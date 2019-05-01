@@ -1,0 +1,738 @@
+6
+1
+0
+2
+
+ 
+
+b
+e
+f
+3
+2
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+6
+3
+2
+7
+0
+
+.
+
+2
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+petrarch 2 : petrarcher
+
+clayton norris
+
+petrarch 2 is the fourth generation of a series of event-data coders id30
+from research by phillip schrodt1. each iteration has brought new functionality
+and usability 2, and this is no exception. petrarch 2 takes much of the power of the
+original petrarch   s dictionaries and redirects it into a faster and smarter core logic.
+earlier iterations handled sentences largely as a list of words, incorporating some
+syntactic information here and there. petrarch 2 (henceforth referred to as petrarch)
+now views the sentence entirely on the syntactic level. it receives the syntactic parse
+of a sentence from the stanford corenlp software, and stores this data as a tree
+structure of linked nodes, where each node is a phrase object. prepositional, noun,
+and verb phrases each have their own version of this phrase class, which deals with
+the logic particular to those kinds of phrases. since this is an event coder, the core
+of the logic focuses around the verbs: who is acting, who is being acted on, and
+what is happening. the theory behind this new structure and its logic is founded
+in generative grammar, id205, and lambda-calculus semantics.
+
+1 tree structure
+
+in an attempt to take advantage of all the syntactic information provided to us by
+the stanford parse, petrarch implements the sentence coding in such a way that the
+syntax tree is apparent in the data structure and the logic. it   s a simple tree struc-
+ture, with every phrase or word being its own node, with pointers to the parent node
+and the set of children nodes3. the syntactic phrases are stored as nested objects of
+the    phrase    class, which has three subclasses    nounphrase,       verbphrase,    and
+   prepphrase.    if a phrase doesn   t fall under one of these categories, it is just kept as
+a    phrase,    though if eventually enough reason can be shown to add another type
+(adjective phrases, for example), it an be done so easily. each of these phrase types
+has several methods unique to it and its own version of a get meaning() method,
+which is what determines the coding of a node from the meaning of its children.
+
+1schrodt, 2001
+2schrodt, 2012
+3the relationship between nodes is frequently described using terms of familial relation (most
+frequently,    parent    and    child   ), or direction (   above    meaning    closer to the root,    and    below   
+meaning    closer to word-level.   )
+
+1
+
+the simplicity of this recursive approach in comparison with the expensive list-
+based pattern matching from previous versions of petrarch yields a signi   cant speed
+improvement, and the theoretically-grounded tree-based semantic searching takes
+advantage of the relationships between nouns and verbs encoded in the syntax tree.
+
+1.1 syntax trees
+
+let   s start with a short linguistics lesson. every sentence in english (and most
+languages) is made up of several    constituents   . a constituent can be a single
+word or a whole phrase (which is a constituent of constituents), but the de   ning
+characteristic is that each constituent serves a speci   c syntactic (i.e. grammatical)
+role. constituents of a sentence are associated hierarchically (hence the phrasal
+constituent-of-constituents), and so the most convenient way of visualizing or storing
+syntactic structure is in a syntax tree. there is an example of a syntax tree and
+how it is used in the parse at the end of this document.
+
+the corenlp software on which petrarch relies for syntactic parsing uses the
+id32 ii 4 syntax notation, which can di   er slightly from canonical gener-
+ative grammar labeling, but for our purposes they are equally useful. constituents
+have speci   c type, depending on their    head    and distribution. the cases we care
+most about in this program are noun, verb, and prepositional phrases. heads,
+in this case, are e   ectively the single word that a phrase can be reduced to, both
+semantically and syntactically. they can be predictably located by navigating the
+syntax tree, so petrarch relies on the idea of phrasal headedness for much of its
+speed. a head of a phrase can be formalized as the lowest word-level constituent to
+which there is an unbroken path of phrase-level similarly-typed constituents from
+the phrase   s root node. basically, to    nd the head of an np (noun phrase), you
+follow the path of np   s down the tree until you    nd a noun. if there   s ever a choice
+of which path to take, in english you will take the rightmost5.
+
+2 flow
+
+the core logic of the id29 is based on the notion that each node in the
+tree has a meaning, and the meaning of a node is a combination of the meanings of
+its children. that means that in moving up the tree and going from word-level to
+sentence-level, words and meanings get combined until you have one noun phrase
+meaning and one verb phrase meaning. the meaning of the verb phrase is what
+captures most of the meaning of the sentence, and accounts for all the relevant nouns
+and verbs below it.
+
+4https://www.cis.upenn.edu/~treebank/
+5many theories of syntax dictate that any node can have at most two children, which would
+never yield a situation where you have several choices, but corenlp does not follow this binary
+branching restriction
+
+2
+
+because of the recursive nature of the meaning determination, one call to get meaning()
+
+from the upper most verb phrase will cause a domino e   ect that    nds the meaning
+of the rest of the tree. the    ow of each speci   c phrase type is determined by its
+get meaning() method. while the logical    ow can   t be strictly linearized due to the
+domino e   ect of recursion, it can be abstracted to follow these steps:
+
+1. read stanford corenlp parse into memory using phrase classes.
+
+2. identify coded actors in noun phrases.
+
+3. identify the usage of the verbs in the verb phrases based on the dictionary
+
+entries.
+
+4. identify how verbs interact with their constituent verb, prepositional, and
+
+noun phrases.
+
+5. identify how verbs interact with the noun phrases in their subject position.
+
+6. resolve verb+verb interactions.
+
+7. return the coding of the uppermost verbphrase using cameo67 verb and
+
+actor codes, if it satis   es the conditions speci   ed by the user
+
+3 classes and class-speci   c    ow
+
+3.1 noun phrases
+
+the nounphrase class only has one unique method, check date(), which is what
+decides which actor code to choose when the code for a speci   c person or country
+changes over time. this is taken almost directly from the older version of petrarch.
+the get meaning() method in the noun phrase both matches the patterns for
+the actors and agents of word-level children, and combines the meanings of con-
+stituent pp, np, and vp children. the priority is given as w ordp atterns > n p >
+p p > v p , and only when actors and agents are not coded will the node    nding the
+meaning look at a lower-priority phrase. this means that the noun phrase    ameri-
+can troops in iraq    would only code as usamil but    troops in iraq    would code
+as irqmil.
+
+3.1.1 pronouns
+
+when petrarch encounters a pronoun, it looks up the tree for an antecedent within
+the same sentence. if the pronoun is relfexive (ends with -self or -selves), petrarch
+looks until it    nds a noun, or until it    nds a verb phrase with a de   ned subject,
+
+6http://eventdata.parusanalytics.com/cameo.dir/cameo.09b6.pdf
+7schrodt et al. 2008
+
+3
+
+and assigns that as the meaning. however, if the pronoun is not re   exive, petrarch
+moves up until it    nds an s-level phrase, then begins its search. this is based on
+the binding rules that pronouns follow in generative grammar. because of the
+distinction between the two types of pronouns, petrarch can correctly identify that
+   itself    in a said b hurt itself refers to b, while    it    in a said b hurt it refers to
+a.
+
+since petrarch currently has no concept of number or gender, it sometimes makes
+mistakes in instances where the pronoun reference depends on the characteristics
+of the nouns in the sentence. such is the case di   erentiating obama told hillary
+that he should run for president again from obama told hillary that she should run
+for president again. both of these would be interpreted by petrarch as obama told
+hillary that hillary should run for president again
+
+3.2 prepositional phrases
+
+the get meaning() method of prepphrase objects returns the meaning of their non-
+preposition constituent. this makes it easier for the actor searching to pass through
+prepositional phrases. the preposition is stored as an attribute of the object and
+is used in some cases to determine whether or not a certain prepphrase should be
+considered.
+
+3.3 verb phrases
+
+verb phrases drive most of the complex logic of the program. they play the largest
+role in all three parts of    nding    who did what to whom   , assigning verb codes and
+   nding the appropriate noun phrases to    t. the get meaning() method of verb
+phrases relies on three other verb-speci   c methods:
+
+3.3.1
+
+get upper()
+
+this method is fairly simple. if the vp has an np speci   er 8 with a coded actor, it
+returns this. otherwise, this returns nothing.
+
+3.3.2
+
+get lower()
+
+this is slightly more complicated.
+in most cases, the verb get lower() method
+behaves very similarly to the nounphrase get meaning() method. it looks for some
+coded actor in noun or prepositional phrases, and returns this.
+
+however, if a vp has a vp as a child, it returns the meaning of only that phrase,
+as well as looking for some sort of negation word. the only vp   s with vp children
+
+8in syntax, two phrase-level siblings are called speci   ers. these occur most frequently between
+vp   s,np   s,and pp   s. the np speci   er of a vp is the phrase that contains the grammatical subject
+of the verb.
+
+4
+
+are modals (could, might, will, etc.) or helping verbs (has, is, do, etc.)9. these
+won   t have other np, or pp children that are relevant to this verb, but can have
+   not    as a child, so this is where negation is    agged.
+
+3.3.3
+
+get code()
+
+this is where the program looks to see if the verb follows a pattern speci   ed in the
+dictionary. the patterns consist of four parts:
+
+1. pre-verb noun phrases
+
+2. pre-verb prepositional phrases 10
+
+3. post-verb noun phrases
+
+4. post-verb prepositional phrases
+
+the process from this point di   ers for active and passive verbs, but only in where
+each search takes place. active verbs look for (1) at the closest s-level (sentence
+node) above the verb, i.e. the nearest point where there will be an np speci   er. it
+   rst    nds this level via the get s() method, and looks to see if the head of the np
+speci   er is part of a pattern. if a head is found and there is more to the pattern   s
+noun phrase, then the program begins to look for the rest of the pattern phrase in
+the noun phrase from which the head came. the verbs    nd (2) in the same place,
+but in pp   s instead of np   s. since we almost never see patterns with this format in
+english, this hasn   t been    ne tuned. then the search begins for (3). this involves
+checking if any of the heads of child np   s are part of a pattern. then petrarch
+follows the same process of looking for longer noun patterns within the phrases of
+the respective heads. part (4) looks at child pp   s for matches, then matches nouns
+within the phrases if necessary by the same methods it matched child np   s.
+
+for passive verbs, the process for prepositions is exactly the same. however, it
+looks for (1) inside the np   s of child pp   s with the preposition    by,       from,    or
+   in,   . if no such phrase is found, the verb is left without a subject. this is simply
+a speci   c case to deal with how english deals with the party that is performing the
+action in a passive sentence. (3) is found in the same place that (1) is found in the
+active sentences.
+
+as an illustration, consider the active and passive forms of a simple sentence
+
+that would match the pattern
+
+protesters     monument
+
+[145] #dest roy
+
+9if it intuitively seems like a verb would have another verb phrase as a child, but it does not fall
+
+into one of these categories, it most likely takes a sentence as a child, rather than a verb phrase.
+
+10i can   t think of a scenario where this would actually be necessary, but the option is there for
+
+consistency   s sake.
+
+5
+
+1. the protesters destroyed the monument.
+
+np
+
+nn
+
+s
+
+vp
+
+vbd
+
+np
+
+.
+
+.
+
+protesters
+
+destroyed
+
+dt
+
+nn
+
+the
+
+monument
+
+2. the monument was destroyed by protesters.
+
+np
+
+s
+
+vp
+
+dt
+
+nn
+
+vbd
+
+vp
+
+the
+
+monument
+
+was
+
+vbn
+
+pp
+
+.
+
+.
+
+destroyed
+
+in
+
+by
+
+np
+
+nn
+
+protesters
+
+key: (1) location (1) match (3) location (3) match
+note that this is only for matching patterns entered in the dictionary, not source
+and target matching. that happens within the get meaning() method, based on
+the outcomes of get upper() and get lower().
+
+3.3.4
+
+get meaning()
+
+the get meaning() method of the verb class    rst combines the values of the previous
+three methods in one of a number of ways, depending on what those methods    nd.
+in most cases, this method returns a list of events that are described by the subtree
+of which the verb phrase is the root. sometimes, however, if there isn   t enough
+verb information available, it will simply return the list of actors described by the
+subtree. in deciding what to do, the verb has several things to consider:
+
+    do i have a source actor? (from get upper())
+
+6
+
+    do i have a code? (from get code())
+    do i have a s-level or vp child? (from get lower())
+    if so, does that child code an event?
+    if so, how does the event that i code relate the event that it codes?
+
+3.3.5 match transf orm()
+
+this method accounts for the fact that ontologies don   t always line up exactly
+with how words work. for example, there are times when you get a sentence like
+   a says it will attack b,    but what you   re looking to code is    a threatens b.   
+m atch transf orm() reads transformations from the verb dictionary and checks to
+see if any of the events match the transformation format. if that   s the case, then
+the event is converted into a simple (s,t,v) format. the entry in the dictionary for
+that example would be
+
+a (a b w ill at t ack) say = a b 138
+
+which is basically post-   x notation. this is described in more detail in the dictionary
+speci   cations.
+
+3.3.6
+
+is valid()
+
+this method is used to catch a consistent mistake that happens in corenlp when
+a past participle is used as an adjective in front of a noun, but is instead coded as
+a verb.
+
+3.4 event extraction
+
+one call to the get meaning() method of the uppermost vp will cause the rest of the
+tree to be parsed, and return the event coding of that vp, which is the event coding
+of the whole tree. since not all events of the sentence at this point might not be
+complete, the sentence object which contains the phrase tree will call get meaning()
+in its get events() method, and check to see if the event is satisfactory. if the event
+that is returned by get meaning() is a complete coding (has all three parts), it is
+assigned to the sentence and the process is complete.
+
+4 dictionaries
+
+petrarch uses the same actor, agent, discard, and issue dictionaries as it always
+has, but the newest version has brought changes to the format and structure of the
+verb dictionary. the sets of synonymous nouns (synsets) remain the same, as well
+as how the base verbs are organized and stored. the two biggest di   erences are the
+
+7
+
+transformations, which match transf orm() looks at, and the patterns for matching
+phrases.
+
+4.1 patterns
+
+the patterns in the dictionaries should now follow a few simple rules:
+
+1. the intended pattern should contain exactly one verb: the verb being matched
+
+2. the pattern entries should be minimal, i.e. the smallest amount of information
+necessary to capture the intended phrases. this is just to keep the dictionary
+small but e   ective.
+
+3. the pattern has up to four parts: pre-verb nouns, pre-verb prepositions,
+
+post-verb nouns, post-verb prepositions.
+
+the patterns themselves also contain additional annotative symbols to provide the
+parser with more syntactic information:
+
+    unmarked words are nouns or particles. these nouns are phrase heads.
+    {bracketed phrases} are for specifying things that can   t be covered by a single
+noun, e.g. (necessary) adjectives, complex nouns, etc.. the last word in the
+brackets should be the head.
+
+    prepositional phrases are (in parentheses). the    rst word is the preposition,
+
+the rest is considered as nouns are.
+
+    note that these prepositional markers can be combined (with {noun phrases})
+
+4.2 verb+verb interaction
+
+4.2.1 combinations
+
+verbs can interact with each other in one of two ways. the    rst is what we call a
+combination. this is what happens when the meaning of the two verbs together is
+literally the meanings of the two verbs individually. these occur mostly frequently
+to specify the subcode of somewhat vague or high-level cameo categories, like
+appeal, intend, refuse or demand. this is handled using an internal translation
+of cameo codes into a system that expands the hierarchy of cameo beyond
+the basic top-level/subcode classi   cation system. this allows for more controllable
+processing of verb combinations that are inherent in cameo. so rather than a
+system where   intend [030] + help [070] =intend to help[033],    we get    intend
+[3000] + help [0040] =intend to help[3040].    the full conversion schema can be
+found in the utilities.py    le under convert code().
+
+codes are converted and stored as four-digit hex (base 16) codes. the general
+principle behind it is in the table below. the    rst three columns encompass the
+
+8
+
+top-level codes, the fourth position is a speci   er. for the most part they follow
+the descriptions here, but some top-level codes have unique subclasses, which don   t
+follow these speci   cally. notice that not all combinations refer to cameo codes.
+this is intentional, and means that if we wanted to code things beyond cameo we
+could. the strength of this is predictability and the possibility of semantic addition.
+when returning the event code, petrarch converts back to cameo for the sake of
+reverse compatibility.
+
+0
+1 reduce
+2 yield
+
+0
+1 say
+2 appeal
+3 intend
+4 demand
+5 protest
+6 threaten
+7 disapprove
+8 posture
+9 coerce
+a investigate
+b consult
+
+0
+1 meet
+2 settle
+3 mediate
+4 aid
+5 expel
+6 pol. change
+7 mat. coop
+8 dip. coop
+9 assault
+a fight
+b mass violence b admin. sanctions
+
+0
+1 leadership
+2 policy
+3 rights
+4 regime
+5 econ
+6 military
+7 humanitarian
+8 judicial
+9 peacekeeping
+a intelligence
+
+c dissent
+d release
+e int   l involvement
+f de-escalation
+
+the one class not present here is 120, which classi   es rejections and refusal to
+cooperate. because the action of    refusing to do x    is so often the same as    not
+doing x,    these are simply categorized as the value of their cooperative version
+minus 0xffff. so, since    provide aid    is 0040,    refuse to provide aid    is 0040-
+ffff = -ffbf. this is functionally equivalent to the negative, since there is no
+positive ffff code, the subtraction always yields a negative value. this allows us
+to convert negations such as    will not help    = 0    f f f f + 0040 =    f f bf
+=    refuse to help.   
+
+4.2.2 transformations
+
+sometimes this is insu   cient, like when the meaning of the verb interaction depends
+also on the relationships between the nouns that are acting and being acted upon.
+the di   erence between    a says b attacked c    and    a says a attacked b    is such
+a case. the    rst is equivalent to    a blames b for an attack,    and the second    a
+
+9
+
+takes credit for an attack on b.    since this depends on the nouns involved, we must
+consider them in the transformation category and not the combination category.
+the speci   cation on how these are formatted is in the documentation.
+
+5 example
+
+consider the sentence
+
+       israel said a mortar bomb was launched at it from the gaza strip on tuesday   
+
+petrarch would code this sentence as isr psegza 112 with the following tree: 11
+
+s
+
+np
+
++isr
+
+vp
+
+isr psegza 112
+
+nnp
+
+vbd
+
+israel
+
+said
+
+sbar
+
+s
+
+np
+
+vp
+
+psegza isr 190
+
+dt
+
+jj
+
+nn
+
+vbd
+
+vp
+
+a
+
+mortar
+
+bomb
+
+was
+
+psegza isr 190
+
+.
+
+.
+
+vbn
+
+pp
+
+pp
+
+launched
+
+in
+
+np
+
+in
+
+np
+
+at
+
++isr
+
+from
+
++psegza
+
+prp
+
+it
+
+np
+
+pp
+
++psegza
+
+in
+
+np
+
+dt
+
+nnp
+
+nnp
+
+on
+
+nnp
+
+the
+
+gaza
+
+strip
+
+tuesday
+
+the color coding shows where the actor codes come from. the signi   cant steps
+taken in this parse involve the verbs    said    and       aunched,    and the pronoun    it.   
+the pronoun coreference follows the non-re   exive matching process described above.
+when petrarch is analyzing    launched,    it
+
+1. identi   es the verb as passive
+
+2. finds the patterns for this verb
+
+3. finds the target under the prepositional phrase with    it   
+
+4. identi   es the antecedent of    it    to be    isr   
+
+5. finds the source under the prepositional phrase with    from   
+
+11for those unfamiliar with cameo verb codes, 190 is an organized attack, while 112 is an
+
+accusation of aggression
+
+10
+
+then, the analysis of    said    follows the process:
+
+1. finds the lower event (psegza isr 190)
+
+2. identi   es the subject of    said    as isr
+
+3. matches this with the dictionary-speci   ed verb transformation
+
+a (b . attack) say = a b 112
+
+4. transforms this into isr psegza 112.
+
+6 works cited
+
+references
+
+[1] schrodt, philip a. 2001.    automated coding of international event data us-
+ing sparse pars- ing techniques.    paper presented at the international studies
+association, chicago, 21-24 february 2001.
+
+[2] schrodt, philip a. 2012.    precedents, progress and prospects in political event
+
+data.    inter- national interactions 38(5):546569.
+
+[3] schrodt, philip a., omur yilmaz, deborah j. gerner and dennis hermrick. 2008.
+   coding sub-state actors using the cameo (con   ict and mediation event
+observations) actor coding framework.    international studies association, san
+francisco, march 2008.
+
+11
+
+

@@ -1,0 +1,559 @@
+   #[1]aylien    an introduction to id3 (with
+   code in tensorflow) comments feed [2]alternate [3]alternate
+
+   [4]products [5]research [6]blog [7]company [8]contact
+
+   [9]blog
+
+   [10]general [11]product [12]data science [13]research [14]get started
+
+   from the blog
+   product
+   product updates and how-to guides for our text analysis api, news api,
+   and text analysis platform
+   data science
+   using text and image analysis for fun and insightful data science
+   projects
+   research
+   the latest updates from our research team.
+   general
+   company updates & news
+   from the aylien.com
+
+   [15]products [16]research [17]blog [18]company [19]contact
+
+   [20]john glover
+   24 aug, 2016
+   research
+   an introduction to id3 (with code in
+   tensorflow)
+
+an introduction to id3 (with code in tensorflow)
+
+   there has been a large resurgence of interest in generative models
+   recently (see [21]this blog post by openai for example). these are
+   models that can learn to create data that is similar to data that we
+   give them. the intuition behind this is that if we can get a model to
+   write high-quality news articles for example, then it must have also
+   learned a lot about news articles in general. or in other words, the
+   model should also have a good internal representation of news articles.
+   we can then hopefully use this representation to help us with other
+   related tasks, such as classifying news articles by topic.
+
+   actually training models to create data like this is not easy, but in
+   recent years a number of methods have started to work quite well. one
+   such promising approach is using id3
+   (gans). the prominent deep learning researcher and director of ai
+   research at facebook, yann lecun, recently [22]cited gans as being one
+   of the most important new developments in deep learning:
+
+      there are many interesting recent development in deep learning   the
+   most important one, in my opinion, is adversarial training (also called
+   gan for id3). this, and the variations that
+     are now being proposed is the most interesting idea in the last 10
+                years in ml, in my opinion.        yann lecun
+
+
+
+   the rest of this post will describe the gan formulation in a bit more
+   detail, and provide a brief example (with code in tensorflow) of using
+   a gan to solve a toy problem.
+
+discriminative vs. generative models
+
+   before looking at gans, let   s briefly review the difference between
+   generative and discriminative models:
+     * a discriminative model learns a function that maps the input data
+       (x) to some desired output class label (y). in probabilistic terms,
+       they directly learn the conditional distribution p(y|x).
+     * a generative model tries to learn the joint id203 of the
+       input data and labels simultaneously, i.e. p(x,y). this can be
+       converted to p(y|x) for classification via bayes rule, but the
+       generative ability could be used for something else as well, such
+       as creating likely new (x, y) samples.
+
+   both types of models are useful, but generative models have one
+   interesting advantage over discriminative models     they have the
+   potential to understand and explain the underlying structure of the
+   input data even when there are no labels. this is very desirable when
+   working on data modelling problems in the real world, as unlabelled
+   data is of course abundant, but getting labelled data is often
+   expensive at best and impractical at worst.
+
+id3
+
+   [23]gans are an interesting idea that were [24]first introduced in 2014
+   by a group of researchers at the university of montreal lead by ian
+   goodfellow (now at openai). the main idea behind a gan is to have two
+   competing neural network models. one takes noise as input and generates
+   samples (and so is called the generator). the other model (called the
+   discriminator) receives samples from both the generator and the
+   training data, and has to be able to distinguish between the two
+   sources. these two networks play a continuous game, where the generator
+   is learning to produce more and more realistic samples, and the
+   discriminator is learning to get better and better at distinguishing
+   generated data from real data. these two networks are trained
+   simultaneously, and the hope is that the competition will drive the
+   generated samples to be indistinguishable from real data.
+
+   gan
+
+   gan overview. source: [25]https://ishmaelbelghazi.github.io/ali
+
+   the analogy that is often used here is that the generator is like a
+   forger trying to produce some counterfeit material, and the
+   discriminator is like the police trying to detect the forged items.
+   this setup may also seem somewhat reminiscent of reinforcement
+   learning, where the generator is receiving a reward signal from the
+   discriminator letting it know whether the generated data is accurate or
+   not. the key difference with gans however is that we can backpropagate
+   gradient information from the discriminator back to the generator
+   network, so the generator knows how to adapt its parameters in order to
+   produce output data that can fool the discriminator.
+
+   so far gans have been primarily applied to modelling natural images.
+   they are now producing [26]excellent results in image generation tasks,
+   generating images that are significantly sharper than those trained
+   using other leading generative methods based on maximum likelihood
+   training objectives. here are some examples of images generated by
+   gans:
+
+   gan-samples-1
+
+   generated bedrooms. source:    unsupervised representation learning with
+   deep convolutional id3   
+   [27]https://arxiv.org/abs/1511.06434v2
+
+
+   gan-samples-2
+
+   generated cifar-10 samples. source:    improved techniques for training
+   gans    [28]https://arxiv.org/abs/1606.03498
+
+approximating a 1d gaussian distribution
+
+   to get a better understanding of how this all works, we   ll use a gan to
+   solve a toy problem in tensorflow     learning to approximate a
+   1-dimensional gaussian distribution. this is based on a [29]blog post
+   with a similar goal by eric jang. the full source code for our demo is
+   available on github ([30]https://github.com/aylien/gan-intro), here we
+   will just focus on some of the more interesting parts of the code.
+
+   first we create the    real    data distribution, a simple gaussian with
+   mean 4 and standard deviation of 0.5. it has a sample function that
+   returns a given number of samples (sorted by value) from the
+   distribution.
+class datadistribution(object):
+    def __init__(self):
+        self.mu = 4
+        self.sigma = 0.5
+
+    def sample(self, n):
+        samples = np.random.normal(self.mu, self.sigma, n)
+        samples.sort()
+        return samples
+
+   the data distribution that we will try to learn looks like this:
+
+   data
+
+   we also define the generator input noise distribution (with a similar
+   sample function). following eric jang   s [31]example, we also go with a
+   [32]stratified sampling approach for the generator input noise     the
+   samples are first generated uniformly over a specified range, and then
+   randomly perturbed.
+class generatordistribution(object):
+    def __init__(self, range):
+        self.range = range
+
+    def sample(self, n):
+        return np.linspace(-self.range, self.range, n) + \
+            np.random.random(n) * 0.01
+
+   our generator and discriminator networks are quite simple. the
+   generator is a linear transformation passed through a nonlinearity (a
+   softplus function), followed by another linear transformation.
+def generator(input, hidden_size):
+    h0 = tf.nn.softplus(linear(input, hidden_size, 'g0'))
+    h1 = linear(h0, 1, 'g1')
+    return h1
+
+   in this case we found that it was important to make sure that the
+   discriminator is more powerful than the generator, as otherwise it did
+   not have sufficient capacity to learn to be able to distinguish
+   accurately between generated and real samples. so we made it a deeper
+   neural network, with a larger number of dimensions. it uses tanh
+   nonlinearities in all layers except the final one, which is a sigmoid
+   (the output of which we can interpret as a id203).
+def discriminator(input, hidden_size):
+    h0 = tf.tanh(linear(input, hidden_size * 2, 'd0'))
+    h1 = tf.tanh(linear(h0, hidden_size * 2, 'd1'))
+    h2 = tf.tanh(linear(h1, hidden_size * 2, 'd2'))
+    h3 = tf.sigmoid(linear(h2, 1, 'd3'))
+    return h3
+
+   we can then connect these pieces together in a tensorflow graph. we
+   also define id168s for each network, with the goal of the
+   generator being simply to fool the discriminator.
+with tf.variable_scope('g'):
+    z = tf.placeholder(tf.float32, shape=(none, 1))
+    g = generator(z, hidden_size)
+
+with tf.variable_scope('d') as scope:
+    x = tf.placeholder(tf.float32, shape=(none, 1))
+    d1 = discriminator(x, hidden_size)
+    scope.reuse_variables()
+    d2 = discriminator(g, hidden_size)
+
+loss_d = tf.reduce_mean(-tf.log(d1) - tf.log(1 - d2))
+loss_g = tf.reduce_mean(-tf.log(d2))
+
+   we create optimizers for each network using the plain
+   gradientdescentoptimizer in tensorflow with exponential learning rate
+   decay. we should also note that finding good optimization parameters
+   here did require some tuning.
+def optimizer(loss, var_list):
+    initial_learning_rate = 0.005
+    decay = 0.95
+    num_decay_steps = 150
+    batch = tf.variable(0)
+    learning_rate = tf.train.exponential_decay(
+        initial_learning_rate,
+        batch,
+        num_decay_steps,
+        decay,
+        staircase=true
+    )
+    optimizer = gradientdescentoptimizer(learning_rate).minimize(
+        loss,
+        global_step=batch,
+        var_list=var_list
+    )
+    return optimizer
+
+vars = tf.trainable_variables()
+d_params = [v for v in vars if v.name.startswith('d/')]
+g_params = [v for v in vars if v.name.startswith('g/')]
+
+opt_d = optimizer(loss_d, d_params)
+opt_g = optimizer(loss_g, g_params)
+
+   to train the model, we draw samples from the data distribution and the
+   noise distribution, and alternate between optimizing the parameters of
+   the discriminator and the generator.
+with tf.session() as session:
+    tf.initialize_all_variables().run()
+
+    for step in xrange(num_steps):
+        # update discriminator
+        x = data.sample(batch_size)
+        z = gen.sample(batch_size)
+        session.run([loss_d, opt_d], {
+            x: np.reshape(x, (batch_size, 1)),
+            z: np.reshape(z, (batch_size, 1))
+        })
+
+        # update generator
+        z = gen.sample(batch_size)
+        session.run([loss_g, opt_g], {
+            z: np.reshape(z, (batch_size, 1))
+        })
+
+   the following animation shows how the generator learns to approximate
+   the data distribution during training:
+
+            iframe: [33]https://www.youtube.com/embed/mobnwr-u8pc
+
+
+
+   we can see that at the start of the training process, the generator was
+   producing a very different distribution to the real data. it eventually
+   learned to approximate it quite closely (somewhere around frame 750),
+   before converging to a narrower distribution focused on the mean of the
+   input distribution. after training, the two distributions look
+   something like this:
+
+   gan-trained-1
+
+
+   this makes sense intuitively. the discriminator is looking at
+   individual samples from the real data and from our generator. if the
+   generator just produces the mean value of the real data in this simple
+   example, then it is going to be quite likely to fool the discriminator.
+
+   there are many possible solutions to this problem. in this case we
+   could add some sort of early-stopping criterion, to pause training when
+   some similarity threshold between the two distributions is reached. it
+   is not entirely clear how to generalise this to bigger problems
+   however, and even in the simple case, it may be hard to guarantee that
+   our generator distribution will always reach a point where early
+   stopping makes sense. a more appealing solution is to address the
+   problem directly by giving the discriminator the ability to examine
+   multiple examples at once.
+
+improving sample diversity
+
+   the problem of the generator collapsing to a parameter setting where it
+   outputs a very narrow distribution of points is    one of the main
+   failure modes    of gans according to a [34]recent paper by tim salimans
+   and collaborators at openai. thankfully they also propose a solution:
+   allow the discriminator to look at multiple samples at once, a
+   technique that they call minibatch discrimination.
+
+   in the paper, minibatch discrimination is defined to be any method
+   where the discriminator is able to look at an entire batch of samples
+   in order to decide whether they come from the generator or the real
+   data. they also present a more specific algorithm which works by
+   modelling the distance between a given sample and all other samples in
+   the same batch. these distances are then combined with the original
+   sample and passed through the discriminator, so it has the option to
+   use the distance measures as well as the sample values during
+   classification.
+
+   the method can be loosely summarized as follows:
+     * take the output of some intermediate layer of the discriminator.
+     * multiply it by a 3d tensor to produce a matrix (of size num_kernels
+       x kernel_dim in the code below).
+     * compute the l1-distance between rows in this matrix across all
+       samples in a batch, and then apply a negative exponential.
+     * the minibatch features for a sample are then the sum of these
+       exponentiated distances.
+     * concatenate the original input to the minibatch layer (the output
+       of the previous discriminator layer) with the newly created
+       minibatch features, and pass this as input to the next layer of the
+       discriminator.
+
+   in tensorflow that translates to something like:
+def minibatch(input, num_kernels=5, kernel_dim=3):
+    x = linear(input, num_kernels * kernel_dim)
+    activation = tf.reshape(x, (-1, num_kernels, kernel_dim))
+    diffs = tf.expand_dims(activation, 3) - \
+        tf.expand_dims(tf.transpose(activation, [1, 2, 0]), 0)
+    abs_diffs = tf.reduce_sum(tf.abs(diffs), 2)
+    minibatch_features = tf.reduce_sum(tf.exp(-abs_diffs), 2)
+    return tf.concat(1, [input, minibatch_features])
+
+   we implemented the proposed minibatch discrimination technique to see
+   if it would help with the collapse of the generator output distribution
+   in our toy example. the new behaviour of the generator network during
+   training is shown below.
+
+            iframe: [35]https://www.youtube.com/embed/0r3g7-4bmyu
+
+
+
+   it   s clear in this case that adding minibatch discrimination causes the
+   generator to maintain most of the width of the original data
+   distribution (although it   s still not perfect). after convergence the
+   distributions now look like this:
+
+   gan-trained-2
+
+   one final point on minibatch discrimination is that it makes the batch
+   size even more important as a hyperparameter. in our toy example we had
+   to keep batches quite small (less than around 16) for training to
+   converge. perhaps it would be sufficient to just limit the number of
+   samples that contribute to each distance measure rather than use the
+   full batch, but again this another parameter to tune.
+
+final thoughts
+
+   id3 are an interesting development, giving
+   us a new way to do unsupervised learning. most of the successful
+   applications of gans have been in the domain of id161, but
+   here at aylien we are researching ways to apply these techniques to
+   natural language processing. if you   re working on the same idea and
+   would like to compare notes then please get in touch.
+
+   one big open problem in this area is how best to evaluate these sorts
+   of models. in the image domain it is quite easy to at least look at the
+   generated samples, although this is obviously not a satisfying
+   solution. in the text domain this is even less useful (unless perhaps
+   your goal is to generate prose). with generative models that are based
+   on maximum likelihood training, we can usually produce some metric
+   based on likelihood (or some lower bound to the likelihood) of unseen
+   test data, but that is not applicable here. some gan papers have
+   produced likelihood estimates based on[36] kernel density estimates
+   from generated samples, but this technique seems to break down in
+   higher dimensional spaces. another solution is to only evaluate on some
+   downstream task (such as classification). if you have any other
+   suggestions then we would love to hear from you.
+
+more information
+
+   if you want to learn more about gans we recommend starting with the
+   following publications:
+     * [37]id3
+     * [38]unsupervised representation learning with deep convolutional
+       id3
+     * [39]infogan: interpretable representation learning by information
+       maximizing generative adversarial nets
+     * [40]improved techniques for training gans
+
+   feel free to [41]reuse our gan code, and of course keep an eye on our
+   [42]blog. comments, corrections and feedback are welcome.
+
+                       [43]text analysis api - sign up
+
+   stay informed
+   subscribe to our newsletter to recieve regular updates about aylien,
+   direct to your inbox.
+   [44]john glover
+   vp of science @ aylien
+   john has (too) many research interests, but is currently focused on
+   methods for unsupervised or semi-supervised (ideally one-shot)
+   learning. in particular, he spends a lot of time thinking about
+   representation learning, and generative models such as generative
+   adversarial networks, id5 and autoregressive
+   neural models. he is also really into music, holds a ph.d. in signal
+   processing for musical audio from maynooth university, and previously
+   studied computer science at university college cork and music & media
+   technologies at trinity college dublin.
+   read next
+   [45]noel bambrick
+   [46]alexa rank search & sort capabilities added to the aylien news api
+   25 aug, 2016
+   alexa rank search & sort capabilities added to the aylien news api
+   related articles
+   [47]will gannon
+   24 apr, 2018
+   [48]using natural language processing to combat filter bubbles and fake
+   news     360   stance detection
+
+   one of the most alarming cultural developments in the internet age has
+   been due to the way that we access news content. the creation of filter
+   bubbles, where people only [   ]
+   [49]read    
+   [50]sebastian ruder
+   12 jun, 2018
+   [51]highlights of naacl-hlt 2018: generalization, test-of-time, and
+   dialogue systems
+
+   i attended naacl-hlt 2018 in new orleans last week. i didn   t manage to
+   catch as many talks and posters this time around (there were just too
+   many inspiring people to [   ]
+   [52]read    
+   [53]sebastian ruder
+   6 mar, 2018
+   [54]research directions at aylien in nlp and id21
+
+   in a recent blog post i outlined some interesting research directions
+   for people who are just getting into nlp and ml (you can read the
+   original post here). these ideas [   ]
+   [55]read    
+   [56]afshin mehrabani
+   7 nov, 2017
+   [57]juggernaut: neural networks in a web browser
+
+   juggernaut is an experimental neural network, written in rust. it is a
+   feed-forward neural network that uses id119 to fit the model
+   and train the network. juggernaut enables us [   ]
+   [58]read    
+   let's talk
+
+   products
+
+   [59]text analysis api [60]news api [61]text analysis platform
+   company
+
+   [62]about us [63]in the news [64]jobs
+   content
+
+   [65]resources [66]blog
+   get in touch
+
+   [67]contact sales [68]press [69]email us
+   stay informed
+
+   [70]privacy policy [71]terms and conditions
+
+   copyright    2018 aylien ltd. all rights reserved.
+
+references
+
+   visible links
+   1. http://blog.aylien.com/introduction-generative-adversarial-networks-code-tensorflow/feed/
+   2. http://blog.aylien.com/wp-json/oembed/1.0/embed?url=http://blog.aylien.com/introduction-generative-adversarial-networks-code-tensorflow/
+   3. http://blog.aylien.com/wp-json/oembed/1.0/embed?url=http://blog.aylien.com/introduction-generative-adversarial-networks-code-tensorflow/&format=xml
+   4. https://aylien.com/products
+   5. https://aylien.com/research
+   6. http://blog.aylien.com/
+   7. https://aylien.com/about
+   8. https://aylien.com/contact
+   9. http://blog.aylien.com/
+  10. http://blog.aylien.com/category/general/
+  11. http://blog.aylien.com/category/product/
+  12. http://blog.aylien.com/category/data-science/
+  13. http://blog.aylien.com/category/research/
+  14. https://aylien.com/products/
+  15. https://aylien.com/products
+  16. https://aylien.com/research
+  17. http://blog.aylien.com/
+  18. https://aylien.com/about
+  19. https://aylien.com/contact
+  20. http://blog.aylien.com/author/john/
+  21. https://openai.com/blog/generative-models/
+  22. https://www.quora.com/what-are-some-recent-and-potentially-upcoming-breakthroughs-in-deep-learning
+  23. https://arxiv.org/abs/1406.2661
+  24. https://www.quora.com/in-what-way-are-adversarial-networks-related-or-different-to-adversarial-training/answer/ian-goodfellow
+  25. https://ishmaelbelghazi.github.io/ali
+  26. https://arxiv.org/abs/1511.06434
+  27. https://arxiv.org/abs/1511.06434v2
+  28. https://arxiv.org/abs/1606.03498
+  29. http://blog.evjang.com/2016/06/generative-adversarial-nets-in.html
+  30. https://github.com/aylien/gan-intro
+  31. http://blog.evjang.com/2016/06/generative-adversarial-nets-in.html
+  32. https://en.wikipedia.org/wiki/stratified_sampling
+  33. https://www.youtube.com/embed/mobnwr-u8pc
+  34. https://arxiv.org/abs/1606.03498
+  35. https://www.youtube.com/embed/0r3g7-4bmyu
+  36. https://en.wikipedia.org/wiki/kernel_density_estimation
+  37. https://arxiv.org/abs/1406.2661
+  38. https://arxiv.org/abs/1511.06434v2
+  39. https://arxiv.org/abs/1606.03657
+  40. https://arxiv.org/abs/1606.03498
+  41. https://github.com/aylien/gan-intro
+  42. http://159.89.224.205/
+  43. http://cta-redirect.hubspot.com/cta/redirect/1942801/02bc9816-b470-4328-9625-fad8d92a8811
+  44. http://blog.aylien.com/author/john/
+  45. http://blog.aylien.com/author/noel/
+  46. http://blog.aylien.com/alexa-rank-search-sort-capabilities-added-aylien-news-api/
+  47. http://blog.aylien.com/author/will/
+  48. http://blog.aylien.com/using-natural-language-processing-to-combat-filter-bubbles-and-fake-news-360-stance-detection/
+  49. http://blog.aylien.com/using-natural-language-processing-to-combat-filter-bubbles-and-fake-news-360-stance-detection/
+  50. http://blog.aylien.com/author/sebastian/
+  51. http://blog.aylien.com/highlights-of-naacl-hlt-2018-generalization-test-of-time-and-dialogue-systems/
+  52. http://blog.aylien.com/highlights-of-naacl-hlt-2018-generalization-test-of-time-and-dialogue-systems/
+  53. http://blog.aylien.com/author/sebastian/
+  54. http://blog.aylien.com/research-directions-at-aylien-in-nlp-and-transfer-learning/
+  55. http://blog.aylien.com/research-directions-at-aylien-in-nlp-and-transfer-learning/
+  56. http://blog.aylien.com/author/afshin/
+  57. http://blog.aylien.com/juggernaut-neural-networks-in-a-web-browser/
+  58. http://blog.aylien.com/juggernaut-neural-networks-in-a-web-browser/
+  59. https://aylien.com/text-api/
+  60. https://aylien.com/news-api/
+  61. https://aylien.com/text-analysis-platform/
+  62. https://aylien.com/about/
+  63. https://aylien.com/in-the-news/
+  64. https://aylien.com/jobs/
+  65. https://aylien.com/resources/
+  66. http://blog.aylien.com/
+  67. https://aylien.com/contact/
+  68. https://aylien.com/in-the-news/
+  69. https://aylien.com/contact/
+  70. https://aylien.com/privacy/
+  71. https://aylien.com/terms/
+
+   hidden links:
+  73. https://aylien.com/
+  74. http://blog.aylien.com/?s=
+  75. http://blog.aylien.com/?s=
+  76. http://blog.aylien.com/category/product/
+  77. http://blog.aylien.com/category/data-science/
+  78. http://blog.aylien.com/category/research/
+  79. http://blog.aylien.com/category/general/
+  80. http://blog.aylien.com/introduction-generative-adversarial-networks-code-tensorflow/john@aylien.com
+  81. http://blog.aylien.com/introduction-generative-adversarial-networks-code-tensorflow/anotherjohng"
+  82. https://twitter.com/_aylien
+  83. https://www.linkedin.com/company-beta/1195911/
+  84. https://www.facebook.com/aylieninc

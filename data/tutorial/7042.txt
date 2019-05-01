@@ -1,0 +1,517 @@
+   #[1]rare technologies    feed [2]rare technologies    comments feed
+   [3]rare technologies    counting efficiently with bounter pt. 1:
+   hashtable comments feed [4]alternate [5]alternate
+
+   [tr?id=1761346240851963&ev=pageview&noscript=1]
+
+   iframe: [6]https://www.googletagmanager.com/ns.html?id=gtm-t2pcjld
+
+   [7]pragmatic machine learning rare technologies [8]navigation
+
+     * [9]services
+     * [10]products
+          + [11]pii tools
+          + [12]scaletext
+     * [13]corporate training
+          + [14]overview
+          + [15]python best practices
+          + [16]practical machine learning
+          + [17]topic modelling
+          + [18]deep learning in practice
+     * [19]for students
+          + [20]open source
+          + [21]incubator
+          + [22]competitions
+     * [23]company
+          + [24]careers
+          + [25]our team
+     * [26]blog
+     * [27]contact
+     * [28]search
+
+     * [29]services
+     * [30]products
+          + [31]pii tools
+          + [32]scaletext
+     * [33]corporate training
+          + [34]overview
+          + [35]python best practices
+          + [36]practical machine learning
+          + [37]topic modelling
+          + [38]deep learning in practice
+     * [39]for students
+          + [40]open source
+          + [41]incubator
+          + [42]competitions
+     * [43]company
+          + [44]careers
+          + [45]our team
+     * [46]blog
+     * [47]contact
+     * [48]search
+
+counting efficiently with bounter pt. 1: hashtable
+
+   [49]filip   tefa    k 2017-11-10[50] machine learning, [51]open source[52]
+   leave a comment
+
+   have you heard about the new open source [53]bounter python library in
+   town? in case you can   t wait to use it in practice but are wary of its
+      frequency estimation   , and what kind of results you can expect, this
+   series of blog posts will help you develop the right intuition. it is
+   split into two parts, one for each of the two very different algorithms
+   we implemented in bounter: the count-min sketch (cms) and the
+   hashtable.
+
+   our tale begins with a straightforward problem. we needed to count
+   frequencies of words in a large corpus, such as the wikipedia. we
+   started with python code that looked a lot like this:
+from collections import counter
+from smart_open import smart_open
+
+wc = counter()
+# preprocessed words, one wikipedia article per line
+with smart_open('wiki_tokens.txt.gz') as wiki:
+    for line in wiki:
+        words = line.decode().split()
+        wc.update(words)
+
+   all developers rely heavily on abstract data structures. we need them
+   to do their job effectively for simple operations, so we can focus on
+   the complexity of our own tasks. when used like this, python   s built-in
+   counter is actually pretty effective. it uses an optimized hashtable
+   under the hood to store the key-value pairs.
+
+   however, when working with very large data sets, even this
+   implementation has its limits. we are storing python objects, and
+   python strings and integers come with a hefty memory overhead. on
+   average, a counter entry uses around 100 bytes.
+
+   thus, for our wikipedia data set with 7,661,318 distinct words, we need
+   800 mb just to count their frequencies. we could still work with that,
+   but we quickly run out of excuses for bigrams: it takes 17.2 gb to
+   count all 179,413,989 distinct word pairs. and we need those
+   frequencies to trim model dictionaries in id97, lsi, lda (and
+   pretty much any other machine learning algorithm that works with text),
+   to identify common phrases for collocations and so on. and wikipedia
+   isn   t even a particularly big dataset. we can do better!
+
+   our team looked for ways to optimize this part of the algorithm. the
+   original solution in gensim was to delete the lowest-frequency entries
+   whenever the dictionary grew too large, increasing the threshold for
+   deletion on each prune (a technique inspired by mikolov   s id97
+   implementation). this was possible as we didn   t need the exact counts.
+   the quality of the output was satisfactory: the long vocabulary tail is
+   not relevant for determining good quality words or phrases. sadly, the
+   solution wasn   t perfect. a pruning routine written on top of counter
+   couldn   t be very fast, and the structure still used 100b per each
+   entry.
+
+   we decided that we could implement the same idea much more efficiently.
+   the first bounter implementation, hashtable, was born.
+
+hashtable discarding keys with low frequencies
+
+   hashtable is a frequency estimator (counter) for strings implemented as
+   a python c-extension. it is a fixed-size [54]hashtable which maintains
+   its own statistics and prunes its lowest-frequency entries
+   automatically when it becomes too full. furthermore, it optimizes
+   string storage (as c strings) to use memory much more efficiently than
+   counter (32b per entry rather than 100b).
+
+initialization and size
+
+   to init this fixed-size structure, we need to set the number of
+   buckets:
+from bounter import hashtable
+counts = hashtable(buckets=4194304)
+
+   one bucket takes 16b, plus we need additional memory to store the
+   strings. in practice, this totals to around 32b per bucket on real
+   data. therefore, our hashtable with 4m buckets will grow to around
+   128mb in production, depending on average length of the stored keys.
+   for humans, we added a more convenient api that chooses the bucket size
+   based on this built-in knowledge:
+from bounter import bounter
+counts = bounter(size_mb=128)
+
+   you can always verify the number of buckets as well as the currently
+   allocated memory:
+print(counts.buckets())
+4194304
+print(counts._mem())  # includes string heap size (currently empty)
+67109888  # 64mb
+
+operations
+
+   from the start, we wanted the hashtable to work as a counter
+   replacement, to make switching between the two easier, so we made it
+   support most of the standard dictionary methods. for efficiency, we
+   also added some new ones:
+# python 2
+counts.update(['a', 'b', 'c', 'a'])
+counts.increment('b')
+# increment('b', 2) would work too!
+print(counts['a'])
+2
+# maintains an exact tally of all increments
+print(counts.total())
+5
+# estimate for the number of distinct keys (uses hyperloglog)
+print(counts.cardinality())
+3
+# currently stored elements
+print(len(counts))
+3
+# iterator returns keys, just like counter
+print(list(counts))
+[u'b', u'a', u'c']
+# supports iterating over key-count pairs, etc.
+print(list(counts.iteritems()))
+[(u'b', 2l), (u'a', 2l), (u'c', 1l)]
+
+   you might notice something funny about the output. we updated the
+   counter with strings (bytes objects) and we could query their count
+   just right, but iteration gives us back unicode objects. bounter does
+   not care about the input string format and it stores the strings as
+   utf-8 bytes internally. we had to make a choice about the output
+   (iteration) format and we decided that unicode would be a better
+   default choice for both python2 and python3. if you would rather work
+   with bytes, you can initialize the hashtable with a special parameter
+   use_unicode=false:
+counts = hashtable(buckets=64, use_unicode=false)
+counts.update(['a', 'b', 'c'])
+print(list(counts))
+['b', 'a', 'c']  # bytes objects
+
+   hashtable is very fast (slightly faster than python   s built-in counter)
+   but you should still be smart about the usage:
+counts['slow'] += 2  # don't use this! counts correctly, but is much slower
+counts.increment('fast', 2)  # preferable
+
+   this is because python translates += into successive get and set
+   operations, which are literally double the work of a hashtable lookup.
+   use the increment() or update() methods instead.
+
+   you may be wondering about the difference between using len() and
+   cardinality(). len(counts) returns the number of keys that are
+   currently stored in the hashtable, those that you get when iterating
+   over its keys. it does not include the removed elements.
+
+   on the other hand, cardinality() is an estimate for the size of the
+   full set (including the removed elements). this is actually a really
+   hard thing to track after the table has been pruned more than once.
+   fortunately, someone had already [55]solved it for us and we have
+   included a [56]hyperloglog structure in bounter. bounter estimates the
+   total number of distinct keys with error less than 1% now.
+
+   likewise, the total() method returns a sum of all counts including the
+   removed entries. this tally is precise, not an estimate, because
+   keeping track of that is straightforward.
+
+hashtable pruning
+
+   with the basics out of the way, you may be anxious to know how pruning
+   works and how it behaves in practice.
+
+   just like an ordinary dictionary, when 3/4 of hashtable   s buckets are
+   filled, it needs to free some space. an ordinary hashtable-based
+   dictionary expands itself by doubling the bucket array. instead,
+   hashtable removes entries with low counts. before doing so, it needs to
+   find the best threshold value. pruning is an operation linear in the
+   size of the structure and we don   t want to do it too often. to this
+   end, hashtable maintains a simple histogram of stored frequencies. it
+   consults the histogram to find the lowest threshold so that at least    
+   of the entries are removed, leaving the table at most 50% full. as we
+   are always pruning a large fraction of all keys, the pruning operation
+   is sufficiently amortized among the inserts and the structure maintains
+   an amortized constant complexity for its operations.
+
+   let   s look at the counting accuracy now. as long the number of distinct
+   elements is less than 3/4 of the buckets, all counts are exact. when
+   the cardinality goes above this number, pruning decreases some counts.
+   this means hashtable   s frequency estimates are biased: they might
+   underestimate, but never overestimate. keys with high frequencies are
+   unlikely to be affected by pruning, although it can happen,
+   particularly for keys that are unevenly distributed in the input stream
+   (a lot of occurrences by the end of the input but occur only
+   sporadically near the beginning).
+
+   the following chart visualises this effect:
+   [57]click to open facetsdive in a new window
+
+   each subchart shows one bounter instance which was used to count
+   frequencies of all bigrams from the english wikipedia (179m distinct).
+   above the chart is the value of the size_mb parameter used to
+   initialize the bounter structure. we took a sample of 500 random
+   bigrams and drew a scatterplot using their actual (log-scaled x-axis)
+   and bounter-estimated (log-scaled y-axis) frequencies. the color of the
+   dot is darker when the estimate is not correct.
+
+   the chart shows the effect of pruning: most of the elements beneath a
+   certain threshold return 0, or another low value, yet values above that
+   threshold are mostly precise except for a few which are underestimated
+   by a very small margin. from left to right, you can very clearly follow
+   the improvement in result accuracy, as we allot more and more memory to
+   bounter.
+
+   if you want to see the charts in action and explore its individual data
+   points, click [58]here to open the chart in a new facetsdive window.
+   you can read more on interactive analytics with google   s facetsdive
+   tool in [59]our recent tutorial.
+   bounter size buckets() quality() precision recall  f1
+   128mb        4m        42.78     1.0       0.847  0.917
+   256mb        8m        21.39     1.0       0.909  0.952
+   512mb        16m       10.69     1.0       0.956  0.978
+   1024mb       32m       5.34      1.0       0.993  0.996
+   2048mb       64m       2.67      1.0       1.0    1.0
+   4096mb       128m      1.34      1.0       1.0    1.0
+   8192mb       256m      0.89      1.0       1.0    1.0
+
+   after counting a large data set with bounter, you might be interested
+   in the degree of degradation of results. the quality() method returns a
+   ratio of the estimated cardinality and its capacity. in other words,
+   how much more memory you would need for precise results.
+counts = hashtable(buckets=8) # can store at most 6 items
+counts.update(['a', 'b', 'c'])
+print(counts.quality()) # 0.5, or 3/6
+counts.update(['d', 'e', 'f', 'g', 'h', 'i'])
+print(counts.quality()) # 1.5, or 9/6
+
+evaluation
+
+   finally, we checked whether the accuracy is good enough for our
+   original purpose, extracting collocations (common phrases) from the
+   english wikipedia. we took a random sample of 2000 bigrams and checked
+   which of them evaluate as phrases using a counter with exact values
+   (27.5% of them did). then we used the same algorithm to determine the
+   phrases, but this time using the estimated counts from bounter. we
+   compared whether the result was the same for each bigram and calculated
+   [60]precision, recall, and f1 values, which you can see in the table
+   below the chart.
+
+   unsurprisingly, hashtable had a perfect precision score in all cases.
+   this is because the results are never overestimated, so all reported
+   phrases were true positives. the number of false negatives increased as
+   we decreased the memory, with more and more small values being
+   underestimated as 0 (or a very low number).
+
+   as you can see, even with a significantly reduced memory, hashtable
+   gives us great performance for phrases generation. with just 128mb,
+   137x less memory than that is required by python   s counter, we managed
+   a very respectable recall of 84.7%.
+
+   of course, these results could only be achieved because of the    long
+   tail    property of our data: most elements had a really small frequency
+   whereas there were considerably less elements with higher frequency. in
+   our nlp domain, this data property holds ([61]zipf   s law) but you have
+   to be mindful if applying hashtable elsewhere.
+
+   stay tuned for the next post, where we take a similar look at
+   countminsketch, the second algorithm in bounter, which takes this
+   result even further, using a completely different data structure and
+   trade-offs.
+
+   [62]bounter[63]cardinality estimation[64]count-min sketch[65]frequency
+   estimation[66]hyperloglog[67]open source
+
+leave a reply [68]cancel reply
+
+   your email address will not be published. required fields are marked *
+
+   comment
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+
+   name * ______________________________
+
+   email * ______________________________
+
+   website ______________________________
+
+   submit
+
+   current [69][email protected] * 4.2_________________
+
+   leave this field empty ____________________
+
+author of post
+
+   filip   tefa    k
+
+filip   tefa    k's bio:
+
+   software engineer with a yearning for learning, currently discovering
+   wonders of ml. enjoys good system architecture and development
+   processes almost as much as beautiful algorithms. outside sw, passions
+   include economy, psychology, video & board games, soundtrack music.
+
+need expert consulting in ml and nlp?
+
+   ________________________________________
+
+   ________________________________________
+
+
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   please leave this field empty. ________________________________________
+
+   send
+
+categories
+
+   categories[select category___________]
+
+archives
+
+   archives [select month__]
+
+recent posts
+
+     * [70]export pii drill-down reports
+     * [71]personal data analytics
+     * [72]scanning office 365 for sensitive pii information
+     * [73]pivoted document length normalisation
+     * [74]sent2vec: an unsupervised approach towards learning sentence
+       embeddings
+
+stay ahead of the curve
+
+get our latest tutorials, updates and insights delivered straight to your
+inbox.
+
+   ____________________
+
+   ____________________
+
+   subscribe
+   ____________________
+   1-2 times a month, if lucky. your information will not be shared.
+
+   [75][footer-logo.png]
+     * [76]services
+     * [77]careers
+     * [78]our team
+     * [79]corporate training
+     * [80]blog
+     * [81]incubator
+     * [82]contact
+     * [83]competitions
+     * [84]site map
+
+   rare technologies [85][email protected] sv  tova 5, prague, czech
+   republic [86](eu) +420 776 288 853
+   type and press    enter    to search ____________________
+
+references
+
+   visible links
+   1. https://rare-technologies.com/feed/
+   2. https://rare-technologies.com/comments/feed/
+   3. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/feed/
+   4. https://rare-technologies.com/wp-json/oembed/1.0/embed?url=https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+   5. https://rare-technologies.com/wp-json/oembed/1.0/embed?url=https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/&format=xml
+   6. https://www.googletagmanager.com/ns.html?id=gtm-t2pcjld
+   7. https://rare-technologies.com/
+   8. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+   9. https://rare-technologies.com/services/
+  10. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+  11. https://pii-tools.com/
+  12. https://scaletext.com/
+  13. https://rare-technologies.com/corporate-training/
+  14. https://rare-technologies.com/corporate-training/
+  15. https://rare-technologies.com/python-best-practices/
+  16. https://rare-technologies.com/practical-machine-learning/
+  17. https://rare-technologies.com/topic-modelling-training/
+  18. https://rare-technologies.com/deep_learning_training/
+  19. https://rare-technologies.com/incubator
+  20. https://github.com/rare-technologies/
+  21. https://rare-technologies.com/incubator/
+  22. https://rare-technologies.com/competitions/
+  23. https://rare-technologies.com/#braintrust
+  24. https://rare-technologies.com/careers/
+  25. https://rare-technologies.com/our-team/
+  26. https://rare-technologies.com/blog/
+  27. https://rare-technologies.com/contact/
+  28. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+  29. https://rare-technologies.com/services/
+  30. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+  31. https://pii-tools.com/
+  32. https://scaletext.com/
+  33. https://rare-technologies.com/corporate-training/
+  34. https://rare-technologies.com/corporate-training/
+  35. https://rare-technologies.com/python-best-practices/
+  36. https://rare-technologies.com/practical-machine-learning/
+  37. https://rare-technologies.com/topic-modelling-training/
+  38. https://rare-technologies.com/deep_learning_training/
+  39. https://rare-technologies.com/incubator
+  40. https://github.com/rare-technologies/
+  41. https://rare-technologies.com/incubator/
+  42. https://rare-technologies.com/competitions/
+  43. https://rare-technologies.com/#braintrust
+  44. https://rare-technologies.com/careers/
+  45. https://rare-technologies.com/our-team/
+  46. https://rare-technologies.com/blog/
+  47. https://rare-technologies.com/contact/
+  48. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+  49. https://rare-technologies.com/author/filip-stefanak/
+  50. https://rare-technologies.com/category/machine-learning/
+  51. https://rare-technologies.com/category/open-source/
+  52. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/#respond
+  53. https://github.com/rare-technologies/bounter
+  54. https://en.wikipedia.org/wiki/hash_table
+  55. https://en.wikipedia.org/wiki/hyperloglog
+  56. https://github.com/ascv/hyperloglog
+  57. https://rare-technologies.com/wp-content/uploads/2017/11/bounter_ht_facets.html
+  58. https://rare-technologies.com/wp-content/uploads/2017/11/bounter_ht_facets.html
+  59. https://rare-technologies.com/interactive-confusion-matrix-python/
+  60. https://en.wikipedia.org/wiki/precision_and_recall
+  61. https://en.wikipedia.org/wiki/zipf's_law
+  62. https://rare-technologies.com/tag/bounter/
+  63. https://rare-technologies.com/tag/cardinality-estimation/
+  64. https://rare-technologies.com/tag/count-min-sketch/
+  65. https://rare-technologies.com/tag/frequency-estimation/
+  66. https://rare-technologies.com/tag/hyperloglog/
+  67. https://rare-technologies.com/tag/open-source/
+  68. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/#respond
+  69. https://rare-technologies.com/cdn-cgi/l/email-protection
+  70. https://rare-technologies.com/personal-data-reports/
+  71. https://rare-technologies.com/pii_analytics/
+  72. https://rare-technologies.com/pii-scan-o365-connector/
+  73. https://rare-technologies.com/pivoted-document-length-normalisation/
+  74. https://rare-technologies.com/sent2vec-an-unsupervised-approach-towards-learning-sentence-embeddings/
+  75. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/
+  76. https://rare-technologies.com/services/
+  77. https://rare-technologies.com/careers/
+  78. https://rare-technologies.com/our-team/
+  79. https://rare-technologies.com/corporate-training/
+  80. https://rare-technologies.com/blog/
+  81. https://rare-technologies.com/incubator/
+  82. https://rare-technologies.com/contact/
+  83. https://rare-technologies.com/competitions/
+  84. https://rare-technologies.com/sitemap
+  85. https://rare-technologies.com/cdn-cgi/l/email-protection#0960676f66497b687b6c247d6c6a61676665666e606c7a276a6664
+  86. tel:+420 776 288 853
+
+   hidden links:
+  88. https://rare-technologies.com/counting-efficiently-with-bounter-pt-1-hashtable/#top
+  89. https://www.facebook.com/raretechnologies
+  90. https://twitter.com/raretechteam
+  91. https://www.linkedin.com/company/6457766
+  92. https://github.com/piskvorky/
+  93. https://rare-technologies.com/feed/

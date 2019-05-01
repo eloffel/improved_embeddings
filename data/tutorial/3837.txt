@@ -1,0 +1,463 @@
+   #[1]rss
+
+     * [2]about
+     * [3]software
+     * [4]demos
+     * [5]blog
+
+   [deep-learning-formula-nlp.jpg]    [6]kemal   anl  
+
+embed, encode, attend, predict: the new deep learning formula for
+state-of-the-art nlp models
+
+   november 10, 2016    by matthew honnibal
+
+   over the last six months, a powerful new neural network playbook has
+   come together for natural language processing. the new approach can be
+   summarised as a simple four-step formula: embed, encode, attend,
+   predict. this post explains the components of this new approach, and
+   shows how they're put together in two recent systems.
+
+update (january 2018)
+
+   [7]spacy v2.0 now features deep learning models for named entity
+   recognition, id33, text classification and similarity
+   prediction based on the architectures described in this post. you can
+   now also create training and evaluation data for these models with
+   [8]prodigy, our new active learning-powered annotation tool. see
+   [9]this video for an example of training an ner system using prodigy.
+
+   when people think about machine learning improvements they usually
+   think about efficiency and accuracy, but the most important dimension
+   is generality. if you want to write a program to flag abusive posts on
+   your social media platform, you should be able to generalise the
+   problem to "i need to take text and predict a class id". it shouldn't
+   matter whether you're flagging abusive posts or tagging emails that
+   propose meetings. if two problems take the same type of input and
+   produce the same type of output, we should be able to reuse the same
+   model code, and get a different behaviour by plugging in different data
+       like playing different games that use the same engine.
+
+implementation example
+
+   i've implemented the decomposable attention model for natural language
+   id136 with spacy and keras. you can find it [10]here on github.
+
+   let's say you have a great technique for predicting a class id from a
+   dense vector of real values. you're convinced you can solve any problem
+   that has that particular input/output "shape". separately, you also
+   have a great technique for predicting a single vector from a vector and
+   a matrix. now you have the solutions to three problems, not two. if you
+   start with a matrix and a vector, and you need a class id, you can
+   obviously compose the two techniques. most nlp problems can be reduced
+   to machine learning problems that take one or more texts as input. if
+   we can transform these texts to vectors, we can reuse general purpose
+   deep learning solutions. here's how to do that.
+
+[11]a four-step strategy for deep learning with text
+
+   embedded word representations, also known as "word vectors", are now
+   one of the most widely used natural language processing technologies.
+   id27s let you treat individual words as related units of
+   meaning, rather than entirely distinct ids. however, most nlp problems
+   require understanding of longer spans of text, not just individual
+   words. there's now a simple and flexible solution that is achieving
+   excellent performance on a wide range of problems. after embedding the
+   text into a sequence of vectors, bidirectional id56s are used to encode
+   the vectors into a sentence matrix. the rows of this matrix can be
+   understood as token vectors     they are sensitive to the sentential
+   context of the token. the final piece of the puzzle is called an
+   attention mechanism. this lets you reduce the sentence matrix down to a
+   sentence vector, ready for prediction. here's how it all works.
+
+[12]step 1: embed
+
+   an embedding table maps long, sparse, binary vectors into shorter,
+   dense, continuous vectors. for example, imagine we receive our text as
+   a sequence of ascii characters. there are 256 possible values, so we
+   can represent each value as a binary vector with 256 dimensions. the
+   value for a will be a vector of 0s, with a 1 at column 97, while the
+   value for b will be a vector of zeros with a 1 at column 98. this is
+   called the "one hot" encoding scheme. different values receive entirely
+   different vectors.
+   id --&lt; vector
+
+   most neural network models begin by tokenising the text into words, and
+   embedding the words into vectors. other models extend the word vector
+   representation with other information. for instance, it's often useful
+   to pass forward a sequence of part-of-speech tags, in addition to the
+   word ids. you can then learn tag embeddings, and concatenate the tag
+   embedding to the id27. this lets you push some amount of
+   position-sensitive information into the word representation. however,
+   there's a much more powerful way to make the word representations
+   context-specific.
+
+[13]step 2: encode
+
+   given a sequence of word vectors, the encode step computes a
+   representation that i'll call a sentence matrix, where each row
+   represents the meaning of each token in the context of the rest of the
+   sentence.
+   (sequence[vector]) --&gt; sequence[vector]
+
+   the technology used for this purpose is a bidirectional id56. both
+   [14]lstm and [15]gru architectures have been shown to work well for
+   this. the vector for each token is computed in two parts: one part by a
+   forward pass, and another part by a backward pass. to get the full
+   vector, we simply stick the two together. here's what's being computed:
+bidirectional id56def encode(fwd_id56, bwd_id56, word_vectors):
+    fwd_out = ndarray((len(word_vectors), fwd_id56.nr_hidden), dtype='float32')
+    bwd_out = ndarray((len(word_vectors), bwd_id56.nr_hidden), dtype='float32')
+    fwd_state = fwd_id56.initial_state()
+    bwd_state = bwd_id56.initial_state()
+    for i in range(len(word_vectors)):
+        fwd_state = fwd_id56(word_vectors[i], fwd_state)
+        bwd_state = bwd_id56(word_vectors[-(i+1)], bwd_state)
+        fwd_out[i] = fwd_state
+        bwd_out[-(i+1)] = bwd_state
+    return concatenate([fwd_state, bwd_state])
+
+   i think bidirectional id56s will be one of those insights that come to
+   feel obvious with time. however, the most direct application of an id56
+   is to read the text and predict something from it. what we're doing
+   here is instead computing an intermediate representation    
+   specifically, per token features. crucially, the representation we're
+   getting back represents the tokens in context. we can learn that the
+   phrase "pick up" has a different meaning from the phrase "pick on",
+   even if we processed the two phrases into separate tokens. this has
+   always been a huge weakness of nlp models. now we have a solution.
+
+[16]step 3: attend
+
+   the attend step reduces the matrix representation produced by the
+   encode step to a single vector, so that it can be passed on to a
+   standard feed-forward network for prediction. the characteristic
+   advantage of an attention mechanism over other reduction operations is
+   that an attention mechanism takes as input an auxiliary context vector:
+   (sequence[vector]) --&gt; vector
+
+   by reducing the matrix to a vector, you're necessarily losing
+   information. that's why the context vector is crucial: it tells you
+   which information to discard, so that the "summary" vector is tailored
+   to the network consuming it. recent research has shown that the
+   attention mechanism is a flexible technique, and new variations of it
+   can be used to create elegant and powerful solutions. for instance,
+   [17]parikh et al. (2016) introduce an attention mechanism that takes
+   two sentence matrices, and outputs a single vector:
+   (sequence[vector], sequence[vector]) --&gt; (vector, vector)
+
+   [18]yang et al. (2016) introduce an attention mechanism that takes a
+   single matrix and outputs a single vector. instead of a context vector
+   derived from some aspect of the input, the "summary" is computed with
+   reference to a context vector learned as a parameter of the model. this
+   makes the attention mechanism a pure reduction operation, which could
+   be used in place of any sum or average pooling step.
+
+[19]step 4: predict
+
+   once the text or pair of texts has been reduced into a single vector,
+   we can learn the target representation     a class label, a real value, a
+   vector, etc. we can also do id170, by using the network
+   as the controller of a state machine such as a transition-based parser.
+   [deep-learning-formula-nlp_predict.svg]
+
+   interestingly, most nlp models usually favour quite shallow
+   feed-forward networks. this has meant that some of the most important
+   recent technologies for id161, such as residual connections
+   and batch normalisation have so far had relatively little impact in the
+   nlp community.
+
+[20]example 1: a decomposable attention model for natural language id136
+
+   natural language id136 is a problem of predicting a class label
+   over a pair of sentences, where the class represents the logical
+   relationship between them. the [21]stanford natural language id136
+   corpus uses three class labels:about the snli corpusthe statements in
+   the snli corpus are crowd-sourced captions collected as part of the
+   [22]flickr 30k corpus. in other words, the sentences being marked as
+   entailment were typed in by workers on mechanical turk. this makes the
+   data rather artificial, so absolute accuracies on the task are little
+   indication of how "ready" these technologies really are. you should try
+   to be neither impressed nor disappointed to hear that the state of the
+   art is 88%. what matters is that standard bag-of-words techniques
+   perform much worse.
+    1. entailment: if the first sentence is true, the second sentence must
+       be true.
+    2. contradiction: if the first sentence is true, the second sentence
+       must be false.
+    3. neutral: neither entailment nor contradiction.
+
+   [23]bowman et al. (2015) give the following examples from the corpus:
+   text hypothesis label
+   a man inspects the uniform of a figure in some east asian country. the
+   man is sleeping contradiction
+   an older and younger man smiling. two men are smiling and laughing at
+   the cats playing on the floor. neutral
+   a black race car starts up in front of a crowd of people. a man is
+   driving down a lonely road. contradiction
+   a soccer game with multiple males playing. some men are playing a
+   sport. entailment
+   a smiling costumed woman is holding an umbrella. a happy woman in a
+   fairy costume holds an umbrella. neutral
+
+   one of the motivations for the corpus is to provide a new, reasonably
+   sized corpus for developing models that encode sentences into vectors.
+   for example, [24]bowman et al. (2016) describe an interesting
+   transition-based model that reads a sentence sequentially to construct
+   a tree-structured internal representation.
+
+   bowman et al. were able to achieve an accuracy of 83.2, a substantial
+   improvement over previous work. less than six months later, [25]parikh
+   et al. (2016) presented a model that achieved 86.8% accuracy, with
+   around 10% of the parameters of bowman et al.'s model. soon after,
+   [26]chen et al. (2016) published a system that performed even better    
+   88.3%. when i first read parikh et al.'s paper, i couldn't understand
+   how their model performed so well. the answer is in the way the model
+   mixes the two sentence matrices, using their novel attention mechanism:
+   [deep-learning-formula-nlp_example.svg]
+
+   the crucial advantage is that the sentence-to-vector reduction operates
+   over he sentences jointly, while [27]bowman et al. (2016) encode the
+   sentences into vectors independently. remember vapnik's princple:
+
+     when solving a problem of interest, do not solve a more general
+     problem as an intermediate step.
+
+     [28]vladimir vapnik
+
+   [29]parikh et al. (2016) take the natural language id136 task to be
+   the problem of interest. they structure their problem to solve it
+   directly, and therefore have a big advantage over models which encode
+   the sentences separately. bowman et al. are more interested in the
+   general problem, and structure their model accordingly. their model is
+   therefore useful in situations where parikh et al.'s is not. for
+   instance, with bowman et al.'s model, you cache the sentence vector,
+   making it much more efficient to compute a similarity matrix.
+
+[30]example 2: hierarchical attention networks for document classification
+
+   document classification was the first nlp application i ever worked on.
+   the australian equivalent of the sec funded a project to crawl
+   australian websites and automatically detect financial scams. while the
+   project was a little ahead of its time, document classification changed
+   surprisingly little over most of the next ten years. that's why i find
+   the hierarchical attention networks model that [31]yang et al. (2016)
+   recently published so exciting. it's the first paper i've seen to offer
+   a really compelling general improvement over older bag-of-words models.
+   here's how it works.
+
+   the model receives as input a document, consisting of a sequence of
+   sentences, where each sentence consists of a sequence of word ids. each
+   word of each sentence is separately embedded, to produce two sequences
+   of word vectors, one for each sentence. the sequences are then
+   separately encoded into two sentence matrices. an attention mechanism
+   then separately reduces the sentence matrices to sentence vectors,
+   which are then encoded to produce a document matrix. a final attention
+   step reduces the document matrix to a document vector, which is then
+   passed through the final prediction network to assign the class label.
+   [deep-learning-formula-nlp_example2.svg]
+
+   this model uses the attention mechanism as a pure reduction step: it
+   learns to take a matrix as input, and summarise it into a vector. it
+   does this by learning context vectors for the two attention
+   transformations, which can be understood as representing words or
+   sentences that the model would find ideally relevant. alternatively,
+   you can see the whole reduction step as a feature extraction procedure.
+   under this view, the context vector is just another opaque parameter.
+         author           methods      yelp '13 yelp '14 yelp '15 imdb
+   yang et al. (2016) hn-att           68.2     70.5     71.0     49.4
+   yang et al. (2016) hn-ave           67.0     69.3     69.9     47.8
+   tang et al. (2015) paragraph vector 57.7     59.2     60.5     34.1
+   tang et al. (2015) id166 + bigrams    57.6     61.6     62.4     40.9
+   tang et al. (2015) id166 + unigrams   58.9     60.0     61.1     39.9
+   tang et al. (2015) id98-word         59.7     61.0     61.5     37.6
+
+   an interesting comparison can be drawn between the [32]yang et al.
+   (2016) model and a convolutional neural network (id98). both models are
+   able to automatically extract position-sensitive features. however, the
+   id98 model is both less general and less efficient. with the
+   bidirectional id56, each sentence only needs to be read twice     once
+   forwards, and once backwards. the lstm encoding can also extract
+   features of arbitrary length, because any aspect of the sentence
+   context might be mixed into the token's vector representation. the
+   procedures for reducing the sentence matrix to a vector is also simple
+   and efficient. to construct the document vector, the same procedure is
+   simply applied again.
+
+   the main factor that drives the model's accuracy is the bidirectional
+   lstm encoder, to create the position-sensitive features. the authors
+   demonstrate this by swapping the attention mechanism out for average
+   pooling. with average pooling, the model still outperforms the previous
+   state-of-the-art on all benchmarks. however, the attention mechanism
+   improves performance further on all evaluations. i find this especially
+   interesting. the implications are quite general     there are after all
+   plenty of situations where you want to reduce a matrix to a vector for
+   further prediction, without reference to any particular external
+   context.
+
+[33]next steps
+
+   i've implemented the entailment model for use with our nlp library,
+   [34]spacy, and i'm working on an implementation of the text
+   classification system. we're also planning to ship a general-purpose
+   bidirectional lstm model for use with spacy, to make it easy to use
+   pre-trained token vectors on your problems.
+
+   if you have a clear idea of the function you're trying to learn     if
+   you know your inputs and outputs of your problem     there's probably a
+   simple and compelling solution to your problem. we can help you find
+   it, or build it for you entirely     just [35]get in touch.
+
+update (january 2018)
+
+   [36]spacy v2.0 now features deep learning models for named entity
+   recognition, id33, text classification and similarity
+   prediction based on the architectures described in this post. you can
+   now also create training and evaluation data for these models with
+   [37]prodigy, our new active learning-powered annotation tool. see
+   [38]this video for an example of training an ner system using prodigy.
+
+bibliography
+
+     * [39]decomposable attention model for natural language id136
+       parikh, ankur p.; tackstr  m, oscar; das, dipanjan; uszkoreit, jakob
+       (2016)
+     * [40]enhancing and combining sequential and tree lstm for natural
+       language id136
+       chen, qian; zhu, xiaodan; ling, zhenhua; wei, si (2016)
+     * [41]hierarchical attention networks for document classification
+       yang, zichao; yang, diyi; dyer, chris; he, xiaodong; smola, alex;
+       hovy, eduard (2016)
+     * [42]a fast unified model for parsing and sentence understanding
+       bowman, samuel r.; gauthier, jon; rastogi, abhinav; gupta, raghav;
+       manning, christopher d.; potts, christopher (2016)
+     * [43]a large annotated corpus for learning natural language
+       id136
+       bowman, samuel r.; angeli, gabor; potts, christopher; manning,
+       christopher d. (2015)
+     * [44]semi-supervised convolutional neural networks for text
+       categorization via region embedding
+       johnson, rie; zhang, tong (2015)
+
+   matthew honnibal
+   about the author
+
+matthew honnibal
+
+   matthew is a leading expert in ai technology, known for his research,
+   software and writings. he completed his phd in 2009, and spent a
+   further 5 years publishing research on state-of-the-art natural
+   language understanding systems. anticipating the ai boom, he left
+   academia in 2014 to develop spacy, an open-source library for
+   industrial-strength nlp.
+
+read more
+
+[45]introducing spacy v2.1
+
+[46]explosion ai in 2017: our year in review
+
+[47]introducing custom pipelines and extensions for spacy v2.0
+
+[48]pseudo-rehearsal: a simple solution to catastrophic forgetting for nlp
+
+[49]prodigy: a new tool for radically efficient machine teaching
+
+[50]supervised learning is great     it   s data collection that   s broken
+
+    about us
+
+   explosion ai is a digital studio specialising in artificial
+   intelligence and natural language processing. we   re the makers of
+   spacy, the leading open-source nlp library.
+
+    navigation
+
+     * [51]home
+     * [52]about
+     * [53]software
+     * [54]demos
+     * [55]blog
+     * [56]legal / imprint
+
+    our software
+
+     * [57]spacy
+       industrial-strength nlp
+     * [58]prodigy
+       radically efficient machine teaching
+
+   [59]see more    
+
+references
+
+   visible links
+   1. https://explosion.ai/feed.xml
+   2. https://explosion.ai/about
+   3. https://explosion.ai/software
+   4. https://explosion.ai/demos
+   5. https://explosion.ai/blog
+   6. https://dribbble.com/kemal
+   7. https://spacy.io/usage/v2
+   8. https://prodi.gy/
+   9. https://www.youtube.com/watch?v=l4scwf8keia
+  10. https://github.com/explosion/spacy/blob/master/examples/keras_parikh_entailment
+  14. https://en.wikipedia.org/wiki/long_short-term_memory
+  15. http://www.wildml.com/2015/10/recurrent-neural-network-tutorial-part-4-implementing-a-grulstm-id56-with-python-and-theano/
+  17. https://arxiv.org/pdf/1606.01933v1.pdf
+  18. https://www.cs.cmu.edu/~diyiy/docs/naacl16.pdf
+  21. http://nlp.stanford.edu/projects/snli/
+  22. https://tacl2013.cs.columbia.edu/ojs/index.php/tacl/article/view/229
+  23. https://www.nyu.edu/projects/bowman/spinn.pdf
+  24. https://www.nyu.edu/projects/bowman/spinn.pdf
+  25. https://arxiv.org/pdf/1606.01933v1.pdf
+  26. https://arxiv.org/pdf/1609.06038v1.pdf
+  27. https://www.nyu.edu/projects/bowman/spinn.pdf
+  28. https://en.wikipedia.org/wiki/vladimir_vapnik
+  29. https://arxiv.org/pdf/1606.01933v1.pdf
+  31. https://www.cs.cmu.edu/~diyiy/docs/naacl16.pdf
+  32. https://www.cs.cmu.edu/~diyiy/docs/naacl16.pdf
+  34. https://github.com/explosion/spacy
+  35. mailto:contact@explosion.ai
+  36. https://spacy.io/usage/v2
+  37. https://prodi.gy/
+  38. https://www.youtube.com/watch?v=l4scwf8keia
+  39. https://arxiv.org/pdf/1606.01933v1.pdf
+  40. https://arxiv.org/pdf/1609.06038v1.pdf
+  41. https://www.cs.cmu.edu/~diyiy/docs/naacl16.pdf
+  42. https://www.nyu.edu/projects/bowman/spinn.pdf
+  43. https://www.nyu.edu/projects/bowman/spinn.pdf
+  44. http://papers.nips.cc/paper/5849-semi-supervised-convolutional-neural-networks-for-text-categorization-via-region-embedding.pdf
+  45. https://explosion.ai/blog/spacy-v2-1
+  46. https://explosion.ai/blog/year-in-review-2017
+  47. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  48. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  49. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  50. https://explosion.ai/blog/supervised-learning-data-collection
+  51. https://explosion.ai/
+  52. https://explosion.ai/about
+  53. https://explosion.ai/software
+  54. https://explosion.ai/demos
+  55. https://explosion.ai/blog
+  56. https://explosion.ai/legal
+  57. https://spacy.io/
+  58. https://prodi.gy/
+  59. https://explosion.ai/software
+
+   hidden links:
+  61. https://explosion.ai/
+  62. mailto:matt@explosion.ai
+  63. https://twitter.com/honnibal
+  64. https://github.com/honnibal
+  65. https://www.semanticscholar.org/search?q=matthew%20honnibal
+  66. https://explosion.ai/blog/spacy-v2-1
+  67. https://explosion.ai/blog/year-in-review-2017
+  68. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  69. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  70. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  71. https://explosion.ai/blog/supervised-learning-data-collection
+  72. mailto:contact@explosion.ai
+  73. https://twitter.com/explosion_ai
+  74. https://github.com/explosion
+  75. https://youtube.com/c/explosionai
+  76. https://explosion.ai/feed

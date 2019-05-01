@@ -1,0 +1,1804 @@
+7
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+m
+0
+3
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+4
+v
+3
+8
+6
+7
+0
+
+.
+
+5
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2017
+
+learning end-to-end goal-oriented dialog
+
+antoine bordes, y-lan boureau & jason weston
+facebook ai research
+new york, usa
+{abordes, ylan, jase}@fb.com
+
+abstract
+
+traditional id71 used in goal-oriented applications require a lot of
+domain-speci   c handcrafting, which hinders scaling up to new domains. end-
+to-end id71, in which all components are trained from the dialogs
+themselves, escape this limitation. but the encouraging success recently obtained in
+chit-chat dialog may not carry over to goal-oriented settings. this paper proposes a
+testbed to break down the strengths and shortcomings of end-to-end id71
+in goal-oriented applications. set in the context of restaurant reservation, our
+tasks require manipulating sentences and symbols in order to properly conduct
+conversations, issue api calls and use the outputs of such calls. we show that an
+end-to-end dialog system based on memory networks can reach promising, yet
+imperfect, performance and learn to perform non-trivial operations. we con   rm
+those results by comparing our system to a hand-crafted slot-   lling baseline on
+data from the second dialog state tracking challenge (henderson et al., 2014a).
+we show similar result patterns on data extracted from an online concierge service.
+
+1
+
+introduction
+
+the most useful applications of id71 such as digital personal assistants or bots are currently
+goal-oriented and transactional: the system needs to understand a user request and complete a related
+task with a clear goal within a limited number of dialog turns. the workhorse of traditional dialog
+systems is slot-   lling (lemon et al., 2006; wang and lemon, 2013; young et al., 2013) which
+prede   nes the structure of a dialog state as a set of slots to be    lled during the dialog. for a restaurant
+reservation system, such slots can be the location, price range or type of cuisine of a restaurant.
+slot-   lling has proven reliable but is inherently hard to scale to new domains: it is impossible to
+manually encode all features and slots that users might refer to in a conversation.
+end-to-end id71, usually based on neural networks (shang et al., 2015; vinyals and
+le, 2015; sordoni et al., 2015; serban et al., 2015a; dodge et al., 2016), escape such limitations:
+all their components are directly trained on past dialogs, with no assumption on the domain or
+dialog state structure, thus making it easy to automatically scale up to new domains. they have
+shown promising performance in non goal-oriented chit-chat settings, where they were trained
+to predict the next utterance in social media and forum threads (ritter et al., 2011; wang et al.,
+2013; lowe et al., 2015) or movie conversations (banchs, 2012). but the performance achieved on
+chit-chat may not necessarily carry over to goal-oriented conversations. as illustrated in figure 1
+in a restaurant reservation scenario, conducting goal-oriented dialog requires skills that go beyond
+id38, e.g., asking questions to clearly de   ne a user request, querying knowledge bases
+(kbs), interpreting results from queries to display options to users or completing a transaction. this
+makes it hard to ascertain how well end-to-end dialog models would do, especially since evaluating
+chit-chat performance in itself is not straightforward (liu et al., 2016). in particular, it is unclear if
+end-to-end models are in a position to replace traditional dialog methods in a goal-directed setting:
+can end-to-end dialog models be competitive with traditional methods even in the well-de   ned
+narrow-domain tasks where they excel? if not, where do they fall short?
+this paper aims to make it easier to address these questions by proposing an open resource to test end-
+to-end id71 in a way that 1) favors reproducibility and comparisons, and 2) is lightweight
+and easy to use. we aim to break down a goal-directed objective into several subtasks to test some
+crucial capabilities that id71 should have (and hence provide error analysis by design).
+
+1
+
+published as a conference paper at iclr 2017
+
+figure 1: goal-oriented dialog tasks. a user (in green) chats with a bot (in blue) to book a table at
+a restaurant. models must predict bot utterances and api calls (in dark red). task 1 tests the capacity of
+interpreting a request and asking the right questions to issue an api call. task 2 checks the ability to modify
+an api call. task 3 and 4 test the capacity of using outputs from an api call (in light red) to propose options
+(sorted by rating) and to provide extra-information. task 5 combines everything.
+
+in the spirit of the babi tasks conceived as id53 testbeds (weston et al., 2015b), we
+designed a set of    ve tasks within the goal-oriented context of restaurant reservation. grounded
+with an underlying kb of restaurants and their properties (location, type of cuisine, etc.), these tasks
+cover several dialog stages and test if models can learn various abilities such as performing dialog
+management, querying kbs, interpreting the output of such queries to continue the conversation or
+dealing with new entities not appearing in dialogs from the training set. in addition to showing how
+the set of tasks we propose can be used to test the goal-directed capabilities of an end-to-end dialog
+system, we also propose results on two additional datasets extracted from real interactions with users,
+to con   rm that the pattern of results observed in our tasks is indeed a good proxy for what would be
+observed on real data, with the added bene   t of better reproducibility and interpretability.
+the goal here is explicitly not to improve the state of the art in the narrow domain of restaurant
+booking, but to take a narrow domain where traditional handcrafted id71 are known to
+perform well, and use that to gauge the strengths and weaknesses of current end-to-end systems
+with no domain knowledge. solving our tasks requires manipulating both natural language and
+symbols from a kb. evaluation uses two metrics, per-response and per-dialog accuracies, the latter
+tracking completion of the actual goal. figure 1 depicts the tasks and section 3 details them. section
+4 compares multiple methods on these tasks. as an end-to-end neural model, we tested memory
+networks (weston et al., 2015a), an attention-based architecture that has proven competitive for
+non goal-oriented dialog (dodge et al., 2016). our experiments in section 5 show that memory
+networks can be trained to perform non-trivial operations such as issuing api calls to kbs and
+manipulating entities unseen in training. we con   rm our    ndings on real human-machine dialogs
+
+2
+
+published as a conference paper at iclr 2017
+
+table 1: data used in this paper. tasks 1-5 were generated using our simulator and share the same kb.
+task 6 was converted from the 2nd dialog state tracking challenge (henderson et al., 2014a). concierge is
+made of chats extracted from a real online concierge service. (   ) tasks 1-5 have two test sets, one using the
+vocabulary of the training set and the other using out-of-vocabulary words.
+
+dialogs
+
+average statistics
+
+tasks
+
+number of utterances:
+
+- user utterances
+- bot utterances
+- outputs from api calls
+
+t1 t2 t3 t4 t5
+55
+12
+13
+5
+18
+7
+0
+24
+
+17
+7
+10
+0
+
+43
+7
+10
+23
+
+15
+4
+4
+7
+
+vocabulary size
+candidate set size
+training dialogs
+
+datasets
+
+tasks 1-5 share the validation dialogs
+same data source
+
+test dialogs
+
+3,747
+4,212
+1,000
+1,000
+1,000(   )
+
+t6
+54
+6
+8
+40
+
+1,229
+2,406
+1,618
+500
+1,117
+
+concierge
+
+8
+4
+4
+0
+
+8,629
+11,482
+3,249
+403
+402
+
+from the restaurant reservation dataset of the 2nd dialog state tracking challenge, or dstc2
+(henderson et al., 2014a), which we converted into our task format, showing that memory networks
+can outperform a dedicated slot-   lling rule-based baseline. we also evaluate on a dataset of human-
+human dialogs extracted from an online concierge service that books restaurants for users. overall,
+the per-response performance is encouraging, but the per-dialog one remains low, indicating that
+end-to-end models still need to improve before being able to reliably handle goal-oriented dialog.
+
+2 related work
+
+the most successful goal-oriented id71 model conversation as partially observable markov
+decision processes (pomdp) (young et al., 2013). however, despite recent efforts to learn modules
+(henderson et al., 2014b), they still require many hand-crafted features for the state and action space
+representations, which restrict their usage to narrow domains. our simulation, used to generate
+goal-oriented datasets, can be seen as an equivalent of the user simulators used to train pomdp
+(young et al., 2013; pietquin and hastie, 2013), but for training end-to-end systems.
+serban et al. (2015b) list available corpora for training id71. unfortunately, no good
+resources exist to train and test end-to-end models in goal-oriented scenarios. goal-oriented datasets
+are usually designed to train or test dialog state tracker components (henderson et al., 2014a) and
+are hence of limited scale and not suitable for end-to-end learning (annotated at the state level and
+noisy). however, we do convert the dialog state tracking challenge data into our framework. some
+datasets are not open source, and require a particular license agreement or the participation to a
+challenge (e.g., the end-to-end task of dstc4 (kim et al., 2016)) or are proprietary (e.g., chen et al.
+(2016)). datasets are often based on interactions between users and existing systems (or ensemble of
+systems) like dstc datasets, sfcore (ga  ic et al., 2014) or atis (dahl et al., 1994). this creates
+noise and makes it harder to interpret the errors of a model. lastly, resources designed to connect
+id71 to users, in particular in the context of id23, are usually built around
+a id104 setting such as amazon mechanical turk, e.g., (hixon et al., 2015; wen et al.,
+2015; su et al., 2015a;b). while this has clear advantages, it prevents reproducibility and consistent
+comparisons of methods in the exact same setting.
+the closest resource to ours might be the set of tasks described in (dodge et al., 2016), since some of
+them can be seen as goal-oriented. however, those are id53 tasks rather than dialog,
+i.e. the bot only responds with answers, never questions, which does not re   ect full conversation.
+
+3 goal-oriented dialog tasks
+
+all our tasks involve a restaurant reservation system, where the goal is to book a table at a restaurant.
+the    rst    ve tasks are generated by a simulation, the last one uses real human-bot dialogs. the data
+for all tasks is available at http://fb.ai/babi. we also give results on a proprietary dataset
+extracted from an online restaurant reservation concierge service with anonymized users.
+
+3
+
+published as a conference paper at iclr 2017
+
+3.1 restaurant reservation simulation
+
+the simulation is based on an underlying kb, whose facts contain the restaurants that can be booked
+and their properties. each restaurant is de   ned by a type of cuisine (10 choices, e.g., french, thai), a
+location (10 choices, e.g., london, tokyo), a price range (cheap, moderate or expensive) and a rating
+(from 1 to 8). for simplicity, we assume that each restaurant only has availability for a single party
+size (2, 4, 6 or 8 people). each restaurant also has an address and a phone number listed in the kb.
+the kb can be queried using api calls, which return the list of facts related to the corresponding
+restaurants. each query must contain four    elds: a location, a type of cuisine, a price range and a
+party size. it can return facts concerning one, several or no restaurant (depending on the party size).
+using the kb, conversations are generated in the format shown in figure 1. each example is a dialog
+comprising utterances from a user and a bot, as well as api calls and the resulting facts. dialogs are
+generated after creating a user request by sampling an entry for each of the four required    elds: e.g.
+the request in figure 1 is [cuisine: british, location: london, party size: six, price range: expensive].
+we use natural language patterns to create user and bot utterances. there are 43 patterns for the user
+and 20 for the bot (the user can use up to 4 ways to say something, while the bot always uses the
+same). those patterns are combined with the kb entities to form thousands of different utterances.
+
+3.1.1 task definitions
+
+we now detail each task. tasks 1 and 2 test dialog management to see if end-to-end systems can learn
+to implicitly track dialog state (never given explicitly), whereas task 3 and 4 check if they can learn
+to use kb facts in a dialog setting. task 3 also requires to learn to sort. task 5 combines all tasks.
+task 1: issuing api calls a user request implicitly de   nes a query that can contain from 0 to 4 of
+the required    elds (sampled uniformly; in figure 1, it contains 3). the bot must ask questions for
+   lling the missing    elds and eventually generate the correct corresponding api call. the bot asks for
+information in a deterministic order, making prediction possible.
+task 2: updating api calls starting by issuing an api call as in task 1, users then ask to update
+their requests between 1 and 4 times (sampled uniformly). the order in which    elds are updated is
+random. the bot must ask users if they are done with their updates and issue the updated api call.
+task 3: displaying options given a user request, we query the kb using the corresponding api
+call and add the facts resulting from the call to the dialog history. the bot must propose options to
+users by listing the restaurant names sorted by their corresponding rating (from higher to lower) until
+users accept. for each option, users have a 25% chance of accepting. if they do, the bot must stop
+displaying options, otherwise propose the next one. users always accept the option if this is the last
+remaining one. we only keep examples with api calls retrieving at least 3 options.
+task 4: providing extra information given a user request, we sample a restaurant and start the
+dialog as if users had agreed to book a table there. we add all kb facts corresponding to it to the
+dialog. users then ask for the phone number of the restaurant, its address or both, with proportions
+25%, 25% and 50% respectively. the bot must learn to use the kb facts correctly to answer.
+task 5: conducting full dialogs we combine tasks 1-4 to generate full dialogs just as in figure 1.
+unlike in task 3, we keep examples if api calls return at least 1 option instead of 3.
+
+3.1.2 datasets
+
+we want to test how well models handle entities appearing in the kb but not in the dialog training
+sets. we split types of cuisine and locations in half, and create two kbs, one with all facts about
+restaurants within the    rst halves and one with the rest. this yields two kbs of 4,200 facts and 600
+restaurants each (5 types of cuisine    5 locations    3 price ranges    8 ratings) that only share price
+ranges, ratings and party sizes, but have disjoint sets of restaurants, locations, types of cuisine, phones
+and addresses. we use one of the kbs to generate the standard training, validation and test dialogs,
+and use the other kb only to generate test dialogs, termed out-of-vocabulary (oov) test sets.
+for training, systems have access to the training examples and both kbs. we then evaluate on both
+test sets, plain and oov. beyond the intrinsic dif   culty of each task, the challenge on the oov test
+
+4
+
+published as a conference paper at iclr 2017
+
+sets is for models to generalize to new entities (restaurants, locations and cuisine types) unseen in any
+training dialog     something natively impossible for embedding methods. ideally, models could, for
+instance, leverage information coming from the entities of the same type seen during training.
+we generate    ve datasets, one per task de   ned in 3.1.1. table 1 gives their statistics. training sets are
+relatively small (1,000 examples) to create realistic learning conditions. the dialogs from the training
+and test sets are different, never being based on the same user requests. thus, we test if models can
+generalize to new combinations of    elds. id71 are evaluated in a ranking, not a generation,
+setting: at each turn of the dialog, we test whether they can predict bot utterances and api calls by
+selecting a candidate, not by generating it.1 candidates are ranked from a set of all bot utterances and
+api calls appearing in training, validation and test sets (plain and oov) for all tasks combined.
+
+3.2 dialog state tracking challenge
+
+since our tasks rely on synthetically generated language for the user, we supplement our dataset
+with real human-bot dialogs. we use data from dstc2 (henderson et al., 2014a), that is also in the
+restaurant booking domain. unlike our tasks, its user requests only require 3    elds: type of cuisine
+(91 choices), location (5 choices) and price range (3 choices). the dataset was originally designed
+for dialog state tracking hence every dialog turn is labeled with a state (a user intent + slots) to be
+predicted. as our goal is to evaluate end-to-end training, we did not use that, but instead converted
+the data into the format of our 5 tasks and included it in the dataset as task 6.
+we used the provided speech transcriptions to create the user and bot utterances, and given the dialog
+states we created the api calls to the kb and their outputs which we added to the dialogs. we also
+added ratings to the restaurants returned by the api calls, so that the options proposed by the bots
+can be consistently predicted (by using the highest rating). we did use the original test set but use
+a slightly different training/validation split. our evaluation differs from the challenge (we do not
+predict the dialog state), so we cannot compare with the results from (henderson et al., 2014a).
+this dataset has similar statistics to our task 5 (see table 1) but is harder. the dialogs are noisier and
+the bots made mistakes due to id103 errors or misinterpretations and also do not always
+have a deterministic behavior (the order in which they can ask for information varies).
+
+3.3 online concierge service
+
+tasks 1-6 are, at least partially, arti   cial. this provides perfect control over their design (at least
+for tasks 1-5), but no guarantee that good performance would carry over from such synthetic to
+more realistic conditions. to quantify this, we also evaluate the models from section 4 on data
+extracted from a real online concierge service performing restaurant booking: users make requests
+through a text-based chat interface that are handled by human operators who can make api calls. all
+conversations are between native english speakers.
+we collected around 4k chats to create this extra dataset, denoted concierge. all conversations have
+been anonymized by (1) removing all user identi   ers, (2) using the stanford ner tagger to remove
+named entities (locations, timestamps, etc.), (3) running some manually de   ned regex to    lter out
+any remaining salient information (phone numbers, etc.). the dataset does not contain results from
+api calls, but still records when operators made use of an external service (yelp or opentable) to
+gather information. hence, these have to be predicted, but without any argument (unlike in task 2).
+the statistics of concierge are given in table 1. the dialogs are shorter than in tasks 1-6, especially
+since they do not include results of api calls, but the vocabulary is more diverse and so is the candidate
+set; the candidate set is made of all utterances of the operator appearing in the training, validation
+and test sets. beyond the higher variability of the language used by human operators compared to
+bots, the dataset offers additional challenges. the set of user requests is much wider, ranging from
+managing restaurant reservations to asking for recommendations or speci   c information. users do
+not always stay focused on the request. api calls are not always used (e.g., the operator might use
+neither yelp nor opentable to    nd a restaurant), and facts about restaurants are not structured nor
+constrained as in a kb. the structure of dialogs is thus much more variable. users and operators also
+make typos, spelling and grammar mistakes.
+
+1 lowe et al. (2016) termed this setting next-utterance-classi   cation.
+
+5
+
+published as a conference paper at iclr 2017
+
+4 models
+
+to demonstrate how to use the dataset and provide baselines, we evaluate several learning methods on
+our goal-oriented dialog tasks: rule-based systems, classical information retrieval methods, supervised
+embeddings, and end-to-end memory networks.
+
+4.1 rule-based systems
+
+our tasks t1-t5 are built with a simulator so as to be completely predictable. thus it is possible
+to hand-code a rule based system that achieves 100% on them, similar to the babi tasks of weston
+et al. (2015b). indeed, the point of these tasks is not to check whether a human is smart enough to be
+able to build a rule-based system to solve them, but to help analyze in which circumstances machine
+learning algorithms are smart enough to work, and where they fail.
+however, the dialog state tracking challenge task (t6) contains some real interactions with users.
+this makes rule-based systems less straightforward and not so accurate (which is where we expect
+machine learning to be useful). we implemented a rule-based system for this task in the following
+way. we initialized a dialog state using the 3 relevant slots for this task: cuisine type, location and
+price range. then we analyzed the training data and wrote a series of rules that    re for triggers like
+word matches, positions in the dialog, entity detections or dialog state, to output particular responses,
+api calls and/or update a dialog state. responses are created by combining patterns extracted from
+the training set with entities detected in the previous turns or stored in the dialog state. overall we
+built 28 rules and extracted 21 patterns. we optimized the choice of rules and their application priority
+(when needed) using the validation set, reaching a validation per-response accuracy of 40.7%. we
+did not build a rule-based system for concierge data as it is even less constrained.
+
+4.2 classical information retrieval models
+
+classical information retrieval (ir) models with no machine learning are standard baselines that
+often perform surprisingly well on dialog tasks (isbell et al., 2000; jafarpour et al., 2010; ritter et al.,
+2011; sordoni et al., 2015). we tried two standard variants:
+
+tf-idf match for each possible candidate response, we compute a matching score between the
+input and the response, and rank the responses by score. the score is the tf   idf weighted cosine
+similarity between the bag-of-words of the input and bag-of-words of the candidate response. we
+consider the case of the input being either only the last utterance or the entire conversation history,
+and choose the variant that works best on the validation set (typically the latter).
+
+nearest neighbor using the input, we    nd the most similar conversation in the training set, and
+output the response from that example. in this case we consider the input to only be the last utterance,
+and consider the training set as (utterance, response) pairs that we select from. we use word overlap
+as the scoring method. when several responses are associated with the same utterance in training, we
+sort them by decreasing co-occurence frequency.
+
+4.3 supervised embedding models
+
+a standard, often strong, baseline is to use supervised id27 models for scoring (conversa-
+tion history, response) pairs. the embedding vectors are trained directly for this goal. in contrast,
+id27s are most well-known in the context of unsupervised training on raw text as in
+id97 (mikolov et al., 2013). such models are trained by learning to predict the middle word
+given the surrounding window of words, or vice-versa. however, given training data consisting of
+dialogs, a much more direct and strongly performing training procedure can be used: predict the next
+response given the previous conversation. in this setting a candidate reponse y is scored against the
+input x: f (x, y) = (ax)(cid:62)by, where a and b are d    v id27 matrices, i.e. input and
+response are treated as summed bags-of-embeddings. we also consider the case of enforcing a = b,
+which sometimes works better, and optimize the choice on the validation set.
+the embeddings are trained with a margin ranking loss: f (x, y) > m + f (x,   y), with m the size
+of the margin, and we sample n negative candidate responses   y per example, and train with sgd.
+this approach has been previously shown to be very effective in a range of contexts (bai et al., 2009;
+
+6
+
+published as a conference paper at iclr 2017
+
+dodge et al., 2016). this method can be thought of as a classical information retrieval model, but
+where the matching function is learnt.
+
+4.4 memory networks
+
+memory networks (weston et al., 2015a; sukhbaatar et al., 2015) are a recent class of models that
+have been applied to a range of natural language processing tasks, including id53
+(weston et al., 2015b), id38 (sukhbaatar et al., 2015), and non-goal-oriented dialog
+(dodge et al., 2016). by    rst writing and then iteratively reading from a memory component (using
+hops) that can store historical dialogs and short-term context to reason about the required response,
+they have been shown to perform well on those tasks and to outperform some other end-to-end
+architectures based on recurrent neural networks. hence, we chose them as end-to-end model
+baseline.
+we use the memn2n architecture of sukhbaatar et al. (2015), with an additional modi   cation to
+leverage exact matches and types, described shortly. apart from that addition, the main components
+of the model are (i) how it stores the conversation in memory, (ii) how it reads from the memory to
+reason about the response; and (iii) how it outputs the response. the details are given in appendix a.
+
+4.5 match type features to deal with entities
+
+words denoting entities have two important traits: 1) exact matches are usually more appropriate to
+deal with them than approximate matches, and 2) they frequently appear as oov words (e.g., the
+name of a new restaurant). both are a challenge for embedding-based methods. firstly, embedding
+into a low dimensional space makes it hard to differentiate between exact word matches, and matches
+between words with similar meaning (bai et al., 2009). while this can be a virtue (e.g. when using
+synonyms), it is often a    aw when dealing with entities (e.g. failure to differentiate between phone
+numbers since they have similar embeddings). secondly, when a new word is used (e.g. the name of
+a new restaurant) not seen before in training, no id27 is available, typically resulting in
+failure (weston et al., 2015a).
+both problems can be alleviated with match type features. speci   cally, we augment the vocabulary
+with 7 special words, one for each of the kb entity types (cuisine type, location, price range, party
+size, rating, phone number and address). for each type, the corresponding type word is added to
+the candidate representation if a word is found that appears 1) as a kb entity of that type, 2) in the
+candidate, and 3) in the input or memory. any word that matches as a kb entity can be typed even
+if it has never been seen before in training dialogs. these features allow the model to learn to rely
+on type information using exact matching words cues when oov entity embeddings are not known,
+as long as it has access to a kb with the oov entities. we assess the impact of such features for
+tf-idf match, supervised embeddings and memory networks.
+
+5 experiments
+
+our main results across all the models and tasks are given in table 2 (extra results are also given in
+table 10 of appendix d). the    rst 5 rows show tasks t1-t5, and rows 6-10 show the same tasks in
+the out-of-vocabulary setting. rows 11 and 12 give results for the dialog state tracking challenge
+task (t6) and concierge respectively. columns 2-7 give the results of each method tried in terms of
+per-response accuracy and per-dialog accuracy, the latter given in parenthesis. per-response accuracy
+counts the percentage of responses that are correct (i.e., the correct candidate is chosen out of all
+possible candidates). per-dialog accuracy counts the percentage of dialogs where every response is
+correct. ultimately, if only one response is incorrect this could result in a failed dialog, i.e. failure to
+achieve the goal (in this case, of achieving a restaurant booking). note that we test memory networks
+(memnns) with and without match type features, the results are shown in the last two columns. the
+hyperparameters for all models were optimized on the validation sets; values for best performing
+models are given in appendix c.
+the classical ir method tf-idf match performs the worst of all methods, and much worse than the
+nearest neighbor ir method, which is true on both the simulated tasks t1-t5 and on the real data
+of t6 and concierge. supplementing tf-idf match with match type features noticeably improves
+performance, which however still remains far behind nearest neighbor ir (adding bigrams to the
+
+7
+
+published as a conference paper at iclr 2017
+
+table 2: test results across all tasks and methods. for tasks t1-t5 results are given in the standard
+setup and the out-of-vocabulary (oov) setup, where words (e.g. restaurant names) may not have been seen
+during training. task t6 is the dialog state tracking 2 task with real dialogs, and only has one setup. best
+performing methods (or methods within 0.1% of best performing) are given in bold for the per-response accuracy
+metric, with the per-dialog accuracy given in parenthesis. (   ) for concierge, an example is considered correctly
+answered if the correct response is ranked among the top 10 candidates by the bot, to accommodate the much
+larger range of semantically equivalent responses among candidates (see ex. in tab. 7) . (   ) we did not implement
+memnns+match type on concierge, because this method requires a kb and there is none associated with it.
+
+task
+
+t1: issuing api calls
+t2: updating api calls
+t3: displaying options
+t4: providing information
+t5: full dialogs
+t1(oov): issuing api calls
+t2(oov): updating api calls
+t3(oov): displaying options
+t4(oov): providing inform.
+t5(oov): full dialogs
+t6: dialog state tracking 2
+concierge(   )
+
+rule-based
+systems
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+100 (100)
+33.3 (0)
+n/a
+
+tf-idf match
++ type
+22.4 (0)
+16.4 (0)
+8.0 (0)
+17.8 (0)
+8.1 (0)
+22.4 (0)
+16.8 (0)
+8.3 (0)
+17.2 (0)
+9.0 (0)
+1.6 (0)
+n/a
+
+no type
+5.6 (0)
+3.4 (0)
+8.0 (0)
+9.5 (0)
+4.6 (0)
+5.8 (0)
+3.5 (0)
+8.3 (0)
+9.8 (0)
+4.6 (0)
+1.6 (0)
+1.1 (0.2)
+
+nearest
+neighbor
+55.1 (0)
+68.3 (0)
+58.8 (0)
+28.6 (0)
+57.1 (0)
+44.1 (0)
+68.3 (0)
+58.8 (0)
+28.6 (0)
+48.4 (0)
+21.9 (0)
+13.4 (0.5)
+
+supervised
+embeddings
+100 (100)
+(0)
+68.4
+(0)
+64.9
+57.2
+(0)
+(0)
+75.4
+(0)
+60.0
+(0)
+68.3
+(0)
+65.0
+(0)
+57.0
+58.2
+(0)
+22.6
+(0)
+14.6 (0.5)
+
+memory networks
+
+no match type
+99.9 (99.6)
+100
+(100)
+74.9
+(2.0)
+59.5
+(3.0)
+96.1 (49.4)
+(0)
+72.3
+(0)
+78.9
+(0)
+74.4
+(0)
+57.6
+65.5
+(0)
+41.1
+(0)
+16.7
+(1.2)
+
++ match type
+100 (100)
+98.3 (83.9)
+74.9
+(0)
+100 (100)
+93.4 (19.7)
+96.5 (82.7)
+94.5 (48.4)
+75.2
+(0)
+100 (100)
+77.7
+(0)
+41.0
+(0)
+n/a(   )
+
+dictionary has no effect on performance). this is in sharp contrast to other recent results on data-
+driven non-goal directed conversations, e.g. over dialogs on twitter (ritter et al., 2011) or reddit
+(dodge et al., 2016), where it was found that tf-idf match outperforms nearest neighbor, as general
+conversations on a given subject typically share many words. we conjecture that the goal-oriented
+nature of the conversation means that the conversation moves forward more quickly, sharing fewer
+words per (input, response) pair, e.g. consider the example in figure 1.
+supervised embeddings outperform classical ir methods in general, indicating that learning mappings
+between words (via id27s) is important. however, only one task (t1, issuing api calls)
+is completely successful. in the other tasks, some responses are correct, as shown by the per-response
+accuracy, however there is no dialog where the goal is actually achieved (i.e., the mean dialog-
+accuracy is 0). typically the model can provide correct responses for greeting messages, asking
+to wait, making api calls and asking if there are any other options necessary. however, it fails to
+interpret the results of api calls to display options, provide information or update the calls with new
+information, resulting in most of its errors, even when match type features are provided.
+memory networks (without match type features) outperform classical ir and supervised embeddings
+across all of the tasks. they can solve the    rst two tasks (issuing and updating api calls) adequately.
+on the other tasks, they give improved results, but do not solve them. while the per-response accuracy
+is improved, the per-dialog accuracy is still close to 0 on t3 and t4. some examples of predictions
+of the memnn for t1-4 are given in appendix b. on the oov tasks again performance is improved,
+but this is all due to better performance on known words, as unknown words are simply not used
+without the match type features. as stated in appendix c, optimal hyperparameters on several of the
+tasks involve 3 or 4 hops, indicating that iterative accessing and reasoning over the conversation helps,
+e.g. on t3 using 1 hop gives 64.8% while 2 hops yields 74.7%. appendix b displays illustrative
+examples of memory networks predictions on t 1-4 and concierge.
+memory networks with match type features give two performance gains over the same models
+without match type features: (i) t4 (providing information) becomes solvable because matches can
+be made to the results of the api call; and (ii) out-of-vocabulary results are signi   cantly improved
+as well. still, tasks t3 and t5 are still fail cases, performance drops slightly on t2 compared to
+not using match type features, and no relative improvement is observed on t6. finally, note that
+matching words on its own is not enough, as evidenced by the poor performance of tf-idf matching;
+this idea must be combined with types and the other properties of the memnn model.
+unsurprisingly, perfectly coded rule-based systems can solve the simulated tasks t1-t5 perfectly,
+whereas our machine learning methods cannot. however, it is not easy to build an effective rule-based
+
+8
+
+published as a conference paper at iclr 2017
+
+system when dealing with real language on real problems, and our rule based system is outperformed
+by memnns on the more realistic task t6.
+overall, while the methods we tried made some inroads into these tasks, there are still many challenges
+left unsolved. our best models can learn to track implicit dialog states and manipulate oov words
+and symbols (t1-t2) to issue api calls and progress in conversations, but they are still unable to
+perfectly handle interpreting knowledge about entities (from returned api calls) to present results to
+the user, e.g. displaying options in t3. the improvement observed on the simulated tasks e.g. where
+memnns outperform supervised embeddings which in turn outperform ir methods, is also seen on
+the realistic data of t6 with similar relative gains. this is encouraging as it indicates that future work
+on breaking down, analysing and developing models over the simulated tasks should help in the real
+tasks as well. results on concierge con   rm this observation: the pattern of relative performances of
+methods is the same on concierge and on our series of tasks. this suggests that our synthetic data
+can indeed be used as an effective evaluation proxy.
+
+6 conclusion
+
+we have introduced an open dataset and task set for evaluating end-to-end goal-oriented dialog
+learning methods in a systematic and controlled way. we hope this will help foster progress of end-to-
+end conversational agents because (i) existing measures of performance either prevent reproducibility
+(different mechanical turk jobs) or do not correlate well with human judgements (liu et al., 2016);
+(ii) the breakdown in tasks will help focus research and development to improve the learning methods;
+and (iii) goal-oriented dialog has clear utility in real applications. we illustrated how to use the
+testbed using a variant of end-to-end memory networks, which prove an effective model on these
+tasks relative to other baselines, but are still lacking in some key areas.
+
+acknowledgments
+
+the authors would like to thank martin raison, alex lebrun and laurent landowski for their help
+with the concierge data.
+
+references
+bai, b., weston, j., grangier, d., collobert, r., sadamasa, k., qi, y., chapelle, o., and weinberger, k. (2009).
+
+supervised semantic indexing. in proceedings of acm cikm, pages 187   196. acm.
+
+banchs, r. e. (2012). movie-dic: a movie dialogue corpus for research and development. in proceedings of the
+
+50th annual meeting of the acl.
+
+chen, y.-n., hakkani-t  r, d., tur, g., gao, j., and deng, l. (2016). end-to-end memory networks with
+
+knowledge carryover for multi-turn spoken language understanding. in proceedings of interspeech.
+
+dahl, d. a., bates, m., brown, m., fisher, w., hunicke-smith, k., pallett, d., pao, c., rudnicky, a., and
+shriberg, e. (1994). expanding the scope of the atis task: the atis-3 corpus. in proceedings of the workshop
+on human language technology, pages 43   48. association for computational linguistics.
+
+dodge, j., gane, a., zhang, x., bordes, a., chopra, s., miller, a., szlam, a., and weston, j. (2016). evaluating
+
+prerequisite qualities for learning end-to-end id71. in proc. of iclr.
+
+ga  ic, m., kim, d., tsiakoulis, p., breslin, c., henderson, m., szummer, m., thomson, b., and young, s. (2014).
+incremental on-line adaptation of pomdp-based dialogue managers to extended domains. in proceedings on
+interspeech.
+
+henderson, m., thomson, b., and williams, j. (2014a). the second dialog state tracking challenge. in 15th
+
+annual meeting of the special interest group on discourse and dialogue, page 263.
+
+henderson, m., thomson, b., and young, s. (2014b). word-based dialog state tracking with recurrent neural
+networks. in proceedings of the 15th annual meeting of the special interest group on discourse and dialogue
+(sigdial), pages 292   299.
+
+hixon, b., clark, p., and hajishirzi, h. (2015). learning id13s for id53 through
+conversational dialog. in proceedings of the the 2015 conference of the north american chapter of the
+association for computational linguistics: human language technologies, denver, colorado, usa.
+
+9
+
+published as a conference paper at iclr 2017
+
+isbell, c. l., kearns, m., kormann, d., singh, s., and stone, p. (2000). cobot in lambdamoo: a social statistics
+
+agent. in aaai/iaai, pages 36   41.
+
+jafarpour, s., burges, c. j., and ritter, a. (2010). filter, rank, and transfer the knowledge: learning to chat.
+
+advances in ranking, 10.
+
+kim, s., d   haro, l. f., banchs, r. e., williams, j. d., and henderson, m. (2016). the fourth dialog state
+tracking challenge. in proceedings of the 7th international workshop on spoken dialogue systems (iwsds).
+
+lemon, o., georgila, k., henderson, j., and stuttle, m. (2006). an isu dialogue system exhibiting reinforcement
+in proceedings of the 11th
+
+learning of dialogue policies: generic slot-   lling in the talk in-car system.
+conference of the european chapter of the acl: posters & demonstrations, pages 119   122.
+
+liu, c.-w., lowe, r., serban, i. v., noseworthy, m., charlin, l., and pineau, j. (2016). how not to evaluate your
+dialogue system: an empirical study of unsupervised id74 for dialogue response generation.
+arxiv preprint arxiv:1603.08023.
+
+lowe, r., pow, n., serban, i., and pineau, j. (2015). the ubuntu dialogue corpus: a large dataset for research in
+
+unstructured multi-turn dialogue systems. arxiv preprint arxiv:1506.08909.
+
+lowe, r., serban, i. v., noseworthy, m., charlin, l., and pineau, j. (2016). on the evaluation of dialogue
+
+systems with next utterance classi   cation. arxiv preprint arxiv:1605.05414.
+
+mikolov, t., chen, k., corrado, g., and dean, j. (2013). ef   cient estimation of word representations in vector
+
+space. arxiv:1301.3781.
+
+pietquin, o. and hastie, h. (2013). a survey on metrics for the evaluation of user simulations. the knowledge
+
+engineering review, 28(01), 59   73.
+
+ritter, a., cherry, c., and dolan, w. b. (2011). data-driven response generation in social media. in proceedings
+
+of the conference on empirical methods in natural language processing.
+
+serban, i. v., sordoni, a., bengio, y., courville, a., and pineau, j. (2015a). building end-to-end dialogue
+systems using generative hierarchical neural network models. in proc. of the aaai conference on arti   cial
+intelligence.
+
+serban, i. v., lowe, r., charlin, l., and pineau, j. (2015b). a survey of available corpora for building data-driven
+
+dialogue systems. arxiv preprint arxiv:1512.05742.
+
+shang, l., lu, z., and li, h. (2015). neural responding machine for short-text conversation. arxiv preprint
+
+arxiv:1503.02364.
+
+sordoni, a., galley, m., auli, m., brockett, c., ji, y., mitchell, m., nie, j.-y., gao, j., and dolan, b. (2015). a
+neural network approach to context-sensitive generation of conversational responses. proceedings of naacl.
+
+su, p.-h., vandyke, d., gasic, m., kim, d., mrksic, n., wen, t.-h., and young, s. (2015a). learning from real
+users: rating dialogue success with neural networks for id23 in spoken dialogue systems.
+arxiv preprint arxiv:1508.03386.
+
+su, p.-h., vandyke, d., gasic, m., mrksic, n., wen, t.-h., and young, s. (2015b). reward shaping with
+recurrent neural networks for speeding up on-line policy learning in spoken dialogue systems. arxiv preprint
+arxiv:1508.03391.
+
+sukhbaatar, s., szlam, a., weston, j., and fergus, r. (2015). end-to-end memory networks. proceedings of
+
+nips.
+
+vinyals, o. and le, q. (2015). a neural conversational model. arxiv preprint arxiv:1506.05869.
+wang, h., lu, z., li, h., and chen, e. (2013). a dataset for research on short-text conversations. in emnlp.
+
+wang, z. and lemon, o. (2013). a simple and generic belief tracking mechanism for the dialog state tracking
+challenge: on the believability of observed information. in proceedings of the sigdial 2013 conference.
+
+wen, t.-h., gasic, m., mrksic, n., su, p.-h., vandyke, d., and young, s. (2015). semantically conditioned
+
+lstm-based id86 for spoken dialogue systems. arxiv preprint arxiv:1508.01745.
+
+weston, j., chopra, s., and bordes, a. (2015a). memory networks. proceedings of iclr.
+
+weston, j., bordes, a., chopra, s., and mikolov, t. (2015b). towards ai-complete id53: a set of
+
+prerequisite toy tasks. arxiv preprint arxiv:1502.05698.
+
+young, s., gasic, m., thomson, b., and williams, j. d. (2013). pomdp-based statistical spoken id71:
+
+a review. proceedings of the ieee, 101(5), 1160   1179.
+
+10
+
+published as a conference paper at iclr 2017
+
+a memory networks implementation
+
+storing and representing the conversation history as the model conducts a conversation with the
+user, at each time step t the previous utterance (from the user) and response (from the model) are appended to the
+memory. hence, at any given time there are cu
+t   1 model responses stored
+(i.e. the entire conversation).2 the aim at time t is to thus choose the next response cr
+t . we train on existing
+full dialog transcripts, so at training time we know the upcoming utterance cr
+t and can use it as a training target.
+following dodge et al. (2016), we represent each utterance as a bag-of-words and in memory it is represented as
+a vector using the embedding matrix a, i.e. the memory is an array with entries:
+
+t user utterances and cr
+
+1 , . . . cu
+
+1, . . . cr
+
+m = (a  (cu
+
+1 ), a  (cr
+
+1) . . . , a  (cu
+
+t   1), a  (cr
+
+t   1))
+
+where   (  ) maps the utterance to a bag of dimension v (the vocabulary), and a is a d    v matrix, where
+d is the embedding dimension. we retain the last user utterance cu
+t as the    input    to be used directly in the
+controller. the contents of each memory slot mi so far does not contain any information of which speaker spoke
+an utterance, and at what time during the conversation. we therefore encode both of those pieces of information
+in the mapping    by extending the vocabulary to contain t = 1000 extra    time features    which encode the
+index i into the bag-of-words, and two more features that encode whether the utterance was spoken by the user
+or the model.
+
+controller is then computed by o = r(cid:80)
+
+attention over the memory the last user utterance cu
+t is embedded using the same matrix a giving
+t ), which can also be seen as the initial state of the controller. at this point the controller reads
+q = a  (cu
+from the memory to    nd salient parts of the previous conversation that are relevant to producing a response.
+the match between q and the memories is computed by taking the inner product followed by a softmax:
+pi = softmax(u(cid:62)mi), giving a id203 vector over the memories. the vector that is returned back to the
+i pimi where r is a d    d square matrix. the controller state is then
+updated with q2 = o + q. the memory can be iteratively reread to look for additional pertinent information
+using the updated state of the controller q2 instead of q, and in general using qh on iteration h, with a    xed
+number of iterations n (termed n hops). empirically we    nd improved performance on our tasks with up to 3
+or 4 hops.
+
+choosing the response the    nal prediction is then de   ned as:
+
+  a = softmax(qn +1
+
+(cid:62)
+
+w   (y1), . . . , qn +1
+
+(cid:62)
+
+w   (yc ))
+
+where there are c candidate responses in y, and w is of dimension d    v . in our tasks the set y is a (large) set
+of candidate responses which includes all possible bot utterances and api calls.
+the entire model is trained using stochastic id119 (sgd), minimizing a standard cross-id178 loss
+between   a and the true label a.
+
+b examples of predictions of a memory network
+
+tables 3, 4, 5 and 6 display examples of predictions of the best performing memory network on full dialogs,
+task 5, (with 3 hops) on test examples of tasks 1-4 along with the values of the attention over each memory
+for each hop (pi as de   ned in sec. a). this model does not use match type features. then, table 7 displays an
+example of prediction of the best performing memory network on concierge (with 2 hops) on a test example
+along with the values of the attention over each memory for each hop.
+
+c hyperparameters
+
+tables 8 and 9 respectively display the values of the hyperparameters of the best supervised embeddings and
+memory networks selected for each task. these models were selected using the best validation validation sets.
+
+d additional results
+
+table 10 provides results for additional variants of supervised embeddings, using either a dictionary that includes
+all bigrams to leverage some word order information, or match type features. on some tasks, supervised
+embeddings perform better when the last user utterance is used as sole input, without the full dialog history
+(see table 8). when no history is used, we slightly adapt match type features to only record type: a special
+word corresponding to type t (e.g., phone, address, etc) is appended to the representation of a candidate if the
+
+2api calls are stored as bot utterances cr
+
+i , and kb facts resulting from such calls as user utterances cu
+i .
+
+11
+
+published as a conference paper at iclr 2017
+
+table 3: task 1 (issue api call) the model learns to direct its attention towards the 4 memories containing
+the information key to issue the api call. more hops help to strengthen this signal. <silence> is a special token
+used to indicate that the user did not speak at this turn     the model has to carry out the conversation with no
+additional input.
+
+hop #1 hop #2 hop #3
+
+locutor
+time
+user
+1
+bot
+2
+user
+3
+bot
+4
+user
+5
+bot
+6
+user
+7
+bot
+8
+user
+9
+bot
+10
+user
+11
+12
+bot
+user input
+correct answer
+predicted answer
+
+dialog history
+hi
+hello what can i help you with today
+may i have a table in paris
+i   m on it
+<silence>
+any preference on a type of cuisine
+i love indian food
+how many people would be in your party
+we will be six
+which price range are looking for
+in a moderate price range please
+ok let me look into some options for you
+<silence>
+api_call indian paris six moderate
+api_call indian paris six moderate
+
+.054
+.040
+.099
+.048
+.181
+.056
+.159
+.051
+.129
+.039
+.128
+.016
+
+[correct]
+
+table 4: task 2 (update api call) out of the multiple memories from the current dialog, the model
+correctly focuses on the 2 important pieces: the original api call and the utterance giving the update.
+
+hop #1 hop #2 hop #3
+
+locutor
+time
+user
+3
+bot
+4
+user
+5
+bot
+6
+user
+7
+bot
+8
+user
+9
+bot
+10
+user
+11
+bot
+12
+user
+13
+bot
+14
+user
+15
+bot
+16
+user
+17
+18
+bot
+user input
+correct answer
+predicted answer
+
+dialog history
+may i have a table in paris
+i   m on it
+<silence>
+any preference on a type of cuisine
+i love indian food
+how many people would be in your party
+we will be six
+which price range are looking for
+in a moderate price range please
+ok let me look into some options for you
+<silence>
+api_call indian paris six moderate
+instead could it be with french food
+sure is there anything else to update
+no
+ok let me look into some options for you
+<silence>
+api_call french paris six moderate
+api_call french paris six moderate
+
+.061
+.026
+.087
+.026
+.081
+.025
+.059
+.038
+.080
+.025
+.127
+.062
+.188
+.016
+.028
+.011
+
+[correct]
+
+12
+
+.016
+.024
+.137
+.028
+.099
+.090
+.188
+.022
+.144
+.028
+.213
+.011
+
+.072
+.012
+.042
+.023
+.070
+.006
+.051
+.043
+.095
+.042
+.069
+.113
+.311
+.007
+.013
+.006
+
+.020
+.008
+.141
+.004
+.037
+.014
+.238
+.010
+.114
+.006
+.405
+.003
+
+.040
+.001
+.012
+.001
+.055
+.001
+.018
+.004
+.096
+.003
+.032
+.043
+.683
+.001
+.007
+.000
+
+published as a conference paper at iclr 2017
+
+table 5: task 3 (displaying options) the model knows it has to display options but the attention is wrong:
+it should attend on the ratings to select the best option (with highest rating). it cannot learn that properly and
+match type features do not help. it is correct here by luck, the task is not solved overall (see tab. 2). we do not
+show all memories in the table, only those with meaningful attention.
+
+hop #1 hop #2 hop #3
+
+locutor
+bot
+user
+bot
+user
+user
+user
+user
+user
+user
+user
+user
+user
+user
+user
+user
+user
+user
+
+time
+14
+15
+20
+21
+23
+24
+25
+26
+27
+30
+31
+32
+33
+37
+38
+39
+40
+user input
+correct answer
+predicted answer
+
+dialog history
+api_call indian paris six moderate
+instead could it be with french food
+api_call french paris six moderate
+resto_1 r_phone rest_1_phone
+resto_1 r_cuisine french
+resto_1 r_location paris
+resto_1 r_number six
+resto_1 r_price moderate
+resto_1 r_rating 6
+resto_2 r_cuisine french
+resto_2 r_location paris
+resto_2 r_number six
+resto_2 r_price moderate
+resto_3 r_cuisine french
+resto_3 r_location paris
+resto_3 r_number six
+resto_3 r_price moderate
+<silence>
+what do you think of this option: resto_1
+what do you think of this option: resto_1
+
+[correct]
+
+table 6: task 4 (providing extra-information) the model knows it must display a phone or an address,
+but, as explained in section a the embeddings mix up the information and make it hard to distinguish between
+different phone numbers or addresses, making answering correctly very hard. as shown in the results of tab. 2,
+this problem can be solved by adding match type features, that allow to emphasize entities actually appearing in
+the history. the attention is globally wrong here.
+
+hop #1 hop #2 hop #3
+
+time
+locutor
+14
+bot
+15
+user
+20
+bot
+21
+user
+22
+user
+23
+user
+24
+user
+25
+user
+26
+user
+27
+user
+28
+user
+29
+user
+31
+user
+32
+user
+33
+user
+35
+user
+36
+user
+37
+user
+39
+user
+40
+user
+42
+bot
+43
+user
+44
+bot
+user input
+correct answer
+predicted answer
+
+dialog history
+api_call indian paris six moderate
+instead could it be with french food
+api_call french paris six moderate
+resto_1 r_phone resto_1_phone
+resto_1 r_address resto_1_address
+resto_1 r_cuisine french
+resto_1 r_location paris
+resto_1 r_number six
+resto_1 r_price moderate
+resto_1 r_rating 6
+resto_2 r_phone resto_2_phone
+resto_2 r_address resto_2_address
+resto_2 r_location paris
+resto_2 r_number six
+resto_2 r_price moderate
+resto_3 r_phone resto_3_phone
+resto_3 r_address resto_3_address
+resto_3 r_location paris
+resto_3 r_number six
+resto_3 r_price moderate
+what do you think of this option: resto_1
+let   s do it
+great let me do the reservation
+do you have its address
+here it is resto_1_address
+here it is: resto_8_address
+
+[incorrect]
+
+13
+
+.012
+.067
+.012
+.018
+.029
+.060
+.050
+.060
+.016
+.031
+.040
+.020
+.029
+.014
+.028
+.024
+.039
+
+.006
+.024
+.005
+.011
+.018
+.018
+.068
+.086
+.070
+.014
+.015
+.014
+.075
+.100
+.038
+.004
+.005
+.028
+.039
+.018
+.074
+.032
+.003
+
+.000
+.103
+.000
+.004
+.005
+.292
+.298
+.090
+.002
+.007
+.081
+.012
+.009
+.001
+.016
+.022
+.015
+
+.000
+.011
+.000
+.005
+.004
+.003
+.091
+.078
+.225
+.006
+.009
+.004
+.176
+.126
+.090
+.001
+.002
+.028
+.013
+.008
+.001
+.004
+.000
+
+.000
+.147
+.000
+.000
+.000
+.094
+.745
+.002
+.000
+.000
+.004
+.000
+.000
+.000
+.001
+.004
+.001
+
+.000
+.007
+.001
+.004
+.001
+.001
+.108
+.020
+.369
+.008
+.006
+.001
+.193
+.026
+.167
+.001
+.001
+.026
+.002
+.013
+.000
+.001
+.000
+
+published as a conference paper at iclr 2017
+
+table 7: concierge data the model is also able to learn from human-human dialogs. <person>, <org>,
+<number> and <date> are special tokens used to anonymize the data. we report the top 5 answers predicted by
+the model. they are all semantically equivalent. note that the utterances, while all produced by humans, are not
+perfect english ("rservation", "i   ll check into it")
+
+time
+1
+2
+3
+4
+5
+
+locutor
+user
+user
+user
+user
+bot
+
+user input
+correct answer
+pred. answer #1
+pred. answer #2
+pred. answer #3
+pred. answer #4
+pred. answer #5
+
+dialog history
+hey concierge
+could you check if i can get a rservation at <org> <date> for brunch
+<number> people
+<silence>
+hi <person> unfortunately <org> is fully booked for <date>
+and there   s <number> people on the waiting list
+when   s the earliest availability
+i   ll check
+i   m on it
+i   ll    nd out
+i   ll take a look
+i   ll check
+i   ll check into it
+
+hop #1 hop #2
+
+.189
+.209
+.197
+.187
+.225
+
+.095
+.178
+.142
+.167
+.410
+
+[incorrect]
+[incorrect]
+[incorrect]
+[correct]
+[incorrect]
+
+table 8: hyperparameters of supervised embeddings. when use history is true, the whole
+conversation history is concatenated with the latest user utterance to create the input. if false, only the latest
+utterance is used as input.
+
+learning rate margin m embedding dim d negative cand. n use history
+
+task
+task 1
+task 2
+task 3
+task 4
+task 5
+task 6
+concierge
+
+task
+task 1
+task 2
+task 3
+task 4
+task 5
+task 6
+concierge
+
+0.01
+0.01
+0.01
+0.001
+0.01
+0.001
+0.001
+
+0.01
+0.01
+0.01
+0.01
+0.01
+0.01
+0.001
+
+0.01
+0.01
+0.1
+0.1
+0.01
+0.01
+0.1
+
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+
+32
+128
+128
+128
+32
+128
+64
+
+128
+32
+32
+128
+32
+128
+128
+
+100
+100
+1000
+1000
+100
+100
+100
+
+100
+100
+100
+100
+100
+100
+100
+
+true
+false
+false
+false
+true
+false
+false
+
+1
+1
+3
+2
+3
+4
+2
+
+table 9: hyperparameters of memory networks. the longer and more complex the dialogs are, the
+more hops are needed.
+
+learning rate margin m embedding dim d negative cand. n nb hops
+
+candidate contains a word that appears in the knowledge base as an entity of type t , regardless of whether the
+same word appeared earlier in the conversation. as seen on table 10, match type features improve performance
+on out-of-vocabulary tasks 1 and 5, bringing it closer to that of memory networks without match type features,
+but still quite lagging memory networks with match type features. bigrams slightly hurt rather than help
+performance, except in task 5 in the standard in-vocabulary setup (performance is lower in the oov setup).
+
+14
+
+published as a conference paper at iclr 2017
+
+table 10: test results across all tasks and methods. for tasks t1-t5 results are given in the standard
+setup and the out-of-vocabulary (oov) setup, where words (e.g. restaurant names) may not have been seen
+during training. task t6 is the dialog state tracking 2 task with real dialogs, and only has one setup. best
+performing methods (or methods within 0.1% of best performing) are given in bold for the per-response accuracy
+metric, with the per-dialog accuracy given in parenthesis.
+
+task
+
+t1: issuing api calls
+t2: updating api calls
+t3: displaying options
+t4: providing information
+t5: full dialogs
+t1(oov): issuing api calls
+t2(oov): updating api calls
+t3(oov): displaying options
+t4(oov): providing inform.
+t5(oov): full dialogs
+t6: dialog state tracking 2
+
+supervised embeddings
+
+no match type
+
+no bigram
+(100)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+
+100
+68.4
+64.9
+57.2
+75.4
+60.0
+68.3
+65.0
+57.0
+58.2
+22.6
+
++ match type
+no bigram
+(0)
+83.2
+(0)
+68.4
+(0)
+64.9
+57.2
+(0)
+(0)
+76.2
+(0)
+67.2
+(0)
+68.3
+(0)
+65.0
+57.1
+(0)
+(0)
+64.4
+22.1
+(0)
+
++ bigrams
+
+no match type
+98.6 (92.4)
+68.3
+64.9
+57.3
+83.4
+58.8
+68.3
+62.1
+57.0
+50.4
+21.8
+
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+(0)
+
+memory networks
+
+no match type
+
++ match type
+
+99.9 (99.6)
+100
+(100)
+74.9
+(2.0)
+59.5
+(3.0)
+96.1 (49.4)
+(0)
+72.3
+(0)
+78.9
+(0)
+74.4
+57.6
+(0)
+(0)
+65.5
+41.1
+(0)
+
+100 (100)
+98.3 (83.9)
+74.9
+(0)
+100 (100)
+93.4 (19.7)
+96.5 (82.7)
+94.5 (48.4)
+75.2
+(0)
+100 (100)
+77.7
+(0)
+41.0
+(0)
+
+15
+
+

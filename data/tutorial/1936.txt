@@ -1,0 +1,310 @@
+   #[1]adit deshpande - cs undergrad at ucla ('19)
+
+   [2][pic.jpg]
+
+[3]adit deshpande
+
+   cs undergrad at ucla ('19)
+
+   [4]blog [5]about [6]github [7]projects [8]resume
+
+analyzing the papers behind facebook's id161 approach
+
+   [cover4th-2.png]
+
+introduction
+
+                   you know that company called facebook? yeah, the one
+   that has 1.6 billion people hooked on their website. take all of the
+   happy birthday posts, embarrassing pictures of you as a little kid,
+   that one family relative that likes every single one of your statuses,
+   and you have a whole lot of data to analyze.
+
+    in terms of analyzing the images, facebook has undoubtedly made great
+   progress with deep id98s. a little over a week ago, the team at facebook
+   ai research (fair) published a [9]blog post detailing the computer
+   vision techniques that are behind some of their object segmentation
+   algorithms. in this post, we   ll go into summarizing and explaining the
+   3 papers that the blog referenced.
+   [segmentation.png]
+
+   the main pipeline that fair utilizes goes as follows. images are fed
+   into a deepmask segmentation framework. the segments are refined
+   through a sharpmask model and classified with multipathnet. let   s look
+   at how each of these components operates separately.
+
+[10]deepmask
+
+   introduction
+
+                   written by pedro pinheiro, roman collobert, and piotr
+   dollar, this paper is titled    learning to segment object candidates   .
+   the authors approach the task of object segmentation through a model
+   that, given an image patch, first outputs a segmentation mask and then
+   outputs the id203 that the patch is centered on a full object.
+   that process is applied over the whole image so that a mask can be
+   created for each object. this whole process is done through just one
+   id98, as both components share many of the layers in the network.
+
+   inputs and outputs
+
+   let   s first visualize what want this model to do. given an input image,
+   we want the network to output a set of masks, or outlines, for each
+   object. we can think of each input image as containing a set of patches
+   (crops of the original image). for each input patch, the output is a
+   binary mask that outlines the shape of the main object as well as a
+   score (between -1 and 1) for how likely the input patch is to contain
+   an object.
+   [segmentation2.png]
+
+   each training example will need to contain these 3 elements (side note:
+   examples with a 1 label need to contain an object that is roughly
+   centered, fully contained in the image, and in a given scale range).
+   the model applies this process at multiple scales and locations on the
+   image (this is the patch set that we were talking about earlier). the
+   results are then aggregated together to form one final image with all
+   of the masks. now, let   s take a look at the how this model is
+   structured.
+   [segmentation3.png]
+
+   network architecture
+
+                   the network was pre-trained for classification on
+   id163 (id21 works. use it). the image is fed through a
+   vgg-like model (without the fully connected layers) with eight 3x3 conv
+   layers and five 2x2 maxpool layers. depending on your input image
+   dimensions, you will get a certain output volume (in this case,
+   512x14x14).
+
+   input: 3 x h x w
+   output:  512 x h/16 x w/16
+
+   then, the model separates into the 2 components described earlier. one
+   head tackles segmentation while the other determines whether or not
+   there is an object in the image.
+
+   segmentation head
+
+                   now we take our output volume, pass it through a
+   network-in-network layer and a relu layer. then, we have a layer of w   
+   x h    (where w    and h    are less than the h and w of the original image)
+   pixel classifiers which determine whether or not a given pixel is part
+   of the object in the center of the image (if you have a 28x28 sized
+   original image, there will be less than 784 classifiers). we then look
+   at the outputs of these classifiers, bilinearly upsample the output to
+   fit the full original resolution, and obtain a black and white binary
+   mask (1   s for yes classification and zeros for no classification).
+
+   objectness head
+
+                   the other component of the network determines if the
+   image contains an object that is centered and at an appropriate scale.
+   putting the output of vgg-like layers through a 2x2 maxpool, a dropout
+   unit, and two fully connected layers, we   re able to obtain our
+      objectness    score.
+
+   training
+
+                   both components of the network are trained
+   simultaneously as the id168 is a sum of id28
+   losses (one for the objectness head and one for every location in the
+   segmentation head).  id26 alternates between going through
+   the segmentation head and the objectness head. data augmentation
+   techniques were used to improve the model.  the model was trained with
+   stochastic id119 on an nvidia tesla k40m gpu for around 5
+   days.
+
+   why this paper is cool
+
+                   a single convolutional neural network. we didn   t need
+   an extra object proposal step or some complex training pipeline. there
+   is a certain simplicity to this model which helps the network   s
+   flexibility as well as its efficiency and speed.
+
+[11]sharpmask
+
+   introduction
+
+               the previous group (along with tsung-yi lin) also authored
+   the paper titled    learning to refine object segments   . evidenced by the
+   title, the paper aims to refine the segmentation masks created in the
+   deepmask model. the main issue with deepmask is that it uses a simple
+   feed forward network that is successful in creating    coarse object
+   masks   , but not in    pixel-accurate segmentations   . the reason for this
+   is that, as you may remember, there is a bilinear up sampling that
+   takes place in order to fit the full size of the image. this causes
+   rough and imprecise alignment with the object boundaries. to address
+   this, the sharpmask model works to combine information from the
+   low-level features that comes from the early layers with the high-level
+   object information that comes from the layers deeper in the network.
+   the model does this by first creating a rough mask for each input patch
+   (deepmask   s job), and then passing it through different refinement
+   modules throughout the network. let   s look at the specifics.
+   [segmentation4.png]
+
+   network architecture
+
+                   the motivation behind sharpmask   s architecture is that
+   because object-level (high-level) information is needed to find a
+   precise segmentation mask, we need to use a top-down approach that
+   first creates a coarse outline but then integrates important low-level
+   information from earlier layers. as you can see from the above picture,
+   the original input first goes through the deepmask pipeline to obtain a
+   rough segmentation. it then is exposed to a series of refinement
+   modules that allow for a more precise upsampling back to the original
+   dimensions of the image.
+
+   refinement module
+
+                   let   s dig a little deeper into the specifics of this
+   refinement module. the goal of this module is to counter the effects of
+   the pooling layers in the deepmask pipeline (the layers that shrunk the
+   224x224 image to 14x14) by upsampling the generated masks in a way that
+   also takes into account the feature maps that were created in the
+   bottom-up pass (you can think of deepmask = bottom-up and refinement
+   module = top-down).  a mathematical way of looking at it is that the
+   refinement module r is a function that generates an upsampled mask m
+   that is a function of the mask in the previous layer as well as a
+   function of the feature map f. the number of refinement modules used
+   would be equal to the number of pooling layers used in the deepmask
+   pipeline.
+   [segmentation5.png]
+
+   now, what exactly goes on in that function r? glad you asked. a na  ve
+   approach would be to just concatenate m and f since they have the same
+   width and height. the problem there lies in the depth channels of each
+   of those components. the number of depth channels for feature maps can
+   be much larger compared to that of the mask. therefore, concatenating
+   would put too much of an emphasis on f. the solution would be to simply
+   reduce the number of depth channels for f by applying a 3x3 conv layer,
+   then concatenating m, going through another 3x3 conv, and finally using
+   a bilinear upsampling (see network architecture image to follow along).
+
+   training
+
+                   the same training data that deepmask uses also applies
+   for sharpmask. we need input patches with binary masks as well as
+   labels. the deepmask layers are trained first. the weights are then
+   frozen as the refinement modules begin their training.
+
+   why this paper is cool
+
+                   this paper was able to build on deepmask   s approach
+   while introducing a new and easy-to-use module. the authors creatively
+   realized that they could obtain more precise segmentations by just
+   integrating the low level information that was available in the early
+   layers of the deepmask pipeline.
+   [segmentation6.png]
+
+[12]multipathnet
+
+   introduction
+
+                   deepmask generates coarse segmentation masks. sharpmask
+   refines those outlines. multipathnet has the job of identifying or
+   classifying the objects in the masks. a group consisting of sergey
+   zagoruyko, adam lerer, tsung-yi lin, pedro pinheiro, sam gross, soumith
+   chintala, and piotr dollar published the paper titled    a multipath
+   network for id164   . the goal of this paper is to improve on
+   id164 techniques by focusing on higher precision
+   localization as well as difficult images with scale variance, heavy
+   occlusion, and clutter. this model takes fast r-id98 as a starting
+   point, so if you haven   t already, check out that [13]paper or look at
+   my previous [14]blog post for a summary. basically, this model is a way
+   of implementing fast r-id98 with deepmask/sharpmask object proposals.
+   the 3 main modifications that this paper introduced include skip
+   connections, foveal regions, and an integral id168. let   s look
+   at the network architecture before diving into each of those.
+   [segmentation7.png]
+
+   network architecture/foveal regions
+
+                   as with fast r-id98, we pass the input image through a
+   vgg network without the fully connected layers. roi pooling is used to
+   extract features  of the region proposals (if we remember from the fast
+   r-id98 paper, roi pooling is a way of mapping features of the image to a
+   feature map of fixed spatial extent that describes the regions). for
+   each object proposal, we then create 4 different region crops for the
+   purpose of viewing the object at multiple scales. these are the    foveal
+   regions    discussed in the intro. these region crops are fed through
+   fully connected layers, the outputs are concatenated, and the network
+   splits into a classification and a regression head. the authors
+   hypothesize that these foveal regions help with localization precision
+   because the network is able to view the image at different scales and
+   with different context around the object of interest.
+
+   skip connections
+
+                   due to fast r-id98   s architecture, an input image of
+   32x32 will quickly get reduced to 2x2 after the last vgg conv layer.
+   roi pooling will create a 7x7 map, but we   ve still lost a lot of the
+   original spatial information. to combat this, we concatenate the
+   features from the conv3, conv4, and conv5 layers and then feed that
+   into the foveal classifier. the paper states that this concatenation
+      gives the classifier access to information from features at multiple
+   locations   .
+
+   integral loss
+
+                   don   t want to go too much into this one since i feel
+   like the math will undoubtedly be much better explained in the paper
+   itself, but the general idea is the authors came up with a loss
+   function that performs better while testing with multiple intersection
+   over union (iou) values.
+
+   why this paper is cool
+
+                   if you like fast r-id98, i think you   ll definitely like
+   this model. it takes the main ideas of using vgg net and roi pooling,
+   while also introducing a way to obtain more precise localizations and
+   classifications through foveal regions, skip connections, and integral
+   loss.
+
+
+   facebook kinda has this id98 stuff down.
+
+   if anyone has anything to add or different explanations of any of the
+   papers, let me know in the comments!
+
+   the [15]code for deepmask and sharpmask. the [16]code for multipathnet.
+
+   dueces.
+   [17]sources
+
+   [18]tweet
+
+   written on september 1, 2016
+
+   please enable javascript to view the [19]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://adeshpande3.github.io/adeshpande3.github.io/feed.xml
+   2. https://adeshpande3.github.io/adeshpande3.github.io/
+   3. https://adeshpande3.github.io/adeshpande3.github.io/
+   4. https://adeshpande3.github.io/adeshpande3.github.io/
+   5. https://adeshpande3.github.io/adeshpande3.github.io/about
+   6. https://github.com/adeshpande3
+   7. https://adeshpande3.github.io/adeshpande3.github.io/projects
+   8. https://adeshpande3.github.io/adeshpande3.github.io/resume.pdf
+   9. https://research.facebook.com/blog/learning-to-segment/
+  10. https://arxiv.org/pdf/1506.06204v2.pdf
+  11. https://arxiv.org/pdf/1603.08695v2.pdf
+  12. http://arxiv.org/pdf/1604.02135v2.pdf
+  13. https://arxiv.org/pdf/1504.08083.pdf
+  14. https://adeshpande3.github.io/adeshpande3.github.io/the-9-deep-learning-papers-you-need-to-know-about.html
+  15. https://github.com/facebookresearch/deepmask
+  16. https://github.com/facebookresearch/multipathnet
+  17. https://adeshpande3.github.io/assets/sources4.txt
+  18. https://twitter.com/share
+  19. http://disqus.com/?ref_noscript
+
+   hidden links:
+  21. mailto:adeshpande3@g.ucla.edu
+  22. https://www.facebook.com/adit.deshpande.5
+  23. https://github.com/adeshpande3
+  24. https://instagram.com/thejugglinguy
+  25. https://www.linkedin.com/in/aditdeshpande
+  26. https://adeshpande3.github.io/adeshpande3.github.io/feed.xml
+  27. https://www.twitter.com/aditdeshpande3

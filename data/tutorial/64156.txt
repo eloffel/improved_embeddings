@@ -1,0 +1,682 @@
+   #[1]machine learning explained    feed [2]machine learning explained   
+   comments feed [3]an intuitive introduction to the hessian for deep
+   learning practitioners [4]id38 tutorial in torchtext
+   (practical torchtext part 2) [5]alternate [6]alternate
+
+   [7]skip to content
+
+   [8]machine learning explained
+
+   deep learning, python, data wrangling and other machine learning
+   related topics explained for practitioners
+   (button) menu
+
+     * [9]about this blog
+     * [10]github
+
+a comprehensive introduction to torchtext (practical torchtext part 1)
+
+   if you   ve ever worked on a project for deep learning for nlp, you   ll
+   know how painful and tedious all the preprocessing is. before you start
+   training your model, you have to:
+    1. read the data from disk
+    2. tokenize the text
+    3. create a mapping from word to a unique integer
+    4. convert the text into lists of integers
+    5. load the data in whatever format your deep learning framework
+       requires
+    6. pad the text so that all the sequences are the same length, so you
+       can process them in batch
+
+   [11]torchtext is a library that makes all the above processing much
+   easier. though still relatively new, its convenient functionality    
+   particularly around batching and loading     make it a library worth
+   learning and using.
+
+   in this post, i   ll demonstrate how torchtext can be used to build and
+   train a text classifier from scratch.to make this tutorial realistic,
+   i   m going to use a small sample of data from [12]this kaggle
+   competition. the data and code are available in [13]my github repo, so
+   feel free to clone it and follow along. or, if you just want to see the
+   minimal working example, feel free to skip the rest of this tutorial
+   and just read the [14]notebook.
+
+   update: the current pip release of torchtext contains bugs that will
+   cause the notebook to work incorrectly. i   ve fixed these bugs on the
+   master branch of the [15]github repo, so i highly recommend you install
+   torchtext with the following command:
+
+$ pip install --upgrade git+https://github.com/pytorch/text
+
+
+
+1. the overview
+
+   torchtext follows the following basic formula for transforming data
+   into working input for your neural network:
+
+   torchtext takes in raw data in the form of text files, csv/tsv files,
+   json files, and directories (as of now) and converts them to datasets.
+   datasets are simply preprocessed blocks of data read into memory with
+   various fields. they are a canonical form of processed data that other
+   data structures can use.
+
+   torchtext then passes the dataset to an iterator. iterators handle
+   numericalizing, batching, packaging, and moving the data to the gpu.
+   basically, it does all the heavy lifting necessary to pass the data to
+   a neural network.
+
+   in the following sections, we   ll see how each of these processes plays
+   out in an actual working example.
+
+
+2. declaring the fields
+
+   torchtext takes a declarative approach to loading its data: you tell
+   torchtext how you want the data to look like, and torchtext handles it
+   for you.
+
+   the way you do this is by declaring a field. the field specifies how
+   you want a certain (you guessed it) field to be processed. let   s look
+   at an example:
+from torchtext.data import field
+tokenize = lambda x: x.split()
+text = field(sequential=true, tokenize=tokenize, lower=true)
+
+label = field(sequential=false, use_vocab=false)
+
+   in the toxic comment classification dataset, there are two kinds of
+   fields: the comment text and the labels (toxic, severe toxic, obscene,
+   threat, insult, and identity hate).
+
+   let   s look at the label field first, since it   s simpler. all fields, by
+   default, expect a sequence of words to come in, and they expect to
+   build a mapping from the words to integers later on (this mapping is
+   called the vocab, and we will see how it is created later). if you are
+   passing a field that is already numericalized by default and is not
+   sequential, you should pass use_vocab=false and sequential=false.
+
+   for the comment text, we pass in the preprocessing we want the field to
+   do as keyword arguments. we give it the tokenizer we want the field to
+   use, tell it to convert the input to lowercase, and also tell it the
+   input is sequential.
+
+   in addition to the keyword arguments mentioned above, the field class
+   also allows the user to specify special tokens (the unk_token for
+   out-of-vocabulary words, the pad_token for padding, the eos_token for
+   the end of a sentence, and an optional init_token for the start of the
+   sentence), choose whether to make the first dimension the batch or the
+   sequence (the first dimension is the sequence by default), and choose
+   whether to allow the sequence lengths to be decided at runtime or
+   decided in advance. fortunately, [16]the docstrings for the field class
+   are relatively well written, so if you need some advanced preprocessing
+   you should refer to them for more information.
+
+   the field class is at the center of torchtext and is what makes
+   preprocessing such an ease. aside from the standard field class, here   s
+   a list of the fields that are currently available (along with their use
+   cases):
+   name description use case
+   field a regular field that defines preprocessing and postprocessing
+   non-text fields and text fields where you don   t need to map integers
+   back to words
+   reversiblefield an extension of the field that allows reverse mapping
+   of word ids to words text fields if you want to map the integers back
+   to natural language (such as in the case of id38)
+   nestedfield a field that takes processes non-tokenized text into a set
+   of smaller fields  char-based models
+   labelfield (new!) a regular field with sequential=false and no <unk>
+   token. newly added on the master branch of the torchtext github repo,
+   not yet available for release. label fields in text classification.
+
+3. constructing the dataset
+
+   the fields know what to do when given raw data. now, we need to tell
+   the fields what data it should work on. this is where we use datasets.
+
+   there are various built-in datasets in torchtext that handle common
+   data formats. for csv/tsv files, the tabulardataset class is
+   convenient. here   s how we would read data from a csv file using the
+   tabulardataset:
+from torchtext.data import tabulardataset
+
+tv_datafields = [("id", none), # we won't be needing the id, so we pass in none
+as the field
+                 ("comment_text", text), ("toxic", label),
+                 ("severe_toxic", label), ("threat", label),
+                 ("obscene", label), ("insult", label),
+                 ("identity_hate", label)]
+trn, vld = tabulardataset.splits(
+               path="data", # the root directory where the data lies
+               train='train.csv', validation="valid.csv",
+               format='csv',
+               skip_header=true, # if your csv header has a header, make sure to
+ pass this to ensure it doesn't get proceesed as data!
+               fields=tv_datafields)
+
+tst_datafields = [("id", none), # we won't be needing the id, so we pass in none
+ as the field
+                  ("comment_text", text)]
+tst = tabulardataset(
+           path="data/test.csv", # the file path
+           format='csv',
+           skip_header=true, # if your csv header has a header, make sure to pas
+s this to ensure it doesn't get proceesed as data!
+           fields=tst_datafields)
+
+   for the tabulardataset, we pass in a list of (name, field) pairs as the
+   fields argument. the fields we pass in must be in the same order as the
+   columns. for the columns we don   t use, we pass in a tuple where the
+   field element is none. [17]^1
+
+   the splits method creates a dataset for the train and validation data
+   by applying the same processing. it can also handle the test data, but
+   since out test data has a different format from the train and
+   validation data, we create a different dataset.
+
+   datasets can mostly be treated in the same way as lists. to understand
+   this, it   s instructive to take a look inside our dataset. datasets can
+   be indexed and iterated over like normal lists, so let   s see what the
+   first element looks like:
+
+>>> trn[0]
+<torchtext.data.example.example at 0x10d3ed3c8>
+>>> trn[0].__dict__.keys()
+dict_keys(['comment_text', 'toxic', 'severe_toxic', 'threat', 'obscene', 'insult
+', 'identity_hate'])
+
+>>> trn[0].comment_text[:3]
+['explanation', 'why', 'the']
+
+   we get an example object. the example object bundles the attributes of
+   a single data point together. we also see that the text has already
+   been tokenized for us, but has not yet been converted to integers. this
+   makes sense since we have not yet constructed the mapping from words to
+   ids. constructing this mapping is our next step.
+
+   torchtext handles mapping words to integers, but it has to be told the
+   full range of words it should handle. in our case, we probably want to
+   build the vocabulary on the training set only, so we run the following
+   code:
+text.build_vocab(trn)
+
+   this makes torchtext go through all the elements in the training set,
+   check the contents corresponding to the text field, and register the
+   words in its vocabulary. torchtext has its own class called vocab for
+   handling the vocabulary. the vocab class holds a mapping from word to
+   id in its stoi attribute and a reverse mapping in its itos attribute.
+   in addition to this, it can automatically build an embedding matrix for
+   you using various pretrained embeddings like id97 (more on this in
+   [18]another tutorial). the vocab class can also take options like
+   max_size and min_freq that dictate how many words are in the vocabulary
+   or how many times a word has to appear to be registered in the
+   vocabulary. words that are not included in the vocabulary will be
+   converted into <unk>, a token standing for    unknown   .
+
+   here is a list of the currently available set of datasets and the
+   format of data they take in:
+   name description use case
+    tabulardataset takes paths to csv/tsv files and json files or python
+   dictionaries as inputs. any problem that involves a label (or labels)
+   for each piece of text
+    languagemodelingdataset takes the path to a text file as input.
+   id38
+    translationdataset  takes a path and extensions to a file for each
+   language.
+
+   e.g. if the files are english:    hoge.en   , french:    hoge.fr   ,
+   path=   hoge   , exts=(   en   ,   fr   )
+    translation
+    sequencetaggingdataset takes a path to a file with the input sequence
+   and output sequence separated by tabs. [19]^2 sequence tagging
+
+   now that we have our data formatted and read into memory, we turn to
+   the next step: creating an iterator to pass the data to our model.
+
+
+4. constructing the iterator
+
+   in torchvision and pytorch, the processing and batching of data is
+   handled by dataloaders. for some reason, torchtext has renamed the
+   objects that do the exact same thing to iterators. the basic
+   functionality is the same, but iterators, as we will see, have some
+   convenient functionality that is unique to nlp.
+
+   below is code for how you would initialize the iterators for the train,
+   validation, and test data.
+
+from torchtext.data import iterator, bucketiterator
+
+train_iter, val_iter = bucketiterator.splits(
+ (trn, vld), # we pass in the datasets we want the iterator to draw data from
+ batch_sizes=(64, 64),
+ device=-1, # if you want to use the gpu, specify the gpu number here
+ sort_key=lambda x: len(x.comment_text), # the bucketiterator needs to be told w
+hat function it should use to group the data.
+ sort_within_batch=false,
+ repeat=false # we pass repeat=false because we want to wrap this iterator layer
+.
+)
+test_iter = iterator(tst, batch_size=64, device=-1, sort=false, sort_within_batc
+h=false, repeat=false)
+
+   update: the sort_within_batch argument, when set to true, sorts the
+   data within each minibatch in decreasing order according to the
+   sort_key. this is necessary when you want to use pack_padded_sequence
+   with the padded sequence data and convert the padded sequence tensor to
+   a packedsequence object.
+
+   the bucketiterator is one of the most powerful features of torchtext.
+   it automatically shuffles and buckets the input sequences into
+   sequences of similar length.
+
+   the reason this is powerful is that     as i mentioned earlier     we need
+   to pad the input sequences to be of the same length to enable batch
+   processing. for instance, the sequences
+[ [3, 15, 2, 7],
+  [4, 1],
+  [5, 5, 6, 8, 1] ]
+
+   would need to be padded to become
+[ [3, 15, 2, 7, 0],
+  [4, 1, 0, 0, 0],
+  [5, 5, 6, 8, 1] ]
+
+
+   as you can see, the amount of padding necessary is determined by the
+   longest sequence in the batch. therefore, padding is most efficient
+   when the sequences are of similar lengths. the bucketiterator does all
+   this behind the scenes. as a word of caution, you need to tell the
+   bucketiterator what attribute you want to bucket the data on. in our
+   case, we want to bucket based on the lengths of the comment_text field,
+   so we pass that in as a keyword argument. see the code above for
+   details on the other arguments.
+
+   for the test data, we don   t want to shuffle the data since we   ll be
+   outputting the predictions at the end of training. this is why we use a
+   standard iterator.
+
+   here   s a list of the iterators that torchtext currently implements:
+   name description use case
+    iterator iterates over the data in the order of the dataset. test
+   data, or any other data where the order is important.
+    bucketiterator buckets sequences of similar lengths together. text
+   classification, sequence tagging, etc. (use cases where the input is of
+   variable length)
+    bpttiterator an iterator built especially for id38 that
+   also generates the input sequence delayed by one timestep. it also
+   varies the bptt (id26 through time) length. this iterator
+   [20]deserves its own post, so i   ll omit the details here.  language
+   modeling
+
+5. wrapping the iterator
+
+   currently, the iterator returns a custom datatype called
+   torchtext.data.batch. the batch class has a similar api to the example
+   type, with a batch of data from each field as attributes.
+   unfortunately, this custom datatype makes code reuse difficult (since
+   each time the column names change, we need to modify the code), and
+   makes torchtext hard to use with other libraries for some use cases
+   (like torchsample and fastai).
+
+   i hope this will be dealt with in the future (i   m considering filing a
+   pr if i can decide what the api should look like), but in the meantime,
+   we   ll hack on a simple wrapper to make the batches easy to use.
+
+   concretely, we   ll convert the batch to a tuple in the form (x, y) where
+   x is the independent variable (the input to the model) and y is the
+   dependent variable (the supervision data). here   s the code:
+
+class batchwrapper:
+      def __init__(self, dl, x_var, y_vars):
+            self.dl, self.x_var, self.y_vars = dl, x_var, y_vars # we pass in th
+e list of attributes for x &amp;amp;amp;amp;lt;g class="gr_ gr_3178 gr-alert gr_
+spell gr_inline_cards gr_disable_anim_appear contextualspelling ins-del" id="317
+8" data-gr-id="3178"&amp;amp;amp;amp;gt;and y&amp;amp;amp;amp;lt;/g&amp;amp;amp;
+amp;gt;
+
+      def __iter__(self):
+            for batch in self.dl:
+                  x = getattr(batch, self.x_var) # we assume only one input in t
+his wrapper
+
+                  if self.y_vars is &amp;amp;amp;amp;lt;g class="gr_ gr_3177 gr-
+alert gr_gramm gr_inline_cards gr_disable_anim_appear grammar replacewithoutsep"
+ id="3177" data-gr-id="3177"&amp;amp;amp;amp;gt;not&amp;amp;amp;amp;lt;/g&amp;am
+p;amp;amp;gt; none: # we will concatenate y into a single tensor
+                        y = torch.cat([getattr(batch, feat).unsqueeze(1) for fea
+t in self.y_vars], dim=1).float()
+                  else:
+                        y = torch.zeros((1))
+
+                  yield (x, y)
+
+      def __len__(self):
+            return len(self.dl)
+
+train_dl = batchwrapper(train_iter, "comment_text", ["toxic", "severe_toxic", "o
+bscene", "threat", "insult", "identity_hate"])
+valid_dl = batchwrapper(val_iter, "comment_text", ["toxic", "severe_toxic", "obs
+cene", "threat", "insult", "identity_hate"])
+test_dl = batchwrapper(test_iter, "comment_text", none)
+
+
+   all we   re doing here is converting the batch object to a tuple of
+   inputs and outputs.
+
+>>> next(train_dl.__iter__())
+(variable containing:
+   606   354   334  ...     63    15    15
+   693    63    55  ...      4   601    29
+   584     4   520  ...    664   242    21
+        ...                       ...
+     1     1     1  ...      1     1    84
+     1     1     1  ...      1     1   118
+     1     1     1  ...      1     1    15
+ [torch.longtensor of size 494x25], variable containing:
+     0     0     0     0     0     0
+     1     1     0     1     1     0
+     1     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     1     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+     0     0     0     0     0     0
+ [torch.floattensor of size 25x6])
+
+   nothing fancy here. now, we   re finally ready to start training a text
+   classifier.
+
+6. training the model
+
+   we   ll use a simple lstm to demonstrate how to train the text classifier
+   on the data we   ve built:
+
+import torch.nn as nn
+import torch.nn.functional as f
+import torch.optim as optim
+from torch.autograd import variable
+
+class simplelstmbaseline(nn.module):
+    def __init__(self, hidden_dim, emb_dim=300, num_linear=1):
+        super().__init__() # don't forget to call this!
+        self.embedding = nn.embedding(len(text.vocab), emb_dim)
+        self.encoder = nn.lstm(emb_dim, hidden_dim, num_layers=1)
+        self.linear_layers = []
+        for _ in range(num_linear - 1):
+            self.linear_layers.append(nn.linear(hidden_dim, hidden_dim))
+            self.linear_layers = nn.modulelist(self.linear_layers)
+        self.predictor = nn.linear(hidden_dim, 6)
+
+    def forward(self, seq):
+        hdn, _ = self.encoder(self.embedding(seq))
+        feature = hdn[-1, :, :]
+        for layer in self.linear_layers:
+          feature = layer(feature)
+          preds = self.predictor(feature)
+        return preds
+
+em_sz = 100
+nh = 500
+nl = 3
+model = simplebilstmbaseline(nh, emb_dim=em_sz)
+
+
+   now, we   ll write the training loop. thanks to all our preprocessing,
+   this is very simple. we can iterate using our wrapped iterator, and the
+   data will automatically be passed to us after being moved to the gpu
+   and numericalized appropriately.
+
+import tqdm
+
+opt = optim.adam(model.parameters(), lr=1e-2)
+loss_func = nn.bcewithlogitsloss()
+
+epochs = 2
+
+for epoch in range(1, epochs + 1):
+    running_loss = 0.0
+    running_corrects = 0
+    model.train() # turn on training mode
+    for x, y in tqdm.tqdm(train_dl): # thanks to our wrapper, we can intuitively
+ iterate over our data!
+        opt.zero_grad()
+
+        preds = model(x)
+        loss = loss_func(y, preds)
+        loss.backward()
+        opt.step()
+
+        running_loss += loss.data[0] * x.size(0)
+
+    epoch_loss = running_loss / len(trn)
+
+    # calculate the validation loss for this epoch
+    val_loss = 0.0
+    model.eval() # turn on evaluation mode
+    for x, y in valid_dl:
+        preds = model(x)
+        loss = loss_func(y, preds)
+        val_loss += loss.data[0] * x.size(0)
+
+    val_loss /= len(vld)
+    print('epoch: {}, training loss: {:.4f}, validation loss: {:.4f}'.format(epo
+ch, epoch_loss, val_loss))
+
+
+   there   s not much to explain here: this is just a standard training
+   loop. now, let   s generate our predictions
+
+test_preds = []
+for x, y in tqdm.tqdm(test_dl):
+    preds = model(x)
+    preds = preds.data.numpy()
+    # the actual outputs of the model are logits, so we need to pass these value
+s to the sigmoid function
+    preds = 1 / (1 + np.exp(-preds))
+    test_preds.append(preds)
+    test_preds = np.hstack(test_preds)
+
+
+   finally, we can write our predictions to a csv file.
+import pandas as pd
+df = pd.read_csv("data/test.csv")
+for i, col in enumerate(["toxic", "severe_toxic", "obscene", "threat", "insult",
+ "identity_hate"]):
+    df[col] = test_preds[:, i]
+
+df.drop("comment_text", axis=1).to_csv("submission.csv", index=false)
+
+   and we   re done! we can submit this file to kaggle, try refining our
+   model, changing the tokenizer, or whatever we feel like, and it will
+   only take a few changes in the code above.
+
+7. conclusion and further readings
+
+   i hope this tutorial has provided insight into how torchtext can be
+   used, and how useful it is. though the library is still new and there
+   are many rough edges, i believe that torchtext is a great first step
+   towards standardized text preprocessing that will improve the
+   productivity of people working in nlp all throughout the world.
+   if you want to see torchtext used for id38, i   ve uploaded
+   [21]another tutorial detailing id38 and the bptt iterator.
+   if you have any further questions, feel free to ask me in the comments!
+
+share this:
+
+     * [22]click to share on twitter (opens in new window)
+     * [23]click to share on facebook (opens in new window)
+     *
+
+    1. the next release of torchtext (and the current version on github)
+       will be able to take a dictionary mapping each column by name to
+       its corresponding field instead of a list.
+    2. the api is a subset of the api of tabulardataset for tsvs, so this
+       might be deprecated in the future.
+
+like this:
+
+   like loading...
+
+related
+
+   author [24]keitakuritaposted on [25]february 8, 2018march 4,
+   2018categories [26]deep learning, [27]nlp
+
+post navigation
+
+   [28]previous previous post: an intuitive introduction to the hessian
+   for deep learning practitioners
+   [29]next next post: id38 tutorial in torchtext (practical
+   torchtext part 2)
+
+top posts & pages
+
+     * [30]an in-depth tutorial to allennlp (from basics to elmo and bert)
+     * [31]weight id172 and layer id172 explained
+       (id172 in deep learning part 2)
+     * [32]paper dissected: "attention is all you need" explained
+     * [33]lightgbm and xgboost explained
+     * [34]a practical introduction to nmf (nonnegative matrix
+       factorization)
+
+subscribe to blog via email
+
+   find anything useful? ;)
+   enter your email address to subscribe to this blog and receive
+   notifications of new posts by email.
+
+   email address ____________________
+
+   (button) subscribe
+
+categories
+
+     * [35]id161 (2)
+     * [36]deep learning (22)
+     * [37]fromscratch (1)
+     * [38]jupyter (2)
+     * [39]kaggle (1)
+     * [40]machine learning (13)
+     * [41]nlp (11)
+     * [42]paper (10)
+     * [43]python (1)
+     * [44]skills (1)
+     * [45]software (1)
+     * [46]software engineering (2)
+     * [47]uncategorized (3)
+
+archives
+
+     * [48]april 2019
+     * [49]february 2019
+     * [50]january 2019
+     * [51]november 2018
+     * [52]september 2018
+     * [53]august 2018
+     * [54]june 2018
+     * [55]may 2018
+     * [56]april 2018
+     * [57]march 2018
+     * [58]february 2018
+     * [59]january 2018
+     * [60]december 2017
+
+     * [61]about this blog
+     * [62]github
+
+   [63]machine learning explained [64]proudly powered by wordpress
+
+   iframe: [65]likes-master
+
+   %d bloggers like this:
+
+references
+
+   visible links
+   1. http://id113xplained.com/feed/
+   2. http://id113xplained.com/comments/feed/
+   3. http://id113xplained.com/2018/02/02/an-introduction-to-second-order-optimization-for-deep-learning-practitioners-basic-math-for-deep-learning-part-1/
+   4. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+   5. http://id113xplained.com/wp-json/oembed/1.0/embed?url=http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/
+   6. http://id113xplained.com/wp-json/oembed/1.0/embed?url=http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/&format=xml
+   7. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/#content
+   8. http://id113xplained.com/
+   9. http://id113xplained.com/about-this-blog/
+  10. https://github.com/keitakurita
+  11. https://github.com/pytorch/text
+  12. https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge
+  13. https://github.com/keitakurita/practical-torchtext
+  14. https://github.com/keitakurita/practical-torchtext/blob/master/lesson 1: intro to torchtext with text classification.ipynb
+  15. https://github.com/pytorch/text
+  16. https://github.com/pytorch/text/blob/c839a7934930819be7e240ea972e4d600966afdc/torchtext/data/field.py#l61
+  17. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/#easy-footnote-bottom-1-310
+  18. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+  19. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/#easy-footnote-bottom-2-310
+  20. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+  21. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+  22. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/?share=twitter
+  23. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/?share=facebook
+  24. http://id113xplained.com/author/admin/
+  25. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/
+  26. http://id113xplained.com/category/machine-learning/deep-learning/
+  27. http://id113xplained.com/category/nlp/
+  28. http://id113xplained.com/2018/02/02/an-introduction-to-second-order-optimization-for-deep-learning-practitioners-basic-math-for-deep-learning-part-1/
+  29. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+  30. http://id113xplained.com/2019/01/30/an-in-depth-tutorial-to-allennlp-from-basics-to-elmo-and-bert/
+  31. http://id113xplained.com/2018/01/13/weight-id172-and-layer-id172-explained-id172-in-deep-learning-part-2/
+  32. http://id113xplained.com/2017/12/29/attention-is-all-you-need-explained/
+  33. http://id113xplained.com/2018/01/05/lightgbm-and-xgboost-explained/
+  34. http://id113xplained.com/2017/12/28/a-practical-introduction-to-nmf-nonnegative-matrix-factorization/
+  35. http://id113xplained.com/category/computer-vision/
+  36. http://id113xplained.com/category/machine-learning/deep-learning/
+  37. http://id113xplained.com/category/fromscratch/
+  38. http://id113xplained.com/category/jupyter/
+  39. http://id113xplained.com/category/kaggle/
+  40. http://id113xplained.com/category/machine-learning/
+  41. http://id113xplained.com/category/nlp/
+  42. http://id113xplained.com/category/paper/
+  43. http://id113xplained.com/category/python/
+  44. http://id113xplained.com/category/skills/
+  45. http://id113xplained.com/category/software/
+  46. http://id113xplained.com/category/software-engineering/
+  47. http://id113xplained.com/category/uncategorized/
+  48. http://id113xplained.com/2019/04/
+  49. http://id113xplained.com/2019/02/
+  50. http://id113xplained.com/2019/01/
+  51. http://id113xplained.com/2018/11/
+  52. http://id113xplained.com/2018/09/
+  53. http://id113xplained.com/2018/08/
+  54. http://id113xplained.com/2018/06/
+  55. http://id113xplained.com/2018/05/
+  56. http://id113xplained.com/2018/04/
+  57. http://id113xplained.com/2018/03/
+  58. http://id113xplained.com/2018/02/
+  59. http://id113xplained.com/2018/01/
+  60. http://id113xplained.com/2017/12/
+  61. http://id113xplained.com/about-this-blog/
+  62. https://github.com/keitakurita
+  63. http://id113xplained.com/
+  64. https://wordpress.org/
+  65. https://widgets.wp.com/likes/master.html?ver=201914#ver=201914
+
+   hidden links:
+  67. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/#easy-footnote-1-310
+  68. http://id113xplained.com/2018/02/08/a-comprehensive-tutorial-to-torchtext/#easy-footnote-2-310

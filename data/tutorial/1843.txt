@@ -1,0 +1,1122 @@
+   #[1]andrej karpathy blog posts
+
+   [2][rssicon.svg]
+   [3]andrej karpathy blog
+
+   [4]about [5]hacker's guide to neural networks
+
+the unreasonable effectiveness of recurrent neural networks
+
+   may 21, 2015
+
+   there   s something magical about recurrent neural networks (id56s). i
+   still remember when i trained my first recurrent network for [6]image
+   captioning. within a few dozen minutes of training my first baby model
+   (with rather arbitrarily-chosen hyperparameters) started to generate
+   very nice looking descriptions of images that were on the edge of
+   making sense. sometimes the ratio of how simple your model is to the
+   quality of the results you get out of it blows past your expectations,
+   and this was one of those times. what made this result so shocking at
+   the time was that the common wisdom was that id56s were supposed to be
+   difficult to train (with more experience i   ve in fact reached the
+   opposite conclusion). fast forward about a year: i   m training id56s all
+   the time and i   ve witnessed their power and robustness many times, and
+   yet their magical outputs still find ways of amusing me. this post is
+   about sharing some of that magic with you.
+
+     we   ll train id56s to generate text character by character and ponder
+     the question    how is that even possible?   
+
+   by the way, together with this post i am also releasing [7]code on
+   github that allows you to train character-level language models based
+   on multi-layer lstms. you give it a large chunk of text and it will
+   learn to generate text like it one character at a time. you can also
+   use it to reproduce my experiments below. but we   re getting ahead of
+   ourselves; what are id56s anyway?
+
+recurrent neural networks
+
+   sequences. depending on your background you might be wondering: what
+   makes recurrent networks so special? a glaring limitation of vanilla
+   neural networks (and also convolutional networks) is that their api is
+   too constrained: they accept a fixed-sized vector as input (e.g. an
+   image) and produce a fixed-sized vector as output (e.g. probabilities
+   of different classes). not only that: these models perform this mapping
+   using a fixed amount of computational steps (e.g. the number of layers
+   in the model). the core reason that recurrent nets are more exciting is
+   that they allow us to operate over sequences of vectors: sequences in
+   the input, the output, or in the most general case both. a few examples
+   may make this more concrete:
+   [diags.jpeg]
+   each rectangle is a vector and arrows represent functions (e.g. matrix
+   multiply). input vectors are in red, output vectors are in blue and
+   green vectors hold the id56's state (more on this soon). from left to
+   right: (1) vanilla mode of processing without id56, from fixed-sized
+   input to fixed-sized output (e.g. image classification). (2) sequence
+   output (e.g. image captioning takes an image and outputs a sentence of
+   words). (3) sequence input (e.g. id31 where a given
+   sentence is classified as expressing positive or negative sentiment).
+   (4) sequence input and sequence output (e.g. machine translation: an
+   id56 reads a sentence in english and then outputs a sentence in french).
+   (5) synced sequence input and output (e.g. video classification where
+   we wish to label each frame of the video). notice that in every case
+   are no pre-specified constraints on the lengths sequences because the
+   recurrent transformation (green) is fixed and can be applied as many
+   times as we like.
+
+   as you might expect, the sequence regime of operation is much more
+   powerful compared to fixed networks that are doomed from the get-go by
+   a fixed number of computational steps, and hence also much more
+   appealing for those of us who aspire to build more intelligent systems.
+   moreover, as we   ll see in a bit, id56s combine the input vector with
+   their state vector with a fixed (but learned) function to produce a new
+   state vector. this can in programming terms be interpreted as running a
+   fixed program with certain inputs and some internal variables. viewed
+   this way, id56s essentially describe programs. in fact, it is known that
+   [8]id56s are turing-complete in the sense that they can to simulate
+   arbitrary programs (with proper weights). but similar to universal
+   approximation theorems for neural nets you shouldn   t read too much into
+   this. in fact, forget i said anything.
+
+     if training vanilla neural nets is optimization over functions,
+     training recurrent nets is optimization over programs.
+
+   sequential processing in absence of sequences. you might be thinking
+   that having sequences as inputs or outputs could be relatively rare,
+   but an important point to realize is that even if your inputs/outputs
+   are fixed vectors, it is still possible to use this powerful formalism
+   to process them in a sequential manner. for instance, the figure below
+   shows results from two very nice papers from [9]deepmind. on the left,
+   an algorithm learns a recurrent network policy that steers its
+   attention around an image; in particular, it learns to read out house
+   numbers from left to right ([10]ba et al.). on the right, a recurrent
+   network generates images of digits by learning to sequentially add
+   color to a canvas ([11]gregor et al.):
+   [house_read.gif] [house_generate.gif]
+   left: id56 learns to read house numbers. right: id56 learns to paint
+   house numbers.
+
+   the takeaway is that even if your data is not in form of sequences, you
+   can still formulate and train powerful models that learn to process it
+   sequentially. you   re learning stateful programs that process your
+   fixed-sized data.
+
+   id56 computation. so how do these things work? at the core, id56s have a
+   deceptively simple api: they accept an input vector x and give you an
+   output vector y. however, crucially this output vector   s contents are
+   influenced not only by the input you just fed in, but also on the
+   entire history of inputs you   ve fed in in the past. written as a class,
+   the id56   s api consists of a single step function:
+id56 = id56()
+y = id56.step(x) # x is an input vector, y is the id56's output vector
+
+   the id56 class has some internal state that it gets to update every time
+   step is called. in the simplest case this state consists of a single
+   hidden vector h. here is an implementation of the step function in a
+   vanilla id56:
+class id56:
+  # ...
+  def step(self, x):
+    # update the hidden state
+    self.h = np.tanh(np.dot(self.w_hh, self.h) + np.dot(self.w_xh, x))
+    # compute the output vector
+    y = np.dot(self.w_hy, self.h)
+    return y
+
+   the above specifies the forward pass of a vanilla id56. this id56   s
+   parameters are the three matrices w_hh, w_xh, w_hy. the hidden state
+   self.h is initialized with the zero vector. the np.tanh function
+   implements a non-linearity that squashes the activations to the range
+   [-1, 1]. notice briefly how this works: there are two terms inside of
+   the tanh: one is based on the previous hidden state and one is based on
+   the current input. in numpy np.dot is id127. the two
+   intermediates interact with addition, and then get squashed by the tanh
+   into the new state vector. if you   re more comfortable with math
+   notation, we can also write the hidden state update as \( h_t = \tanh (
+   w_{hh} h_{t-1} + w_{xh} x_t ) \), where tanh is applied elementwise.
+
+   we initialize the matrices of the id56 with random numbers and the bulk
+   of work during training goes into finding the matrices that give rise
+   to desirable behavior, as measured with some id168 that
+   expresses your preference to what kinds of outputs y you   d like to see
+   in response to your input sequences x.
+
+   going deep. id56s are neural networks and everything works monotonically
+   better (if done right) if you put on your deep learning hat and start
+   stacking models up like pancakes. for instance, we can form a 2-layer
+   recurrent network as follows:
+y1 = id561.step(x)
+y = id562.step(y1)
+
+   in other words we have two separate id56s: one id56 is receiving the
+   input vectors and the second id56 is receiving the output of the first
+   id56 as its input. except neither of these id56s know or care - it   s all
+   just vectors coming in and going out, and some gradients flowing
+   through each module during id26.
+
+   getting fancy. i   d like to briefly mention that in practice most of us
+   use a slightly different formulation than what i presented above called
+   a long short-term memory (lstm) network. the lstm is a particular type
+   of recurrent network that works slightly better in practice, owing to
+   its more powerful update equation and some appealing id26
+   dynamics. i won   t go into details, but everything i   ve said about id56s
+   stays exactly the same, except the mathematical form for computing the
+   update (the line self.h = ... ) gets a little more complicated. from
+   here on i will use the terms    id56/lstm    interchangeably but all
+   experiments in this post use an lstm.
+
+character-level language models
+
+   okay, so we have an idea about what id56s are, why they are super
+   exciting, and how they work. we   ll now ground this in a fun
+   application: we   ll train id56 character-level language models. that is,
+   we   ll give the id56 a huge chunk of text and ask it to model the
+   id203 distribution of the next character in the sequence given a
+   sequence of previous characters. this will then allow us to generate
+   new text one character at a time.
+
+   as a working example, suppose we only had a vocabulary of four possible
+   letters    helo   , and wanted to train an id56 on the training sequence
+      hello   . this training sequence is in fact a source of 4 separate
+   training examples: 1. the id203 of    e    should be likely given the
+   context of    h   , 2.    l    should be likely in the context of    he   , 3.    l   
+   should also be likely given the context of    hel   , and finally 4.    o   
+   should be likely given the context of    hell   .
+
+   concretely, we will encode each character into a vector using 1-of-k
+   encoding (i.e. all zero except for a single one at the index of the
+   character in the vocabulary), and feed them into the id56 one at a time
+   with the step function. we will then observe a sequence of
+   4-dimensional output vectors (one dimension per character), which we
+   interpret as the confidence the id56 currently assigns to each character
+   coming next in the sequence. here   s a diagram:
+   [charseq.jpeg]
+   an example id56 with 4-dimensional input and output layers, and a hidden
+   layer of 3 units (neurons). this diagram shows the activations in the
+   forward pass when the id56 is fed the characters "hell" as input. the
+   output layer contains confidences the id56 assigns for the next
+   character (vocabulary is "h,e,l,o"); we want the green numbers to be
+   high and red numbers to be low.
+
+   for example, we see that in the first time step when the id56 saw the
+   character    h    it assigned confidence of 1.0 to the next letter being
+      h   , 2.2 to letter    e   , -3.0 to    l   , and 4.1 to    o   . since in our
+   training data (the string    hello   ) the next correct character is    e   ,
+   we would like to increase its confidence (green) and decrease the
+   confidence of all other letters (red). similarly, we have a desired
+   target character at every one of the 4 time steps that we   d like the
+   network to assign a greater confidence to. since the id56 consists
+   entirely of differentiable operations we can run the id26
+   algorithm (this is just a recursive application of the chain rule from
+   calculus) to figure out in what direction we should adjust every one of
+   its weights to increase the scores of the correct targets (green bold
+   numbers). we can then perform a parameter update, which nudges every
+   weight a tiny amount in this gradient direction. if we were to feed the
+   same inputs to the id56 after the parameter update we would find that
+   the scores of the correct characters (e.g.    e    in the first time step)
+   would be slightly higher (e.g. 2.3 instead of 2.2), and the scores of
+   incorrect characters would be slightly lower. we then repeat this
+   process over and over many times until the network converges and its
+   predictions are eventually consistent with the training data in that
+   correct characters are always predicted next.
+
+   a more technical explanation is that we use the standard softmax
+   classifier (also commonly referred to as the cross-id178 loss) on
+   every output vector simultaneously. the id56 is trained with mini-batch
+   stochastic id119 and i like to use [12]rmsprop or adam
+   (per-parameter adaptive learning rate methods) to stablilize the
+   updates.
+
+   notice also that the first time the character    l    is input, the target
+   is    l   , but the second time the target is    o   . the id56 therefore cannot
+   rely on the input alone and must use its recurrent connection to keep
+   track of the context to achieve this task.
+
+   at test time, we feed a character into the id56 and get a distribution
+   over what characters are likely to come next. we sample from this
+   distribution, and feed it right back in to get the next letter. repeat
+   this process and you   re sampling text! lets now train an id56 on
+   different datasets and see what happens.
+
+   to further clarify, for educational purposes i also wrote a [13]minimal
+   character-level id56 language model in python/numpy. it is only about
+   100 lines long and hopefully it gives a concise, concrete and useful
+   summary of the above if you   re better at reading code than text. we   ll
+   now dive into example results, produced with the much more efficient
+   lua/torch codebase.
+
+fun with id56s
+
+   all 5 example character models below were trained with the [14]code i   m
+   releasing on github. the input in each case is a single file with some
+   text, and we   re training an id56 to predict the next character in the
+   sequence.
+
+paul graham generator
+
+   lets first try a small dataset of english as a sanity check. my
+   favorite fun dataset is the concatenation of [15]paul graham   s essays.
+   the basic idea is that there   s a lot of wisdom in these essays, but
+   unfortunately paul graham is a relatively slow generator. wouldn   t it
+   be great if we could sample startup wisdom on demand? that   s where an
+   id56 comes in.
+
+   concatenating all pg essays over the last ~5 years we get approximately
+   1mb text file, or about 1 million characters (this is considered a very
+   small dataset by the way). technical: lets train a 2-layer lstm with
+   512 hidden nodes (approx. 3.5 million parameters), and with dropout of
+   0.5 after each layer. we   ll train with batches of 100 examples and
+   truncated id26 through time of length 100 characters. with
+   these settings one batch on a titan z gpu takes about 0.46 seconds
+   (this can be cut in half with 50 character bptt at negligible cost in
+   performance). without further ado, lets see a sample from the id56:
+
+      the surprised in investors weren   t going to raise money. i   m not the
+   company with the time there are all interesting quickly, don   t have to
+   get off the same programmers. there   s a super-angel round fundraising,
+   why do you can do. if you have a different physical investment are
+   become in people who reduced in a startup with the way to argument the
+   acquirer could see them just that you   re also the founders will part of
+   users    affords that and an alternation to the idea. [2] don   t work at
+   first member to see the way kids will seem in advance of a bad
+   successful startup. and if you have to act the big company too.   
+
+   okay, clearly the above is unfortunately not going to replace paul
+   graham anytime soon, but remember that the id56 had to learn english
+   completely from scratch and with a small dataset (including where you
+   put commas, apostrophes and spaces). i also like that it learns to
+   support its own arguments (e.g. [2], above). sometimes it says
+   something that offers a glimmer of insight, such as    a company is a
+   meeting to think to investors   . [16]here   s a link to 50k character
+   sample if you   d like to see more.
+
+   temperature. we can also play with the temperature of the softmax
+   during sampling. decreasing the temperature from 1 to some lower number
+   (e.g. 0.5) makes the id56 more confident, but also more conservative in
+   its samples. conversely, higher temperatures will give more diversity
+   but at cost of more mistakes (e.g. spelling mistakes, etc). in
+   particular, setting temperature very near zero will give the most
+   likely thing that paul graham might say:
+
+      is that they were all the same thing that was a startup is that they
+   were all the same thing that was a startup is that they were all the
+   same thing that was a startup is that they were all the same   
+
+   looks like we   ve reached an infinite loop about startups.
+
+shakespeare
+
+   it looks like we can learn to spell english words. but how about if
+   there is more structure and style in the data? to examine this i
+   downloaded all the works of shakespeare and concatenated them into a
+   single (4.4mb) file. we can now afford to train a larger network, in
+   this case lets try a 3-layer id56 with 512 hidden nodes on each layer.
+   after we train the network for a few hours we obtain samples such as:
+pandarus:
+alas, i think he shall be come approached and the day
+when little srain would be attain'd into being never fed,
+and who is but a chain and subjects of his death,
+i should not sleep.
+
+second senator:
+they are away this miseries, produced upon my soul,
+breaking and strongly should be buried, when i perish
+the earth and thoughts of many states.
+
+duke vincentio:
+well, your wit is in the care of side and that.
+
+second lord:
+they would be ruled after this chamber, and
+my fair nues begun out of the fact, to be conveyed,
+whose noble souls i'll have the heart of the wars.
+
+clown:
+come, sir, i will make did behold your worship.
+
+viola:
+i'll drink it.
+
+   remember, all the id56 knows are characters, so in particular it samples
+   both speaker   s names and the contents. sometimes we also get relatively
+   extented monologue passages, such as:
+viola:
+why, salisbury must find his flesh and thought
+that which i am not aps, not a man and in fire,
+to show the reining of the raven and the wars
+to grace my hand reproach within, and not a fair are hand,
+that caesar and my goodly father's world;
+when i was heaven of presence and our fleets,
+we spare with hours, but cut thy council i am great,
+murdered and by thy master's ready there
+my power to give thee but so much as hell:
+some service in the noble bondman here,
+would show him to her wine.
+
+king lear:
+o, if you were a feeble sight, the courtesy of your law,
+your sight and several breath, will wear the gods
+with his heads, and my hands are wonder'd at the deeds,
+so drop upon your lordship's head, and your opinion
+shall be against your honour.
+
+   i can barely recognize these samples from actual shakespeare :) if you
+   like shakespeare, you might appreciate this [17]100,000 character
+   sample. of course, you can also generate an infinite amount of your own
+   samples at different temperatures with the provided code.
+
+wikipedia
+
+   we saw that the lstm can learn to spell words and copy general
+   syntactic structures. lets further increase the difficulty and train on
+   structured markdown. in particular, lets take the [18]hutter prize
+   100mb dataset of raw wikipedia and train an lstm. following [19]graves
+   et al., i used the first 96mb for training, the rest for validation and
+   ran a few models overnight. we can now sample wikipedia articles! below
+   are a few fun excerpts. first, some basic markdown output:
+naturalism and decision for the majority of arab countries' capitalide was groun
+ded
+by the irish language by [[john clair]], [[an imperial japanese revolt]], associ
+ated
+with guangzham's sovereignty. his generals were the powerful ruler of the portug
+al
+in the [[protestant immineners]], which could be said to be directly in cantones
+e
+communication, which followed a ceremony and set inspired prison, training. the
+emperor travelled back to [[antioch, perth, october 25|21]] to note, the kingdom
+
+of costa rica, unsuccessful fashioned the [[thrales]], [[cynth's dajoard]], know
+n
+in western [[scotland]], near italy to the conquest of india with the conflict.
+copyright was the succession of independence in the slop of syrian influence tha
+t
+was a famous german movement based on a more popular servicious, non-doctrinal
+and sexual power post. many governments recognize the military housing of the
+[[civil liberalization and infantry resolution 265 national party in hungary]],
+that is sympathetic to be to the [[punjab resolution]]
+(pjs)[http://www.humah.yahoo.com/guardian.
+cfm/7754800786d17551963s89.htm official economics adjoint for the nazism, montgo
+mery
+was swear to advance to the resources for those socialism's rule,
+was starting to signing a major tripad of aid exile.]]
+
+   in case you were wondering, the yahoo url above doesn   t actually exist,
+   the model just hallucinated it. also, note that the model learns to
+   open and close the parenthesis correctly. there   s also quite a lot of
+   structured markdown that the model learns, for example sometimes it
+   creates headings, lists, etc.:
+{ { cite journal | id=cerling nonforest department|format=newlymeslated|none } }
+''www.e-complete''.
+
+'''see also''': [[list of ethical consent processing]]
+
+== see also ==
+*[[iender dome of the ed]]
+*[[anti-autism]]
+
+===[[religion|religion]]===
+*[[french writings]]
+*[[maria]]
+*[[revelation]]
+*[[mount agamul]]
+
+== external links==
+* [http://www.biblegateway.nih.gov/entrepre/ website of the world festival. the
+labour of india-county defeats at the ripper of california road.]
+
+==external links==
+* [http://www.romanology.com/ constitution of the netherlands and hispanic compe
+tition for bilabial and commonwealth industry (republican constitution of the ex
+tent of the netherlands)]
+
+
+
+   sometimes the model snaps into a mode of generating random but valid
+   xml:
+<page>
+  <title>antichrist</title>
+  <id>865</id>
+  <revision>
+    <id>15900676</id>
+    <timestamp>2002-08-03t18:14:12z</timestamp>
+    <contributor>
+      <username>paris</username>
+      <id>23</id>
+    </contributor>
+    <minor />
+    <comment>automated conversion</comment>
+    <text xml:space="preserve">#redirect [[christianity]]</text>
+  </revision>
+</page>
+
+   the model completely makes up the timestamp, id, and so on. also, note
+   that it closes the correct tags appropriately and in the correct nested
+   order. here are [20]100,000 characters of sampled wikipedia if you   re
+   interested to see more.
+
+algebraic geometry (latex)
+
+   the results above suggest that the model is actually quite good at
+   learning complex syntactic structures. impressed by these results, my
+   labmate ([21]justin johnson) and i decided to push even further into
+   structured territories and got a hold of [22]this book on algebraic
+   stacks/geometry. we downloaded the raw latex source file (a 16mb file)
+   and trained a multilayer lstm. amazingly, the resulting sampled latex
+   almost compiles. we had to step in and fix a few issues manually but
+   then you get plausible looking math, it   s quite astonishing:
+   [latex4.jpeg]
+   sampled (fake) algebraic geometry. [23]here's the actual pdf.
+
+   here   s another sample:
+   [latex3.jpeg]
+   more hallucinated algebraic geometry. nice try on the diagram (right).
+
+   as you can see above, sometimes the model tries to generate latex
+   diagrams, but clearly it hasn   t really figured them out. i also like
+   the part where it chooses to skip a proof (   proof omitted.   , top left).
+   of course, keep in mind that latex has a relatively difficult
+   structured syntactic format that i haven   t even fully mastered myself.
+   for instance, here is a raw sample from the model (unedited):
+\begin{proof}
+we may assume that $\mathcal{i}$ is an abelian sheaf on $\mathcal{c}$.
+\item given a morphism $\delta : \mathcal{f} \to \mathcal{i}$
+is an injective and let $\mathfrak q$ be an abelian sheaf on $x$.
+let $\mathcal{f}$ be a fibered complex. let $\mathcal{f}$ be a category.
+\begin{enumerate}
+\item \hyperref[setain-construction-phantom]{lemma}
+\label{lemma-characterize-quasi-finite}
+let $\mathcal{f}$ be an abelian quasi-coherent sheaf on $\mathcal{c}$.
+let $\mathcal{f}$ be a coherent $\mathcal{o}_x$-module. then
+$\mathcal{f}$ is an abelian catenary over $\mathcal{c}$.
+\item the following are equivalent
+\begin{enumerate}
+\item $\mathcal{f}$ is an $\mathcal{o}_x$-module.
+\end{lemma}
+
+   this sample from a relatively decent model illustrates a few common
+   mistakes. for example, the model opens a \begin{proof} environment but
+   then ends it with a \end{lemma}. this is an example of a problem we   d
+   have to fix manually, and is likely due to the fact that the dependency
+   is too long-term: by the time the model is done with the proof it has
+   forgotten whether it was doing a proof or a lemma. similarly, it opens
+   an \begin{enumerate} but then forgets to close it. we observed that
+   these became less common with larger/better models, but nonetheless,
+   these are the kinds of mistakes that come up.
+
+linux source code
+
+   i wanted to push structured data to its limit, so for the final
+   challenge i decided to use code. in particular, i took all the source
+   and header files found in the [24]linux repo on github, concatenated
+   all of them in a single giant file (474mb of c code) (i was originally
+   going to train only on the kernel but that by itself is only ~16mb).
+   then i trained several as-large-as-fits-on-my-gpu 3-layer lstms over a
+   period of a few days. these models have about 10 million parameters,
+   which is still on the lower end for id56 models. the results are
+   superfun:
+/*
+ * increment the size file of the new incorrect ui_filter group information
+ * of the size generatively.
+ */
+static int indicate_policy(void)
+{
+  int error;
+  if (fd == marn_ept) {
+    /*
+     * the kernel blank will coeld it to userspace.
+     */
+    if (ss->segment < mem_total)
+      unblock_graph_and_set_blocked();
+    else
+      ret = 1;
+    goto bail;
+  }
+  segaddr = in_sb(in.addr);
+  selector = seg / 16;
+  setup_works = true;
+  for (i = 0; i < blocks; i++) {
+    seq = buf[i++];
+    bpf = bd->bd.next + i * search;
+    if (fd) {
+      current = blocked;
+    }
+  }
+  rw->name = "getjbbregs";
+  bprm_self_clearl(&iv->version);
+  regs->new = blocks[(bpf_stats << info->historidac)] | pfmr_clobathinc_seconds
+<< 12;
+  return segtable;
+}
+
+   the code looks really quite great overall. of course, i don   t think it
+   compiles but when you scroll through the generate code it feels very
+   much like a giant c code base. notice that the id56 peppers its code
+   with comments here and there at random. it is also very good at making
+   very few syntactic errors. for example, it uses strings properly,
+   pointer notation, etc. it also opens and closes brackets {[ correctly
+   and learns to indent its code very well. a common error is that it
+   can   t keep track of variable names: it often uses undefined variables
+   (e.g. rw above), declares variables it never uses (e.g. int error), or
+   returns non-existing variables. lets see a few more examples. here   s
+   another snippet that shows a wider array of operations that the id56
+   learns:
+/*
+ * if this error is set, we will need anything right after that bsd.
+ */
+static void action_new_function(struct s_stat_info *wb)
+{
+  unsigned long flags;
+  int lel_idx_bit = e->edd, *sys & ~((unsigned long) *first_compat);
+  buf[0] = 0xffffffff & (bit << 4);
+  min(inc, slist->bytes);
+  printk(kern_warning "memory allocated %02x/%02x, "
+    "original mll instead\n"),
+    min(min(multi_run - s->len, max) * num_data_in),
+    frame_pos, sz + first_seg);
+  div_u64_w(val, inb_p);
+  spin_unlock(&disk->queue_lock);
+  mutex_unlock(&s->sock->mutex);
+  mutex_unlock(&func->mutex);
+  return disassemble(info->pending_bh);
+}
+
+static void num_serial_settings(struct tty_struct *tty)
+{
+  if (tty == tty)
+    disable_single_st_p(dev);
+  pci_disable_spool(port);
+  return 0;
+}
+
+static void do_command(struct seq_file *m, void *v)
+{
+  int column = 32 << (cmd[2] & 0x80);
+  if (state)
+    cmd = (int)(int_state ^ (in_8(&ch->ch_flags) & cmd) ? 2 : 1);
+  else
+    seq = 1;
+  for (i = 0; i < 16; i++) {
+    if (k & (1 << 1))
+      pipe = (in_use & umxthread_uncca) +
+        ((count & 0x00000000fffffff8) & 0x000000f) << 8;
+    if (count == 0)
+      sub(pid, ppc_md.kexec_handle, 0x20000000);
+    pipe_set_bytes(i, 0);
+  }
+  /* free our user pages pointer to place camera if all dash */
+  subsystem_info = &of_changes[page_size];
+  rek_controls(offset, idx, &soffset);
+  /* now we want to deliberately put it to device */
+  control_check_polarity(&context, val, 0);
+  for (i = 0; i < counter; i++)
+    seq_puts(s, "policy ");
+}
+
+   notice that in the second function the model compares tty == tty, which
+   is vacuously true. on the other hand, at least the variable tty exists
+   in the scope this time! in the last function, notice that the code does
+   not return anything, which happens to be correct since the function
+   signature is void. however, the first two functions were also declared
+   void and did return values. this is again a form of a common mistake
+   due to long-term interactions.
+
+   sometimes the model decides that it   s time to sample a new file. this
+   is usually a very amusing part: the model first recites the gnu license
+   character by character, samples a few includes, generates some macros
+   and then dives into the code:
+/*
+ *  copyright (c) 2006-2010, intel mobile communications.  all rights reserved.
+ *
+ *   this program is free software; you can redistribute it and/or modify it
+ * under the terms of the gnu general public license version 2 as published by
+ * the free software foundation.
+ *
+ *        this program is distributed in the hope that it will be useful,
+ * but without any warranty; without even the implied warranty of
+ *   merchantability or fitness for a particular purpose.  see the
+ *
+ *  gnu general public license for more details.
+ *
+ *   you should have received a copy of the gnu general public license
+ *    along with this program; if not, write to the free software foundation,
+ *  inc., 675 mass ave, cambridge, ma 02139, usa.
+ */
+
+#include <linux/kexec.h>
+#include <linux/errno.h>
+#include <linux/io.h>
+#include <linux/platform_device.h>
+#include <linux/multi.h>
+#include <linux/ckevent.h>
+
+#include <asm/io.h>
+#include <asm/prom.h>
+#include <asm/e820.h>
+#include <asm/system_info.h>
+#include <asm/setew.h>
+#include <asm/pgproto.h>
+
+#define reg_pg    vesa_slot_addr_pack
+#define pfm_nocomp  afsr(0, load)
+#define stack_ddr(type)     (func)
+
+#define swap_allocate(nr)     (e)
+#define emulate_sigs()  arch_get_unaligned_child()
+#define access_rw(tst)  asm volatile("movd %%esp, %0, %3" : : "r" (0));   \
+  if (__type & do_read)
+
+static void stat_pc_sec __read_mostly offsetof(struct seq_argsqueue, \
+          pc>[1]);
+
+static void
+os_prefix(unsigned long sys)
+{
+#ifdef config_preempt
+  put_param_raid(2, sel) = get_state_state();
+  set_pid_sum((unsigned long)state, current_state_str(),
+           (unsigned long)-1->lr_full; low;
+}
+
+   there are too many fun parts to cover- i could probably write an entire
+   blog post on just this part. i   ll cut it short for now, but here is
+   [25]1mb of sampled linux code for your viewing pleasure.
+
+generating baby names
+
+   lets try one more for fun. lets feed the id56 a large text file that
+   contains 8000 baby names listed out, one per line (names obtained from
+   [26]here). we can feed this to the id56 and then generate new names!
+   here are some example names, only showing the ones that do not occur in
+   the training data (90% don   t):
+
+   rudi levette berice lussa hany mareanne chrestina carissy marylen
+   hammine janye marlise jacacrie hendred romand charienna nenotto ette
+   dorane wallen marly darine salina elvyn ersia maralena minoria ellia
+   charmin antley nerille chelon walmor evena jeryly stachon charisa
+   allisa anatha cathanie geetra alexie jerin cassen herbett cossie velen
+   daurenge robester shermond terisa licia roselen ferine jayn lusine
+   charyanne sales sanny resa wallon martine merus jelen candica wallin
+   tel rachene tarine ozila ketia shanne arnande karella roselina alessia
+   chasty deland berther geamar jackein mellisand sagdy nenc lessie rasemy
+   guen gavi milea anneda margoris janin rodelin zeanna elyne janah
+   ferzina susta pey castina
+
+   you can see many more [27]here. some of my favorites include    baby   
+   (haha),    killie   ,    char   ,    r   ,    more   ,    mars   ,    hi   ,    saddie   ,    with   
+   and    ahbort   . well that was fun.    of course, you can imagine this being
+   quite useful inspiration when writing a novel, or naming a new startup
+   :)
+
+understanding what   s going on
+
+   we saw that the results at the end of training can be impressive, but
+   how does any of this work? lets run two quick experiments to briefly
+   peek under the hood.
+
+the evolution of samples while training
+
+   first, it   s fun to look at how the sampled text evolves while the model
+   trains. for example, i trained an lstm of leo tolstoy   s war and peace
+   and then generated samples every 100 iterations of training. at
+   iteration 100 the model samples random jumbles:
+tyntd-iafhatawiaoihrdemot  lytdws  e ,tfti, astai f ogoh eoase rrranbyne 'nhthne
+e e
+plia tklrgd t o idoe ns,smtt   h ne etie h,hregtrs nigtike,aoaenns lng
+
+   however, notice that at least it is starting to get an idea about words
+   separated by spaces. except sometimes it inserts two spaces. it also
+   doesn   t know that comma is amost always followed by a space. at 300
+   iterations we see that the model starts to get an idea about quotes and
+   periods:
+"tmont thithey" fomesscerliund
+keushey. thom here
+sheulke, anmerenith ol sivh i lalterthend bleipile shuwy fil on aseterlome
+coaniogennc phe lism thond hon at. meidimorotion in ther thize."
+
+   the words are now also separated with spaces and the model starts to
+   get the idea about periods at the end of a sentence. at iteration 500:
+we counter. he stutn co des. his stanted out one ofler that concossions and was
+to gearang reay jotrets and with fre colt otf paitt thin wall. which das stimn
+
+   the model has now learned to spell the shortest and most common words
+   such as    we   ,    he   ,    his   ,    which   ,    and   , etc. at iteration 700 we   re
+   starting to see more and more english-like text emerge:
+aftair fall unsuch that the hall for prince velzonski's that me of
+her hearly, and behs to so arwage fiving were to it beloge, pavu say falling mis
+fort
+how, and gogition is so overelical and ofter.
+
+   at iteration 1200 we   re now seeing use of quotations and
+   question/exclamation marks. longer words have now been learned as well:
+"kite vouch!" he repeated by her
+door. "but i would be done and quarts, feeling, then, son is people...."
+
+   until at last we start to get properly spelled words, quotations,
+   names, and so on by about iteration 2000:
+"why do what that day," replied natasha, and wishing to himself the fact the
+princess, princess mary was easier, fed in had oftened him.
+pierre aking his soul came to the packs and drove up his father-in-law women.
+
+   the picture that emerges is that the model first discovers the general
+   word-space structure and then rapidly starts to learn the words; first
+   starting with the short words and then eventually the longer ones.
+   topics and themes that span multiple words (and in general longer-term
+   dependencies) start to emerge only much later.
+
+visualizing the predictions and the    neuron    firings in the id56
+
+   another fun visualization is to look at the predicted distributions
+   over characters. in the visualizations below we feed a wikipedia id56
+   model character data from the validation set (shown along the
+   blue/green rows) and under every character we visualize (in red) the
+   top 5 guesses that the model assigns for the next character. the
+   guesses are colored by their id203 (so dark red = judged as very
+   likely, white = not very likely). for example, notice that there are
+   stretches of characters where the model is extremely confident about
+   the next letter (e.g., the model is very confident about characters
+   during the http://www. sequence).
+
+   the input character sequence (blue/green) is colored based on the
+   firing of a randomly chosen neuron in the hidden representation of the
+   id56. think about it as green = very excited and blue = not very excited
+   (for those familiar with details of lstms, these are values between
+   [-1,1] in the hidden state vector, which is just the gated and tanh   d
+   lstm cell state). intuitively, this is visualizing the firing rate of
+   some neuron in the    brain    of the id56 while it reads the input
+   sequence. different neurons might be looking for different patterns;
+   below we   ll look at 4 different ones that i found and thought were
+   interesting or interpretable (many also aren   t):
+   [under1.jpeg]
+   the neuron highlighted in this image seems to get very excited about
+   urls and turns off outside of the urls. the lstm is likely using this
+   neuron to remember if it is inside a url or not.
+   [under2.jpeg]
+   the highlighted neuron here gets very excited when the id56 is inside
+   the [[ ]] markdown environment and turns off outside of it.
+   interestingly, the neuron can't turn on right after it sees the
+   character "[", it must wait for the second "[" and then activate. this
+   task of counting whether the model has seen one or two "[" is likely
+   done with a different neuron.
+   [under3.jpeg]
+   here we see a neuron that varies seemingly linearly across the [[ ]]
+   environment. in other words its activation is giving the id56 a
+   time-aligned coordinate system across the [[ ]] scope. the id56 can use
+   this information to make different characters more or less likely
+   depending on how early/late it is in the [[ ]] scope (perhaps?).
+   [under4.jpeg]
+   here is another neuron that has very local behavior: it is relatively
+   silent but sharply turns off right after the first "w" in the "www"
+   sequence. the id56 might be using this neuron to count up how far in the
+   "www" sequence it is, so that it can know whether it should emit
+   another "w", or if it should start the url.
+
+   of course, a lot of these conclusions are slightly hand-wavy as the
+   hidden state of the id56 is a huge, high-dimensional and largely
+   distributed representation. these visualizations were produced with
+   custom html/css/javascript, you can see a sketch of what   s involved
+   [28]here if you   d like to create something similar.
+
+   we can also condense this visualization by excluding the most likely
+   predictions and only visualize the text, colored by activations of a
+   cell. we can see that in addition to a large portion of cells that do
+   not do anything interpretible, about 5% of them turn out to have
+   learned quite interesting and interpretible algorithms:
+   [pane1.png] [pane2.png]
+
+   again, what is beautiful about this is that we didn   t have to hardcode
+   at any point that if you   re trying to predict the next character it
+   might, for example, be useful to keep track of whether or not you are
+   currently inside or outside of quote. we just trained the lstm on raw
+   data and it decided that this is a useful quantitity to keep track of.
+   in other words one of its cells gradually tuned itself during training
+   to become a quote detection cell, since this helps it better perform
+   the final task. this is one of the cleanest and most compelling
+   examples of where the power in deep learning models (and more generally
+   end-to-end training) is coming from.
+
+source code
+
+   i hope i   ve convinced you that training character-level language models
+   is a very fun exercise. you can train your own models using the
+   [29]char-id56 code i released on github (under mit license). it takes
+   one large text file and trains a character-level model that you can
+   then sample from. also, it helps if you have a gpu or otherwise
+   training on cpu will be about a factor of 10x slower. in any case, if
+   you end up training on some data and getting fun results let me know!
+   and if you get lost in the torch/lua codebase remember that all it is
+   is just a more fancy version of this [30]100-line gist.
+
+   brief digression. the code is written in [31]torch 7, which has
+   recently become my favorite deep learning framework. i   ve only started
+   working with torch/lua over the last few months and it hasn   t been easy
+   (i spent a good amount of time digging through the raw torch code on
+   github and asking questions on their gitter to get things done), but
+   once you get a hang of things it offers a lot of flexibility and speed.
+   i   ve also worked with caffe and theano in the past and i believe torch,
+   while not perfect, gets its levels of abstraction and philosophy right
+   better than others. in my view the desirable features of an effective
+   framework are:
+    1. cpu/gpu transparent tensor library with a lot of functionality
+       (slicing, array/matrix operations, etc. )
+    2. an entirely separate code base in a scripting language (ideally
+       python) that operates over tensors and implements all deep learning
+       stuff (forward/backward, computation graphs, etc)
+    3. it should be possible to easily share pretrained models (caffe does
+       this well, others don   t), and crucially
+    4. no compilation step (or at least not as currently done in theano).
+       the trend in deep learning is towards larger, more complex networks
+       that are are time-unrolled in complex graphs. it is critical that
+       these do not compile for a long time or development time greatly
+       suffers. second, by compiling one gives up interpretability and the
+       ability to log/debug effectively. if there is an option to compile
+       the graph once it has been developed for efficiency in prod that   s
+       fine.
+
+further reading
+
+   before the end of the post i also wanted to position id56s in a wider
+   context and provide a sketch of the current research directions. id56s
+   have recently generated a significant amount of buzz and excitement in
+   the field of deep learning. similar to convolutional networks they have
+   been around for decades but their full potential has only recently
+   started to get widely recognized, in large part due to our growing
+   computational resources. here   s a brief sketch of a few recent
+   developments (definitely not complete list, and a lot of this work
+   draws from research back to 1990s, see related work sections):
+
+   in the domain of nlp/speech, id56s [32]transcribe speech to text,
+   perform [33]machine translation, [34]generate handwritten text, and of
+   course, they have been used as powerful language models [35](sutskever
+   et al.) [36](graves) [37](mikolov et al.) (both on the level of
+   characters and words). currently it seems that word-level models work
+   better than character-level models, but this is surely a temporary
+   thing.
+
+   id161. id56s are also quickly becoming pervasive in computer
+   vision. for example, we   re seeing id56s in frame-level [38]video
+   classification, [39]image captioning (also including my own work and
+   many others), [40]video captioning and very recently [41]visual
+   id53. my personal favorite id56s in id161 paper
+   is [42]recurrent models of visual attention, both due to its high-level
+   direction (sequential processing of images with glances) and the
+   low-level modeling (reinforce learning rule that is a special case of
+   id189 in id23, which allows one to
+   train models that perform non-differentiable computation (taking
+   glances around the image in this case)). i   m confident that this type
+   of hybrid model that consists of a blend of id98 for raw perception
+   coupled with an id56 glance policy on top will become pervasive in
+   perception, especially for more complex tasks that go beyond
+   classifying some objects in plain view.
+
+   inductive reasoning, memories and attention. another extremely exciting
+   direction of research is oriented towards addressing the limitations of
+   vanilla recurrent networks. one problem is that id56s are not inductive:
+   they memorize sequences extremely well, but they don   t necessarily
+   always show convincing signs of generalizing in the correct way (i   ll
+   provide pointers in a bit that make this more concrete). a second issue
+   is they unnecessarily couple their representation size to the amount of
+   computation per step. for instance, if you double the size of the
+   hidden state vector you   d quadruple the amount of flops at each step
+   due to the id127. ideally, we   d like to maintain a huge
+   representation/memory (e.g. containing all of wikipedia or many
+   intermediate state variables), while maintaining the ability to keep
+   computation per time step fixed.
+
+   the first convincing example of moving towards these directions was
+   developed in deepmind   s [43]id63s paper. this paper
+   sketched a path towards models that can perform read/write operations
+   between large, external memory arrays and a smaller set of memory
+   registers (think of these as our working memory) where the computation
+   happens. crucially, the ntm paper also featured very interesting memory
+   addressing mechanisms that were implemented with a (soft, and
+   fully-differentiable) attention model. the concept of soft attention
+   has turned out to be a powerful modeling feature and was also featured
+   in [44]id4 by jointly learning to align and
+   translate for machine translation and [45]memory networks for (toy)
+   id53. in fact, i   d go as far as to say that
+
+     the concept of attention is the most interesting recent
+     architectural innovation in neural networks.
+
+   now, i don   t want to dive into too many details but a soft attention
+   scheme for memory addressing is convenient because it keeps the model
+   fully-differentiable, but unfortunately one sacrifices efficiency
+   because everything that can be attended to is attended to (but softly).
+   think of this as declaring a pointer in c that doesn   t point to a
+   specific address but instead defines an entire distribution over all
+   addresses in the entire memory, and dereferencing the pointer returns a
+   weighted sum of the pointed content (that would be an expensive
+   operation!). this has motivated multiple authors to swap soft attention
+   models for hard attention where one samples a particular chunk of
+   memory to attend to (e.g. a read/write action for some memory cell
+   instead of reading/writing from all cells to some degree). this model
+   is significantly more philosophically appealing, scalable and
+   efficient, but unfortunately it is also non-differentiable. this then
+   calls for use of techniques from the id23 literature
+   (e.g. reinforce) where people are perfectly used to the concept of
+   non-differentiable interactions. this is very much ongoing work but
+   these hard id12 have been explored, for example, in
+   [46]inferring algorithmic patterns with stack-augmented recurrent nets,
+   [47]id23 id63s, and [48]show attend
+   and tell.
+
+   people. if you   d like to read up on id56s i recommend theses from
+   [49]alex graves, [50]ilya sutskever and [51]tomas mikolov. for more
+   about reinforce and more generally id23 and policy
+   gradient methods (which reinforce is a special case of) [52]david
+   silver   s class, or one of [53]pieter abbeel   s classes.
+
+   code. if you   d like to play with training id56s i hear good things about
+   [54]keras or [55]passage for theano, the [56]code released with this
+   post for torch, or [57]this gist for raw numpy code i wrote a while ago
+   that implements an efficient, batched lstm forward and backward pass.
+   you can also have a look at my numpy-based [58]neuraltalk which uses an
+   id56/lstm to caption images, or maybe this [59]caffe implementation by
+   jeff donahue.
+
+conclusion
+
+   we   ve learned about id56s, how they work, why they have become a big
+   deal, we   ve trained an id56 character-level language model on several
+   fun datasets, and we   ve seen where id56s are going. you can confidently
+   expect a large amount of innovation in the space of id56s, and i believe
+   they will become a pervasive and critical component to intelligent
+   systems.
+
+   lastly, to add some meta to this post, i trained an id56 on the source
+   file of this blog post. unfortunately, at about 46k characters i
+   haven   t written enough data to properly feed the id56, but the returned
+   sample (generated with low temperature to get a more typical sample)
+   is:
+i've the id56 with and works, but the computed with program of the
+id56 with and the computed of the id56 with with and the code
+
+   yes, the post was about id56 and how well it works, so clearly this
+   works :). see you next time!
+
+   edit (extra links):
+
+   videos:
+     * i gave a talk on this work at the [60]london deep learning meetup
+       (video).
+
+   discussions:
+     * [61]hn discussion
+     * reddit discussion on [62]r/machinelearning
+     * reddit discussion on [63]r/programming
+
+   replies:
+     * [64]yoav goldberg compared these id56 results to [65]id165 maximum
+       likelihood (counting) baseline
+     * [66]@nylk trained char-id56 on [67]cooking recipes. they look great!
+     * [68]@mrchrisjohnson trained char-id56 on eminem lyrics and then
+       synthesized a rap song with robotic voice reading it out. hilarious
+       :)
+     * [69]@samim trained char-id56 on [70]obama speeches. they look fun!
+     * [71]jo  o felipe trained char-id56 irish folk music and [72]sampled
+       music
+     * [73]bob sturm also trained char-id56 on [74]music in abc notation
+     * [75]id56 bible bot by [76]maximilien
+     * [77]learning holiness learning the bible
+     * [78]terminal.com snapshot that has char-id56 set up and ready to go
+       in a browser-based virtual machine (thanks [79]@samim)
+
+   please enable javascript to view the [80]comments powered by disqus.
+   [81]comments powered by disqus
+
+     * andrej karpathy blog
+
+     * [82]karpathy
+     * [83]karpathy
+
+   musings of a computer scientist.
+
+references
+
+   visible links
+   1. http://karpathy.github.io/feed.xml
+   2. http://karpathy.github.io/feed.xml
+   3. http://karpathy.github.io/
+   4. http://karpathy.github.io/about/
+   5. http://karpathy.github.io/neuralnets/
+   6. http://cs.stanford.edu/people/karpathy/deepimagesent/
+   7. https://github.com/karpathy/char-id56
+   8. http://binds.cs.umass.edu/papers/1995_siegelmann_science.pdf
+   9. http://deepmind.com/
+  10. http://arxiv.org/abs/1412.7755
+  11. http://arxiv.org/abs/1502.04623
+  12. http://arxiv.org/abs/1502.04390
+  13. https://gist.github.com/karpathy/d4dee566867f8291f086
+  14. https://github.com/karpathy/char-id56
+  15. http://www.paulgraham.com/articles.html
+  16. http://cs.stanford.edu/people/karpathy/char-id56/pg.txt
+  17. http://cs.stanford.edu/people/karpathy/char-id56/shakespear.txt
+  18. http://prize.hutter1.net/
+  19. http://arxiv.org/abs/1308.0850
+  20. http://cs.stanford.edu/people/karpathy/char-id56/wiki.txt
+  21. http://cs.stanford.edu/people/jcjohns/
+  22. http://stacks.math.columbia.edu/
+  23. http://cs.stanford.edu/people/jcjohns/fake-math/4.pdf
+  24. https://github.com/torvalds/linux
+  25. http://cs.stanford.edu/people/karpathy/char-id56/linux.txt
+  26. http://www.cs.cmu.edu/afs/cs/project/ai-repository/ai/areas/nlp/corpora/names/
+  27. http://cs.stanford.edu/people/karpathy/namesgenunique.txt
+  28. http://cs.stanford.edu/people/karpathy/viscode.zip
+  29. https://github.com/karpathy/char-id56
+  30. https://gist.github.com/karpathy/d4dee566867f8291f086
+  31. http://torch.ch/
+  32. http://www.jmlr.org/proceedings/papers/v32/graves14.pdf
+  33. http://arxiv.org/abs/1409.3215
+  34. http://www.cs.toronto.edu/~graves/handwriting.html
+  35. http://www.cs.utoronto.ca/~ilya/pubs/2011/lang-id56.pdf
+  36. http://arxiv.org/abs/1308.0850
+  37. http://www.id56lm.org/
+  38. http://arxiv.org/abs/1411.4389
+  39. http://arxiv.org/abs/1411.4555
+  40. http://arxiv.org/abs/1505.00487
+  41. http://arxiv.org/abs/1505.02074
+  42. http://arxiv.org/abs/1406.6247
+  43. http://arxiv.org/abs/1410.5401
+  44. http://arxiv.org/abs/1409.0473
+  45. http://arxiv.org/abs/1503.08895
+  46. http://arxiv.org/abs/1503.01007
+  47. http://arxiv.org/abs/1505.00521
+  48. http://arxiv.org/abs/1502.03044
+  49. http://www.cs.toronto.edu/~graves/
+  50. http://www.cs.toronto.edu/~ilya/
+  51. http://www.id56lm.org/
+  52. http://www0.cs.ucl.ac.uk/staff/d.silver/web/home.html
+  53. http://www.cs.berkeley.edu/~pabbeel/
+  54. https://github.com/fchollet/keras
+  55. https://github.com/indicodatasolutions/passage
+  56. https://github.com/karpathy/char-id56
+  57. https://gist.github.com/karpathy/587454dc0146a6ae21fc
+  58. https://github.com/karpathy/neuraltalk
+  59. http://jeffdonahue.com/lrcn/
+  60. https://skillsmatter.com/skillscasts/6611-visualizing-and-understanding-recurrent-networks
+  61. https://news.ycombinator.com/item?id=9584325
+  62. http://www.reddit.com/r/machinelearning/comments/36s673/the_unreasonable_effectiveness_of_recurrent/
+  63. http://www.reddit.com/r/programming/comments/36su8d/the_unreasonable_effectiveness_of_recurrent/
+  64. https://twitter.com/yoavgo
+  65. http://nbviewer.ipython.org/gist/yoavg/d76121dfde2618422139
+  66. https://twitter.com/nylk
+  67. https://gist.github.com/nylki/1efbaa36635956d35bcc
+  68. https://twitter.com/mrchrisjohnson
+  69. https://twitter.com/samim
+  70. https://medium.com/@samim/obama-id56-machine-generated-political-speeches-c8abd18a2ea0
+  71. https://twitter.com/seaandsailor
+  72. https://soundcloud.com/seaandsailor/sets/char-id56-composes-irish-folk-music
+  73. https://twitter.com/boblsturm
+  74. https://highnoongmt.wordpress.com/2015/05/22/lisls-stis-recurrent-neural-networks-for-folk-music-generation/
+  75. https://twitter.com/id56_bible
+  76. https://twitter.com/the__glu/with_replies
+  77. http://cpury.github.io/learning-holiness/
+  78. https://www.terminal.com/tiny/zmcqdkwgom
+  79. https://www.twitter.com/samim
+  80. http://disqus.com/?ref_noscript
+  81. http://disqus.com/
+  82. https://github.com/karpathy
+  83. https://twitter.com/karpathy
+
+   hidden links:
+  85. http://karpathy.github.io/2015/05/21/id56-effectiveness/

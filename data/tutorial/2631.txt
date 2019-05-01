@@ -1,0 +1,574 @@
+   #[1]index [2]search [3]id137 for id31 [4]hybrid
+   monte-carlo sampling
+
+navigation
+
+     * [5]index
+     * [6]next |
+     * [7]previous |
+     * [8]deeplearning 0.1 documentation   
+
+[9]table of contents
+
+     * [10]recurrent neural networks with id27s
+          + [11]summary
+          + [12]code - citations - contact
+               o [13]code
+               o [14]papers
+               o [15]contact
+          + [16]task
+          + [17]dataset
+          + [18]recurrent neural network model
+               o [19]raw input encoding
+               o [20]context window
+               o [21]id27s
+               o [22]elman recurrent neural network
+          + [23]evaluation
+          + [24]training
+               o [25]updates
+               o [26]stopping criterion
+               o [27]hyper-parameter selection
+          + [28]running the code
+               o [29]timing
+               o [30]id27 nearest neighbors
+
+previous topic
+
+   [31]hybrid monte-carlo sampling
+
+next topic
+
+   [32]id137 for id31
+
+this page
+
+     * [33]show source
+
+quick search
+
+   ____________________
+   go
+
+recurrent neural networks with id27s[34]  
+
+summary[35]  
+
+   in this tutorial, you will learn how to:
+     * learn id27s
+     * using recurrent neural networks architectures
+     * with context windows
+
+   in order to perform id29 / slot-filling (spoken language
+   understanding)
+
+code - citations - contact[36]  
+
+code[37]  
+
+   directly running experiments is also possible using this [38]github
+   repository.
+
+papers[39]  
+
+   if you use this tutorial, cite the following papers:
+     * [40][pdf] gr  goire mesnil, xiaodong he, li deng and yoshua bengio.
+       investigation of recurrent-neural-network architectures and
+       learning methods for spoken language understanding. interspeech,
+       2013.
+     * [41][pdf] gokhan tur, dilek hakkani-tur and larry heck. what is
+       left to be understood in atis?
+     * [42][pdf] christian raymond and giuseppe riccardi. generative and
+       discriminative algorithms for spoken language understanding.
+       interspeech, 2007.
+     * [43][pdf] bastien, fr  d  ric, lamblin, pascal, pascanu, razvan,
+       bergstra, james, goodfellow, ian, bergeron, arnaud, bouchard,
+       nicolas, and bengio, yoshua. theano: new features and speed
+       improvements. nips workshop on deep learning and unsupervised
+       id171, 2012.
+     * [44][pdf] bergstra, james, breuleux, olivier, bastien, fr  d  ric,
+       lamblin, pascal, pascanu, razvan, desjardins, guillaume, turian,
+       joseph, warde-farley, david, and bengio, yoshua. theano: a cpu and
+       gpu math expression compiler. in proceedings of the python for
+       scientific computing conference (scipy), june 2010.
+
+   thank you!
+
+contact[45]  
+
+   please email to gr  goire mesnil
+   (first-add-a-dot-last-add-at-gmail-add-a-dot-com) for any problem
+   report or feedback. we will be glad to hear from you.
+
+task[46]  
+
+   the slot-filling (spoken language understanding) consists in assigning
+   a label to each word given a sentence. it   s a classification task.
+
+dataset[47]  
+
+   an old and small benchmark for this task is the atis (airline travel
+   information system) dataset collected by darpa. here is a sentence (or
+   utterance) example using the [48]inside outside beginning (iob)
+   representation.
+   input (words)   show flights from boston to new   york  today
+   output (labels) o    o       o    b-dept o  b-arr i-arr b-date
+
+   the atis offical split contains 4,978/893 sentences for a total of
+   56,590/9,198 words (average sentence length is 15) in the train/test
+   set. the number of classes (different slots) is 128 including the o
+   label (null).
+
+   as [49]microsoft research people, we deal with unseen words in the test
+   set by marking any words with only one single occurrence in the
+   training set as <unk> and use this token to represent those unseen
+   words in the test set. as [50]ronan collobert and colleagues, we
+   converted sequences of numbers with the string digit i.e. 1984 is
+   converted to digitdigitdigitdigit.
+
+   we split the official train set into a training and validation set that
+   contain respectively 80% and 20% of the official training sentences.
+   [51]significant performance improvement difference has to be greater
+   than 0.6% in f1 measure at the 95% level due to the small size of the
+   dataset. for evaluation purpose, experiments have to report the
+   following metrics:
+     * [52]precision
+     * [53]recall
+     * [54]f1 score
+
+   we will use the [55]conlleval perl script to measure the performance of
+   our models.
+
+recurrent neural network model[56]  
+
+raw input encoding[57]  
+
+   a token corresponds to a word. each token in the atis vocabulary is
+   associated to an index. each sentence is a array of indexes (int32).
+   then, each set (train, valid, test) is a list of arrays of indexes. a
+   python dictionary is defined for mapping the space of indexes to the
+   space of words.
+>>> sentence
+array([383, 189,  13, 193, 208, 307, 195, 502, 260, 539,
+        7,  60,  72, 8, 350, 384], dtype=int32)
+>>> map(lambda x: index2word[x], sentence)
+['please', 'find', 'a', 'flight', 'from', 'miami', 'florida',
+        'to', 'las', 'vegas', '<unk>', 'arriving', 'before', 'digit', "o'clock",
+ 'pm']
+
+   same thing for labels corresponding to this particular sentence.
+>>> labels
+array([126, 126, 126, 126, 126,  48,  50, 126,  78, 123,  81, 126,  15,
+        14,  89,  89], dtype=int32)
+>>> map(lambda x: index2label[x], labels)
+['o', 'o', 'o', 'o', 'o', 'b-fromloc.city_name', 'b-fromloc.state_name',
+        'o', 'b-toloc.city_name', 'i-toloc.city_name', 'b-toloc.state_name',
+        'o', 'b-arrive_time.time_relative', 'b-arrive_time.time',
+        'i-arrive_time.time', 'i-arrive_time.time']
+
+context window[58]  
+
+   given a sentence i.e. an array of indexes, and a window size i.e.
+   1,3,5,..., we need to convert each word in the sentence to a context
+   window surrounding this particular word. in details, we have:
+def contextwin(l, win):
+    '''
+    win :: int corresponding to the size of the window
+    given a list of indexes composing a sentence
+
+    l :: array containing the word indexes
+
+    it will return a list of list of indexes corresponding
+    to context windows surrounding each word in the sentence
+    '''
+    assert (win % 2) == 1
+    assert win >= 1
+    l = list(l)
+
+    lpadded = win // 2 * [-1] + l + win // 2 * [-1]
+    out = [lpadded[i:(i + win)] for i in range(len(l))]
+
+    assert len(out) == len(l)
+    return out
+
+   the index -1 corresponds to the padding index we insert at the
+   beginning/end of the sentence.
+
+   here is a sample:
+>>> x
+array([0, 1, 2, 3, 4], dtype=int32)
+>>> contextwin(x, 3)
+[[-1, 0, 1],
+ [ 0, 1, 2],
+ [ 1, 2, 3],
+ [ 2, 3, 4],
+ [ 3, 4,-1]]
+>>> contextwin(x, 7)
+[[-1, -1, -1, 0, 1, 2, 3],
+ [-1, -1,  0, 1, 2, 3, 4],
+ [-1,  0,  1, 2, 3, 4,-1],
+ [ 0,  1,  2, 3, 4,-1,-1],
+ [ 1,  2,  3, 4,-1,-1,-1]]
+
+   to summarize, we started with an array of indexes and ended with a
+   matrix of indexes. each line corresponds to the context window
+   surrounding this word.
+
+id27s[59]  
+
+   once we have the sentence converted to context windows i.e. a matrix of
+   indexes, we have to associate these indexes to the embeddings
+   (real-valued vector associated to each word). using theano, it gives:
+import theano, numpy
+from theano import tensor as t
+
+# nv :: size of our vocabulary
+# de :: dimension of the embedding space
+# cs :: context window size
+nv, de, cs = 1000, 50, 5
+
+embeddings = theano.shared(0.2 * numpy.random.uniform(-1.0, 1.0, \
+    (nv+1, de)).astype(theano.config.floatx)) # add one for padding at the end
+
+idxs = t.imatrix() # as many columns as words in the context window and as many
+lines as words in the sentence
+x    = self.emb[idxs].reshape((idxs.shape[0], de*cs))
+
+   the x symbolic variable corresponds to a matrix of shape (number of
+   words in the sentences, dimension of the embedding space x context
+   window size).
+
+   let   s compile a theano function to do so
+>>> sample
+array([0, 1, 2, 3, 4], dtype=int32)
+>>> csample = contextwin(sample, 7)
+[[-1, -1, -1, 0, 1, 2, 3],
+ [-1, -1,  0, 1, 2, 3, 4],
+ [-1,  0,  1, 2, 3, 4,-1],
+ [ 0,  1,  2, 3, 4,-1,-1],
+ [ 1,  2,  3, 4,-1,-1,-1]]
+>>> f = theano.function(inputs=[idxs], outputs=x)
+>>> f(csample)
+array([[-0.08088442,  0.08458307,  0.05064092, ...,  0.06876887,
+        -0.06648078, -0.15192257],
+       [-0.08088442,  0.08458307,  0.05064092, ...,  0.11192625,
+         0.08745284,  0.04381778],
+       [-0.08088442,  0.08458307,  0.05064092, ..., -0.00937143,
+         0.10804889,  0.1247109 ],
+       [ 0.11038255, -0.10563177, -0.18760249, ..., -0.00937143,
+         0.10804889,  0.1247109 ],
+       [ 0.18738101,  0.14727569, -0.069544  , ..., -0.00937143,
+         0.10804889,  0.1247109 ]], dtype=float32)
+>>> f(csample).shape
+(5, 350)
+
+   we now have a sequence (of length 5 which is corresponds to the length
+   of the sentence) of context window id27s which is easy to
+   feed to a simple recurrent neural network to iterate with.
+
+elman recurrent neural network[60]  
+
+   the followin (elman) recurrent neural network (e-id56) takes as input
+   the current input (time t) and the previous hiddent state (time t-1).
+   then it iterates.
+
+   in the previous section, we processed the input to fit this
+   sequential/temporal structure. it consists in a matrix where the row 0
+   corresponds to the time step t=0, the row 1 corresponds to the time
+   step t=1, etc.
+
+   the parameters of the e-id56 to be learned are:
+     * the id27s (real-valued matrix)
+     * the initial hidden state (real-value vector)
+     * two matrices for the linear projection of the input t and the
+       previous hidden layer state t-1
+     * (optional) bias. [61]recommendation: don   t use it.
+     * softmax classification layer on top
+
+   the hyperparameters define the whole architecture:
+     * dimension of the id27
+     * size of the vocabulary
+     * number of hidden units
+     * number of classes
+     * random seed + way to initialize the model
+
+   it gives the following code:
+class id56slu(object):
+    ''' elman neural net model '''
+    def __init__(self, nh, nc, ne, de, cs):
+        '''
+        nh :: dimension of the hidden layer
+        nc :: number of classes
+        ne :: number of id27s in the vocabulary
+        de :: dimension of the id27s
+        cs :: word window context size
+        '''
+        # parameters of the model
+        self.emb = theano.shared(name='embeddings',
+                                 value=0.2 * numpy.random.uniform(-1.0, 1.0,
+                                 (ne+1, de))
+                                 # add one for padding at the end
+                                 .astype(theano.config.floatx))
+        self.wx = theano.shared(name='wx',
+                                value=0.2 * numpy.random.uniform(-1.0, 1.0,
+                                (de * cs, nh))
+                                .astype(theano.config.floatx))
+        self.wh = theano.shared(name='wh',
+                                value=0.2 * numpy.random.uniform(-1.0, 1.0,
+                                (nh, nh))
+                                .astype(theano.config.floatx))
+        self.w = theano.shared(name='w',
+                               value=0.2 * numpy.random.uniform(-1.0, 1.0,
+                               (nh, nc))
+                               .astype(theano.config.floatx))
+        self.bh = theano.shared(name='bh',
+                                value=numpy.zeros(nh,
+                                dtype=theano.config.floatx))
+        self.b = theano.shared(name='b',
+                               value=numpy.zeros(nc,
+                               dtype=theano.config.floatx))
+        self.h0 = theano.shared(name='h0',
+                                value=numpy.zeros(nh,
+                                dtype=theano.config.floatx))
+
+        # bundle
+        self.params = [self.emb, self.wx, self.wh, self.w,
+                       self.bh, self.b, self.h0]
+
+   then we integrate the way to build the input from the embedding matrix:
+        idxs = t.imatrix()
+        x = self.emb[idxs].reshape((idxs.shape[0], de*cs))
+        y_sentence = t.ivector('y_sentence')  # labels
+
+   we use the scan operator to construct the recursion, works like a
+   charm:
+        def recurrence(x_t, h_tm1):
+            h_t = t.nnet.sigmoid(t.dot(x_t, self.wx)
+                                 + t.dot(h_tm1, self.wh) + self.bh)
+            s_t = t.nnet.softmax(t.dot(h_t, self.w) + self.b)
+            return [h_t, s_t]
+
+        [h, s], _ = theano.scan(fn=recurrence,
+                                sequences=x,
+                                outputs_info=[self.h0, none],
+                                n_steps=x.shape[0])
+
+        p_y_given_x_sentence = s[:, 0, :]
+        y_pred = t.argmax(p_y_given_x_sentence, axis=1)
+
+   theano will then compute all the gradients automatically to maximize
+   the log-likelihood:
+        lr = t.scalar('lr')
+
+        sentence_nll = -t.mean(t.log(p_y_given_x_sentence)
+                               [t.arange(x.shape[0]), y_sentence])
+        sentence_gradients = t.grad(sentence_nll, self.params)
+        sentence_updates = ordereddict((p, p - lr*g)
+                                       for p, g in
+                                       zip(self.params, sentence_gradients))
+
+   next compile those functions:
+        self.classify = theano.function(inputs=[idxs], outputs=y_pred)
+        self.sentence_train = theano.function(inputs=[idxs, y_sentence, lr],
+                                              outputs=sentence_nll,
+                                              updates=sentence_updates)
+
+   we keep the id27s on the unit sphere by normalizing them
+   after each update:
+        self.normalize = theano.function(inputs=[],
+                                         updates={self.emb:
+                                                  self.emb /
+                                                  t.sqrt((self.emb**2)
+                                                  .sum(axis=1))
+                                                  .dimshuffle(0, 'x')})
+
+   and that   s it!
+
+evaluation[62]  
+
+   with the previous defined functions, you can compare the predicted
+   labels with the true labels and compute some metrics. in this [63]repo,
+   we build a wrapper around the [64]conlleval perl script. it   s not
+   trivial to compute those metrics due to the [65]inside outside
+   beginning (iob) representation i.e. a prediction is considered correct
+   if the word-beginning and the word-inside and the word-outside
+   predictions are all correct. note that the extension is txt and you
+   will have to change it to pl .
+
+training[66]  
+
+updates[67]  
+
+   for stochastic id119 (sgd) update, we consider the whole
+   sentence as a mini-batch and perform one update per sentence. it is
+   possible to perform a pure sgd (contrary to mini-batch) where the
+   update is done on only one single word at a time.
+
+   after each iteration/update, we normalize the id27s to keep
+   them on a unit sphere.
+
+stopping criterion[68]  
+
+   early-stopping on a validation set is our id173 technique: the
+   training is run for a given number of epochs (a single pass through the
+   whole dataset) and keep the best model along with respect to the f1
+   score computed on the validation set after each epoch.
+
+hyper-parameter selection[69]  
+
+   although there is interesting research/[70]code on the topic of
+   automatic hyper-parameter selection, we use the [71]kiss random search.
+
+   the following intervals can give you some starting point:
+     * learning rate : uniform([0.05,0.01])
+     * window size : random value from {3,...,19}
+     * number of hidden units : random value from {100,200}
+     * embedding dimension : random value from {50,100}
+
+running the code[72]  
+
+   after downloading the data using download.sh , the user can then run
+   the code by calling:
+python code/id56slu.py
+
+('new best: epoch', 25, 'valid f1', 96.84, 'best test f1', 93.79)
+[learning] epoch 26 >> 100.00% completed in 28.76 (sec) <<
+[learning] epoch 27 >> 100.00% completed in 28.76 (sec) <<
+...
+('best result: epoch', 57, 'valid f1', 97.23, 'best test f1', 94.2, 'with the mo
+del', 'id56slu')
+
+timing[73]  
+
+   running experiments on atis using this [74]repository will run one
+   epoch in less than 40 seconds on i7 cpu 950 @ 3.07ghz using less than
+   200 mo of ram:
+[learning] epoch 0 >> 100.00% completed in 34.48 (sec) <<
+
+   after a few epochs, you obtain decent performance 94.48 % of f1 score.:
+new best: epoch 28 valid f1 96.61 best test f1 94.19
+new best: epoch 29 valid f1 96.63 best test f1 94.42
+[learning] epoch 30 >> 100.00% completed in 35.04 (sec) <<
+[learning] epoch 31 >> 100.00% completed in 34.80 (sec) <<
+[...]
+new best: epoch 40 valid f1 97.25 best test f1 94.34
+[learning] epoch 41 >> 100.00% completed in 35.18 (sec) <<
+new best: epoch 42 valid f1 97.33 best test f1 94.48
+[learning] epoch 43 >> 100.00% completed in 35.39 (sec) <<
+[learning] epoch 44 >> 100.00% completed in 35.31 (sec) <<
+[...]
+
+id27 nearest neighbors[75]  
+
+   we can check the k-nearest neighbors of the learned embeddings. l2 and
+   cosine distance gave the same results so we plot them for the cosine
+   distance.
+   atlanta back ap80 but aircraft business a august actually cheap
+   phoenix live ap57 if plane coach people september provide weekday
+   denver lives ap up service first do january prices weekdays
+   tacoma both connections a airplane fourth but june stop am
+   columbus how tomorrow now seating thrift numbers december number early
+   seattle me before amount stand tenth abbreviation november flight sfo
+   minneapolis out earliest more that second if april there milwaukee
+   pittsburgh other connect abbreviation on fifth up july serving jfk
+   ontario plane thrift restrictions turboprop third serve jfk thank
+   shortest
+   montreal service coach mean mean twelfth database october ticket bwi
+   philadelphia fare today interested amount sixth passengers may are
+   lastest
+
+   as you can judge, the limited size of the vocabulary (about 500 words)
+   gives us mitigated performance. according to human judgement: some are
+   good, some are bad.
+
+navigation
+
+     * [76]index
+     * [77]next |
+     * [78]previous |
+     * [79]deeplearning 0.1 documentation   
+
+      copyright 2008--2010, lisa lab. last updated on jun 15, 2018. created
+   using [80]sphinx 1.5.
+
+references
+
+   1. http://deeplearning.net/tutorial/genindex.html
+   2. http://deeplearning.net/tutorial/search.html
+   3. http://deeplearning.net/tutorial/lstm.html
+   4. http://deeplearning.net/tutorial/hmc.html
+   5. http://deeplearning.net/tutorial/genindex.html
+   6. http://deeplearning.net/tutorial/lstm.html
+   7. http://deeplearning.net/tutorial/hmc.html
+   8. http://deeplearning.net/tutorial/contents.html
+   9. http://deeplearning.net/tutorial/contents.html
+  10. http://deeplearning.net/tutorial/id56slu.html
+  11. http://deeplearning.net/tutorial/id56slu.html#summary
+  12. http://deeplearning.net/tutorial/id56slu.html#code-citations-contact
+  13. http://deeplearning.net/tutorial/id56slu.html#code
+  14. http://deeplearning.net/tutorial/id56slu.html#papers
+  15. http://deeplearning.net/tutorial/id56slu.html#contact
+  16. http://deeplearning.net/tutorial/id56slu.html#task
+  17. http://deeplearning.net/tutorial/id56slu.html#dataset
+  18. http://deeplearning.net/tutorial/id56slu.html#recurrent-neural-network-model
+  19. http://deeplearning.net/tutorial/id56slu.html#raw-input-encoding
+  20. http://deeplearning.net/tutorial/id56slu.html#context-window
+  21. http://deeplearning.net/tutorial/id56slu.html#word-embeddings
+  22. http://deeplearning.net/tutorial/id56slu.html#elman-recurrent-neural-network
+  23. http://deeplearning.net/tutorial/id56slu.html#evaluation
+  24. http://deeplearning.net/tutorial/id56slu.html#training
+  25. http://deeplearning.net/tutorial/id56slu.html#updates
+  26. http://deeplearning.net/tutorial/id56slu.html#stopping-criterion
+  27. http://deeplearning.net/tutorial/id56slu.html#hyper-parameter-selection
+  28. http://deeplearning.net/tutorial/id56slu.html#running-the-code
+  29. http://deeplearning.net/tutorial/id56slu.html#timing
+  30. http://deeplearning.net/tutorial/id56slu.html#word-embedding-nearest-neighbors
+  31. http://deeplearning.net/tutorial/hmc.html
+  32. http://deeplearning.net/tutorial/lstm.html
+  33. http://deeplearning.net/tutorial/_sources/id56slu.txt
+  34. http://deeplearning.net/tutorial/id56slu.html#recurrent-neural-networks-with-word-embeddings
+  35. http://deeplearning.net/tutorial/id56slu.html#summary
+  36. http://deeplearning.net/tutorial/id56slu.html#code-citations-contact
+  37. http://deeplearning.net/tutorial/id56slu.html#code
+  38. https://github.com/mesnilgr/is13
+  39. http://deeplearning.net/tutorial/id56slu.html#papers
+  40. http://www.iro.umontreal.ca/~lisa/pointeurs/id56spokenlanguage2013.pdf
+  41. http://research.microsoft.com/en-us/people/gokhant/0000019.pdf
+  42. http://lia.univ-avignon.fr/fileadmin/documents/users/intranet/fich_art/997-interspeech2007.pdf
+  43. http://www.iro.umontreal.ca/~lisa/pointeurs/nips2012_deep_workshop_theano_final.pdf
+  44. http://www.iro.umontreal.ca/~lisa/pointeurs/theano_scipy2010.pdf
+  45. http://deeplearning.net/tutorial/id56slu.html#contact
+  46. http://deeplearning.net/tutorial/id56slu.html#task
+  47. http://deeplearning.net/tutorial/id56slu.html#dataset
+  48. http://en.wikipedia.org/wiki/inside_outside_beginning
+  49. http://research.microsoft.com/en-us/um/people/gzweig/pubs/interspeech2013id56lu.pdf
+  50. http://ronan.collobert.com/pub/matos/2011_nlp_jmlr.pdf
+  51. http://research.microsoft.com/en-us/um/people/gzweig/pubs/interspeech2013id56lu.pdf
+  52. http://en.wikipedia.org/wiki/precision_(information_retrieval)
+  53. http://en.wikipedia.org/wiki/recall_(information_retrieval)
+  54. http://en.wikipedia.org/wiki/f1_score
+  55. http://www.cnts.ua.ac.be/conll2000/chunking/conlleval.txt
+  56. http://deeplearning.net/tutorial/id56slu.html#recurrent-neural-network-model
+  57. http://deeplearning.net/tutorial/id56slu.html#raw-input-encoding
+  58. http://deeplearning.net/tutorial/id56slu.html#context-window
+  59. http://deeplearning.net/tutorial/id56slu.html#word-embeddings
+  60. http://deeplearning.net/tutorial/id56slu.html#elman-recurrent-neural-network
+  61. http://en.wikipedia.org/wiki/occam's_razor
+  62. http://deeplearning.net/tutorial/id56slu.html#evaluation
+  63. https://github.com/mesnilgr/is13
+  64. http://www.cnts.ua.ac.be/conll2000/chunking/conlleval.txt
+  65. http://en.wikipedia.org/wiki/inside_outside_beginning
+  66. http://deeplearning.net/tutorial/id56slu.html#training
+  67. http://deeplearning.net/tutorial/id56slu.html#updates
+  68. http://deeplearning.net/tutorial/id56slu.html#stopping-criterion
+  69. http://deeplearning.net/tutorial/id56slu.html#hyper-parameter-selection
+  70. https://github.com/jaspersnoek/spearmint
+  71. http://en.wikipedia.org/wiki/kiss_principle
+  72. http://deeplearning.net/tutorial/id56slu.html#running-the-code
+  73. http://deeplearning.net/tutorial/id56slu.html#timing
+  74. https://github.com/mesnilgr/is13
+  75. http://deeplearning.net/tutorial/id56slu.html#word-embedding-nearest-neighbors
+  76. http://deeplearning.net/tutorial/genindex.html
+  77. http://deeplearning.net/tutorial/lstm.html
+  78. http://deeplearning.net/tutorial/hmc.html
+  79. http://deeplearning.net/tutorial/contents.html
+  80. http://sphinx-doc.org/

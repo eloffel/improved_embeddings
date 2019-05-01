@@ -1,0 +1,1694 @@
+deep voice: real-time neural text-to-speech
+
+7
+1
+0
+2
+
+ 
+r
+a
+
+m
+7
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+5
+2
+8
+7
+0
+
+.
+
+2
+0
+7
+1
+:
+v
+i
+x
+r
+a
+
+sercan   o. ar  k   
+mike chrzanowski   
+adam coates   
+gregory diamos   
+andrew gibiansky   
+yongguo kang   
+xian li   
+john miller   
+andrew ng   
+jonathan raiman   
+shubho sengupta   
+mohammad shoeybi   
+baidu silicon valley arti   cial intelligence lab, 1195 bordeaux dr. sunnyvale, ca 94089
+
+sercanarik@baidu.com
+mikechrzanowski@baidu.com
+adamcoates@baidu.com
+gregdiamos@baidu.com
+gibianskyandrew@baidu.com
+kangyongguo@baidu.com
+lixian05@baidu.com
+millerjohn@baidu.com
+andrewng@baidu.com
+jonathanraiman@baidu.com
+ssengupta@baidu.com
+mohammad@baidu.com
+
+abstract
+
+we present deep voice, a production-quality
+text-to-speech system constructed entirely from
+deep neural networks. deep voice lays the
+groundwork for truly end-to-end neural speech
+synthesis.
+the system comprises    ve ma-
+jor building blocks: a segmentation model for
+locating phoneme boundaries, a grapheme-to-
+phoneme conversion model, a phoneme duration
+prediction model, a fundamental frequency pre-
+diction model, and an audio synthesis model.
+for the segmentation model, we propose a novel
+way of performing phoneme boundary detection
+with deep neural networks using connectionist
+temporal classi   cation (ctc) loss. for the au-
+dio synthesis model, we implement a variant
+of wavenet that requires fewer parameters and
+trains faster than the original. by using a neu-
+ral network for each component, our system is
+simpler and more    exible than traditional text-to-
+speech systems, where each component requires
+laborious feature engineering and extensive do-
+main expertise. finally, we show that id136
+with our system can be performed faster than real
+time and describe optimized wavenet id136
+kernels on both cpu and gpu that achieve up to
+400x speedups over existing implementations.
+
+   authors are listed alphabetically by last name.
+
+submitted february 24, 2017 for review for the international con-
+ference on machine learning (icml) 2017. copyright 2017 by
+the author(s).
+
+1. introduction
+synthesizing arti   cial human speech from text, commonly
+known as text-to-speech (tts), is an essential component
+in many applications such as speech-enabled devices, navi-
+gation systems, and accessibility for the visually-impaired.
+fundamentally,
+it allows human-technology interaction
+without requiring visual interfaces. modern tts systems
+are based on complex, multi-stage processing pipelines,
+each of which may rely on hand-engineered features and
+heuristics. due to this complexity, developing new tts
+systems can be very labor intensive and dif   cult.
+deep voice is inspired by traditional
+text-to-speech
+pipelines and adopts the same structure, while replacing all
+components with neural networks and using simpler fea-
+tures:    rst we convert text to phoneme and then use an
+audio synthesis model to convert linguistic features into
+speech (taylor, 2009). unlike prior work (which uses
+hand-engineered features such as spectral envelope, spec-
+tral parameters, aperiodic parameters, etc.), our only fea-
+tures are phonemes with stress annotations, phoneme du-
+rations, and fundamental frequency (f0). this choice of
+features makes our system more readily applicable to new
+datasets, voices, and domains without any manual data an-
+notation or additional feature engineering. we demonstrate
+this claim by retraining our entire pipeline without any hy-
+perparameter changes on an entirely new dataset that con-
+tains solely audio and unaligned textual transcriptions and
+generating relatively high quality speech. in a conventional
+tts system this adaptation requires days to weeks of tun-
+ing, whereas deep voice allows you to do it in only a few
+hours of manual effort and the time it takes models to train.
+
+deep voice: real-time neural tts
+
+real-time id136 is a requirement for a production-
+quality tts system; without it, the system is unusable for
+most applications of tts. prior work has demonstrated that
+a wavenet (van den oord et al., 2016) can generate close to
+human-level speech. however, wavenet id136 poses a
+daunting computational problem due to the high-frequency,
+autoregressive nature of the model, and it has been hitherto
+unknown whether such models can be used in a produc-
+tion system. we answer this question in the af   rmative and
+demonstrate ef   cient, faster-than-real-time wavenet infer-
+ence kernels that produce high-quality 16 khz audio and
+realize a 400x speedup over previous wavenet id136
+implementations (paine et al., 2016).
+
+2. related work
+previous work uses neural networks as substitutes for
+several tts system components, including grapheme-to-
+phoneme conversion models (rao et al., 2015; yao &
+zweig, 2015), phoneme duration prediction models (zen
+& sak, 2015), fundamental frequency prediction models
+(pascual & bonafonte, 2016; ronanki et al., 2016), and
+audio synthesis models (van den oord et al., 2016; mehri
+et al., 2016). unlike deep voice, however, none of these
+systems solve the entire problem of tts and many of them
+use specialized hand-engineered features developed specif-
+ically for their domain.
+most recently, there has been a lot of work in paramet-
+ric audio synthesis, notably wavenet, sampleid56, and
+char2wav (van den oord et al., 2016; mehri et al., 2016;
+sotelo et al., 2017). while wavenet can be used for
+both conditional and unconditional audio generation, sam-
+pleid56 is only used for unconditional audio generation.
+char2wav extends sampleid56 with an attention-based
+phoneme duration model and the equivalent of an f0 pre-
+diction model, effectively providing local conditioning in-
+formation to a sampleid56-based vocoder.
+deep voice differs from these systems in several key as-
+pects that notably increase the scope of the problem. first,
+deep voice is completely standalone; training a new deep
+voice system does not require a pre-existing tts system,
+and can be done from scratch using a dataset of short au-
+dio clips and corresponding textual transcripts. in contrast,
+reproducing either of the aforementioned systems requires
+access and understanding of a pre-existing tts system, be-
+cause they use features from another tts system either at
+training or id136 time.
+second, deep voice minimizes the use of hand-engineered
+features; it uses one-hot encoded characters for grapheme
+to phoneme conversion, one-hot encoded phonemes and
+stresses, phoneme durations in milliseconds, and normal-
+ized log fundamental frequency that can be computed from
+
+waveforms using any f0 estimation algorithm. all of these
+can easily be obtained from audio and transcripts with min-
+imal effort. in contrast, prior works use a much more com-
+plex feature representation, that effectively makes repro-
+ducing the system impossible without a pre-existing tts
+system. wavenet uses several features from a tts system
+(zen et al., 2013), that include values such as the number
+of syllables in a word, position of syllables in the phrase,
+position of the current frame in the phoneme, and dynamic
+features of the speech spectrum like spectral and excitation
+parameters, as well as their time derivatives. char2wav
+relies on vocoder features from the world tts system
+(morise et al., 2016) for pre-training their alignment mod-
+ule which include f0, spectral envelope, and aperiodic pa-
+rameters.
+finally, we focus on creating a production-ready system,
+which requires that our models run in real-time for infer-
+ence. deep voice can synthesize audio in fractions of a
+second, and offers a tunable trade-off between synthesis
+speed and audio quality. in contrast, previous results with
+wavenet require several minutes of runtime to synthesize
+one second of audio. we are unaware of similar bench-
+marks for sampleid56, but the 3-tier architecture as de-
+scribed in the original publication requires approximately
+4-5x as much compute during id136 as our largest
+wavenet models, so running the model in real-time may
+prove challenging.
+
+3. tts system components
+as shown in fig. 1, the tts system consists of    ve major
+building blocks:
+
+    the grapheme-to-phoneme model converts from
+written text (english characters) to phonemes (en-
+coded using a phonemic alphabet such as arpabet).
+    the segmentation model locates phoneme bound-
+aries in the voice dataset. given an audio    le and a
+phoneme-by-phoneme transcription of the audio, the
+segmentation model identi   es where in the audio each
+phoneme begins and ends.
+
+    the phoneme duration model predicts the temporal
+duration of every phoneme in a phoneme sequence (an
+utterance).
+
+    the fundamental frequency model predicts whether
+a phoneme is voiced.
+the model pre-
+dicts the fundamental frequency (f0) throughout the
+phoneme   s duration.
+
+if it
+
+    the audio synthesis model combines the outputs
+of the grapheme-to-phoneme, phoneme duration, and
+fundamental frequency prediction models and synthe-
+sizes audio at a high sampling rate, corresponding to
+
+is,
+
+deep voice: real-time neural tts
+
+figure 1. system diagram depicting (a) training procedure and (b) id136 procedure, with inputs on the left and outputs on the right.
+in our system, the duration prediction model and the f0 prediction model are performed by a single neural network trained with a joint
+loss. the grapheme-to-phoneme model is used as a fallback for words that are not present in a phoneme dictionary, such as cmudict.
+dotted lines denote non-learned components.
+
+the desired text.
+
+during id136,
+text is fed through the grapheme-to-
+phoneme model or a phoneme dictionary to generate
+phonemes. next, the phonemes are provided as inputs to
+the phoneme duration model and f0 prediction model to
+assign durations to each phoneme and generate an f0 con-
+tour. finally, the phonemes, phoneme durations, and f0
+are used as local conditioning input features to the audio
+synthesis model, which generates the    nal utterance.
+unlike the other models, the segmentation model is not
+used during id136.
+it is used to annotate
+the training voice data with phoneme boundaries. the
+phoneme boundaries imply durations, which can be used
+to train the phoneme duration model. the audio, anno-
+tated with phonemes and phoneme durations as well as
+fundamental frequency, is used to train the audio synthe-
+sis model.
+in the following sections, we describe all the building
+blocks in detail.
+
+instead,
+
+3.1. grapheme-to-phoneme model
+
+our grapheme-to-phoneme model is based on the encoder-
+decoder architecture developed by (yao & zweig, 2015).
+however, we use a multi-layer bidirectional encoder with
+a gated recurrent unit (gru) nonlinearity and an equally
+deep unidirectional gru decoder (chung et al., 2014). the
+initial state of every decoder layer is initialized to the    nal
+
+hidden state of the corresponding encoder forward layer.
+the architecture is trained with teacher forcing and decod-
+ing is performed using id125. we use 3 bidirectional
+layers with 1024 units each in the encoder and 3 unidirec-
+tional layers of the same size in the decoder and a beam
+search with a width of 5 candidates. during training, we
+use dropout with id203 0.95 after each recurrent layer.
+for training, we use the adam optimization algorithm with
+  1 = 0.9,   2 = 0.999,    = 10   8, a batch size of 64, a
+learning rate of 10   3, and an annealing rate of 0.85 applied
+every 1000 iterations (kingma & ba, 2014).
+
+3.2. segmentation model
+
+our segmentation model is trained to output the align-
+ment between a given utterance and a sequence of target
+phonemes. this task is similar to the problem of aligning
+speech to written output in id103. in that do-
+main, the connectionist temporal classi   cation (ctc) loss
+function has been shown to focus on character alignments
+to learn a mapping between sound and text (graves et al.,
+2006). we adapt the convolutional recurrent neural net-
+work architecture from a state-of-the-art speech recogni-
+tion system (amodei et al., 2015) for phoneme boundary
+detection.
+a network trained with ctc to generate sequences of
+phonemes will produce brief peaks for every output
+phoneme. although this is suf   cient to roughly align the
+phonemes to the audio, it is insuf   cient to detect precise
+
+(a)durationsf0 profileid136grapheme-to-phonemeduration predictionfundamental frequency (f0) predictionaudio synthesistextaudiophonemesphoneme dictionarytraining(b)audiosegmentationgrapheme-to-phonemetextphonemesaudio synthesisdurationsduration predictionfundamental frequency (f0) predictionf0 extractionphoneme dictionaryaudiodeep voice: real-time neural tts
+
+label encoding, consider
+
+phoneme boundaries. to overcome this, we train to predict
+sequences of phoneme pairs rather than single phonemes.
+the network will then tend to output phoneme pairs at
+timesteps close to the boundary between two phonemes in
+a pair.
+to illustrate our
+the string
+   hello!   . to convert this to a sequence of phoneme pair
+labels, convert the utterance to phonemes (using a pro-
+nunciation dictionary such as cmudict or a grapheme-to-
+phoneme model) and pad the phoneme sequence on either
+end with the silence phoneme to get    sil hh eh l ow sil   .
+finally, construct consecutive phoneme pairs and get    (sil,
+hh), (hh, eh), (eh, l), (l, ow), (ow, sil)   .
+input audio is featurized by computing 20 mel-frequency
+cepstral coef   cients (mfccs) with a ten millisecond stride.
+on top of the input layer, there are two convolution lay-
+ers (2d convolutions in time and frequency), three bidirec-
+tional recurrent gru layers, and    nally a softmax output
+layer. the convolution layers use kernels with unit stride,
+height nine (in frequency bins), and width    ve (in time)
+and the recurrent layers use 512 gru cells (for each di-
+rection). dropout with a id203 of 0.95 is applied
+after the last convolution and recurrent layers. to com-
+pute the phoneme-pair error rate (pper), we decode using
+id125. to decode phoneme boundaries, we perform
+a id125 with width 50 with the constraint that neigh-
+boring phoneme pairs overlap by at least one phoneme and
+keep track of the positions in the utterance of each phoneme
+pair.
+for training, we use the adam optimization algorithm with
+  1 = 0.9,   2 = 0.999,    = 10   8, a batch size of 128, a
+learning rate of 10   4, and an annealing rate of 0.95 applied
+every 500 iterations (kingma & ba, 2014).
+
+3.3. phoneme duration and fundamental frequency
+
+model
+
+we use a single architecture to jointly predict phoneme du-
+ration and time-dependent fundamental frequency. the in-
+put to the model is a sequence of phonemes with stresses,
+with each phoneme and stress being encoded as a one-hot
+vector. the architecture comprises two fully connected lay-
+ers with 256 units each followed by two unidirectional re-
+current layers with 128 gru cells each and    nally a fully-
+connected output layer. dropout with a id203 of 0.8 is
+applied after the initial fully-connected layers and the last
+recurrent layer.
+the    nal layer produces three estimations for every input
+phoneme: the phoneme duration, the id203 that the
+phoneme is voiced (i.e. has a fundamental frequency), and
+20 time-dependent f0 values, which are sampled uniformly
+over the predicted duration.
+
+the model is optimized by minimizing a joint loss that
+combines phoneme duration error, fundamental frequency
+error, the negative log likelihood of the id203 that
+the phoneme is voiced, and a penalty term proportional to
+the absolute change of f0 with respect to time to impose
+smoothness. the speci   c functional form of the loss func-
+tion is described in appendix b.
+for training, we use the adam optimization algorithm with
+  1 = 0.9,   2 = 0.999,    = 10   8, a batch size of 128, a
+learning rate of 3    10   4, and an annealing rate of 0.9886
+applied every 400 iterations (kingma & ba, 2014).
+
+3.4. audio synthesis model
+
+our audio synthesis model
+is a variant of wavenet.
+wavenet consists of a conditioning network, which up-
+samples linguistic features to the desired frequency, and
+an autoregressive network, which generates a probabil-
+ity distribution p(y) over discretized audio samples y    
+{0, 1, . . . , 255}. we vary the number of layers (cid:96), the num-
+ber of residual channels r (dimension of the hidden state of
+every layer), and the number of skip channels s (the dimen-
+sion to which layer outputs are projected prior to the output
+layer).
+wavenet consists of an upsampling and conditioning net-
+work, followed by (cid:96) 2  1 convolution layers with r residual
+output channels and gated tanh nonlinearities. we break
+the convolution into two matrix multiplies per timestep
+with wprev and wcur. these layers are connected with
+residual connections. the hidden state of every layer is
+concatenated to an (cid:96)r vector and projected to s skip chan-
+nels with wskip, followed by two layers of 1    1 convolu-
+tions (with weights wrelu and wout) with relu nonlineari-
+ties.
+wavenet uses transposed convolutions for upsampling and
+conditioning. we    nd that our models perform better, train
+faster, and require fewer parameters if we instead    rst en-
+code the inputs with a stack of bidirectional quasi-id56
+(qid56) layers (bradbury et al., 2016) and then perform
+upsampling by repetition to the desired frequency.
+our highest-quality    nal model uses (cid:96) = 40 layers, r = 64
+residual channels, and s = 256 skip channels. for train-
+ing, we use the adam optimization algorithm with   1 =
+0.9,   2 = 0.999,    = 10   8, a batch size of 8, a learning
+rate of 10   3, and an annealing rate of 0.9886 applied every
+1,000 iterations (kingma & ba, 2014).
+please refer to appendix a for full details of our wavenet
+architecture and the qid56 layers we use.
+
+deep voice: real-time neural tts
+
+4. results
+we train our models on an internal english speech database
+containing approximately 20 hours of speech data seg-
+mented into 13,079 utterances.
+in addition, we present
+audio synthesis results for our models trained on a subset
+of the blizzard 2013 data (prahallad et al., 2013). both
+datasets are spoken by a professional female speaker.
+all of our models are implemented using the tensorflow
+framework (abadi et al., 2015).
+
+4.1. segmentation results
+
+we train on 8 titanx maxwell gpus, splitting each batch
+equally among the gpus and using a ring all-reduce to av-
+erage gradients computed on different gpus, with each
+iteration taking approximately 1300 milliseconds. after
+approximately 14,000 iterations, the model converges to a
+phoneme pair error rate of 7%. we also    nd that phoneme
+boundaries do not have to be precise, and randomly shift-
+ing phoneme boundaries by 10-30 milliseconds makes no
+difference in the audio quality, and so suspect that audio
+quality is insensitive to the phoneme pair error rate past a
+certain point.
+
+4.2. grapheme-to-phoneme results
+
+we train a grapheme-to-phoneme model on data obtained
+from cmudict (weide, 2008). we strip out all words that
+do not start with a letter, contain numbers, or have multiple
+pronunciations, which leaves 124,978 out of the original
+133,854 grapheme-phoneme sequence pairs.
+we train on a single titanx maxwell gpu with each it-
+eration taking approximately 150 milliseconds. after ap-
+proximately 20,000 iterations, the model converges to a
+phoneme error rate of 5.8% and a word error rate of 28.7%,
+which are on par with previous reported results (yao &
+zweig, 2015). unlike prior work, we do not use a language
+model during decoding and do not include words with mul-
+tiple pronunciations in our data set.
+
+4.3. phoneme duration and fundamental frequency
+
+results
+
+we train on a single titanx maxwell gpu with each itera-
+tion taking approximately 120 milliseconds. after approx-
+imately 20,000 iterations, the model converges to a mean
+absolute error of 38 milliseconds (for phoneme duration)
+and 29.4 hz (for fundamental frequency).
+
+4.4. audio synthesis results
+
+we divide the utterances in our audio dataset into one
+second chunks with a quarter second of context for each
+chunk, padding each utterance with a quarter second of si-
+
+lence at the beginning. we    lter out chunks that are pre-
+dominantly silence and end up with 74,348 total chunks.
+we trained models with varying depth, including 10, 20,
+30, and 40 layers in the residual layer stack. we    nd that
+models below 20 layers result in poor quality audio. the
+20, 30, and 40 layer models all produce high quality rec-
+ognizable speech, but the 40 layer models have less noise
+than the 20 layer models, which can be detected with high-
+quality over-ear headphones.
+previous work has emphasized the importance of receptive
+   eld size in determining model quality. indeed, the 20 layer
+models have half the receptive    eld as the 40 layer mod-
+els. however, when run at 48 khz, models with 40 layers
+have only 83 milliseconds of receptive    eld, but still gen-
+erate high quality audio. this suggests the receptive    eld
+of the 20 layer models is suf   cient, and we conjecture the
+difference in audio quality is due to some other factor than
+receptive    eld size.
+we train on 8 titanx maxwell gpus with one chunk per
+gpu, using a ring allreduce to average gradients computed
+on different gpus. each iteration takes approximately 450
+milliseconds. our model converges after approximately
+300,000 iterations. we    nd that a single 1.25s chunk is suf-
+   cient to saturate the compute on the gpu and that batch-
+ing does not increase training ef   ciency.
+as is common with high-dimensional generative models
+(theis et al., 2015), model loss is somewhat uncorrelated
+with perceptual quality of individual samples. while mod-
+els with unusually high loss sound distinctly noisy, models
+that optimize below a certain threshold do not have a loss
+indicative of their quality. in addition, changes in model
+architecture (such as depth and output frequency) can have
+a signi   cant impact on model loss while having a small ef-
+fect on audio quality.
+to estimate perceptual quality of the individual stages of
+our tts pipeline, we crowdsourced mean opinion score
+(mos) ratings (ratings between one and    ve, higher values
+being better) from mechanical turk using the crowdmos
+toolkit and methodology (ribeiro et al., 2011). in order to
+separate the effect of the audio preprocessing, the wavenet
+model quality, and the phoneme duration and fundamental
+frequency model quality, we present mos scores for a va-
+riety of utterance types, including synthesis results where
+the wavenet inputs (duration and f0) are extracted from
+ground truth audio rather than synthesized by other mod-
+els. the results are presented in table 1. we purposefully
+include ground truth samples in every batch of samples that
+raters evaluate to highlight the delta from human speech
+and allow raters to distinguish    ner grained differences be-
+tween models; the downside of this approach is that the re-
+sulting mos scores will be signi   cantly lower than if raters
+
+deep voice: real-time neural tts
+
+are presented only with synthesized audio samples.
+first of all, we    nd a signi   cant drop in mos when simply
+downsampling the audio stream from 48 khz to 16 khz, es-
+pecially in combination with   -law companding and quan-
+tization, likely because a 48 khz sample is presented to the
+raters as a baseline for a 5 score, and a low quality noisy
+synthesis result is presented as a 1. when used with ground
+truth durations and f0, our models score highly, with the
+95% con   dence intervals of our models intersecting those
+of the ground truth samples. however, using synthesized
+frequency reduces the mos, and further including synthe-
+sized durations reduces it signi   cantly. we conclude that
+the main barrier to progress towards natural tts lies with
+duration and fundamental frequency prediction, and our
+systems have not meaningfully progressed past the state of
+the art in that regard. finally, our best models run slightly
+slower than real-time (see table 2), so we demonstrate that
+synthesis quality can be traded for id136 speed by ad-
+justing model size by obtaining scores for models that run
+1x and 2x faster than real-time.
+we also tested wavenet models trained on the full set of
+features from the original wavenet publication, but found
+no perceptual difference between those models and models
+trained on our reduced feature set.
+
+4.5. blizzard results
+
+to demonstrate the    exibility of our system, we retrained
+all of our models with identical hyperparameters on the
+blizzard 2013 dataset (prahallad et al., 2013). for our ex-
+periments, we used a 20.5 hour subset of the dataset seg-
+mented into 9,741 utterances. we evaluated the model us-
+ing the procedure described in section 4.4, which encour-
+ages raters to compare synthesized audio directly with the
+ground truth. on the held out set, 16 khz companded and
+expanded audio receives a mos score of 4.65  0.13, while
+our synthesized audio received a mos score of 2.67  0.37.
+
+5. optimizing id136
+although wavenet has shown promise in generating high-
+quality synthesized speech,
+initial experiments reported
+generation times of many minutes or hours for short ut-
+terances. wavenet id136 poses an incredibly challeng-
+ing computational problem due to the high-frequency, au-
+toregressive nature of the model, which requires orders of
+magnitude more timesteps than traditional recurrent neural
+networks. when generating audio, a single sample must
+be generated in approximately 60   s (for 16 khz audio) or
+20   s (for 48 khz audio). for our 40 layer models, this
+means that a single layer (consisting of several matrix mul-
+tiplies and nonlinearities) must complete in approximately
+1.5   s. for comparison, accessing a value that resides
+
+in main memory on a cpu can take 0.1   s.
+in order to
+perform id136 at real-time, we must take great care to
+never recompute any results, store the entire model in the
+processor cache (as opposed to main memory), and opti-
+mally utilize the available computational units. these same
+techniques could be used to accelerate image synthesis with
+pixelid98 (oord et al., 2016) to fractions of a second per
+image.
+synthesizing one second of audio with our 40 layer
+wavenet model takes approximately 55  109    oating point
+operations (flops). the activations in any given layer de-
+pend on the activations in the previous layer and the pre-
+vious timestep, so id136 must be done one timestep
+and one layer at a time. a single layer requires only
+42    103 flops, which makes achieving meaningful par-
+allelism dif   cult. in addition to the compute requirements,
+the model has approximately 1.6    106 parameters, which
+equate to about 6.4 mb if represented in single precision.
+(see appendix e for a complete performance model.)
+on cpu, a single haswell or broadwell core has a peak
+single-precision throughput of approximately 77    109
+flops and an l2-to-l1 cache bandwidth of approximately
+140 gb/s 1. the model must be loaded from cache once per
+timestep, which requires a bandwidth of 100 gb/s. even
+if the model were to    t in l2 cache, the implementation
+would need to utilize 70% of the maximum bandwidth and
+70% of the peak flops in order to do id136 in real-
+time on a single core. splitting the calculations across
+multiple cores reduces the dif   culty of the problem, but
+nonetheless it remains challenging as id136 must op-
+erate at a signi   cant fraction of maximum memory band-
+width and peak flops and while keeping threads synchro-
+nized.
+a gpu has higher memory bandwidth and peak flops
+than a cpu but provides a more specialized and hence
+restrictive computational model. a naive implementation
+that launches a single kernel for every layer or timestep is
+untenable, but an implementation based on the persistent
+id56 technique (diamos et al., 2016) may be able to take
+advantage of the throughput offered by gpus.
+we implement high-speed optimized id136 kernels for
+both cpu and gpu and demonstrate that wavenet infer-
+ence at faster-than-real-time speeds is achievable. table 2
+lists the cpu and gpu id136 speeds for different mod-
+els.
+in both cases, the benchmarks include only the au-
+toregressive, high-frequency audio generation and do not
+include the generation of linguistic conditioning features
+(which can be done in parallel for the entire utterance). our
+cpu kernels run at real-time or faster-than-real-time for a
+1assuming two 8-wide avx fma instructions every cycle
+
+and an l2-to-l1 bandwidth of 64 bytes per cycle.
+
+deep voice: real-time neural tts
+
+type
+ground truth (48 khz)
+ground truth
+ground truth (companded and expanded)
+synthesized
+synthesized (48 khz)
+synthesized (synthesized f0)
+synthesized (synthesized duration and f0)
+synthesized (2x real-time id136)
+synthesized (1x real-time id136)
+
+model size
+
+none
+none
+none
+
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 20, r = 32, s = 128
+(cid:96) = 20, r = 64, s = 128
+
+mos  ci
+4.75    0.12
+4.45    0.16
+4.34    0.18
+3.94    0.26
+3.84    0.24
+2.76    0.31
+2.00    0.23
+2.74    0.32
+3.35    0.31
+
+table 1. mean opinion scores (mos) and 95% con   dence intervals (cis) for utterances. this mos score is a relative mos score
+obtained by showing raters the same utterance across all the model types (which encourages comparative rating and allows the raters
+to distinguish    ner grained differences). every batch of samples also includes the ground truth 48 khz recording, which makes all our
+ratings comparative to natural human voices. 474 ratings were collected for every sample. unless otherwise mentioned, models used
+phoneme durations and f0 extracted from the ground truth, rather than synthesized by the duration prediction and frequency prediction
+models, as well as a 16384 hz audio sampling rate.
+
+model
+
+platform data type number of threads
+
+(cid:96) = 20, r = 32, s = 128
+(cid:96) = 20, r = 32, s = 128
+(cid:96) = 20, r = 64, s = 128
+(cid:96) = 20, r = 64, s = 128
+(cid:96) = 20, r = 64, s = 128
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 40, r = 64, s = 256
+(cid:96) = 20, r = 32, s = 128
+(cid:96) = 20, r = 64, s = 128
+(cid:96) = 40, r = 32, s = 128
+(cid:96) = 40, r = 64, s = 128
+
+cpu
+cpu
+cpu
+cpu
+cpu
+cpu
+cpu
+cpu
+gpu
+gpu
+gpu
+gpu
+
+float32
+float32
+
+int16
+
+float32
+float32
+
+int16
+
+float32
+float32
+float32
+float32
+float32
+float32
+
+6
+2
+2
+6
+2
+2
+6
+2
+
+n/a
+n/a
+n/a
+n/a
+
+speed-up over real-time
+
+2.7
+2.05
+1.2
+1.11
+0.79
+0.67
+0.61
+0.35
+0.39
+0.29
+0.23
+0.17
+
+table 2. cpu and gpu id136 kernel benchmarks for different models in    oat32 and int16. at least one main and one auxiliary
+thread were used for all cpu kernels. these kernels operate on a single utterance with no batching. cpu results are from a intel xeon
+e5-2660 v3 haswell processor clocked at 2.6 ghz and gpu results are from a geforce gtx titan x maxwell gpu.
+
+subset of models, while the gpu models do not yet match
+this performance.
+
+5.1. cpu implementation
+
+we achieve real-time cpu id136 by avoiding any re-
+computation, doing cache-friendly memory accesses, par-
+allelizing work via multithreading with ef   cient synchro-
+nization, minimizing nonlinearity flops, avoiding cache
+thrashing and thread contention via thread pinning, and us-
+ing custom hardware-optimized routines for matrix multi-
+plication and convolution.
+for the cpu implementation, we split the computation into
+the following steps:
+
+1. sample embedding: compute the wavenet input
+causal convolution by doing two sample embeddings,
+one for the current timestep and one for the previous
+timestep, and summing them with a bias. that is,
+x(0) = wemb,prev    yi   1 + wemb,cur    yi + bembed (1)
+
+deep voice: real-time neural tts
+
+a(1)
+cur
+x(1)
+
+a(2)
+cur
+x(1)
+
+. . .
+
+cur
+
+a((cid:96)   1)
+x((cid:96)   1)
+
+a((cid:96))
+cur
+x((cid:96))
+
+zs     za     p
+
+x(0)
+
+main threads
+
+sync points
+
+auxiliary threads
+
+q(1)
+
+q(2)
+
+. . .
+
+q((cid:96)   1)
+
+q((cid:96)) a(1)
+
+prev     a(2)
+
+prev     . . .     a((cid:96)   1)
+
+prev     a((cid:96))
+
+prev
+
+cur     . . .     a((cid:96)   1)
+
+cur     a(2)
+cur     a((cid:96))
+a(1)
+x(1)     x(2)     . . .     x((cid:96)   1)     x((cid:96))
+
+cur
+
+timestep t
+
+timestep t + 1
+
+figure 2. two groups of threads run in parallel. computation of the wskip is of   oaded to the auxiliary threads while the main threads
+progress through the stack of wavenet layers. while the main threads are computing the output layer, the auxiliary threads prepare the
+left wprev half of the wavenet layer convolutions for the upcoming timestep. arrows indicate where one thread group waits on results
+from the other thread group, and are implemented as spinlocks.
+
+2. layer id136: for every layer j from j = 1 to (cid:96)
+
+with dilation width d:
+
+(a) compute the left half of the width-two dilated
+
+convolution via a matrix-vector multiply:
+
+a(j)
+prev = w (j)
+
+prev    x(j   1)
+i   d
+
+(2)
+
+(b) compute the right half of the dilated convolution:
+
+a(j)
+cur = w (j)
+
+cur    x(j   1)
+
+i
+
+(3)
+
+(c) compute the hidden state h(j) given the condi-
+
+tioning vector l(j)
+h :
+
+a(j) = a(j)
+
+h(j) = tanh
+
+(cid:16)
+
+cur + b(j)
+
+(cid:16)
+
+(cid:17)      
+
+h
+
+h + l(j)
+a(j)
+,
+r:2r
+
+(cid:17)
+
+prev + a(j)
+a(j)
+0:r
+
+(4)
+
+(5)
+
+where v0:r denotes the    rst r elements of the vec-
+tor v and vr:2r denotes the next r elements. then,
+compute the input to the next layer via a matrix-
+vector multiply:
+
+x(j) = w (j)
+res
+
+   h(j) + b(j)
+
+res
+
+(6)
+
+(d) compute the contribution to the skip-channel
+matrix multiply from this layer, accumulating
+over all layers, with q(0) = bskip:
+q(j) = q(j   1) + w (j)
+
+(7)
+3. output: compute the two output 1    1 convolutions:
+
+skip    h(j)
+
+zs = relu
+za = relu (wrelu    zs + brelu)
+p = softmax (wout    za + bout)
+
+(8)
+
+(9)
+(10)
+
+finally, sample yi+1 randomly from the distribution p.
+
+(cid:16)
+q((cid:96))(cid:17)
+
+prev, q(j), and zs, with the a(j)
+
+we parallelize these across two groups of threads as de-
+picted in figure 2. a group of main threads computes
+x(0), a(j)
+cur , h(j), and x(j), za, and p. a group of auxiliary
+threads computes a(j)
+prev being
+computed for the next upcoming timestep while the main
+threads compute za and p. each of these groups can con-
+sist of a single thread or of multiple threads; if there are
+multiple threads, each thread computes one block of each
+matrix-vector multiply, binary operation, or unary opera-
+tion, and thread barriers are inserted as needed. splitting
+the model across multiple threads both splits up the com-
+pute and can also be used to ensure that the model weights
+   t into the processor l2 cache.
+pinning threads to physical cores (or disabling hyper-
+threading) is important for avoiding thread contention and
+cache thrashing and increases performance by approxi-
+mately 30%.
+depending on model size,
+the nonlinearities (tanh,
+sigmoid, and softmax) can also take a signi   cant frac-
+tion of id136 time, so we replace all nonlinearities with
+high-accuracy approximations, which are detailed in ap-
+pendix c. the maximum absolute error arising from these
+approximations is 1.5    10   3 for tanh, 2.5    10   3 for
+sigmoid, and 2.4    10   5 for ex. with approximate instead
+of exact nonlinearities, performance increases by roughly
+30%.
+we also implement id136 with weight matrices quan-
+tized to int16 and    nd no change in perceptual quality
+when using quantization. for larger models, quantization
+offers a signi   cant speedup when using fewer threads, but
+overhead of thread synchronization prevents it from being
+useful with a larger number of threads.
+finally, we write custom avx assembly kernels for matrix-
+vector multiplication using peachpy (dukhan, 2015) spe-
+cialized to our matrix sizes.
+id136 using our custom
+assembly kernels is up to 1.5x faster than intel mkl and
+3.5x faster than openblas when using float32. nei-
+
+deep voice: real-time neural tts
+
+to-end trainable tts system, and allowing us to train the
+entire system with no intermediate supervision. in lieu of
+fusing the models, improving the duration and frequency
+models via larger training datasets or generative modeling
+techniques may have an impact on voice naturalness.
+
+ther library provides the equivalent int16 operations.
+
+5.2. gpu implementation
+
+due to their computational intensity, many neural models
+are ultimately deployed on gpus, which can have a much
+higher computational throughput than cpus. since our
+model is memory bandwidth and flop bound, it may seem
+like a natural choice to run id136 on a gpu, but it turns
+out that comes with a different set of challenges.
+usually, code is run on the gpu in a sequence of kernel
+invocations, with every matrix multiply or vector operation
+being its own kernel. however, the latency for a cuda
+kernel launch (which may be up to 50   s) combined with
+the time needed to load the entire model from gpu mem-
+ory are prohibitively large for an approach like this. an
+id136 kernel in this style ends up being approximately
+1000x slower than real-time.
+to get close to real-time on a gpu, we instead build a ker-
+nel using the techniques of persistent id56s (diamos et al.,
+2016) which generates all samples in the output audio in a
+single kernel launch. the weights for the model are loaded
+to registers once and then used without unloading them for
+the entire duration of id136. due to the mismatch be-
+tween the cuda programming model and such persistent
+kernels, the resulting kernels are specialized to particular
+model sizes and are incredibly labor-intensive to write. al-
+though our gpu id136 speeds are not quite real-time
+(table 2), we believe that with these techniques and a bet-
+ter implementation we can achieve real-time wavenet in-
+ference on gpus as well as cpus. implementation details
+for the persistent gpu kernels are available in appendix d.
+
+6. conclusion
+in this work, we demonstrate that current deep learning
+approaches are viable for all the components of a high-
+quality text-to-speech engine by building a fully neural sys-
+tem. we optimize id136 to faster-than-real-time speeds,
+showing that these techniques can be applied to gener-
+ate audio in real-time in a streaming fashion. our system
+is trainable without any human involvement, dramatically
+simplifying the process of creating tts systems.
+our work opens many new possible directions for explo-
+ration.
+id136 performance can be further improved
+through careful optimization, model quantization on gpu,
+and int8 quantization on cpu, as well as experiment-
+ing with other architectures such as the xeon phi. an-
+other natural direction is removing the separation between
+stages and merging the segmentation, duration prediction,
+and fundamental frequency prediction models directly into
+the audio synthesis model, thereby turning the problem into
+a full sequence-to-sequence model, creating a single end-
+
+deep voice: real-time neural tts
+
+references
+abadi, mart    n, agarwal, ashish, barham, paul, brevdo,
+eugene, chen, zhifeng, citro, craig, corrado, greg s.,
+davis, andy, dean, jeffrey, devin, matthieu, ghe-
+mawat, sanjay, goodfellow, ian, harp, andrew, irv-
+ing, geoffrey, isard, michael, jia, yangqing, jozefowicz,
+rafal, kaiser, lukasz, kudlur, manjunath, levenberg,
+josh, man  e, dan, monga, rajat, moore, sherry, murray,
+derek, olah, chris, schuster, mike, shlens, jonathon,
+steiner, benoit, sutskever, ilya, talwar, kunal, tucker,
+paul, vanhoucke, vincent, vasudevan, vijay, vi  egas,
+fernanda, vinyals, oriol, warden, pete, wattenberg,
+martin, wicke, martin, yu, yuan, and zheng, xiaoqiang.
+tensorflow: large-scale machine learning on heteroge-
+neous systems, 2015. url http://tensorflow.
+org/. software available from tensor   ow.org.
+
+amodei, dario, anubhai, rishita, battenberg, eric, case,
+carl, casper, jared, catanzaro, bryan, chen, jingdong,
+chrzanowski, mike, coates, adam, diamos, greg, et al.
+deep speech 2: end-to-end id103 in english
+and mandarin. arxiv preprint arxiv:1512.02595, 2015.
+
+boersma, paulus petrus gerardus et al. praat, a system
+for doing id102 by computer. glot international, 5,
+2002.
+
+bradbury, james, merity, stephen, xiong, caiming, and
+socher, richard. quasi-recurrent neural networks. arxiv
+preprint arxiv:1611.01576, 2016.
+
+chung, junyoung, gulcehre, caglar, cho, kyunghyun,
+and bengio, yoshua. empirical evaluation of gated re-
+current neural networks on sequence modeling. arxiv
+preprint arxiv:1412.3555, 2014.
+
+diamos, greg, sengupta, shubho, catanzaro, bryan,
+chrzanowski, mike, coates, adam, elsen, erich, engel,
+jesse, hannun, awni, and satheesh, sanjeev. persistent
+in proceed-
+id56s: stashing recurrent weights on-chip.
+ings of the 33rd international conference on machine
+learning, pp. 2024   2033, 2016.
+
+dukhan, marat. peachpy meets opcodes: direct machine
+code generation from python. in proceedings of the 5th
+workshop on python for high-performance and scien-
+ti   c computing, pp. 3. acm, 2015.
+
+graves, alex, fern  andez, santiago, gomez, faustino, and
+schmidhuber, j  urgen. connectionist temporal classi   ca-
+tion: labelling unsegmented sequence data with recur-
+rent neural networks. in proceedings of the 23rd inter-
+national conference on machine learning, icml    06,
+pp. 369   376, new york, ny, usa, 2006. acm.
+
+mehri, soroush, kumar, kundan, gulrajani, ishaan, ku-
+mar, rithesh, jain, shubham, sotelo, jose, courville,
+aaron, and bengio, yoshua. sampleid56: an uncondi-
+tional end-to-end neural audio generation model. arxiv
+preprint arxiv:1612.07837, 2016.
+
+morise, masanori, yokomori, fumiya, and ozawa, kenji.
+world: a vocoder-based high-quality id133
+ieice transac-
+system for real-time applications.
+tions on information and systems, 99(7):1877   1884,
+2016.
+
+van
+
+oord, aaron
+
+and
+kavukcuoglu, koray. pixel recurrent neural networks.
+arxiv preprint arxiv:1601.06759, 2016.
+
+den, kalchbrenner, nal,
+
+paine, tom le, khorrami, pooya, chang, shiyu, zhang,
+yang, ramachandran,
+prajit, hasegawa-johnson,
+mark a, and huang, thomas s. fast wavenet gen-
+arxiv preprint arxiv:1611.09482,
+eration algorithm.
+2016.
+
+pascual, santiago and bonafonte, antonio. multi-output
+id56-lstm for multiple speaker id133 with   -
+interpolation model. way, 1000:2, 2016.
+
+prahallad, kishore, vadapalli, anandaswarup, elluru,
+naresh, et al. the blizzard challenge 2013indian lan-
+in in blizzard challenge workshop 2013,
+guage task.
+2013.
+
+rao, kanishka, peng, fuchun, sak, has  im, and beau-
+fays, franc  oise. grapheme-to-phoneme conversion us-
+ing long short-term memory recurrent neural networks.
+in acoustics, speech and signal processing (icassp),
+2015 ieee international conference on, pp. 4225   4229.
+ieee, 2015.
+
+ribeiro, fl  avio, flor  encio, dinei, zhang, cha, and seltzer,
+michael. crowdmos: an approach for id104
+in acoustics, speech and
+mean opinion score studies.
+signal processing (icassp), 2011 ieee international
+conference on, pp. 2416   2419. ieee, 2011.
+
+ronanki, srikanth, henter, gustav eje, wu, zhizheng, and
+king, simon. a template-based approach for speech
+synthesis intonation generation using lstms. interspeech
+2016, pp. 2463   2467, 2016.
+
+sotelo, jose, mehri, soroush, kumar, kundan, santos,
+joao felipe, kastner, kyle, courville, aaron, and ben-
+gio, yoshua. char2wav: end-to-end id133. in
+iclr 2017 workshop submission, 2017. url https:
+//openreview.net/forum?id=b1vwyyskx.
+
+kingma, d. and ba, j. adam: a method for stochastic
+
+optimization. arxiv preprint arxiv:1412.6980, 2014.
+
+stephenson, ian. production rendering, design and im-
+
+plementation. springer, 2005.
+
+deep voice: real-time neural tts
+
+taylor, paul. text-to-id133. cambridge univer-
+sity press, new york, ny, usa, 1st edition, 2009. isbn
+0521899273, 9780521899277.
+
+theis, lucas, oord, a  aron van den, and bethge, matthias.
+a note on the evaluation of generative models. arxiv
+preprint arxiv:1511.01844, 2015.
+
+van den oord, a  aron, dieleman, sander, zen, heiga, si-
+monyan, karen, vinyals, oriol, graves, alex, kalch-
+brenner, nal, senior, andrew, and kavukcuoglu, ko-
+ray. wavenet: a generative model for raw audio. corr
+abs/1609.03499, 2016.
+
+weide, r.
+
+the cmu pronunciation dictionary 0.7.
+
+carnegie mellon university, 2008.
+
+yao, kaisheng and zweig, geoffrey.
+
+sequence-to-
+sequence neural net models for grapheme-to-phoneme
+conversion. arxiv preprint arxiv:1506.00196, 2015.
+
+zen, heiga and sak, has  im. unidirectional long short-term
+memory recurrent neural network with recurrent output
+in acoustics,
+layer for low-latency id133.
+speech and signal processing (icassp), 2015 ieee in-
+ternational conference on, pp. 4470   4474. ieee, 2015.
+
+zen, heiga, senior, andrew, and schuster, mike. statistical
+parametric id133 using deep neural networks.
+in proceedings of the ieee international conference on
+acoustics, speech, and signal processing (icassp), pp.
+7962   7966, 2013.
+
+appendices
+
+deep voice: real-time neural tts
+
+a. wavenet architecture and details
+the wavenet consists of a conditioning network c = c(v), which converts low-frequency linguistic features v to the
+native audio frequency, and an auto-regressive process p (yi|c, yi   1, . . . , yi   r) which predicts the next audio sample given
+the conditioning for the current timestep c and a context of r audio samples. r is the receptive    eld size, and is a property
+determined by the structure of the network. a sketch of the wavenet architecture is shown in figure 3. the network details
+are described in the following subsections.
+
+figure 3. the modi   ed wavenet architecture. components are colored according to function:
+qid56s, yellow unary operations and softmax, pink binary operations, and indigo reshapes, transposes, and slices.
+
+teal inputs, green convolutions and
+
+a.1. auto-regressive wavenet
+
+the structure of the auto-regressive network is parameterized by the number of layers (cid:96), the number of skip channels s,
+and the number of residual channels r.
+audio is quantized to a = 256 values using   -law companding, as described in section 2.2 of wavenet. the one-hot
+encoded values go through an initial 2x1 convolution which generates the input x(0)     rr for the    rst layer in the residual
+stack:
+
+x(0) = wembed     y + bembed,
+
+(11)
+
+  16khz audio input,    a one-hot features2x1 conv,   r outputs2x1 dilated conv,  2r outputs1x1 conv,    r outputs1x1 conv,    s outputs1x1 conv,    a outputsl layersrelu1x1 conv,    a outputsrelutanh256hz phoneme and f0 features,    227 dimensionsforward qid56 l x rbackward qid56 l x rforward qid56 q0 /2backward qid56 q0 /2stackstackinterleavetanhsplit channelsnearest neighbor upsampling to 16khzsoftmax+++x+deep voice: real-time neural tts
+
+where     is the one-dimensional convolution operator. since the input audio y is a one-hot vector, this convolution can be
+done via embeddings instead of matrix multiplies. each subsequent layer computes a hidden state vector h(i) and then (due
+to the residual connections between layers) adds to its input x(i   1) to generate its output x(i):
+g     x(i   1) + b(i)
+w (i)
+
+(cid:17)      
+
+g + l(i)
+g
+
+(cid:16)
+
+(cid:16)
+
+(cid:17)
+
+(12)
+
+h(i) = tanh
+x(i) = x(i   1) + w (i)
+
+h     x(i   1) + b(i)
+h + l(i)
+w (i)
+   h(i) + b(i)
+r ,
+
+h
+
+r
+
+(13)
+
+where l(i) is the output for that layer of the conditioning network. since each layer adds its output to its input, the
+dimensionality of the layers must remain    xed to the number of residual channels, r. although here this is written as two
+convolutions, one for wh and one for wg, it is actually done more ef   ciently with a single convolution with r input and
+2r output channels. during id136, this convolution is replaced with two matrix-vector multiplies with matrices wprev
+(the left half of the convolution) and wcur (the right half). thus we can reformulate the computation of h(i) for a speci   c
+timestep t as follows:
+
+h(cid:48)(i) = w (i)
+h(i) = tanh
+
+(cid:16)
+prev    x(i   1)
+
+(cid:17)
+cur    x(i   1)
+t   d + w (i)
+(cid:48)(i)
+(cid:48)(i)
+h
+h
+r:2r
+0:r
+
+(cid:17)      
+
+(cid:16)
+
+,
+
+t
+
++ b(i) + l(i)
+
+(14)
+
+(15)
+
+where l(i) and is a concatenation of l(i)
+the hidden state h(i) from each of the layers 1 through (cid:96) is concatenated and projected with a learned wskip down to the
+number of skip channels s:
+
+g and b(i) and is a concatenation of b(i)
+
+h and b(i)
+g .
+
+h and l(i)
+
+               
+
+               
+
+h(1)
+h(2)
+...
+h((cid:96))
+
+h =
+
+zs = relu (wskip    h + bskip) ,
+
+h     r(cid:96)r
+
+zs     rs
+
+where relu(x) = max(0, x).
+zs is then fed through two fully connected relu layers to generate the output distribution p     ra:
+za     ra
+
+za = relu (wrelu    zs + brelu) ,
+p = softmax (wout    za + bout)
+
+a.2. conditioning network
+
+when trained without conditioning information, wavenet models produce human-like    babbling sounds   , as they lack suf-
+   cient long-range information to reproduce words. in order to generate recognizable speech, every timestep is conditioned
+by an associated set of linguistic features. this is done by biasing every layer with a per-timestep conditioning vector
+generated from a lower-frequency input signal containing phoneme, stress, and fundamental frequency features.
+the frequency of the audio is signi   cantly higher than the frequency of the linguistic conditioning information, so an
+upsampling procedure is used to convert from lower-frequency linguistic features to higher-frequency conditioning vectors
+for each wavenet layer.
+the original wavenet does upsampling by repetition or through a transposed convolution. instead, we    rst pass our input
+features through two bidirectional quasi-id56 layers (bradbury et al., 2016) with fo-pooling and 2x1 convolutions. a
+unidirectional qid56 layer with fo-pooling is de   ned by the following equations:
+
+  h = tanh (wh     x + bh)
+o =    (wo     x + bo)
+f =    (wf     x + bf )
+ht = ft    ht   1 + (1     ft)      ht
+zt = ot    ht
+
+(20)
+(21)
+(22)
+(23)
+(24)
+
+(16)
+
+(17)
+
+(18)
+(19)
+
+deep voice: real-time neural tts
+
+a bidirectional qid56 layer is computed by running two unidirectional qid56s, one on the input sequence and one on
+a reversed copy of the input sequence, and then stacking their output channels. after both qid56 layers, we interleave
+the channels, so that the tanh and the sigmoid in the wavenet both get channels generated by the forward qid56 and
+backward qid56.
+following the bidirectional qid56 layers, we upsample to the native audio frequency by repetition2.
+we    nd that the model is very sensitive to the upsampling procedure: although many variations of the conditioning network
+converge, they regularly produce phoneme mispronunciations.
+
+a.3. input featurization
+
+our wavenet is trained with 8-bit   -law companded audio which is downsampled to 16384 hz from 16-bit dual-channel
+pcm audio at 48000 hz. it is conditioned on a 256 hz phoneme signal. the conditioning feature vector has 227 dimen-
+sions. of these two are for fundamental frequency. one of these indicates whether the current phoneme is voiced (and thus
+has an f0) and the other is normalized log-frequency, computed by normalizing the log of f0 to minimum observed f0 to
+be approximately between -1 and 1. the rest of the features describe the current phoneme, the two previous phonemes,
+and the two next phonemes, with each phoneme being encoded via a 40-dimensional one-hot vector for phoneme identity
+(with 39 phonemes for arpabet phonemes and 1 for silence) and a 5-dimensional one-hot vector for phoneme stress (no
+stress, primary stress, secondary stress, tertiary stress, and quaternary stress). not all of the datasets we work with have
+tertiary or quaternary stress, and those features are always zero for the datasets that do not have those stress levels.
+in our experiments, we found that including the phoneme context (two previous and two next phonemes) is crucial for
+upsampling via transposed convolution and less critical but still important for our qid56-based upsampling. although
+sound quality without the phoneme context remains high, mispronunciation of a subset of the utterances becomes an issue.
+we also found that including extra id144 features such as word and syllable breaks, pauses, phoneme and syllable counts,
+frame position relative to phoneme, etc, were unhelpful and did not result in higher quality synthesized samples.
+in order to convert from phonemes annotated with durations to a    xed-frequency phoneme signal, we sample the phonemes
+at regular intervals, effectively repeating each phoneme (with context and f0) a number proportional to its duration. as a
+result, phoneme duration is effectively quantized to 1/256 sec     4ms.
+we use praat (boersma et al., 2002) in batch mode to compute f0 at the appropriate frequency, with a minimum f0
+of 75 and a maximum f0 of 500. the praat batch script used to generate f0 is available at https://github.com/baidu-
+research/deep-voice/blob/master/scripts/f0-script.praat and can be run with praat --run f0-script.praat.
+
+a.4. sampling from output distribution
+
+at every timestep, the synthesis model produces a distribution over samples, p (s), conditioned on the previous samples
+and the linguistic features. in order to produce the samples, there are a variety of ways you could choose to use this
+distribution:
+
+    direct sampling: sample randomly from p (y).
+    temperature sampling: sample randomly from a distribution adjusted by a temperature t
+
+  pt(y) =
+
+1
+z
+
+p (y)1/t,
+
+(25)
+
+where z is a normalizing constant.
+
+    mean: take the mean of the distribution ep [y].
+    mode: take the most likely sample, argmax p (y).
+2upsampling using bilinear interpolation slowed convergence and reduced generation quality by adding noise or causing mispro-
+nunciations, while bicubic upsampling led to muf   ed sounds. upsampling by repetition is done by computing the ratio of the output
+frequency to the input frequency and repeating every element in the input signal an appropriate number of times.
+
+deep voice: real-time neural tts
+
+    top k: sample from an adjusted distribution that only permits the top k samples
+
+where z is a normalizing constant.
+
+  pk(y) =
+
+if y < kth(p (y))
+
+0
+p (y)/z otherwise,
+
+(cid:40)
+
+(26)
+
+we    nd that out of these different sampling methods, only direct sampling produces high quality outputs. temperature sam-
+pling produces acceptable quality results, and indeed outperforms direct sampling early on in training, but for converged
+models is signi   cantly worse. this observation indicates that the generative audio model accurately learns a conditional
+sample distribution and that modifying this distribution through the above heuristics is worse than just using the learned
+distribution.
+
+a.5. training
+
+we observed several tendencies of the models during training. as expected, the randomly initialized model produces white
+noise. throughout training, the model gradually increases the signal to noise ratio, and the volume of the white noise
+dies down while the volume of the speech signal increases. the speech signal can be inaudible for tens of thousands of
+iterations before it dominates the white noise.
+in addition, because the model is autoregressive, rare mistakes can produce very audible disturbances. for example, a
+common failure mode is to produce a small number of incorrect samples during sampling, which then results in a large
+number incorrect samples due to compounding errors. this is audible as a brief period of loud noise before the model
+stabilizes. the likelihood of this happening is higher early on in training, and does not happen in converged models.
+
+b. phoneme model loss
+the loss for the nth phoneme is
+
+t   1(cid:88)
+
+|(cid:99)f 0n,t     f 0n,t| +   3
+
+t   2(cid:88)
+
+|(cid:99)f 0n,t+1    (cid:99)f 0n,t|,
+
+ln = |  tn     tn| +   1ce(  pn, pn) +   2
+
+where   i   s are tradeoff constants,(cid:98)tn and tn are the estimated and ground-truth durations of the nth phoneme,   pn and pn
+are the estimated and ground-truth probabilities that the nth phoneme is voiced, ce is the cross-id178 function, (cid:98)fn,t and
+
+fn,t are the estimated and ground-truth values of the fundamental frequency of the nth phoneme at time t. t time samples
+are equally spaced along the phoneme duration.
+
+t=0
+
+t=0
+
+(27)
+
+c. nonlinearity approximation details
+during id136, we replace exact implementations of the neural network nonlinearities with high-accuracy rational ap-
+proximations. in this appendix, we detail the derivation of these approximations.
+
+c.1. tanh and sigmoid approximation
+denoting   e(x) as an approximation to e|x|, we use the following approximations for tanh and   :
+
+tanh(x)     sign(x)
+
+  e(x)     1/  e(x)
+  e(x) + 1/  e(x)
+
+(cid:40)   e(x)
+1+  e(x) x     0
+1+  e(x) x     0
+
+1
+
+  (x)    
+
+(28)
+
+(29)
+
+we choose a forth-order polynomial to represent   e(x). the following    t produces accurate values for both tanh(x) and
+  (x):
+
+(30)
+by itself,   e(x) is not a very good approximate function for e|x|, but it yields good approximations when used to approximate
+tanh and    as described in equations 28 and 29.
+
+  e(x) = 1 + |x| + 0.5658x2 + 0.143x4
+
+c.2. ex approximation
+
+deep voice: real-time neural tts
+
+we follow the approach of (stephenson, 2005) to calculate an approximate ex function.
+directly, we approximate 2x and use the identity ex = 2x/ln 2.
+let (cid:98)x(cid:99) to be the    oor of x     r. then,
+
+2x = 2(cid:98)x(cid:99)    2x   (cid:98)x(cid:99)
+
+= 2(cid:98)x(cid:99)   (cid:16)
+
+1 + (2x   (cid:98)x(cid:99)     1)
+
+(cid:17)
+
+instead of approximating ex
+
+where 0     2x   (cid:98)x(cid:99)     1 < 1 since 0     x     (cid:98)x(cid:99) < 1. if we use a 32-bit    oat to represent 2x, then (cid:98)x(cid:99) + 127 and 2x   (cid:98)x(cid:99)     1
+are represented by the exponent and fraction bits of 2x. therefore, if we interpret the bytes pattern of 2x as a 32-bits integer
+(represented by i2x), we have
+
+i2x = ((cid:98)x(cid:99) + 127)    223 + (2x   (cid:98)x(cid:99)     1)    223.
+
+(31)
+
+rearranging the equation 31 and using z = x     (cid:98)x(cid:99) results to
+
+(32)
+if we can accurately approximate g(z) = 2z     z over z     [0, 1), then interpreting back the byte representation of i2x in
+equation 32 as a 32-bits    oat, we can accurately approximate 2x. we use a rational approximation as
+
+i2x = (x + 126 + {2z     z})    223
+
+g(z)        4.7259162 +
+
+27.7280233
+4.84252568     z
+
+    1.49012907z,
+
+(33)
+
+which gives are maximum error 2.4    10   5 for x     (      , 0].
+
+d. persistent gpu kernels
+a nvidia gpu has multiple streaming multiprocessors (sms), each of which has a register    le and a l1 cache. there
+is also a coherent l2 cache that is shared by all sms. the id136 process needs to generate one sample every 61   s.
+due to the high latency of a cuda kernel launch and of reading small matrices from gpu memory, the entire audio
+generation process must be done by a single kernel with the weights loaded into the register    le across all sms. this raises
+two challenges   how to split the model across registers in a way to minimize communication between sms and how to
+communicate between sms given the restrictions imposed by the cuda programming model.
+we split the model across the register    le of 24 sms, numbered sm1    sm24, of a titanx gpu. we do not use sm24.
+sm1 to sm20 store two adjacent layers of the residual stack. this means sm1 stores layers 1 and 2, sm2 stores layers
+3 and 4 and so on and so forth. each layer has three matrices and three bias vectors   wprev, bprev, wcur, bcur, that are
+for the dilated convolutions and wr, br. thus smi generates two hidden states h(2i) and h(2i+1) and an output x(2i).
+each sm also stores the rows of the wskip matrix that will interact with the generated hidden state vectors. thus wskip is
+partitioned across 20 sms. only sm20 needs to store bskip. sm21 stores wrelu and brelu. finally, wout is split across
+two sms   sm22 and sm23 because of register    le limitations and sm23 stores bout.
+the next challenge is to coordinate the data transfer between sms, since the cuda programming model executes one
+kernel across all sms in parallel. however we want execution to go sequentially in a round robin fashion from sm1 to
+sm23 and back again from sm1 as we generate one audio sample at a time. we launch our cuda kernel with 23 thread
+blocks and simulate such sequential execution by spinning on locks, one for each sm, that are stored in global memory and
+cached in l2. first sm1 executes two layers of the wavenet model to generate h(1), h(2) and x(2). it then unlocks the lock
+that sm2 is spinning on and sets its own lock. it does this by bypassing the l1 cache to write to global memory so that all
+sms have a coherent view of the locks. then sm2 does the same for sm3 and this sequential locking and unlocking chain
+continues for each sm. finally sm23 generates the output distribution p for timestep t and unlocks sm1 so that entire
+process can repeat to generate p for timestep t + 1.
+just like locks, we pass data between sms, by reading and writing to global memory by bypassing the l1 cache. since
+nvidia gpus have a coherent l2 cache, a global memory write bypassing the l1, followed by a memory fence results
+in a coherent view of memory across sms.
+
+deep voice: real-time neural tts
+
+this partitioning scheme however is quite in   exible and only works for speci   c values of l, r and s shown in table 2. this
+is because each sm has a    xed sized register    le and combined with the relatively in   exible and expensive communica-
+tion mechanism between sms implies that splitting weight matrices between sms is challenging. any change in those
+parameters means a new kernel has to be written, which is a very time consuming process.
+there are two main reasons why the gpu kernels are slower than cpu kernels. firstly, synchronization between sms in a
+gpu is expensive since it is done by busy waiting on locks in l2 cache. secondly even though we divide the model in a
+way that will    t in the register    le of each sm, the cuda compiler still spills to l1 cache. we hope that with handcrafted
+assembly code, we will be able to match the performance of cpu kernels. however, the lack of parallelism in wavenet
+id136 makes it dif   cult to hide the latencies inherent in reading and writing small matrices from gpu memory which
+are exposed in the absence of a rich cache hierarchy in gpus.
+
+e. performance model
+we present a performance model for the autoregressive wavenet architecture described in appendix a.1. in our model a
+dot product between two vectors of dimension r takes 2r flops   r multiplications and r additions. this means that a
+matrix-vector multiply between w , an r    r matrix and x, a r    1 vector takes 2r    r = 2r2 flops. thus calculating h(cid:48)(i)
+uses
+
+= (2r    2r) + (2r    2r) + 2r + 2r + 2r flops
+
+(34)
+
+(cid:16)
+
+h(cid:48)(i)(cid:17)
+
+cost
+
+let division and exponentiaton take fd and fe flops respectively. this means tanh and    takes (fd + 2fe + 1) flops.
+thus calculating h(i) takes 2r    (fd + 2fe + 1) + r flops. finally calculating x(i) for each layer takes r + (2r    r) + r
+flops. this brings the total flops for calculating one layer to
+
+cost (layer) = 10r2 + 11r + 2r(fd + fe) flops
+
+(35)
+
+under the same model, calculating zs takes ((cid:96)   2r)   s + s + s flops, where we assume that relu takes 1 flop. similarly,
+calculating za takes 2s    a + a + a flops and wout    za + bout takes 2a    a + a flops.
+calculating the numerically stable softmax takes one max, one subtract, one exponentiation, one sum and one division per
+element of a vector. hence calculating p takes 3a + a(fd + fe) flops.
+adding it all up, our    nal performance model to generate each audio sample is as follows:
+
+cost (sample) = (cid:96)(cid:0)10r2 + 11r + 2r(fd + fe)(cid:1) + s(2r    (cid:96) + 2) + a(2s + 2a + 3) + a(3 + fd + fe) flops
+
+(36)
+
+if we let (cid:96) = 40, r = 64, and s = a = 256, and assume that fd = 10 and fe = 10, with a sampling frequency of 16384hz,
+we have approximately 55    109 flops for every second of synthesis.
+
+

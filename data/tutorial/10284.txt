@@ -1,0 +1,1524 @@
+6
+1
+0
+2
+
+ 
+
+y
+a
+m
+6
+1
+
+ 
+
+ 
+ 
+]
+
+g
+l
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+2
+5
+7
+1
+0
+
+.
+
+2
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+large scale distributed semi-supervised learning using streaming
+
+approximation
+
+sujith ravi
+
+qiming diao1
+
+google inc., mountain view, ca, usa
+
+carnegie mellon university, pittsburgh, pa, usa
+
+sravi@google.com
+
+singapore mgt. university, singapore
+
+qiming.ustc@gmail.com
+
+abstract
+
+graph-based
+
+semi-supervised
+traditional
+learning (ssl) approaches are not suited for
+massive data and large label scenarios since
+they scale linearly with the number of edges
+|e| and distinct labels m. to deal with
+the large label size problem, recent works
+propose sketch-based methods to approxi-
+mate the label distribution per node thereby
+achieving a space reduction from o(m) to
+o(log m), under certain conditions.
+in this
+paper, we present a novel streaming graph-
+based ssl approximation that e   ectively
+captures the sparsity of the label distribution
+and further reduces the space complexity per
+node to o(1). we also provide a distributed
+version of the algorithm that scales well to
+large data sizes. experiments on real-world
+datasets demonstrate that the new method
+achieves better performance than existing
+state-of-the-art algorithms with signi   cant
+reduction in memory footprint.
+finally,
+we propose a robust graph augmentation
+strategy using unsupervised deep learning
+architectures that yields further signi   cant
+quality gains for ssl in natural
+language
+applications.
+
+1 introduction
+
+semi-supervised learning (ssl) methods use small
+amounts of labeled data along with large amounts of
+unlabeled data to train prediction systems. such ap-
+proaches have gained widespread usage in recent years
+
+1work done during an internship at google.
+
+appearing in proceedings of the 19th international con-
+ference on arti   cial intelligence and statistics (aistats)
+2016, cadiz, spain. jmlr: w&cp volume 51. copyright
+2016 by the authors.
+
+and have been rapidly supplanting supervised systems
+in many scenarios owing to the abundant amounts of
+unlabeled data available on the web and other do-
+mains. annotating and creating labeled training data
+for many predictions tasks is quite challenging because
+it is often an expensive and labor-intensive process.
+on the other hand, unlabeled data is readily available
+and can be leveraged by ssl approaches to improve
+the performance of supervised prediction systems.
+
+there are several surveys that cover various ssl meth-
+ods in the literature [25, 37, 8, 6]. the majority of
+ssl algorithms are computationally expensive; for ex-
+ample, transductive id166 [16]. graph-based ssl algo-
+rithms [38, 17, 33, 4, 26, 30] are a subclass of ssl tech-
+niques that have received a lot of attention recently,
+as they scale much better to large problems and data
+sizes. these methods exploit the idea of constructing
+and smoothing a graph in which data (both labeled
+and unlabeled) is represented by nodes and edges link
+vertices that are related to each other. edge weights
+are de   ned using a similarity function on node pairs
+and govern how strongly the labels of the nodes con-
+nected by the edge should agree. graph-based meth-
+ods based on label propagation [38, 29] work by using
+class label information associated with each labeled
+   seed    node, and propagating these labels over the
+graph in a principled, iterative manner. these meth-
+ods often converge quickly and their time and space
+complexity scales linearly with the number of edges
+|e| and number of labels m. successful applications
+include a wide range of tasks in id161 [36],
+information retrieval (ir) and social networks [34] and
+natural language processing (nlp); for example, class
+instance acquisition and relation prediction, to name
+a few [30, 27, 19].
+
+several classi   cation and knowledge expansion type
+of problems involve a large number of labels in real-
+world scenarios. for instance, entity-relation classi-
+   cation over the widely used freebase taxonomy re-
+quires learning over thousands of labels which can grow
+further by orders when extending to open-domain ex-
+
+large scale distributed semi-supervised learning using streaming approximation
+
+traction from the web or social media; scenarios in-
+volving complex overlapping classes [7]; or    ne-grained
+classi   cation at large scale for natural language and
+id161 applications [28, 13]. unfortunately,
+existing graph-based ssl methods cannot deal with
+large m and |e| sizes. typically individual nodes are
+initialized with sparse label distributions, but they
+become dense in later iterations as they propagate
+through the graph. talukdar and cohen [28] recently
+proposed a method that seeks to overcome the la-
+bel scale problem by using a count-min sketch [10]
+to approximate labels and their scores for each node.
+this reduces the memory complexity to o(log m) from
+o(m). they also report improved running times when
+using the sketch-based approach. however, in real-
+world applications, the number of actual labels k asso-
+ciated with each node is typically sparse even though
+the overall label space may be huge; i.e., k (cid:28) m. clev-
+erly leveraging sparsity in such scenarios can yield huge
+bene   ts in terms of e   ciency and scalability. while
+the sketching technique from [28] approximates the la-
+bel space succinctly, it does not utilize the sparsity (a
+naturally occurring phenomenon in real data) to full
+bene   t during learning.
+
+contributions:
+in this paper, we propose a new
+graph propagation algorithm for general purpose semi-
+supervised learning with applications for nlp and
+other areas. we show how the new algorithm can
+be run e   ciently even when the label size m is huge.
+at its core, we use an approximation that e   ectively
+captures the sparsity of the label distribution and en-
+sures the algorithm propagates the labels accurately.
+this reduces the space complexity per node from o(m)
+to o(k), where k(cid:28)m and a constant (say, 5 or 10
+in practice), so o(1) which scales better than previ-
+ous methods. we show how to e   ciently parallelize
+the algorithm by proposing a distributed version that
+scales well for large graph sizes. we also propose an
+e   cient linear-time graph construction strategy that
+can e   ectively combine information from multiple sig-
+nals which can vary between sparse or dense repre-
+sentations.
+in particular, we show that for graphs
+where nodes represent textual information (e.g., en-
+tity name or type), it is possible to robustly learn la-
+tent semantic embeddings associated with these nodes
+using only raw text and state-of-the-art deep learn-
+ing techniques. augmenting the original graph with
+such embeddings followed by graph ssl yields signif-
+icant improvements in quality. we demonstrate the
+power of the new method by evaluating on di   erent
+knowledge expansion tasks using existing benchmark
+datasets. our results show that, when compared with
+existing state-of-the-art systems for these tasks, our
+method performs better in terms of space complexity
+and qualitative performance.
+
+2 graph-based semi-supervised
+
+learning
+
+preliminary: the goal is to produce a soft assign-
+ment of labels to each node in a graph g = (v, e, w ),
+where v is the set of nodes, e the set of edges and
+w the edge weight matrix.2 every edge (v, u) /    e
+is assigned a weight wvu = 0. among the |v | = n
+number of nodes, |vl| = nl of them are labeled while
+|vu| = nu are unlabeled. we use diagonal matrix s to
+record the seeds, in which svv = 1 if the node v is seed.
+l represents the output label set whose size |l| = m
+can be large in the real world. y is a n     m matrix
+which records the training label distribution for the
+seeds where yvl = 0 for v     vu, and   y is an n     m
+label distribution assignment matrix for all nodes. in
+general, our method is a graph-based semi-supervised
+learning algorithm, which learns   y by propagating the
+information of y on graph g.
+
+2.1 graph ssl optimization
+
+we learn a label distribution   y by minimizing the con-
+vex objective function:
+
+c(   y) =   1
+
+svv||   yv     yv||2
+
+2
+
+(cid:88)
+(cid:88)
+
+v   vl
+
+wvu||   yv       yu||2
+
++   2
+
++   3
+
+(cid:88)
+l(cid:88)
+
+s.t.
+
+v   v,u   n (v)
+
+||   yv     u||2
+
+2
+
+v   v
+  yvl = 1,   v
+
+(1)
+
+l=1
+
+where n (v) is the (incoming) neighbor node set of
+the node v, and u is the (uniform) prior distribution
+over all labels. the above objective function models
+that: 1) the label distribution should be close to the
+gold label assignment for all the seeds; 2) the label dis-
+tribution of a pair of neighbors should be similar mea-
+sured by their a   nity score in the edge weight matrix;
+3) the label distribution should be close to the prior
+u, which is a uniform distribution. the setting of the
+hyperparameters   i will be discussed in section 5.1.
+
+the optimization criterion is inspired from [5] and sim-
+ilar to some existing approaches such as adsorption [3]
+and mad [29] but uses a slightly di   erent objective
+function, notably the matrices have di   erent construc-
+tions. in section 5, we also compare our vanilla version
+against some of these baselines for completeness.
+
+the objective function in equation 1 permits an e   -
+cient iterative optimization technique that is repeated
+
+2the graph g can be directed or undirected depending
+on the task. following most existing works in the litera-
+ture, we use undirected edges for e in our experiments.
+
+sujith ravi, qiming diao
+
+until convergence. we utilize the jacobi iterative al-
+gorithm which de   nes the approximate solution at the
+(i + 1)th iteration, given the solution of the (i)th iter-
+ation as follows:
+
+  y (i)
+vl =
+
+1
+
+mvl
+
+(  1svvyvl +   2
+
+wvu   y (i   1)
+
+ul
+
+(cid:88)
+
+u   n (v)
+
++   3ul)
+
+(2)
+
+mvl =   1svv +   2
+
+wvu +   3
+
+(cid:88)
+
+u   n (v)
+
+where i is the iteration index and ul = 1
+m which is
+the uniform distribution on label l. the iterative pro-
+cedure starts with   y (0)
+vl which is initialized with seed
+label weight yvl if v     vl, else with uniform distribu-
+tion 1
+vl aggregates the label
+distribution   y(i   1)
+at iteration i    1 from all its neigh-
+bors u     n (v). more details for deriving the update
+equation can be found in [5].
+
+m . in each iteration i,   y (i)
+
+u
+
+we use the name expander to refer to this vanilla
+method that optimizes equation 1.
+
+algorithm 1 dist-expander algorithm
+1: input: a graph g = (v, e, w ), where v = vl     vu
+
+vl = seed/labeled nodes, vu = unlabeled nodes
+2: output: a label distribution   yv =   yv1   yv2...   yvm for
+every node v     v minimizing the overall objective
+function (1). here,   yvl represents the weight of label l
+assigned to the node v.
+
+3: let l be the set of all possible labels, |l| = m.
+vl with seed label weights if v     vl, else 1
+4: initialize   y 0
+m .
+5: (graph creation) initialize each node v with its neigh-
+
+bors n (v) = {u : (v, u)     e}.
+
+6: partition the graph into p disjoint partitions v1, ..., vp,
+
+where(cid:83)
+
+i vi = v .
+
+7: for i = 1 to max iter do
+8:
+9:
+10:
+
+process individual partitions vp in parallel.
+for every node v     vp do
+
+v
+
+to all neighbors u     n (v).
+
+(message passing) send previous label distribu-
+tion   yi   1
+(label update) receive a message mu from
+its neighbor u with corresponding label weights
+u . process each message m1...m|n (v)| and
+  yi   1
+update current label distribution   y i
+v iteratively
+using equation (2).
+
+11:
+
+2.2 dist-expander: scaling to large data
+
+end for
+
+12:
+13: end for
+
+in many applications, semi-supervised learning be-
+comes challenging when the graphs become huge. to
+scale to really large data sizes, we propose dist-
+expander, a distributed version of the algorithm
+that is directly suited towards parallelization across
+many machines. we turn to pregel [20] and its open
+source version giraph [2] as the underlying framework
+for our distributed algorithm. these systems follow
+a bulk synchronous parallel (bsp) model of compu-
+tation that proceeds in rounds. in every round, every
+machine does some local processing and then sends ar-
+bitrary messages to other machines. semantically, we
+think of the communication graph as    xed, and in each
+round each node performs some local computation and
+then sends messages to its neighbors.
+
+the speci   c systems like pregel and giraph build in-
+frastructure that ensures that the overall system is
+fault tolerant, e   cient, and fast. the programmer   s
+job is simply to specify the code that each vertex will
+run at every round. previously, some works have ex-
+plored using mapreduce framework to scale to large
+graphs [31]. but unlike these methods, the pregel-
+based model is far more e   cient and better suited
+for graph algorithms that    t the iterative optimiza-
+tion scheme for ssl algorithms. pregel keeps ver-
+tices and edges on the machine that performs compu-
+tation, and uses network transfers only for messages.
+mapreduce, however, is essentially functional, so ex-
+pressing a graph algorithm as a chained mapreduce
+requires passing the entire state of the graph from one
+stage to the next   in general requiring much more
+communication and associated serialization overhead
+which results in signi   cant network cost (refer [20]
+
+for a detailed comparison). in addition, the need to
+coordinate the steps of a chained mapreduce adds
+programming complexity that is avoided by dist-
+expander iterations over rounds/steps. further-
+more, we use a version of pregel that allows spilling to
+disk instead of storing the entire computation state in
+ram unlike [20]. algorithm 1 describes the details.
+
+3 streaming algorithm for scaling to
+
+large label spaces
+
+graph-based ssl methods usually scale linearly with
+the label size m, and require o(m) space for each node.
+talukdar and cohen [28] proposed to deal with the is-
+sue of large label spaces by employing a count-min
+sketch approximation to store the label distribution
+of each node. however, we argue that it is not nec-
+essary to approximate the whole label distribution for
+each node, especially for large label sets, because the
+label distribution of each node is typically sparse and
+only the top ranking ones are useful. moreover, the
+count-min sketch can even be harmful for the top
+ranking labels because of its approximation. the au-
+thors also mention other related works that attempt to
+induce sparsity using id173 techniques [32, 18]
+but for a very di   erent purpose [11]. in contrast, our
+work tackles the exact same problem as [28] to scale
+graph-based ssl for large label settings. the method
+presented here does not attempt to enforce sparsity
+and instead focuses on e   ciently storing and updat-
+ing label distributions during semi-supervised learning
+with a streaming approximation. in addition, we also
+compare (in section 5) against other relevant graph-
+
+large scale distributed semi-supervised learning using streaming approximation
+
+based ssl baselines [30, 1] that use heuristics to dis-
+card poorly scored labels and retain only top ranking
+labels per node out of a large label set.
+
+expander-s method: we propose a streaming
+sparsity approximation algorithm for semi-supervised
+learning that achieves constant space complexity and
+huge memory savings over the current state-of-the-art
+approach (mad-sketch) in addition to signi   cant
+runtime improvements over the exact version. the
+method processes messages from neighbors e   ciently
+in a streaming fashion and records a sparse set of top
+ranking labels for each node and approximate estimate
+for the remaining.
+in general, the idea is similar to
+   nding frequent items from data streams, where the
+item is the label and the streams are messages from
+neighbors in our case. our pregel-based approach (al-
+gorithm 1) provides a natural framework to implement
+this idea of processing message streams. we replace
+the update step 11 in the algorithm with the new ver-
+sion thereby allowing us to scale to both large label
+spaces and data using the same framework.
+
+preliminary: manku and motwani [21] presented an
+algorithm for computing frequency counts exceeding a
+user-speci   ed threshold over data streams, and others
+have applied this algorithm to handle large amounts of
+data in nlp problems [15, 14, 35, 24]. the general idea
+is that a data stream containing n elements is split
+into multiple epochs with 1
+  elements in each epoch.
+thus there are  n epochs in total, and each such epoch
+has an id starting from 1. the algorithm processes
+elements in each epoch sequentially and maintains a
+list of tuples of the form (e, f,    ), where e is an item,
+f is its reported frequency, and     is the maximum
+error of the frequency estimation. in current epoch t,
+when an item e comes in, it increments the frequency
+count f , if the item e is contained in the list of tuples.
+otherwise, it creates a new tuple (e, 1, t     1). then,
+after each epoch, the algorithm    lters out the items
+whose maximum frequency is small. speci   cally, if
+the epoch t ended, the algorithm deletes all tuples that
+satis   es the condition f +         t. this ensures that
+rare items are not retained at the end.
+
+label distributions
+
+neighbor
+as weighted
+streams: intuitively, in our setting, each item is a
+label and each neighbor is an epoch. for a given node
+v, the neighbors pass label id203 streams to node
+v, where each neighbor u     n (v) is an epoch and the
+size of epochs is |n (v)|. we maintain a list of tu-
+ples of the form (l, f,    ), in which the l is the label
+index, f is the weighted id203 value, and     is
+the maximum error of the weighted id203 esti-
+mation. for the current neighbor ut (say, it is the t-th
+neighbor of v, t     |n (v)|), the node v receives the
+label distribution   yutl with edge weight wvut. the al-
+
+  yutl,   (cid:80)t   1
+
+gorithm then does two things: if the label l is currently
+in the tuple list, it increments the id203 value f
+  yutl. if not, it creates new tuple of the
+by adding wvut
+form (l, wvut
+i=1 wvui). here, we use    as a
+id203 threshold (e.g., can be set as uniform dis-
+tribution 1
+m ), because the value in an item frequency
+stream is naturally 1 while ours is a id203 weight.
+moreover, each epoch t, which is neighbor ut in our
+task, is weighted by the edge weight wvut unlike pre-
+vious settings [21]. then, after we receive the message
+from the t-th neighbor, we    lter out the labels whose
+maximum id203 is small. we delete label l, if
+
+f +           (cid:80)t
+
+i=1 wvui.
+
+i=1
+
+  yuli
+
+m   k
+
+memory-bounded update: with the given stream-
+ing sparsity algorithm, we can ensure that no low
+weighted-id203 labels are retained after receiv-
+ing messages from all neighbors. however, in many
+cases, we want the number of retained labels to be
+bounded by k,
+i.e retain the top-k label based on
+the id203.
+in this case, for a node v, each of
+its neighbors u     n (v) just contains its top-k la-
+  u = 1.0   (cid:80)k
+bels, i.e.   yu=   yul1 ,   yul2 ,       ,   yulk . moreover, we use
+to record the average id203
+mass of the remaining labels. we then apply the pre-
+vious streaming sparsity algorithm. the only di   er-
+  yutl,(cid:80)t   1
+ence is that when a label l does not exists in the
+current tuple list, it creates a new tuple of the form
+(l, wvut
+i=1 wvui   ui). intuitively, instead of set-
+ting a    xed global    as threshold, we vary the threshold
+  ui based on the sparsity of the previous seen neigh-
+bors. in each epoch, after receiving messages   yut from
+the current (t-th) neighbor, we scan the current tuple
+list. for each tuple (l, f,    ), we increments its prob-
+ability value f by adding   ut, if label l is not within
+the top-k label list of the current t-th neighbor. then,
+i=1 wvui  ui. finally,
+after receiving messages from all neighbors, we rank
+all remaining tuples based on the value f +     within
+each tuple (l, f,    ). this value represents the maxi-
+mum weighted-id203 estimation. then we just
+pick the top-k labels and record only their probabili-
+ties for the current node v.
+lemma 1 for any node u     v , let y be the un-
+normalized true label weights and   y be the estimate
+given by the streaming sparsity approximation version
+of expander algorithm at any given iteration. let
+n be the total number of label entries received from
+all neighbors of u before aggregation, d = |n (u)| be
+the degree of node u and k be the constant number
+of (non-zero) entries retained in   y where n     k    d,
+then (1) the approximation error of the proposed spar-
+sity approximation is bounded in each iteration by
+  yl     yl       yl +       n
+k for all labels l, (2) the space
+used by the algorithm at each node is o(k) = o(1).
+
+we    lter out label l, if f +        (cid:80)t
+
+sujith ravi, qiming diao
+
+the proof for the    rst part of the statement can be
+derived following a similar analysis as [21] using la-
+bel weights instead of frequency. at the end of each
+iteration, the algorithm ensures that labels with low
+weights are not retained and for the remaining ones,
+its estimate is close to the exact label weight within
+an additive factor. the second part of the statement
+follows direclty from the fact that each node retains
+atmost k labels in every iteration. the detailed proof
+is not included here.
+
+next, we study various graph construction choices and
+demonstrate how augmenting the input graph using
+external information can be bene   cial for learning.
+
+4 graph construction
+
+generic graph
+
+sparse graph
+
+dense graph
+
+sparse+dense graph
+
+figure 1: graph construction strategies.
+
+the main ingredient for graph-based ssl approaches
+is the input graph itself. we demonstrate that the
+choice of graph construction mechanism has an impor-
+tant e   ect on the quality of ssl output. depending
+on the edge link information as well as choice of ver-
+tex representation, there are multiple ways to create an
+input graph for ssl   (a) generic graphs which rep-
+resent observed neighborhood or link information con-
+necting vertices (e.g., connections in a social network),
+(b) graphs constructed from sparse feature representa-
+tions for each vertex (e.g., a bipartite freebase graph
+connecting entity nodes with cell value nodes that cap-
+ture properties of the entity occurring in a schema or
+table), (c) graphs constructed from dense representa-
+tions for each vertex, i.e., use dense feature character-
+istics per node to de   ne neighborhood (discussed in
+more detail in the next section), and (d) augmented
+graphs that use a mixture of the above.
+
+figure 1 shows an illustration of the various graph
+types. we focus on (b), (c) and (d) here since these are
+more applicable to natural language scenarios. sparse
+instance-feature graphs (b) are typically provided as
+input for most ssl tasks in nlp. next, we propose
+a method to automatically construct a graph (c) for
+text applications using semantic embeddings and use
+this to produce an augmented graph (d) that captures
+both sparse and dense per-vertex characteristics.
+
+4.1 graph augmentation with dense
+
+semantic representations
+
+in the past, graph-based ssl methods have been
+widely applied to several nlp problems. in many sce-
+narios, the nodes (and labels) represent textual infor-
+mation (e.g., query, document, entity name/type, etc.)
+and could be augmented with semantic information
+from the real world. recently, some researchers have
+explored strategies to enhance the input graphs [19]
+using external sources such as the web or a knowledge
+base. however, these methods require access to struc-
+tured information from a knowledge base or access to
+web search results corresponding to a large number of
+targeted queries from the particular domain. unlike
+these methods, we propose a more robust strategy for
+graph augmentation that follows a two-step approach
+using only a large corpus of raw text. first, we learn
+a dense vector representation that captures the un-
+derlying semantics associated with each (text) node.
+we resort to recent state-of-the-art deep learning al-
+gorithms to e   ciently learn word and phrase semantic
+embeddings in a dense low-dimensional space from a
+large text corpus using unsupervised methods.
+
+we follow the recent work of mikolov et al. [22, 23] to
+compute continuous vector representations of words
+(or phrases) from very large datasets. the method
+takes a text corpus as input and learns a vector repre-
+sentation for every word (or phrase) in the vocabulary.
+we use the continuous skip-gram model [22] combined
+with a hierarchical softmax layer in which each word
+in a sentence is used as an input to a log-linear clas-
+si   er which tries to maximize classi   cation of another
+word within the same sentence using the current word.
+more details about the deep learning architecture and
+training procedure can be found in [22]. moreover,
+these models can be e   ciently parallelized and scale
+to huge datasets using a distributed training frame-
+work [12]. we obtain a 1000-dimensional vector repre-
+sentation (for each word) trained on 100 billion tokens
+of newswire text.3 for some settings (example dataset
+in section 5), nodes represent entity names (word col-
+locations and not bag-of-words). we can train the
+embedding model to take this into account by treat-
+ing entity mentions (e.g., within wikipedia or news
+article text) as special words and applying the same
+procedure as earlier to produce embedding vectors for
+entities. next, for each node v = w1w2...wn, we query
+the pre-trained vectors e to obtain its corresponding
+embedding vemb from words in the node text.
+
+(cid:40)e(v),
+(cid:80)
+if v     e
+i e(wi), otherwise
+
+1
+n
+
+vemb =
+
+(3)
+
+3it is also possible to use pre-trained embedding vectors:
+
+https://code.google.com/p/id97/
+
+large scale distributed semi-supervised learning using streaming approximation
+
+following this, we compute a similarity function over
+pairs of nodes using the embedding vectors, where
+simemb(u, v) = uemb    vemb. we    lter out node pairs
+with low similarity values <   sim and add an edge in
+the original graph g = (v, e) for every remaining pair.
+unfortunately, the above strategy requires o(|v |2)
+similarity computations which is infeasible in prac-
+tice. to address this challenge, we resort to local-
+ity sensitive hashing (lsh) [9], a random projection
+method used to e   ciently approximate nearest neigh-
+bor lookups when data size and dimensionality is large.
+we use the node embedding vectors vemb and perform
+lsh to signi   cantly reduce unnecessary pairwise com-
+putations that would yield low similarity values.4
+
+5 experiments
+
+5.1 experiment setup
+data: we use two real-world datasets (publicly avail-
+able from freebase) for evaluation in this section.
+
+data name
+
+freebase-entity
+freebase-relation
+
+nodes
+301, 638
+9, 367, 013
+
+edges
+
+labels avg, deg.
+
+1, 155, 001
+16, 817, 110
+
+192
+7, 664
+
+3.83
+1.80
+
+freebase-entity (referred as fb-e) is the exact same
+dataset and setup used in previous works [28, 30]. this
+dataset consists of cell value nodes and property nodes
+which are entities and table properties in freebase.
+an edge indicates that an entity appears in a table cell.
+the second dataset is freebase-relation (referred as
+fb-r). this dataset comprises entity1-relation-entity2
+triples from freebase, which consists of more than 7000
+relations and more than 8m triples. we extract two
+kinds of nodes from these triples, entity-pair nodes
+(e.g., <barack obama, hawaii>) and entity nodes
+(e.g., barack obama). the former one is labeled with
+the relation type (e.g., placeofbirth). an edge is cre-
+ated if two nodes have an entity in common.
+graph-based ssl systems: we compare di   er-
+ent graph-based ssl methods: expander, both
+the vanilla method and the version that runs on the
+graph with semantic augmentation (as detailed in sec-
+tion 4.1), and expander-s, the streaming ap-
+proximation algorithm introduced in section 3.
+
+for baseline comparison, we consider two state-of-art
+existing works mad [29] and mad-sketch [28].
+talukdar and pereira [30] show that mad outper-
+forms traditional graph-based ssl algorithms. mad-
+sketch further approximates the label distribution
+on each node using count-min sketch to reduce the
+space and time complexity. to ensure a fair com-
+parison, we obtained the mad code directly from
+the authors and ran the exact same code on the
+
+4for lsh, we use   sim=0.6, number of hash tables
+
+d=12, width w =10 in our experiments.
+
+same machine as expander for all experiments re-
+ported here. we obtained the same mrr performance
+(0.28) for mad on the freebase-entity dataset (10
+seeds/label) as reported by [28].
+parameters: for the ssl objective function parame-
+ters, we set   1 = 1,   2 = 0.01 and   3 = 0.01. we tried
+multiple settings for mad and mad-sketch algo-
+rithms and replicated the best reported performance
+metrics from [28] using these values, so the baseline
+results are comparable to their system.
+evaluation: precision@k (referred as p@k) and
+mean reciprocal rank (mrr) are used as evalua-
+tion metrics for all experiments, where higher is better.
+p@k measures the accuracy of the top ranking labels
+(i.e., atleast one of the gold labels was found among
+the top k) returned by each method. mrr is calcu-
+, where q     v is the test node
+lated as 1|q|
+set, and rankv is the rank of the gold label among the
+label distribution   yv.
+
+(cid:80)
+
+v   q
+
+rankv
+
+1
+
+for experiments, we use the same procedure as re-
+ported in literature [28], running each algorithm for
+10 iterations per round (veri   ed to be su   cient for
+convergence on these datasets) and then taking the
+average performance over 3 rounds.
+
+5.2 graph ssl results
+first, we quantitatively compare the graph-based ssl
+methods in terms of mrr and precision@k without
+considering the space and time complexity. table 1
+shows the results with 5 seeds/label and 10 seeds/label
+on the freebase-entity dataset.
+
+from the results, we have several    ndings: (1) both
+expander-based methods outperform mad con-
+sistently in terms of mrr and precison@k. (2) our
+algorithm on the enhanced graph using semantic em-
+beddings (last row) produces signi   cant gains over the
+original graph, which indicates that densifying the
+graph with additional information provides a useful
+technique for improving ssl in such scenarios.
+
+5.3 streaming sparsity versus sketch
+in this section, we compare the mad-sketch and
+expander-s algorithms against the vanilla ver-
+sions. the former one uses count-min sketch to ap-
+proximate the whole label distribution per node, while
+the latter uses streaming approximation to capture
+the sparsity of the label distribution. for freebase-
+entity dataset, we run these two methods with 5
+seeds/label.5 the freebase-relation dataset is too big
+to run on a single machine, so we sample a smaller
+6 from it. for this new dataset, we only
+dataset fb-r2
+
+5we observed similar    ndings with larger seed sizes.
+6we create fb-r2 by randomly picking 1000 labels and
+keeping only entity-pair nodes which belong to these labels
+and their corresponding edges (4.5m nodes, 7.4m edges).
+
+sujith ravi, qiming diao
+
+5 seeds/label
+
+10 seeds/label
+
+methods
+
+mad
+
+expander
+expander
+
+(combined graph)
+
+mrr p@1
+0.2485
+0.3271
+0.3511
+
+0.1453
+0.2086
+0.2301
+
+p@5
+0.3127
+0.4507
+0.4799
+
+p@10 p@20 mrr p@1
+0.4478
+0.6029
+0.6176
+
+0.5513
+0.7299
+0.7384
+
+0.2790
+0.3348
+0.3727
+
+0.1988
+0.1994
+0.23436
+
+p@5
+0.3496
+0.4701
+0.5173
+
+p@10 p@20
+0.5604
+0.4663
+0.7593
+0.6506
+0.6654
+0.7679
+
+table 1: comparison of various graph transduction methods on the the freebase-entity graph.
+
+methods
+
+mad
+
+mad-sketch (w=20 d=3)
+mad-sketch (w=109 d=3)
+
+expander
+
+expander-s (k=5)
+expander-s (k=10)
+expander-s (k=20)
+
+mrr p@1
+0.1453
+0.2485
+0.1285
+0.2041
+0.1609
+0.2516
+0.3271
+0.2086
+0.2071
+0.2046
+0.2055
+
+n a
+n a
+n a
+
+0.4478
+0.3133
+0.4266
+0.6029
+
+p@5 p@10 p@20
+0.5513
+0.3127
+0.4528
+0.2536
+0.5478
+0.3206
+0.4507
+0.7299
+0.4209
+0.4493
+0.4646
+
+0.5923
+0.5981
+
+n a
+n a
+
+0.7221
+
+n a
+
+compute time(s)
+
+space(g)
+
+206.5
+30.0
+39.8
+256.4
+78.2
+94.0
+
+123.1.4
+
+9.10
+1.20
+2.57
+1.34
+0.62
+0.76
+0.82
+
+table 2: comparison of various scalable methods based on mad and expander on the freebase-entity graph.
+
+methods
+
+mad-sketch (w=20 d=3)
+
+expander-s (k=5)
+expander-s (k=10)
+expander-s (k=20)
+
+mrr p@1
+0.0493
+0.1075
+0.1054
+0.1057
+0.1058
+
+n a
+n a
+n a
+
+p@5
+
+0.21572
+0.2798
+0.2818
+0.2832
+
+p@10 p@20
+0.2252
+0.2902
+
+n a
+
+0.3745
+0.3765
+
+n a
+n a
+
+0.4774
+
+compute time(s)
+
+space(g)
+
+294
+1092
+1302
+1518
+
+12
+0.91
+1.02
+1.14
+
+table 3: comparison of mad and expander methods on the fb-r2 graph, a subgraph of freebase-relation.
+s on the subset of freebase-relation (fb-r2), due to
+compare the approximation methods mad-sketch
+low space requirements (   12   lower than even mad-
+and our expander-s, by picking 20 seeds/label
+and taking average over 3 rounds. we just test
+sketch). moreover, it outperforms mad-sketch
+(w=20,d=3) in terms of precision@k.
+mad-sketch (w=20,d=3), since the setting mad-
+sketch (w=109,d=3) runs out-of-memory using a
+single machine. we use protocol bu   ers (an e   cient
+data serialization scheme) to store the data for ex-
+pander-s. for the space, we report the memory
+taken by the whole process. for expander-s, as
+described in section 3, each node stores at most k la-
+bels, so the mrr and precision@k where k > k are
+not available, and we refer it as na.
+
+frequency thresholding vs. streaming spar-
+sity: we also compare our
+streaming approxi-
+mation algorithm (expander-s) against a sim-
+ple frequency-based thresholding technique (freq-
+thresh) used often by online sparse learning algo-
+rithms (zero out small weights after each update step
+11 in algorithm 1). however, this becomes computa-
+tionally ine   cient o(degree     k) in our case especially
+for nodes with high degree, which is prohibitive since
+it requires us to aggregate label distributions from all
+neighbors before pruning.7 in both cases, we can still
+maintain constant space complexity per-node by re-
+taining only top-k labels after the update step. ta-
+ble 4 shows that the streaming sparsity approximation
+produces signi   cantly better quality results (precision
+at 5, 10) than frequency thresholding in addition to
+being far more computationally e   cient.
+
+methods
+
+freq-thresh(k=5)
+expander-s (k=5)
+freq-thresh(k=10)
+expander-s (k=10)
+
+p@1
+0.1921
+0.2071
+0.2028
+0.2046
+
+p@5
+0.4066
+0.4209
+0.4216
+0.4493
+
+p@10
+
+n a
+n a
+
+0.5719
+0.5923
+
+table 4: comparison of sparsity approximation vs.
+frequency thresholding on freebase-entity dataset.
+
+5.4 graph ssl with large data, label sizes
+in this section, we evaluate the space and time
+our distributed algorithm dist-
+e   ciency of
+expander (described in section 2.2) coupled with
+
+7we set threshold    = 0.001 for freq-thresh based
+
+on experiments on a small heldout dataset.
+
+tables 2, 3 show results on freebase-entity and the
+smaller freebase-relation (fb-r2) datasets, respec-
+tively. we make the following observations:
+(1)
+mad-sketch (w=109,d=3) can obtain similar per-
+formance compared with mad, while it can achieve
+about 5.2   speedup, and 3.54   space reduction. how-
+ever, when the sketch size is small (e.g. w=20,d=3),
+the algorithm loses quality in terms of both mrr
+and precision@k. for applications involving large la-
+bel sizes, due to space limitations, we can only allocate
+a limited memory size for each node, yet we should
+still be able to retain the accurate or relevant labels
+within the available memory. on fb-r2 data, we ob-
+serve that mad-sketch (w=109,d=3) is not exe-
+cutable, and the mad-sketch (w=20,d=3) yields
+(2) comparing the expander and
+poor results.
+expander-s, the latter one obtains similar per-
+formance in terms of precision@k, while it achieves
+3.28   speedup for k = 5 and 2.16   space reduction.
+compared with the mad-sketch, the speedup is
+not as steep mainly because the algorithm needs to
+go through the tuple list and    lter out the ones be-
+low the threshold to ensure that we retain the    good   
+labels. however, we can easily execute expander-
+
+large scale distributed semi-supervised learning using streaming approximation
+
+the new streaming approximation update (section 3).
+to focus on large data settings, we only use freebase-
+relation data set in subsequent experiments. follow-
+ing previous work [28], we use the identity of each node
+as a label. in other words, the label size can poten-
+tially be as large as the size of the nodes |v |. first, we
+test how the computation time scales with the number
+of nodes, by    xing label size. we follow a straight-
+forward strategy: randomly sample di   erent number
+of edges (and corresponding nodes) from the original
+graph. for each graph size, we randomly sample 1000
+nodes as seeds, and set their node identities as labels.
+we then run vanilla expander, expander-s
+(k = 5) and dist-expander-s (k = 5) on each
+graph. the last one is a distributed version which par-
+titions the graph and runs on 100 machines. we show
+the running time for di   erent node sizes in figure 2.
+expander runs out-of-memory when the node size
+
+figure 2: running time vs. data size for single-
+machine versus distributed algorithm.
+
+goes up to 1m, and the running time slows down sig-
+ni   cantly when graph size increases. expander-s
+(k=5) can handle all    ve data sets on a single ma-
+chine and while the running time is better than ex-
+pander, it starts to slow down noticeably on larger
+graphs with 7m nodes. dist-expander-s scales
+quite well with the node size, and yields a 50-fold
+speedup when compared with expander-s when
+the node size is    7m.
+
+figure 3: memory usage vs. label size.
+
+figure 3 illustrates how the memory usage scales with
+label size for our distributed version. for this sce-
+nario, we use the entire freebase-relation dataset and
+vary label size by randomly choosing di   erent num-
+ber of seed nodes as labels. we    nd that the overall
+
+figure 4: per iteration runtime on massive graphs of
+varying sizes distributed across 300 machines.
+space cost is consistently around 35gb, because our
+streaming algorithm captures a sparse constant space
+approximation of the label distribution and does not
+run out-of-memory even for large label sizes. note
+that the distributed version consumes more than 30gb
+primarily because there will be redundant information
+recorded when partitioning the graph (including data
+replication for system fault-tolerance).
+
+finally, we test how the distributed sparsity approx-
+imation algorithm scales on massive graphs with bil-
+lions of nodes and edges. since the freebase graph
+is not su   ciently large for this setting, we construct
+graphs of varying sizes from a di   erent dataset (seg-
+mented video sequences tagged with 1000 labels). fig-
+ure 4 illustrates that the streaming distributed al-
+gorithm scales very e   ciently for such scenarios and
+runs quite fast. each computing iteration for dist-
+expander-s runs to completion in just 2.3 seconds
+on a 17.8m node/26.7m edge graph and roughly 9 min-
+utes on a much larger 2.6b node/6.5b edge graph.
+
+6 conclusion
+
+existing graph-based ssl algorithms usually require
+o(m) space per node and do not scale to scenarios in-
+volving large label sizes m and massive graphs. we
+propose a novel streaming algorithm that e   ectively
+and accurately captures the sparsity of the label distri-
+bution. the algorithm operates e   ciently in a stream-
+ing fashion and reduces the space complexity per node
+to o(1) in addition to yielding high quality perfor-
+mance. moreover, we extend the method with a dis-
+tributed algorithm that scales elegantly to large data
+and label sizes (for example, billions of nodes/edges
+and millions of labels). we also show that graph aug-
+mentation using unsupervised learning techniques can
+provide a robust strategy to yield performance gains
+for ssl problems involving natural language.
+
+acknowledgements
+
+we thank partha talukdar for useful pointers to mad
+code and kevin murphy for providing us access to the
+freebase-relation dataset.
+
+sujith ravi, qiming diao
+
+references
+
+[1] r. agrawal, a. gupta, y. prabhu, and m. varma.
+multi-label learning with millions of labels: rec-
+ommending advertiser bid phrases for web pages.
+in proceedings of the international world wide
+web conference, 2013.
+
+[2] apache giraph.
+
+http://giraph.apache.org/,
+
+2013.
+
+[3] s. baluja, r. seth, d. sivakumar, y. jing, j. yag-
+nik, s. kumar, d. ravichandran, and m. aly.
+video suggestion and discovery for youtube: tak-
+ing id93 through the view graph.
+in
+proceedings of the 17th international conference
+on world wide web, www    08, pages 895   904,
+2008.
+
+[4] m. belkin, p. niyogi, and v. sindhwani. on man-
+ifold id173. in proceeding of the confer-
+ence on arti   cial intelligence and statistics (ais-
+tats), 2005.
+
+[5] y. bengio, o. delalleau, and n. le roux. la-
+bel propagation and quadratic criterion.
+in
+o. chapelle, b. sch  olkopf, and a. zien, editors,
+semi-supervised learning, pages 193   216. mit
+press, 2006.
+
+[6] j. blitzer and x. j. zhu. semi-supervised learn-
+ing for natural language processing. in acl-hlt
+tutorial, june 2008.
+
+[7] a. carlson, j. betteridge, b. kisiel, b. settles,
+e. r. h. jr., and t. m. mitchell. toward an ar-
+chitecture for never-ending language learning. in
+aaai, 2010.
+
+[8] o. chapelle, b. sch  olkopf, and a. zien, edi-
+tors. semi-supervised learning. mit press, cam-
+bridge, ma, 2006.
+
+[9] m. charikar. similarity estimation techniques
+from rounding algorithms. in proceedings of the
+thiry-fourth annual acm symposium on theory
+of computing, pages 380   388, 2002.
+
+[10] g. cormode and s. muthukrishnan. an improved
+data stream summary: the count-min sketch and
+its applications. journal of algorithms, 55(1):58   
+75, 2005.
+
+[11] d. das and n. a. smith. graph-based lexicon
+in
+expansion with sparsity-inducing penalties.
+proceedings of the 2012 conference of the north
+american chapter of the association for com-
+putational linguistics: human language tech-
+nologies, pages 677   687. association for compu-
+tational linguistics, 2012.
+
+[12] j. dean, g. corrado, r. monga, k. chen,
+m. devin, q. v. le, m. z. mao, m. ranzato,
+a. w. senior, p. a. tucker, k. yang, and a. y.
+ng. large scale distributed deep networks.
+in
+proceedings of nips, pages 1232   1240, 2012.
+
+[13] j. deng, w. dong, r. socher, l.-j. li, k. li, and
+l. fei-fei. id163: a large-scale hierarchical
+image database. in cvpr09, 2009.
+
+[14] b. v. durme and a. lall. streaming pointwise
+mutual information.
+in y. bengio, d. schuur-
+mans, j. la   erty, c. williams, and a. culotta,
+editors, advances in neural information process-
+ing systems 22, pages 1892   1900. 2009.
+
+[15] a. goyal, h. daum  e, iii, and s. venkatasubra-
+manian. streaming for large scale nlp: lan-
+guage modeling. in proceedings of human lan-
+guage technologies: the 2009 annual conference
+of the north american chapter of the association
+for computational linguistics, naacl    09, pages
+512   520, 2009.
+
+[16] t. joachims. transductive id136 for text clas-
+si   cation using support vector machines. in pro-
+ceedings of the sixteenth international conference
+on machine learning, pages 200   209, 1999.
+
+[17] t. joachims. transductive learning via spectral
+graph partitioning. in proceedings of icml, pages
+290   297, 2003.
+
+[18] m. kowalski and b. torr  esani. sparsity and per-
+sistence: mixed norms provide simple signal mod-
+els with dependent coe   cients. signal, image and
+video processing, 3(3):251   264, sept. 2009.
+
+[19] z. kozareva, k. voevodski, and s.-h. teng. class
+label enhancement via related instances. in pro-
+ceedings of emnlp, pages 118   128, 2011.
+
+[20] g. malewicz, m. h. austern, a. j. bik, j. c.
+dehnert, i. horn, n. leiser, and g. czajkowski.
+pregel: a system for large-scale graph processing.
+in proceedings of the 2010 acm sigmod in-
+ternational conference on management of data,
+pages 135   146, 2010.
+
+[21] g. s. manku and r. motwani. approximate fre-
+quency counts over data streams.
+in proceed-
+ings of the 28th international conference on very
+large data bases, vldb    02, pages 346   357,
+2002.
+
+[22] t. mikolov, k. chen, g. corrado, and j. dean.
+e   cient estimation of word representations in
+vector space.
+in proceedings of workshop at
+iclr, 2013.
+
+large scale distributed semi-supervised learning using streaming approximation
+
+[23] t. mikolov, i. sutskever, k. chen, g. corrado,
+and j. dean. distributed representations of words
+and phrases and their compositionality. in pro-
+ceedings of nips, 2013.
+
+[24] m. osborne, a. lall, and b. v. durme. expo-
+nential reservoir sampling for streaming language
+models. in proceedings of the 52nd annual meet-
+ing of the association for computational linguis-
+tics, acl    2014, pages 687   692, 2014.
+
+[25] m. seeger. learning with labeled and unlabeled
+
+data. technical report, 2001.
+
+[26] a. subramanya and j. a. bilmes. entropic graph
+id173 in non-parametric semi-supervised
+classi   cation.
+in proceedings of nips, pages
+1803   1811, 2009.
+
+[27] a. subramanya, s. petrov, and f. pereira. ef-
+   cient graph-based semi-supervised learning of
+structured tagging models. in proceedings of the
+2010 conference on empirical methods in natu-
+ral language processing, emnlp    10, pages 167   
+176, 2010.
+
+[28] p. talukdar and w. cohen. scaling graph-based
+semi supervised learning to large number of la-
+bels using count-min sketch.
+in proceedings of
+aistats, pages 940   947, 2014.
+
+[29] p. p. talukdar and k. crammer. new regular-
+ized algorithms for transductive learning. in pro-
+ceedings of the european conference on machine
+learning and knowledge discovery in databases:
+part ii, ecml pkdd    09, pages 442   457, 2009.
+
+[30] p. p. talukdar and f. pereira. experiments in
+graph-based semi-supervised learning methods for
+class-instance acquisition.
+in proceedings of the
+48th annual meeting of the association for com-
+putational linguistics, acl    10, pages 1473   1481,
+2010.
+
+[31] p. p. talukdar,
+
+j. reisinger, m. pasca,
+d. ravichandran, r. bhagat, and f. pereira.
+weakly-supervised acquisition of labeled class in-
+stances using graph id93. in emnlp,
+pages 582   590, 2008.
+
+[32] r. tibshirani. regression shrinkage and selection
+via the lasso. journal of the royal statistical so-
+ciety (series b), 58:267   288, 1996.
+
+[33] a. c. tommi and t. jaakkola. on information
+in proceedings of the 19th uai,
+
+id173.
+2003.
+
+[34] j. ugander and l. backstrom. balanced label
+propagation for partitioning massive graphs. in
+proceedings of the sixth acm international con-
+ference on web search and data mining, pages
+507   516, 2013.
+
+[35] b. van durme and a. lall. e   cient online lo-
+cality sensitive hashing via reservoir counting. in
+proceedings of the 49th annual meeting of the as-
+sociation for computational linguistics: human
+language technologies: short papers - volume 2,
+hlt    11, pages 18   23, 2011.
+
+[36] y. wang, r. ji, and s.-f. chang. label propa-
+gation from id163 to 3d point clouds. in pro-
+ceedings of cvpr, pages 3135   3142. ieee, 2013.
+
+[37] x. zhu. semi-supervised learning literature sur-
+vey. technical report 1530, computer sciences,
+university of wisconsin-madison, 2005.
+
+[38] x. zhu, z. ghahramani, and j. la   erty. semi-
+supervised learning using gaussian    elds and har-
+monic functions. in proceedings of icml, pages
+912   919, 2003.
+
+

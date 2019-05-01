@@ -1,0 +1,1361 @@
+neural belief tracker: data-driven dialogue state tracking
+
+nikola mrk  si  c1, diarmuid   o s  eaghdha2
+
+tsung-hsien wen1, blaise thomson2, steve young1
+
+1 university of cambridge
+
+2 apple inc.
+
+{nm480, thw28, sjy}@cam.ac.uk
+
+{doseaghdha, blaisethom}@apple.com
+
+7
+1
+0
+2
+
+ 
+r
+p
+a
+1
+2
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+7
+7
+7
+3
+0
+
+.
+
+6
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+one of the core components of modern spo-
+ken dialogue systems is the belief tracker,
+which estimates the user   s goal at every
+step of the dialogue. however, most current
+approaches have dif   culty scaling to larger,
+more complex dialogue domains. this is
+due to their dependency on either: a) spo-
+ken language understanding models that
+require large amounts of annotated training
+data; or b) hand-crafted lexicons for captur-
+ing some of the linguistic variation in users   
+language. we propose a novel neural be-
+lief tracking (nbt) framework which over-
+comes these problems by building on re-
+cent advances in representation learning.
+nbt models reason over pre-trained word
+vectors, learning to compose them into dis-
+tributed representations of user utterances
+and dialogue context. our evaluation on
+two datasets shows that this approach sur-
+passes past limitations, matching the per-
+formance of state-of-the-art models which
+rely on hand-crafted semantic lexicons and
+outperforming them when such lexicons
+are not provided.
+
+introduction
+
+1
+spoken dialogue systems (sds) allow users to in-
+teract with computer applications through conversa-
+tion. task-based systems help users achieve goals
+such as    nding restaurants or booking    ights. the
+dialogue state tracking (dst) component of an
+sds serves to interpret user input and update the
+belief state, which is the system   s internal repre-
+sentation of the state of the conversation (young
+et al., 2010). this is a id203 distribution over
+dialogue states used by the downstream dialogue
+manager to decide which action the system should
+
+user: i   m looking for a cheaper restaurant
+inform(price=cheap)
+system: sure. what kind - and where?
+user: thai food, somewhere downtown
+inform(price=cheap, food=thai,
+area=centre)
+system: the house serves cheap thai food
+user: where is it?
+inform(price=cheap, food=thai,
+area=centre); request(address)
+system: the house is at 106 regent street
+figure 1: annotated dialogue states in a sample di-
+alogue. underlined words show rephrasings which
+are typically handled using semantic dictionaries.
+
+perform next (su et al., 2016a,b); the system action
+is then verbalised by the natural language generator
+(wen et al., 2015a,b; du  sek and jur  c      cek, 2015).
+
+the dialogue state tracking challenge (dstc)
+series of shared tasks has provided a common evalu-
+ation framework accompanied by labelled datasets
+(williams et al., 2016). in this framework, the di-
+alogue system is supported by a domain ontology
+which describes the range of user intents the sys-
+tem can process. the ontology de   nes a collection
+of slots and the values that each slot can take. the
+system must track the search constraints expressed
+by users (goals or informable slots) and questions
+the users ask about search results (requests), tak-
+ing into account each user utterance (input via a
+speech recogniser) and the dialogue context (e.g.,
+what the system just said). the example in figure
+1 shows the true state after each user utterance in
+a three-turn conversation. as can be seen in this
+example, dst models depend on identifying men-
+tions of ontology items in user utterances. this
+becomes a non-trivial task when confronted with
+lexical variation, the dynamics of context and noisy
+automated id103 (asr) output.
+
+food=cheap: [affordable, budget, low-cost,
+low-priced, inexpensive, cheaper, economic, ...]
+rating=high: [best, high-rated, highly rated,
+top-rated, cool, chic, popular, trendy, ...]
+area=centre: [center, downtown, central,
+city centre, midtown, town centre, ...]
+figure 2: an example semantic dictionary with
+rephrasings for three ontology values in a restau-
+rant search domain.
+
+traditional statistical approaches use separate
+spoken language understanding (slu) modules
+to address lexical variability within a single dia-
+logue turn. however, training such models requires
+substantial amounts of domain-speci   c annotation.
+alternatively, turn-level slu and cross-turn dst
+can be coalesced into a single model to achieve
+superior belief tracking performance, as shown by
+henderson et al. (2014d). such coupled models
+typically rely on manually constructed semantic
+dictionaries to identify alternative mentions of on-
+tology items that vary lexically or morphologically.
+figure 2 gives an example of such a dictionary
+for three slot-value pairs. this approach, which
+we term delexicalisation, is clearly not scalable
+to larger, more complex dialogue domains. im-
+portantly, the focus on english in dst research
+understates the considerable challenges that mor-
+phology poses to systems based on exact matching
+in morphologically richer languages such as italian
+or german (see vuli  c et al. (2017)).
+
+in this paper, we present two new models, col-
+lectively called the neural belief tracker (nbt)
+family. the proposed models couple slu and dst,
+ef   ciently learning to handle variation without re-
+quiring any hand-crafted resources. to do that,
+nbt models move away from exact matching and
+instead reason entirely over pre-trained word vec-
+tors. the vectors making up the user utterance and
+preceding system output are    rst composed into in-
+termediate representations. these representations
+are then used to decide which of the ontology-
+de   ned intents have been expressed by the user
+up to that point in the conversation.
+
+to the best of our knowledge, nbt models are
+the    rst to successfully use pre-trained word vector
+spaces to improve the language understanding ca-
+pability of belief tracking models. in evaluation on
+two datasets, we show that: a) nbt models match
+the performance of delexicalisation-based models
+which make use of hand-crafted semantic lexicons;
+
+and b) the nbt models signi   cantly outperform
+those models when such resources are not avail-
+able. consequently, we believe this work proposes
+a framework better-suited to scaling belief tracking
+models for deployment in real-world dialogue sys-
+tems operating over sophisticated application do-
+mains where the creation of such domain-speci   c
+lexicons would be infeasible.
+
+2 background
+models for probabilistic dialogue state tracking, or
+belief tracking, were introduced as components of
+spoken dialogue systems in order to better handle
+noisy id103 and other sources of un-
+certainty in understanding a user   s goals (bohus
+and rudnicky, 2006; williams and young, 2007;
+young et al., 2010). modern dialogue management
+policies can learn to use a tracker   s distribution
+over intents to decide whether to execute an action
+or request clari   cation from the user. as men-
+tioned above, the dstc shared tasks have spurred
+research on this problem and established a standard
+evaluation paradigm (williams et al., 2013; hen-
+derson et al., 2014b,a). in this setting, the task is
+de   ned by an ontology that enumerates the goals a
+user can specify and the attributes of entities that
+the user can request information about. many dif-
+ferent belief tracking models have been proposed
+in the literature, from generative (thomson and
+young, 2010) and discriminative (henderson et al.,
+2014d) statistical models to rule-based systems
+(wang and lemon, 2013). to motivate the work
+presented here, we categorise prior research accord-
+ing to their reliance (or otherwise) on a separate
+slu module for interpreting user utterances:1
+separate slu traditional sds pipelines use
+spoken language understanding (slu) decoders
+to detect slot-value pairs expressed in the auto-
+matic id103 (asr) output. the
+downstream dst model then combines this in-
+formation with the past dialogue context to up-
+date the belief state (thomson and young, 2010;
+wang and lemon, 2013; lee and kim, 2016; perez,
+2016; perez and liu, 2017; sun et al., 2016; jang
+et al., 2016; shi et al., 2016; dernoncourt et al.,
+2016; liu and perez, 2017; vodol  an et al., 2017).
+1the best-performing models in dstc2 all used both raw
+asr output and the output of (potentially more than one) slu
+decoders (williams, 2014; williams et al., 2016). this does
+not mean that those models are immune to the drawbacks
+identi   ed here for the two model categories; in fact, they share
+the drawbacks of both.
+
+figure 3: architecture of the nbt model. the implementation of the three representation learning
+subcomponents can be modi   ed, as long as these produce adequate vector representations which the
+downstream model components can use to decide whether the current candidate slot-value pair was
+expressed in the user utterance (taking into account the preceding system act).
+
+in the dstc challenges, some systems used the
+output of template-based matching systems such
+as phoenix (wang, 1994). however, more robust
+and accurate statistical slu systems are available.
+many discriminative approaches to spoken dia-
+logue slu train independent binary models that
+decide whether each slot-value pair was expressed
+in the user utterance. given enough data, these
+models can learn which lexical features are good
+indicators for a given value and can capture ele-
+ments of id141 (mairesse et al., 2009). this
+line of work later shifted focus to robust handling of
+rich asr output (henderson et al., 2012; tur et al.,
+2013). slu has also been treated as a sequence
+labelling problem, where each word in an utterance
+is labelled according to its role in the user   s intent;
+standard labelling models such as crfs or recur-
+rent neural networks can then be used (raymond
+and ricardi, 2007; yao et al., 2014; celikyilmaz
+and hakkani-tur, 2015; mesnil et al., 2015; peng
+et al., 2015; zhang and wang, 2016; liu and lane,
+2016b; vu et al., 2016; liu and lane, 2016a, i.a.).
+other approaches adopt a more complex modelling
+structure inspired by id29 (saleh et al.,
+2014; vlachos and clark, 2014). one drawback
+shared by these methods is their resource require-
+ments, either because they need to learn indepen-
+dent parameters for each slot and value or because
+they need    ne-grained manual annotation at the
+word level. this hinders scaling to larger, more
+realistic application domains.
+
+joint slu/dst research on belief tracking has
+found it advantageous to reason about slu and
+dst jointly, taking asr predictions as input and
+generating belief states as output (henderson et al.,
+2014d; sun et al., 2014; zilka and jurcicek, 2015;
+mrk  si  c et al., 2015). in dstc2, systems which
+used no external slu module outperformed all sys-
+tems that only used external slu features. joint
+models typically rely on a strategy known as delex-
+icalisation whereby slots and values mentioned in
+the text are replaced with generic labels. once
+the dataset is transformed in this manner, one can
+extract a collection of template-like id165 fea-
+tures such as [want tagged-value food]. to per-
+form belief tracking, the shared model iterates over
+all slot-value pairs, extracting delexicalised feature
+vectors and making a separate binary decision re-
+garding each pair. delexicalisation introduces a
+hidden dependency that is rarely discussed: how
+do we identify slot/value mentions in text? for
+toy domains, one can manually construct semantic
+dictionaries which list the potential rephrasings for
+all slot values. as shown by mrk  si  c et al. (2016),
+the use of such dictionaries is essential for the per-
+formance of current delexicalisation-based models.
+again though, this will not scale to the rich variety
+of user language or to general domains.
+
+the primary motivation for the work presented
+in this paper is to overcome the limitations that
+affect previous belief tracking models.
+the
+nbt model ef   ciently learns from the avail-
+
+able data by: 1) leveraging semantic informa-
+tion from pre-trained word vectors to resolve lex-
+ical/morphological ambiguity; 2) maximising the
+number of parameters shared across ontology val-
+ues; and 3) having the    exibility to learn domain-
+speci   c id141s and other kinds of variation
+that make it infeasible to rely on exact matching
+and delexicalisation as a robust strategy.
+
+3 neural belief tracker
+
+the neural belief tracker (nbt) is a model de-
+signed to detect the slot-value pairs that make up
+the user   s goal at a given turn during the    ow of
+dialogue. its input consists of the system dialogue
+acts preceding the user input, the user utterance
+itself, and a single candidate slot-value pair that
+it needs to make a decision about. for instance,
+the model might have to decide whether the goal
+food=italian has been expressed in    i   m look-
+ing for good pizza   . to perform belief tracking, the
+nbt model iterates over all candidate slot-value
+pairs (de   ned by the ontology), and decides which
+ones have just been expressed by the user.
+
+figure 3 presents the    ow of information in the
+model. the    rst layer in the nbt hierarchy per-
+forms representation learning given the three model
+inputs, producing vector representations for the
+user utterance (r), the current candidate slot-value
+pair (c) and the system dialogue acts (tq, ts, tv).
+subsequently, the learned vector representations
+interact through the context modelling and seman-
+tic decoding submodules to obtain the intermediate
+interaction summary vectors dr, dc and d. these
+are used as input to the    nal decision-making mod-
+ule which decides whether the user expressed the
+intent represented by the candidate slot-value pair.
+
+3.1 representation learning
+for any given user utterance, system act(s) and can-
+didate slot-value pair, the representation learning
+submodules produce vector representations which
+act as input for the downstream components of
+the model. all representation learning subcompo-
+nents make use of pre-trained collections of word
+vectors. as shown by mrk  si  c et al. (2016), special-
+ising word vectors to express semantic similarity
+rather than relatedness is essential for improving
+belief tracking performance. for this reason, we
+use the semantically-specialised paragram-sl999
+word vectors (wieting et al., 2015) throughout this
+work. the nbt training procedure keeps these
+
+vectors    xed: that way, at test time, unseen words
+semantically related to familiar slot values (i.e. in-
+expensive to cheap) will be recognised purely by
+their position in the original vector space (see also
+rockt  aschel et al. (2016)). this means that the
+nbt model parameters can be shared across all
+values of the given slot, or even across all slots.
+
+let u represent a user utterance consisting of
+ku words u1, u2, . . . , uku. each word has an asso-
+ciated word vector u1, . . . , uku. we propose two
+model variants which differ in the method used to
+produce vector representations of u: nbt-dnn
+and nbt-id98. both act over the constituent n-
+grams of the utterance. let vn
+i be the concatenation
+of the n word vectors starting at index i, so that:
+
+i = ui     . . .     ui+n   1
+vn
+
+(1)
+where     denotes vector concatenation. the simpler
+of our two models, which we term nbt-dnn, is
+shown in figure 4. this model computes cumula-
+tive id165 representation vectors r1, r2 and r3,
+which are the id165    summaries    of the unigrams,
+bigrams and trigrams in the user utterance:
+
+rn =
+
+vn
+i
+
+(2)
+
+i=1
+
+each of these vectors is then non-linearly mapped
+to intermediate representations of the same size:
+
+r(cid:48)
+n =   (w s
+
+nrn + bs
+n)
+
+(3)
+
+where the weight matrices and bias terms map the
+cumulative id165s to vectors of the same dimen-
+sionality and    denotes the sigmoid activation func-
+tion. we maintain a separate set of parameters for
+each slot (indicated by superscript s). the three
+vectors are then summed to obtain a single repre-
+sentation for the user utterance:
+2 + r(cid:48)
+
+r = r(cid:48)
+
+1 + r(cid:48)
+
+(4)
+
+3
+
+the cumulative id165 representations used by
+this model are just unweighted sums of all word
+vectors in the utterance. ideally, the model should
+learn to recognise which parts of the utterance are
+more relevant for the subsequent classi   cation task.
+for instance, it could learn to ignore verbs or stop
+words and pay more attention to adjectives and
+nouns which are more likely to express slot values.
+
+ku   n+1(cid:88)
+
+figure 4: nbt-dnn model. word vectors of id165s (n = 1, 2, 3) are summed to obtain cumulative
+id165s, then passed through another hidden layer and summed to obtain the utterance representation r.
+
+figure 5: nbt-id98 model. l convolutional    lters of window sizes 1, 2, 3 are applied to word vectors
+of the given utterance (l = 3 in the diagram, but l = 300 in the system). the convolutions are followed
+by the relu activation function and max-pooling to produce summary id165 representations. these are
+summed to obtain the utterance representation r.
+
+nbt-id98 our second model draws inspiration
+from successful applications of convolutional neu-
+ral networks (id98s) for language understanding
+(collobert et al., 2011; kalchbrenner et al., 2014;
+kim, 2014). these models typically apply a num-
+ber of convolutional    lters to id165s in the input
+sentence, followed by non-linear activation func-
+tions and max-pooling. following this approach,
+the nbt-id98 model applies l = 300 differ-
+ent    lters for id165 lengths of 1, 2 and 3 (fig-
+n     rl  nd denote the collection
+ure 5). let f s
+of    lters for each value of n, where d = 300 is
+the word vector dimensionality. if vn
+i denotes the
+concatenation of n word vectors starting at index
+i, let mn = [vn
+ku   n+1] be the list of
+id165s that convolutional    lters of length n run
+over. the three intermediate representations are
+then given by:
+
+2 ; . . . ; vn
+
+1 ; vn
+
+rn = f s
+
+n mn
+
+(5)
+
+each column of the intermediate matrices rn is
+produced by a single convolutional    lter of length
+n. we obtain summary id165 representations
+by pushing these representations through a recti-
+
+   ed linear unit (relu) activation function (nair
+and hinton, 2010) and max-pooling over time
+(i.e. columns of the matrix) to get a single feature
+for each of the l    lters applied to the utterance:
+
+r(cid:48)
+n = maxpool (relu (rn + bs
+
+n))
+
+(6)
+
+where bs
+n is a bias term broadcast across all    lters.
+finally, the three summary id165 representations
+are summed to obtain the    nal utterance represen-
+tation vector r (as in equation 4). the nbt-id98
+model is (by design) better suited to longer utter-
+ances, as its convolutional    lters interact directly
+with subsequences of the utterance, and not just
+their noisy summaries given by the nbt-dnn   s
+cumulative id165s.
+
+3.2 semantic decoding
+the nbt diagram in figure 3 shows that the ut-
+terance representation r and the candidate slot-
+value pair representation c directly interact through
+the semantic decoding module. this compo-
+nent decides whether the user explicitly expressed
+an intent matching the current candidate pair
+
+(cid:1)
+
+c =   (cid:0)w s
+
+(i.e. without taking the dialogue context into ac-
+count). examples of such matches would be    i
+want thai food    with food=thai or more de-
+manding ones such as    a pricey restaurant    with
+price=expensive. this is where the use of
+high-quality pre-trained word vectors comes into
+play: a delexicalisation-based model could deal
+with the former example but would be helpless in
+the latter case, unless a human expert had provided
+a semantic dictionary listing all potential rephras-
+ings for each value in the domain ontology.
+
+let the vector space representations of a candi-
+date pair   s slot name and value be given by cs and
+cv (with vectors of multi-word slot names/values
+summed together). the nbt model learns to map
+this tuple into a single vector c of the same dimen-
+sionality as the utterance representation r. these
+two representations are then forced to interact in or-
+der to learn a similarity metric which discriminates
+between interactions of utterances with slot-value
+pairs that they either do or do not express:
+
+d = r     c
+
+c (cs + cv) + bs
+c
+
+(7)
+(8)
+where     denotes element-wise vector multiplica-
+tion. the dot product, which may seem like the
+more intuitive similarity metric, would reduce the
+rich set of features in d to a single scalar. the
+element-wise multiplication allows the downstream
+network to make better use of its parameters by
+learning non-linear interactions between sets of
+features in r and c.2
+
+3.3 context modelling
+this    decoder    does not yet suf   ce to extract intents
+from utterances in human-machine dialogue. to
+understand some queries, the belief tracker must be
+aware of context, i.e. the    ow of dialogue leading
+up to the latest user utterance. while all previous
+system and user utterances are important, the most
+relevant one is the last system utterance, in which
+the dialogue system could have performed (among
+others) one of the following two system acts:
+
+1. system request: the system asks the user
+about the value of a speci   c slot tq. if the
+system utterance is:    what price range would
+
+2we also tried to concatenate r and c and pass that vector
+to the downstream decision-making neural network. however,
+this set-up led to very weak performance since our relatively
+small datasets did not suf   ce for the network to learn to model
+the interaction between the two feature vectors.
+
+you like?    and the user answers with any, the
+model must infer the reference to price range,
+and not to other slots such as area or food.
+
+2. system con   rm: the system asks the user
+to con   rm whether a speci   c slot-value pair
+(ts, tv) is part of their desired constraints. for
+example, if the user responds to    how about
+turkish food?    with    yes   , the model must be
+aware of the system act in order to correctly
+update the belief state.
+
+if we make the markovian decision to only con-
+sider the last set of system acts, we can incorporate
+context modelling into the nbt. let tq and (ts, tv)
+be the word vectors of the arguments for the sys-
+tem request and con   rm acts (zero vectors if none).
+the model computes the following measures of
+similarity between the system acts, candidate pair
+(cs, cv) and utterance representation r:
+
+mr = (cs    tq)r
+mc = (cs    ts)(cv    tv)r
+
+(9)
+(10)
+where    denotes dot product. the computed similar-
+ity terms act as gating mechanisms which only pass
+the utterance representation through if the system
+asked about the current candidate slot or slot-value
+pair. this type of interaction is particularly useful
+for the con   rm system act: if the system asks the
+user to con   rm, the user is likely not to mention any
+slot values, but to just respond af   rmatively or neg-
+atively. this means that the model must consider
+the three-way interaction between the utterance,
+candidate slot-value pair and the slot value pair of-
+fered by the system. if (and only if) the latter two
+are the same should the model consider the af   rma-
+tive or negative polarity of the user utterance when
+making the subsequent binary decision.
+binary decision maker the intermediate repre-
+sentations are passed through another hidden layer
+and then combined. if   dim(x) =   (w x + b) is a
+layer which maps input vector x to a vector of size
+dim, the input to the    nal binary softmax (which
+represents the decision) is given by:
+
+(cid:0)  100(d) +   100(mr) +   100(mc)(cid:1)
+
+y =   2
+
+4 belief state update mechanism
+in spoken dialogue systems, belief tracking models
+operate over the output of automatic speech recog-
+nition (asr). despite improvements to speech
+
+recognition, the need to make the most out of im-
+perfect asr will persist as dialogue systems are
+used in increasingly noisy environments.
+
+in this work, we de   ne a simple rule-based
+belief state update mechanism which can be
+applied to asr n-best lists. for dialogue turn t,
+let syst   1 denote the preceding system output, and
+let ht denote the list of n asr hypotheses ht
+i with
+posterior probabilities pt
+i. for any hypothesis ht
+i,
+slot s and slot value v     vs, nbt models estimate
+p(s, v | ht
+i, syst   1), which is the (turn-level)
+id203 that (s, v) was expressed in the given
+hypothesis. the predictions for n such hypotheses
+are then combined as:
+
+p(s, v | ht, syst   1) =
+
+n(cid:88)
+
+p(cid:0)s, v | ht
+
+i, syst(cid:1)
+
+pt
+i
+
+i=1
+
+this turn-level belief state estimate is then com-
+bined with the (cumulative) belief state up to time
+(t     1) to get the updated belief state estimate:
+
+p(s, v | h1:t, sys1:t   1) =    p(cid:0)s, v | ht, syst   1(cid:1)
++ (1       ) p(cid:0)s, v | h1:t   1, sys1:t   2(cid:1)
+
+where    is the coef   cient which determines the
+relative weight of the turn-level and previous turns   
+belief state estimates.3 for slot s, the set of its
+detected values at turn t is then given by:
+
+s = {v     vs | p(cid:0)s, v | h1:t, sys1:t   1(cid:1)     0.5}
+
+v t
+
+for informable (i.e. goal-tracking) slots, the value
+in v t
+s with the highest id203 is chosen as the
+s (cid:54)= {   }). for requests, all slots
+current goal (if v t
+in v t
+req are deemed to have been requested. as
+requestable slots serve to model single-turn user
+queries, they require no belief tracking across turns.
+
+5 experiments
+5.1 datasets
+two datasets were used for training and evalua-
+tion. both consist of user conversations with task-
+oriented dialogue systems designed to help users
+   nd suitable restaurants around cambridge, uk.
+the two corpora share the same domain ontology,
+which contains three informable (i.e. goal-tracking)
+slots: food, area and price. the users can spec-
+ify values for these slots in order to    nd restaurants
+
+3this coef   cient was tuned on the dstc2 development
+
+set. the best performance was achieved with    = 0.55.
+
+which best meet their criteria. once the system sug-
+gests a restaurant, the users can ask about the values
+of up to eight requestable slots (phone number,
+address, etc.). the two datasets are:
+
+1. dstc2: we use the transcriptions, asr hy-
+potheses and turn-level semantic labels pro-
+vided for the dialogue state tracking chal-
+lenge 2 (henderson et al., 2014a). the of-
+   cial transcriptions contain various spelling
+errors which we corrected manually;
+the
+cleaned version of
+is avail-
+able at mi.eng.cam.ac.uk/  nm480/
+dstc2-clean.zip. the training data con-
+tains 2207 dialogues and the test set consists
+of 1117 dialogues. we train nbt models on
+transcriptions but report belief tracking perfor-
+mance on test set asr hypotheses provided
+in the original challenge.
+
+the dataset
+
+2. woz 2.0: wen et al. (2017) performed a wiz-
+ard of oz style experiment in which amazon
+mechanical turk users assumed the role of
+the system or the user of a task-oriented dia-
+logue system based on the dstc2 ontology.
+users typed instead of using speech, which
+means performance in the woz experiments
+is more indicative of the model   s capacity for
+semantic understanding than its robustness to
+asr errors. whereas in the dstc2 dialogues
+users would quickly adapt to the system   s
+(lack of) language understanding capability,
+the woz experimental design gave them free-
+dom to use more sophisticated language. we
+expanded the original woz dataset from wen
+et al. (2017) using the same data collection
+procedure, yielding a total of 1200 dialogues.
+we divided these into 600 training, 200 vali-
+dation and 400 test set dialogues. the woz
+2.0 dataset is available at mi.eng.cam.ac.
+uk/  nm480/woz_2.0.zip.
+
+training examples the two corpora are used to
+create training data for two separate experiments.
+for each dataset, we iterate over all train set utter-
+ances, generating one example for each of the slot-
+value pairs in the ontology. an example consists
+of a transcription, its context (i.e. list of preceding
+system acts) and a candidate slot-value pair. the
+binary label for each example indicates whether or
+not its utterance and context express the example   s
+candidate pair. for instance,    i would like irish
+
+food    would generate a positive example for candi-
+date pair food=irish, and a negative example for
+every other slot-value pair in the ontology.
+
+evaluation we focus on two key evaluation met-
+rics introduced in (henderson et al., 2014a):
+
+1. goals (   joint goal accuracy   ): the proportion
+of dialogue turns where all the user   s search
+goal constraints were correctly identi   ed;
+
+2. requests: similarly, the proportion of dia-
+logue turns where user   s requests for infor-
+mation were identi   ed correctly.
+
+5.2 models
+we evaluate two nbt model variants: nbt-dnn
+and nbt-id98. to train the models, we use the
+adam optimizer (kingma and ba, 2015) with cross-
+id178 loss, backpropagating through all the nbt
+subcomponents while keeping the pre-trained word
+vectors    xed (in order to allow the model to deal
+with unseen words at test time). the model is
+trained separately for each slot. due to the high
+class bias (most of the constructed examples are
+negative), we incorporate a    xed number of posi-
+tive examples in each mini-batch.4
+
+baseline models for each of the two datasets,
+we compare the nbt models to:
+
+1. a baseline system that implements a well-
+known competitive delexicalisation-based
+model for that dataset. for dstc2, the model
+is that of henderson et al. (2014c; 2014d).
+this model is an id165 based neural net-
+work model with recurrent connections be-
+tween turns (but not inside utterances) which
+replaces occurrences of slot names and val-
+ues with generic delexicalised features. for
+woz 2.0, we compare the nbt models to a
+more sophisticated belief tracking model pre-
+sented in (wen et al., 2017). this model uses
+an id56 for belief state updates and a id98
+for turn-level feature extraction. unlike nbt-
+id98, their id98 operates not over vectors,
+
+4model hyperparameters were tuned on the respective val-
+idation sets. for both datasets, the initial adam learning rate
+was set to 0.001, and 1
+8 th of positive examples were included
+in each mini-batch. the batch size did not affect performance:
+it was set to 256 in all experiments. gradient clipping (to
+[   2.0, 2.0]) was used to handle exploding gradients. dropout
+(srivastava et al., 2014) was used for regularisation (with 50%
+dropout rate on all intermediate representations). both nbt
+models were implemented in tensorflow (abadi et al., 2015).
+
+but over delexicalised features akin to those
+used by henderson et al. (2014c).
+
+2. the same baseline model supplemented with
+a task-speci   c semantic dictionary (produced
+by the baseline system creators). the two
+dictionaries are available at mi.eng.cam.
+ac.uk/  nm480/sem-dict.zip. the
+dstc2 dictionary contains only three rephras-
+ings. nonetheless, the use of these rephras-
+ings translates to substantial gains in dst per-
+formance (see sect. 6.1). we believe this
+result supports our claim that the vocabu-
+lary used by mechanical turkers in dstc2
+was constrained by the system   s inability to
+cope with lexical variation and asr noise.
+the woz dictionary includes 38 rephrasings,
+showing that the unconstrained language used
+by mechanical turkers in the wizard-of-oz
+setup requires more elaborate lexicons.
+
+both baseline models map exact matches
+of ontology-de   ned intents (and their lexicon-
+speci   ed rephrasings) to one-hot delexicalised n-
+gram features. this means that pre-trained vectors
+cannot be incorporated directly into these models.
+
+6 results
+6.1 belief tracking performance
+table 1 shows the performance of nbt models
+trained and evaluated on dstc2 and woz 2.0
+datasets. the nbt models outperformed the base-
+line models in terms of both joint goal and request
+accuracies. for goals, the gains are always statis-
+tically signi   cant (paired t-test, p < 0.05). more-
+over, there was no statistically signi   cant variation
+between the nbt and the lexicon-supplemented
+models, showing that the nbt can handle seman-
+tic relations which otherwise had to be explicitly
+encoded in semantic dictionaries.
+
+while the nbt performs well across the board,
+we can compare its performance on the two datasets
+to understand its strengths. the improvement over
+the baseline is greater on woz 2.0, which cor-
+roborates our intuition that the nbt   s ability to
+learn linguistic variation is vital for this dataset
+containing longer sentences, richer vocabulary and
+no asr errors. by comparison, the language of
+the subjects in the dstc2 dataset is less rich, and
+compensating for asr errors is the main hurdle:
+given access to the dstc2 test set transcriptions,
+the nbt models    goal accuracy rises to 0.96. this
+
+dst model
+delexicalisation-based model
+delexicalisation-based model + semantic dictionary
+neural belief tracker: nbt-dnn
+neural belief tracker: nbt-id98
+
+dstc2
+
+woz 2.0
+
+goals requests goals requests
+69.1
+72.9*
+72.6*
+73.4*
+
+87.1
+87.6
+91.2*
+91.6*
+
+70.8
+83.7*
+84.4*
+84.2*
+
+95.7
+95.7
+96.4
+96.5
+
+table 1: dstc2 and woz 2.0 test set accuracies for: a) joint goals; and b) turn-level requests. the
+asterisk indicates statistically signi   cant improvement over the baseline trackers (paired t-test; p < 0.05).
+
+indicates that future work should focus on better
+asr compensation if the model is to be deployed
+in environments with challenging acoustics.
+
+6.2 the importance of word vector spaces
+the nbt models use the semantic relations em-
+bedded in the pre-trained word vectors to handle
+semantic variation and produce high-quality inter-
+mediate representations. table 2 shows the per-
+formance of nbt-id985 models making use of
+three different word vector collections: 1)    random   
+word vectors initialised using the xavier initiali-
+sation (glorot and bengio, 2010); 2) distributional
+glove vectors (pennington et al., 2014), trained
+using co-occurrence information in large textual
+corpora; and 3) semantically specialised paragram-
+sl999 vectors (wieting et al., 2015), which are ob-
+tained by injecting semantic similarity constraints
+from the paraphrase database (ganitkevitch et al.,
+2013) into the distributional glove vectors in order
+to improve their semantic content.
+
+the results in table 2 show that the use of seman-
+tically specialised word vectors leads to consider-
+able performance gains: paragram-sl999 vectors
+(signi   cantly) outperformed glove and xavier
+vectors for goal tracking on both datasets. the
+gains are particularly robust for noisy dstc2
+data, where both collections of pre-trained vec-
+tors consistently outperformed random initialisa-
+tion. the gains are weaker for the noise-free woz
+2.0 dataset, which seems to be large (and clean)
+enough for the nbt model to learn task-speci   c
+rephrasings and compensate for the lack of seman-
+tic content in the word vectors. for this dataset,
+glove vectors do not improve over the randomly
+initialised ones. we believe this happens because
+distributional models keep related, yet antonymous
+words close together (e.g. north and south, expen-
+sive and inexpensive), offsetting the useful seman-
+tic content embedded in this vector spaces.
+
+5the nbt-dnn model showed the same trends. for
+
+brevity, table 2 presents only the nbt-id98    gures.
+
+word vectors
+
+xavier (no info.)
+
+glove
+
+paragram-sl999
+
+dstc2
+
+woz 2.0
+
+goals requests goals requests
+64.2
+69.0*
+73.4*
+
+81.2
+96.4*
+96.5*
+
+81.2
+80.1
+84.2*
+
+90.7
+91.4
+91.6
+
+table 2: dstc2 and woz 2.0 test set performance
+(joint goals and requests) of the nbt-id98 model
+making use of three different word vector collec-
+tions. the asterisk indicates statistically signi   cant
+improvement over the baseline xavier (random)
+word vectors (paired t-test; p < 0.05).
+
+7 conclusion
+in this paper, we have proposed a novel neural
+belief tracking (nbt) framework designed to over-
+come current obstacles to deploying dialogue sys-
+tems in real-world dialogue domains. the nbt
+models offer the known advantages of coupling
+spoken language understanding and dialogue
+state tracking, without relying on hand-crafted
+semantic lexicons to achieve state-of-the-art perfor-
+mance. our evaluation demonstrated these bene   ts:
+the nbt models match the performance of models
+which make use of such lexicons and vastly outper-
+form them when these are not available. finally, we
+have shown that the performance of nbt models
+improves with the semantic quality of the under-
+lying word vectors. to the best of our knowledge,
+we are the    rst to move past intrinsic evaluation
+and show that semantic specialisation boosts per-
+formance in downstream tasks.
+
+in future work, we intend to explore applications
+of the nbt for multi-domain dialogue systems, as
+well as in languages other than english that require
+handling of complex morphological variation.
+
+acknowledgements
+the authors would like to thank ivan vuli  c, ulrich
+paquet, the cambridge dialogue systems group
+and the anonymous acl reviewers for their con-
+structive feedback and helpful discussions.
+
+references
+mart    n abadi, ashish agarwal, paul barham, eugene
+brevdo, zhifeng chen, craig citro, greg s. cor-
+rado, andy davis, jeffrey dean, matthieu devin,
+sanjay ghemawat, ian goodfellow, andrew harp,
+geoffrey irving, michael isard, yangqing jia, rafal
+jozefowicz, lukasz kaiser, manjunath kudlur, josh
+levenberg, dan man  e, rajat monga, sherry moore,
+derek murray, chris olah, mike schuster, jonathon
+shlens, benoit steiner, ilya sutskever, kunal talwar,
+paul tucker, vincent vanhoucke, vijay vasudevan,
+fernanda vi  egas, oriol vinyals, pete warden, mar-
+tin wattenberg, martin wicke, yuan yu, and xiao-
+qiang zheng. 2015. tensorflow: large-scale ma-
+chine learning on heterogeneous systems.
+
+dan bohus and alex rudnicky. 2006. a    k hypothe-
+ses + other    belief updating model. in proceedings
+of the aaai workshop on statistical and empirical
+methods in spoken dialogue systems.
+
+asli celikyilmaz and dilek hakkani-tur. 2015. con-
+volutional neural network based semantic tagging
+in proceedings of nips
+with entity embeddings.
+workshop on machine learning for spoken lan-
+guage understanding and interaction.
+
+ronan collobert, jason weston, leon bottou, michael
+karlen, koray kavukcuoglu, and pavel kuksa. 2011.
+natural language processing (almost) from scratch.
+journal of machine learning research 12:2493   
+2537.
+
+franck dernoncourt, ji young lee, trung h. bui, and
+hung h. bui. 2016. robust dialog state tracking for
+large ontologies. in proceedings of iwsds.
+
+ond  rej du  sek and filip jur  c      cek. 2015. training a nat-
+ural language generator from unaligned data. in
+proceedings of acl.
+
+juri ganitkevitch, benjamin van durme, and chris
+ppdb: the paraphrase
+
+callison-burch. 2013.
+database. in proceedings of naacl hlt.
+
+xavier glorot and yoshua bengio. 2010. understand-
+ing the dif   culty of training deep feedforward neural
+networks. in proceedings of aistats.
+
+matthew henderson, milica ga  si  c, blaise thomson,
+pirros tsiakoulis, kai yu, and steve young. 2012.
+discriminative spoken language understanding us-
+ing word confusion networks. in spoken language
+technology workshop, 2012. ieee.
+
+matthew henderson, blaise thomson, and jason d.
+wiliams. 2014a. the second dialog state tracking
+challenge. in proceedings of sigdial.
+
+matthew henderson, blaise thomson, and jason d.
+wiliams. 2014b. the third dialog state tracking
+challenge. in proceedings of ieee slt.
+
+matthew henderson, blaise thomson, and steve
+young. 2014c. robust dialog state tracking using
+
+delexicalised recurrent neural networks and unsu-
+pervised adaptation. in proceedings of ieee slt.
+
+matthew henderson, blaise thomson, and steve
+young. 2014d. word-based dialog state tracking
+with recurrent neural networks. in proceedings of
+sigdial.
+
+youngsoo jang, jiyeon ham, byung-jun lee, young-
+jae chang, and kee-eung kim. 2016. neural dialog
+state tracker for large ontologies by attention mecha-
+nism. in proceedings of ieee slt.
+
+nal kalchbrenner, edward grefenstette, and phil blun-
+som. 2014. a convolutional neural network for
+modelling sentences. in proceedings of acl.
+
+yoon kim. 2014. convolutional neural networks for
+sentence classi   cation. in proceedings of emnlp.
+
+diederik p. kingma and jimmy ba. 2015. adam: a
+in proceed-
+
+method for stochastic optimization.
+ings of iclr.
+
+byung-jun lee and kee-eung kim. 2016. dialog his-
+tory construction with long-short term memory
+for robust generative dialog state tracking. dia-
+logue & discourse 7(3):47   64.
+
+bing liu and ian lane. 2016a. attention-based recur-
+rent neural network models for joint intent detec-
+tion and slot filling. in proceedings of interspeech.
+
+bing liu and ian lane. 2016b. joint online spoken
+language understanding and id38
+with recurrent neural networks. in proceedings of
+sigdial.
+
+fei liu and julien perez. 2017. gated end-to-end
+
+memory networks. in proceedings of eacl.
+
+f. mairesse, m. gasic, f. jurcicek, s. keizer, b. thom-
+son, k. yu, and s. young. 2009. spoken language
+understanding from unaligned data using discrim-
+in proceedings of
+inative classi   cation models.
+icassp.
+
+gr  egoire mesnil, yann dauphin, kaisheng yao,
+yoshua bengio, li deng, dilek hakkani-tur, xi-
+aodong he, larry heck, dong yu, and geoffrey
+zweig. 2015. using recurrent neural networks
+for slot    lling in spoken language understanding.
+ieee/acm transactions on audio, speech, and lan-
+guage processing 23(3):530   539.
+
+nikola mrk  si  c, diarmuid   o s  eaghdha, blaise thom-
+son, milica ga  si  c, lina rojas-barahona, pei-hao
+su, david vandyke, tsung-hsien wen, and steve
+young. 2016. counter-   tting word vectors to lin-
+guistic constraints. in proceedings of hlt-naacl.
+nikola mrk  si  c, diarmuid   o s  eaghdha, blaise thom-
+son, milica ga  si  c, pei-hao su, david vandyke,
+tsung-hsien wen, and steve young. 2015. multi-
+domain dialog state tracking using recurrent neu-
+ral networks. in proceedings of acl.
+
+vinod nair and geoffrey e. hinton. 2010. recti   ed
+linear units improve restricted id82s.
+in proceedings of icml.
+
+kai sun, qizhe xie, and kai yu. 2016. recurrent poly-
+nomial network for dialogue state tracking. dia-
+logue & discourse 7(3):65   88.
+
+baolin peng, kaisheng yao, li jing, and kam-fai
+wong. 2015. recurrent neural networks with ex-
+ternal memory for language understanding. in pro-
+ceedings of the national ccf conference on natu-
+ral language processing and chinese computing.
+
+jeffrey pennington, richard socher, and christopher
+manning. 2014. glove: global vectors for word
+representation. in proceedings of emnlp.
+
+blaise thomson and steve young. 2010. bayesian up-
+date of dialogue state: a pomdp framework for
+spoken dialogue systems. computer speech and
+language .
+
+gokhan tur, anoop deoras, and dilek hakkani-tur.
+2013. id29 using word confusion net-
+works with id49. in proceed-
+ings of interspeech.
+
+julien perez. 2016. spectral decomposition method of
+dialog state tracking via collective matrix factoriza-
+tion. dialogue & discourse 7(3):34   46.
+
+andreas vlachos and stephen clark. 2014. a new cor-
+pus and imitation learning framework for context-
+dependent id29. tacl 2:547   559.
+
+julien perez and fei liu. 2017. dialog state tracking, a
+machine reading approach using memory network.
+in proceedings of eacl.
+
+christian raymond and giuseppe ricardi. 2007. gen-
+erative and discriminative algorithms for spoken
+in proceedings of inter-
+language understanding.
+speech.
+
+tim rockt  aschel, edward grefenstette, karl moritz
+hermann, tomas kocisky, and phil blunsom. 2016.
+reasoning about entailment with neural attention.
+in iclr.
+
+iman saleh, sha   q joty, llu    s m`arquez, alessandro
+moschitti, preslav nakov, scott cyphers, and jim
+glass. 2014. a study of using syntactic and seman-
+tic structures for concept segmentation and labeling.
+in proceedings of coling.
+
+hongjie shi, takashi ushio, mitsuru endo, katsuyoshi
+yamagami, and noriaki horii. 2016. convolutional
+neural networks for multi-topic dialog state track-
+ing. in proceedings of iwsds.
+
+nitish srivastava, geoffrey hinton, alex krizhevsky,
+ilya sutskever, and ruslan salakhutdinov. 2014.
+dropout: a simple way to prevent neural networks
+from over   tting. journal of machine learning re-
+search .
+
+pei-hao su, milica ga  si  c, nikola mrk  si  c, lina rojas-
+barahona, stefan ultes, david vandyke, tsung-
+hsien wen, and steve young. 2016a. continuously
+in arxiv
+learning neural dialogue management.
+preprint: 1606.02689.
+
+pei-hao su, milica ga  si  c, nikola mrk  si  c, lina rojas-
+barahona, stefan ultes, david vandyke, tsung-
+hsien wen, and steve young. 2016b. on-line active
+reward learning for policy optimisation in spoken di-
+alogue systems. in proceedings of acl.
+
+kai sun, lu chen, su zhu, and kai yu. 2014. the
+sjtu system for dialog state tracking challenge
+2. in proceedings of sigdial.
+
+miroslav vodol  an, rudolf kadlec, and jan kleindienst.
+2017. hybrid dialog state tracker with asr fea-
+tures. in proceedings of eacl.
+
+ngoc thang vu, pankaj gupta, heike adel, and hin-
+rich sch  utze. 2016. bi-directional recurrent neural
+network with ranking loss for spoken language un-
+derstanding. in proceedings of icassp.
+
+ivan vuli  c, nikola mrk  si  c, roi reichart, diarmuid   o
+s  eaghdha, steve young, and anna korhonen. 2017.
+morph-   tting: fine-tuning word vector spaces with
+in proceedings of
+simple language-speci   c rules.
+acl.
+
+wayne wang. 1994. extracting information from
+in proceedings of inter-
+
+spontaneous speech.
+speech.
+
+zhuoran wang and oliver lemon. 2013. a simple and
+generic belief tracking mechanism for the dialog
+state tracking challenge: on the believability of ob-
+served information. in proceedings of sigdial.
+
+tsung-hsien wen, milica ga  si  c, dongho kim, nikola
+mrk  si  c, pei-hao su, david vandyke, and steve
+young. 2015a.
+stochastic language generation
+in dialogue using recurrent neural networks with
+convolutional sentence reranking. in proceedings
+of sigdial.
+
+tsung-hsien wen, milica ga  si  c, nikola mrk  si  c,
+pei-hao su, david vandyke, and steve young.
+2015b. semantically conditioned lstm-based nat-
+ural language generation for spoken dialogue sys-
+tems. in proceedings of emnlp.
+
+tsung-hsien wen, david vandyke, nikola mrk  si  c,
+milica ga  si  c, lina m. rojas-barahona, pei-hao su,
+stefan ultes, and steve young. 2017. a network-
+based end-to-end trainable task-oriented dialogue
+system. in proceedings of eacl.
+
+john wieting, mohit bansal, kevin gimpel, and karen
+livescu. 2015. from paraphrase database to compo-
+sitional paraphrase model and back. tacl 3:345   
+358.
+
+jason d. williams. 2014. web-style ranking and slu
+in proceed-
+
+combination for dialog state tracking.
+ings of sigdial.
+
+jason d. williams, antoine raux, and matthew hen-
+derson. 2016. the dialog state tracking challenge
+series: a review. dialogue & discourse 7(3):4   33.
+
+jason d. williams, antoine raux, deepak ramachan-
+dran, and alan w. black. 2013. the dialogue state
+tracking challenge. in proceedings of sigdial.
+
+jason d. williams and steve young. 2007. partially
+observable id100 for spoken
+id71. computer speech and language
+21:393   422.
+
+kaisheng yao, baolin peng, yu zhang, dong yu, ge-
+offrey zweig, and yangyang shi. 2014. spoken lan-
+guage understanding using long short-term memory
+neural networks. in proceedings of asru.
+
+steve young, milica ga  si  c, simon keizer, franc  ois
+mairesse, jost schatzmann, blaise thomson, and
+kai yu. 2010. the hidden information state model:
+a practical framework for pomdp-based spoken di-
+alogue management. computer speech and lan-
+guage 24:150   174.
+
+xiaodong zhang and houfeng wang. 2016. a joint
+model of intent determination and slot filling for
+in proceedings
+spoken language understanding.
+of ijcai.
+
+lukas zilka and filip jurcicek. 2015.
+
+incremental
+lstm-based dialog state tracker. in proceedings of
+asru.
+
+

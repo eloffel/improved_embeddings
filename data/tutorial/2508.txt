@@ -1,0 +1,719 @@
+   25 february, 2016
+
+overview (part i)
+
+     * background
+     * classification/regression as empirical risk minimization framework
+       with
+          + id168s
+          + stochastic id119 (sgd)
+          + learning rate decay
+          + out-of-core processing
+          + feature hashing/id27s
+          + optimizations for sparse features
+     * nlp example: id166 with generative features
+
+overview (part ii)
+
+     * refitting our framework for deep learning
+          + more on dense representations
+          + multiclass learning
+     * fully connected layers
+     * convolutional layers
+     * max over time, k-max
+     * language choices
+     * on gpus
+
+background (part i)
+
+     * what if we want to process big datasets
+          + sets might not fit in memory
+          + often, for nlp, with classifiers like id28 and
+            linear id166s
+     * want to do it efficiently
+          + dont load whole batch into memory
+     * desire a learning approach that is not bottlenecked by the training
+       set size
+     * additionally remember that in nlp, tend to have lots of sparse
+       features
+          + would like to optimize as well for this
+
+sources
+
+     * this talk borrows most of its content from work of
+          + leon bottou - researcher, sgd evangelist, author of sgd demo
+            code
+          + ronan collobert - bottou's phd student, creator of torch
+          + yann lecun - head of fair, researcher, creator of lenet5
+          + john langford - researcher at ms research, author of vowpal
+            wabbit
+     * these guys have done enough individually that it would take the
+       whole slideshow just to list!
+
+some basic definitions - machine learning
+
+     * what is machine learning?
+          + me: "learn from training data to predict unknown outcomes
+            given input parameters"
+          + ronan collobert: "machine learning aims to minimize the
+            expected risk (generalization error) using only the
+            information of the training set"
+          + "we are seeking a function f in a set of functions f which
+            minimizes the cost function q over z" \[r: f \in \mathcal{f}
+            \longmapsto e(q(z,f)) = \int_z q(z, f) p(z) dz\]
+          + but, cannot simply minimize with optimization, as distribution
+            p is unknown     instead minimize empirical risk (average loss)
+            over training set
+       \[r_l: f \in \mathcal{f} \longmapsto e_n(f) = \frac{1}{n}
+       \sum_{n=0}^{n} q(z_n, f)\]
+     * as training data increases, empirical risk converges to expected
+       risk!
+          + weak law of large numbers!
+
+some basic definitions - data
+
+     * feature vector? x
+          + chosen parameters to the function we are building, a fixed
+            vector of dimension d
+     * label/predicted value f(x)
+          + what we want to predict
+          + continous predictors are regression models, discrete are
+            classifiers
+          + during training, known labels seen with features, so that we
+            can learn
+     * training example \[z_i = (x_i, y_i) \in x \times y\]
+     * training data, of length n: \[\{z_1, z_2, ..., z_n\}\]
+     * id168
+          + price paid for inaccuracy of predictions \[q(z_n, f)\]
+
+more about id168s
+
+     * our risk minimization framework requires us to define a cost or
+       id168 q
+     * square (l2) common for id75 \[[f(x) - y]^2\]
+     * log (logistic) common for classification \[log(1 + e^{-yf(x)})\]
+     * hinge (id166 with slack) common for classification
+          + even though this is non-differentiable at 0, can use
+            sub-gradient! \[max(0, 1 - y f(x))\]
+
+so how do we learn it?
+
+     * one simple way, works on almost all functions is id119
+     * randomly guess starting point
+     * iterative
+          + take steps proportional to negative of gradient of the
+            function at the current point
+
+   \[w^{(i+1)} = w^{(i)} - \eta \nabla q(y, f(x))\] \[w^{(i+1)} = w^{(i)}
+   - \eta \sum_{n=1}^{n} \nabla q(y_n, f(x))\]
+
+   \[w_j^{(i+1)} = w_j^{(i)} - \eta \sum_{n=1}^{n}
+   \frac{\partial{q}}{\partial{f(x)}}\frac{\partial{f(x)}}{\partial
+   w_j^{(i)}} q(y_n, f(x))\]
+
+stochastic id119
+
+     * a problem with gd is that it must see the entire "batch" n before
+       it makes a parameter update
+          + this means that its a function of n and of d for a parameter
+            update
+          + learning scales with size of dataset!
+     * what if instead of updating per batch, we updated per training
+       example?
+          + approximate gradient with single random example
+          + parameter update is a function of d now only.
+          + there could be local noise, which could throw off the
+            approximation
+          + in practice, works extremely well, tends to learn more stuff
+            faster
+
+   \[w^{(t+1)} = w^{(t)} - \eta \nabla q(y_t, f(x_t))\]
+
+concrete example with l2 loss:
+
+     * id168 \[q = \frac{1}{2} (f_w(x) - y)^2\]
+     * derivative of loss with respect to params (chain rule) \[(f_w(x) -
+       y) \frac{\partial}{\partial w_j}(f_w(x) - y)\] \[(f_w(x) - y)
+       \frac{\partial}{\partial w_j} \sum_{d=0}^{d} w_d x_d - y\]
+     * finally wrt parameter j, we get a simple update \[(f_w(x) - y)
+       x_j\]
+     * use chain rule to make cost derivative modular
+     * note that first part of function is just the derivative of loss
+       function wrt f(x)
+
+sgd with l2 id173
+
+   \[e_n(w) = \frac{\lambda}{2} ||w||^2 + \frac{1}{n} \sum_{t=1}^{n}
+   q(y_t, f(x_t))\]
+     * derivative
+
+   \[w^{(t+1)} = w^{(t)} - \eta_t \lambda w^{(t)} - \eta_t x_t
+   \frac{\partial{q}}{\partial{f(x)}} q(y_t, f(x_t))\]
+     * reduces to
+
+   \[w^{(t+1)} = (1 - \eta_t \lambda) w^{(t)} - \eta_t x_t
+   \frac{\partial{q}}{\partial{f(x)}} q(y_t, f(x_t))\]
+
+code for id168
+
+public class squaredloss implements loss
+{
+    @override
+    public double loss(double p, double y)
+    {
+        double d = p - y;
+        return 0.5 * d * d;
+    }
+
+    @override
+    public double dloss(double p, double y)
+    {
+        return (p - y);
+    }
+}
+
+code for hinge id168
+
+public class hingeloss implements loss
+{
+    @override
+    public double loss(double p, double y)
+    {
+        return math.max(0, 1 - p * y);
+    }
+
+    @override
+    public double dloss(double p, double y)
+    {
+        return (math.max(0, 1 - p * y) == 0) ? 0 : -y;
+    }
+}
+
+code for sgd
+
+/**
+ *  do simple stochastic id119 update step
+ *  @param vectorn feature vector
+ *  @param eta learning rate (step size)
+ *  @param lambda id173 param
+ *  @param dloss loss wrt f(x): dloss = lossfunction.dloss(fx, y);
+ */
+public void updateweights(vectorn vectorn, double eta, double lambda, double dlo
+ss, double y)
+{
+    arraydouble x = ((densevectorn) vectorn).getx();
+    weights.scale(1 - eta * lambda);
+
+    for (int i = 0, sz = x.size(); i < sz; ++i)
+    {
+        weights.addi(i, -eta * dloss * x.get(i));
+    }
+    wbias += -eta * bias_lr_scale * dloss;
+}
+
+learning rate decay
+
+     * we often want to slow down the learning rate over time. this
+       prevents overshooting as we get closer
+          + step size too big: optimization diverges
+          + step size too small: optimization slow, can get stuck in local
+            minima
+     * progressive decay
+          + initial learning rate \[\eta = \eta_0\]
+          + decay \[\eta_d\]
+          + at each iteration t: \[\eta(t) = \frac{\eta0}{1 + t \eta_d}\]
+
+example code with robbins-monro decay
+
+public class robbinsmonroupdateschedule implements learningrateschedule
+{
+    long numseentotal;
+    double eta0;
+    double lambda;
+
+    @override
+    public void reset(double eta0, double lambda)
+    {
+        this.lambda = lambda;
+        this.eta0 = eta0;
+        numseentotal = 0;
+    }
+
+    @override
+    public double update()
+    {
+        double eta = eta0 / (1 + lambda * eta0 * numseentotal);
+        ++numseentotal;
+        return eta;
+    }
+
+sgd training on single example
+
+/**
+ * binary trainer for single sgd example.  update the
+ * learning rate schedule, find derivative of loss wrt f(x),
+ * pass to updateweights() to make sgd update
+ * @param model our model
+ * @param fv our feature vector example with label and x vector
+ */
+public final void trainone(model model, featurevector fv)
+{
+    weightmodel weightmodel = (weightmodel)model;
+    double eta = learningrateschedule.update();
+    double y = fv.gety();
+    double fx = weightmodel.predict(fv);
+    double dloss = lossfunction.dloss(fx, y);
+    weightmodel.updateweights(fv.getx(), eta, lambda, dloss, y);
+}
+
+memory efficient processing
+
+     * many machine learning libraries require the whole problem in
+       working memory
+     * with sgd, easy to avoid, undesirable since datasets large
+     * could read a line at a time from a file in sequence
+          + but, file io interrupts processing in single thread version
+          + io on large datasets with fast training algo becomes the
+            processing bottleneck
+     * use a fixed size circular buffer to feed sgd from memory, use
+       another thread to feed that queue
+          + vowpal wabbit uses this technique
+
+   [2q==]
+
+more details on circular buffer training implementation
+
+     * file io thread
+          + reads the data from file
+          + inserts data to ring buffer
+          + also caches data to binary version of training set
+          + signals the processor thread at ends of epochs
+          + re-reads the data from cache on subsequent epochs
+     * processor (consumer) thread reads example from the circular buffer
+       and trains with it
+          + ideally, callback at end of epoch
+     * relatively easy, but in practice, kind of painful to test
+
+a few details in implementation in java
+
+     * java has a nice ring buffer library called disruptor - very fast
+          + lock free, low latency, prevent jvm gc stalls, memory
+            allocation
+          +
+
+     5x gains over arrayblockingqueue in similar config
+          + to utilize, we need to overload a class called eventhandler,
+            and a messageevent
+     * when we write the files out as a cache in java, we can user
+       randomaccessfile to reload them
+          + very good performance
+          + also, random shuffling can be fast and simple
+     * java has an undocumented class called unsafe that allows us native
+       memory access
+          + way faster than serialization libraries (> 1000x)
+
+disruptor-based processor
+
+// assumes a class messageevent with a field featurevector fv
+public class messageeventhandler implements eventhandler<messageevent>
+{
+    /**
+     * on a message, check if it is a null fv.  if so, we are at the end of an e
+poch.
+     * @param messageevent an fv holder
+     * @param l sequence number (which is increasing)
+     * @param b not used
+     * @throws exception
+     */
+    @override
+    public void onevent(messageevent messageevent, long l, boolean b) throws exc
+eption
+    {
+        if (messageevent.fv == null)
+        {
+            onepochended();
+        }
+        learner.trainone(model, messageevent.fv);
+    }
+
+publishing feature vectors
+
+public void start(learner learner, model model, int numepochs, int buffersize)
+{
+    this.numepochs = numepochs;
+    executor = executors.newsinglethreadexecutor();
+    messageeventfactory factory = new messageeventfactory();
+    waitstrategy waitstrategy = (strategy == strategy.yield) ? new yieldingwaits
+trategy(): new busyspinwaitstrategy();
+    disruptor =
+        new disruptor<messageevent>(factory, executils.nextpowerof2(buffersize),
+
+                                    executor, producertype.single, waitstrategy)
+;
+    handler = new messageeventhandler(learner, model);
+    disruptor.handleeventswith(handler);
+    disruptor.start();
+}
+public void add(featurevector fv)
+{
+    ringbuffer<messageevent> ringbuffer = disruptor.getringbuffer();
+    long sequence = ringbuffer.next();
+    try
+    {
+        messageevent event = ringbuffer.get(sequence);
+        event.fv = fv;
+    }
+    finally
+    {
+        ringbuffer.publish(sequence);
+    }
+}
+
+dealing with fixed-width feature vectors
+
+     * problem: during feature extraction, you extract millions of
+       features with some string name
+          + to build a feature vector, you need a dictionary mapping
+            strings to feature indices, dimension d
+          + as your vocab gets larger, ram usage increases with each word!
+          + also, if unlucky and using a bad implementation of a data
+            structure, may be additional overhead to this
+          + sparse vector implementation also might help!
+     * for memory efficiency and processing speed, don't allocate a new
+       feature vector each time
+          + could grow vector as needed, but rather work with fixed width
+            vectors
+
+introducing feature hashing
+
+     * in feature hashing, we dont build a dictionary mapping feature name
+       to index, we just hash it!
+          + pick a number of bits k
+          + use a good hash function (e.g. murmur hash), and the output
+            with (2^k)-1
+     * also this means that our feature vector itself is k bits as well
+          + can pre-allocate exactly the necessary number of bytes in our
+            fixed buffer
+          + john langford: "online learning + hashing = learning algorithm
+            with fully controlled memory footprint -> robustness"
+
+feature hashing implementation
+
+public class hashfeatureencoder implements featurenameencoder
+{
+    int space;
+
+    /**
+     * default constructor, how many bits to use
+     * @param nbits number bits to use
+     */
+    public hashfeatureencoder(int nbits)
+    {
+        this.space = (int)math.pow(2, nbits) - 1;
+    }
+
+    /**
+     * constant time lookup into space
+     * @param name feature name
+     * @return
+     */
+    @override
+    public integer indexof(string name)
+    {
+        return murmurhash.hash32(name) & space;
+    }
+...
+}
+
+other ways to collapse features?
+
+     * recently popular nlp approach - continuous representations
+          + convert "sparse one-hot" representation to "dense continuous"
+            representation
+          + for example, we can use pre-trained embeddings from id97
+            or glove as input
+          + a bow document in continuous space is still a sum operation in
+            continous space
+          + ymmv without deeper learning
+
+id97 embeddings briefly
+
+     * id97 maps a one hot vector to a continuous representation in
+       embedded space
+          + train a shallow neural net (sgns or cbow)
+          + pop the base hidden layer connections out
+          + matrix of connections of size |v| x layersz
+          + formula for lookup is then easy, but we have to keep vocab lut
+            in memory again
+
+getting the id97 result
+
+// lut from literal word to its index in vectors
+private final map<string, integer> vocab;
+
+private final float[][] vectors; // |v| x layersz
+
+public float[] getvec(string word)
+{
+    if (vocab.containskey(word))
+    {
+        return this.vectors[vocab.get(word)];
+    }
+    return this.nullv;
+}
+
+building up dense feature vectors
+
+...
+// parse a sentence and place results in a continuous bag of words
+densevectorn x = new densevectorn((int)embeddingsize);
+arraydouble xarray = x.getx();
+
+while (tokenizer.hasmoretokens())
+{
+    // optional, problem dependent
+    string word = tokenizer.nexttoken().tolowercase();
+    float[] wordvector = id97model.getvec(word);
+    for (int j = 0, sz = xarray.size(); j < sz; ++j)
+    {
+        // cbow
+        xarray.addi(j, wordvector[j]);
+    }
+}
+
+final featurevector fv = new featurevector(label, x);
+
+optimizations for sparse feature vectors
+
+     * remember from before, sgd with id173:
+
+   \[w^{(t+1)} = (1 - \eta_t \lambda) w^{(t)} - \eta_t x_t
+   \frac{\partial{q}}{\partial{f(x)}} q(y_t, f(x_t))\]
+     * bottou identifies a refactoring in sgd tricks
+          + complexity then scales with number of non-zero terms \[w_t =
+            s_t w_t\] \[s_{t+1} = (1 - \eta_t \lambda) s_t\] \[g_t =
+            q'(y_t, s_t w_t x_t)\]
+
+   \[\frac{(1 - \eta_t \lambda) s_t w_t}{(1 - \eta_t \lambda) s_t} -
+   \frac{\eta_t x_t g_t}{s_{t+1}}\]
+
+   \[w_{t+1} = w_t - \eta_t g_t x_t/s_{t+1}\]
+
+optimizations for sparse feature vectors - hogwild
+
+     * hogwild - technique used by id97 code
+          + processors allowed equal access to shared memory and are able
+            to update inidivual components of memory at will
+          + when data is sparse, memory overwrites are rare and barely
+            introduce any error in the computation when they do
+          + enables near-linear speedups
+
+use case: online learning in the wild for nlp
+
+     * fascinating paper by wang, manning (2012)
+          + id166 with generative features beats many approaches to
+            sentiment, reviews and news categorization
+          + later found to be true with longer id165s and lr (mesnil,
+            mikolov, bengio)
+     * think of feature vector activation in bow model as attesting a
+       feature with a value
+          + normally "one-hot"" sum
+          + can be other things, e.g., tf-idf weight
+          + but we can use more valuable weights!
+
+nbid166 details
+
+     * remember naive bayes?
+
+   \[p(c|d) \propto [\prod_{i=0}^{|v_d|} p(w_i|c)] p(c)\]
+     * what if we use the likelihood ratio of components as features?
+          + simple to do, build a lexicon of feature counts over classes
+            upfront
+          + calculate likelihood ratio of word in classes
+          + when word is attested, apply weight as feature value
+     * we also will use a linear weighting between this id166 and nb
+       (id173)
+          + note that, with uniform priors, log likelihood sum is the nb
+            id203 of class
+
+nbid166-xl idea
+
+     * use everything we have learned to build large scale implementation
+          + feature hashing
+          + lr/id166
+          + fast out-of-core sgd (and optionally adagrad) processing
+     * should be much faster than nbid166, which uses liblinear, especially
+       as dataset size increases
+
+nbid166-xl feature weights
+
+// look up the generative feature
+private void tofeature(set<integer> set, list<offset> offsets, string... str)
+{
+    string joined = collectionsmanip.join(str, "_*_");
+    int idx = hashfeatureencoder.indexof(joined);
+
+    if (!set.contains(idx))
+    {
+        set.add(idx);
+        double v = lexicon.get(idx);
+        offsets.add(new offset(idx, v));
+    }
+}
+
+nbid166-xl lexicon extraction
+
+// increment joins and hashes feature, as above, increments count in label speci
+fic ftable
+for (int i = 0, sz = text.size(); i < sz; ++i)
+{
+    // circular
+    lll = ll;
+    ll = l;
+    l = t;
+    t = text.get(i);
+    // unigram
+    increment(ftable, t);
+    numtokens[labelidx]++;
+    // bigram?
+    if (ngrams > 1 && l != null)
+    {
+        // trigram?
+        increment(ftable, l, t);
+        numtokens[labelidx]++;
+        if (ngrams > 2 && ll != null)
+        {
+            increment(ftable, ll, l, t);
+            numtokens[labelidx]++;
+        }
+        ...
+    }
+}
+
+nbid166-xl lexicon generation
+
+double numtotalf0 = numtokens[0] + alpha * uniquewordsf0;
+double numtotalf1 = numtokens[1] + alpha * uniquewordsf1;
+
+for (integer word : words)
+{
+    double f0 = (collectionsmanip.getordefault(ftable0, word, 0l) + alpha)/numto
+talf0;
+    double f1 = (collectionsmanip.getordefault(ftable1, word, 0l) + alpha)/numto
+talf1;
+    lexicon.put(word, math.log(f1 / f0));
+}
+
+bakeoff (sorta)
+
+     * only 25k training examples available when using script provided by
+       nbid166
+          + get these by running oh_my_gosh.sh from checkout of mesnil's
+            implementation
+          + this is far from large, but still
+     * not good way of seeing real-time other than using time command
+     * my machine crushes data
+          + much faster than the estimates given by mesnil
+
+nbid166 performance (trigrams)
+
+dpressel@dpressel:~/dev/work/nbid166_run$ time python ../nbid166/nbid166.py --liblinea
+r liblinear-1.96 --ptrain data/train-pos.txt --ntrain data/train-neg.txt --ptest
+ data/test-pos.txt --ntest data/test-neg.txt --ngram 123 --out nbid166-test-trigra
+m
+counting...
+computing r...
+processing files...
+iter  1 act 1.236e+04 pre 1.070e+04 delta 8.596e+00 f 1.733e+04 |g| 7.848e+03 cg
+   7
+iter  2 act 3.132e+03 pre 2.542e+03 delta 1.033e+01 f 4.970e+03 |g| 2.126e+03 cg
+   9
+iter  3 act 9.326e+02 pre 7.520e+02 delta 1.033e+01 f 1.838e+03 |g| 7.607e+02 cg
+   9
+iter  4 act 2.631e+02 pre 2.130e+02 delta 1.033e+01 f 9.055e+02 |g| 2.825e+02 cg
+   8
+iter  5 act 7.708e+01 pre 6.203e+01 delta 1.033e+01 f 6.424e+02 |g| 1.066e+02 cg
+   7
+iter  6 act 3.909e+01 pre 3.054e+01 delta 1.033e+01 f 5.653e+02 |g| 4.129e+01 cg
+   9
+accuracy = 91.872% (22968/25000)
+
+real    1m44.156s
+user    1m43.172s
+sys 0m1.280s
+
+nbid166-xl performance (trigrams)
+
+xl.nbid166.nbid166 --train /home/dpressel/dev/work/nbid166_run/data/train-xl.tsv --eva
+l /home/dpressel/dev/work/nbid166_run/data/test-xl.tsv
+--cgrams 0 --ngrams 3 --nbits 26 --loss log --epochs 10 -e0 0.05 --lambda 1e-6 -
+-beta 1
+
+4951537 hash words in lexicon, aggregated in 6.72s.  starting training
+trained model in 18.81s.  25000 training examples seen
+22969 / 25000
+model accuracy 91.88 %
+total hashing collisions 7065689
+
+nbid166-xl performance in general
+
+     * this difference gets more stark with large datasets
+          + our out-of-core sgd remains incredibly consistent!
+     * previous attempt, last laptop million examples from twitter
+          + 1.5 minutes to build lexicon
+          + 45s first epoch (due to overlap)
+          + 15s for additional epochs
+
+references - 1
+
+     * ronan collobert's thesis
+          + [1]http://ronan.collobert.org/pub/matos/2004_phdthesis_lip6.pd
+            f
+     * tradeoffs of large-scale learning (bottou, bousquet)
+          + [2]http://leon.bottou.org/publications/pdf/nips-2007.pdf
+     * sgd tricks (bottou)
+          + [3]http://research.microsoft.com/pubs/192769/tricks-2012.pdf
+     * large scale online learning (bottou/lecun)
+          + [4]http://leon.bottou.org/publications/pdf/nips-2003.pdf
+     * hogwild
+          + [5]http://www.eecs.berkeley.edu/~brecht/papers/hogwildtr.pdf
+     * feature hashing (langford)
+          + [6]http://cilvr.cs.nyu.edu/diglib/lsml/lecture08-hashing.pdf
+     * intro to stat. machine learning nns - samy bengio
+          + [7]http://bengio.abracadoudou.com/lectures/old/tex_ann.pdf
+
+references - 2
+
+     * disruptor performance (lmax)
+          + [8]https://github.com/lmax-exchange/disruptor/wiki/performance
+            -results
+     * unsafe io vs serialization (thompson)
+          + [9]http://mechanical-sympathy.blogspot.com/2012/07/native-cc-l
+            ike-performance-for-java.html
+     * reference code
+          + [10]https://github.com/dpressel/sgdtk
+     * nbid166 paper (wang/manning)
+          + [11]http://nlp.stanford.edu/pubs/sidaw12_simple_sentiment.pdf
+     * ensemble of generative and discriminative techniques    (mesnil)
+          + [12]http://arxiv.org/pdf/1412.5335v5.pdf
+     * nbid166 baseline code
+          + [13]https://github.com/mesnilgr/nbid166
+     * nbid166 sgd reference code
+          + [14]https://github.com/dpressel/nbid166-xl
+
+references
+
+   1. http://ronan.collobert.org/pub/matos/2004_phdthesis_lip6.pdf
+   2. http://leon.bottou.org/publications/pdf/nips-2007.pdf
+   3. http://research.microsoft.com/pubs/192769/tricks-2012.pdf
+   4. http://leon.bottou.org/publications/pdf/nips-2003.pdf
+   5. http://www.eecs.berkeley.edu/~brecht/papers/hogwildtr.pdf
+   6. http://cilvr.cs.nyu.edu/diglib/lsml/lecture08-hashing.pdf
+   7. http://bengio.abracadoudou.com/lectures/old/tex_ann.pdf
+   8. https://github.com/lmax-exchange/disruptor/wiki/performance-results
+   9. http://mechanical-sympathy.blogspot.com/2012/07/native-cc-like-performance-for-java.html
+  10. https://github.com/dpressel/sgdtk
+  11. http://nlp.stanford.edu/pubs/sidaw12_simple_sentiment.pdf
+  12. http://arxiv.org/pdf/1412.5335v5.pdf
+  13. https://github.com/mesnilgr/nbid166
+  14. https://github.com/dpressel/nbid166-xl

@@ -1,0 +1,1668 @@
+learning to skim text
+
+adams wei yu   
+
+carnegie mellon university
+
+hongrae lee
+
+google
+
+quoc v. le
+
+google
+
+weiyu@cs.cmu.edu
+
+hrlee@google.com
+
+qvl@google.com
+
+7
+1
+0
+2
+
+ 
+r
+p
+a
+9
+2
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+7
+7
+8
+6
+0
+
+.
+
+4
+0
+7
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+recurrent neural networks are showing
+much promise in many sub-areas of nat-
+ural language processing, ranging from
+document classi   cation to machine trans-
+lation to automatic id53.
+despite their promise, many recurrent
+models have to read the whole text word
+by word, making it slow to handle long
+documents. for example, it is dif   cult to
+use a recurrent network to read a book
+and answer questions about it.
+in this
+paper, we present an approach of read-
+ing text while skipping irrelevant informa-
+tion if needed. the underlying model is
+a recurrent network that learns how far to
+jump after reading a few words of the input
+text. we employ a standard policy gradient
+method to train the model to make discrete
+jumping decisions.
+in our benchmarks
+on four different tasks, including number
+prediction, id31, news arti-
+cle classi   cation and automatic q&a, our
+proposed model, a modi   ed lstm with
+jumping, is up to 6 times faster than the
+standard sequential lstm, while main-
+taining the same or even better accuracy.
+introduction
+
+1
+the last few years have seen much success of ap-
+plying neural networks to many important appli-
+cations in natural language processing, e.g., part-
+of-speech tagging, chunking, named entity recog-
+nition (collobert et al., 2011), sentiment analy-
+sis (socher et al., 2011, 2013), document classi   -
+cation (kim, 2014; le and mikolov, 2014; zhang
+et al., 2015; dai and le, 2015), machine transla-
+tion (kalchbrenner and blunsom, 2013; sutskever
+   most of work was done when awy was with google.
+
+et al., 2014; bahdanau et al., 2014; sennrich et al.,
+2015; wu et al., 2016), conversational/dialogue
+modeling (sordoni et al., 2015; vinyals and le,
+2015; shang et al., 2015), document summariza-
+tion (rush et al., 2015; nallapati et al., 2016),
+parsing (andor et al., 2016) and automatic ques-
+tion answering (q&a) (weston et al., 2015; her-
+mann et al., 2015; wang and jiang, 2016; wang
+et al., 2016; trischler et al., 2016; lee et al., 2016;
+seo et al., 2016; xiong et al., 2016). an important
+characteristic of all these models is that they read
+all the text available to them. while it is essential
+for certain applications, such as machine transla-
+tion, this characteristic also makes it slow to ap-
+ply these models to scenarios that have long input
+text, such as document classi   cation or automatic
+q&a. however, the fact that texts are usually writ-
+ten with redundancy inspires us to think about the
+possibility of reading selectively.
+
+in this paper, we consider the problem of under-
+standing documents with partial reading, and pro-
+pose a modi   cation to the basic neural architec-
+tures that allows them to read input text with skip-
+ping. the main bene   t of this approach is faster
+id136 because it skips irrelevant information.
+an unexpected bene   t of this approach is that it
+also helps the models generalize better.
+
+in our approach, the model is a recurrent net-
+work, which learns to predict the number of jump-
+ing steps after it reads one or several input tokens.
+such a discrete model is therefore not fully differ-
+entiable, but it can be trained by a standard policy
+gradient algorithm, where the reward can be the
+accuracy or its proxy during training.
+
+in our experiments, we use the basic lstm
+recurrent networks (hochreiter and schmidhuber,
+1997) as the base model and benchmark the pro-
+posed algorithm on a range of document clas-
+si   cation or reading comprehension tasks, using
+various datasets such as rotten tomatoes (pang
+
+figure 1: a synthetic example of the proposed model to process a text document. in this example, the
+maximum size of jump k is 5, the number of tokens read before a jump r is 2 and the number of jumps
+allowed n is 10. the green softmax are for jumping predictions. the processing stops if a) the jumping
+softmax predicts a 0 or b) the jump times exceeds n or c) the network processed the last token. we only
+show the case a) in this    gure.
+
+and lee, 2005), imdb (maas et al., 2011), ag
+news (zhang et al., 2015) and children   s book
+test (hill et al., 2015). we    nd that the proposed
+approach of selective reading speeds up the base
+model by two to six times. surprisingly, we also
+observe our model beats the standard lstm in
+terms of accuracy.
+
+in summary, the main contribution of our work
+is to design an architecture that learns to skim text
+and show that it is both faster and more accurate
+in practical applications of text processing. our
+model is simple and    exible enough that we antic-
+ipate it would be able to incorporate to recurrent
+nets with more sophisticated structures to achieve
+even better performance in the future.
+
+2 methodology
+
+in this section, we introduce the proposed model
+named lstm-jump. we    rst describe its main
+structure, followed by the dif   culty of estimat-
+ing part of the model parameters because of non-
+differentiability. to address this issue, we appeal
+to a id23 formulation and adopt
+a policy gradient method.
+
+2.1 model overview
+the main architecture of the proposed model is
+shown in figure 1, which is based on an lstm re-
+current neural network. before training, the num-
+ber of jumps allowed n, the number of tokens
+read between every two jumps r and the max-
+imum size of jumping k are chosen ahead of
+time. while k is a    xed parameter of the model,
+n and r are hyperparameters that can vary be-
+tween training and testing. also, throughout the
+paper, we would use d1:p to denote a sequence
+d1, d2, ..., dp.
+
+in the following, we describe in detail how the
+model operates when processing text. given a
+training example x1:t , the recurrent network will
+read the embedding of the    rst r tokens x1:r and
+output the hidden state. then this state is used
+to compute the jumping softmax that determines a
+distribution over the jumping steps between 1 and
+k. the model then samples from this distribution
+a jumping step, which is used to decide the next
+token to be read into the model. let    be the sam-
+pled value, then the next starting token is xr+  .
+such process continues until either
+
+a) the jump softmax samples a 0; or
+b) the number of jumps exceeds n; or
+c) the model reaches the last token xt .
+
+after stopping, as the output, the latest hidden
+state is further used for predicting desired targets.
+how to leverage the hidden state depends on the
+speci   cs of the task at hand. for example, for clas-
+si   cation problems in section 3.1, 3.2 and 3.3, it
+is directly applied to produce a softmax for classi-
+   cation, while in automatic q&a problem of sec-
+tion 3.4, it is used to compute the correlation with
+the candidate answers in order to select the best
+one. figure 1 gives an example with k = 5,
+r = 2 and n = 10 terminating on condition a).
+
+2.2 training with reinforce
+our goal for training is to estimate the parameters
+of lstm and possibly id27, which
+are denoted as   m, together with the jumping ac-
+tion parameters   a. once obtained, they can be
+used for id136.
+
+the estimation of   m is straightforward in the
+tasks that can be reduced as classi   cation prob-
+lems (which is essentially what our experiments
+cover), as the cross id178 objective j1(  m) is
+
+differentiable over   m that we can directly apply
+id26 to minimize.
+
+however, the nature of discrete jumping deci-
+sions made at every step makes it dif   cult to es-
+timate   a, as cross id178 is no longer differen-
+tiable over   a. therefore, we formulate it as a
+id23 problem and apply policy
+gradient method to train the model. speci   cally,
+we need to maximize a reward function over   a
+which can be constructed as follows.
+
+let j1:n be the jumping action sequence dur-
+ing the training with an example x1:t . suppose
+hi is a hidden state of the lstm right before the
+i-th jump ji,1 then it is a function of j1:i   1 and
+thus can be denoted as hi(j1:i   1). now the jump
+is attained by sampling from the multinomial dis-
+tribution p(ji|hi(j1:i   1);   a), which is determined
+by the jump softmax. we can receive a reward
+r after processing x1:t under the current jumping
+strategy.2 the reward should be positive if the out-
+put is favorable or non-positive otherwise. in our
+experiments, we choose
+
+if prediction correct;
+
+r =
+
+   1 otherwise.
+
+(cid:26) 1
+
+then the objective function of   a we want to max-
+imize is the expected reward under the distribution
+de   ned by the current jumping policy, i.e.,
+
+(1)
+
+where p(j1:n ;   a) =(cid:81)
+
+j2(  a) = ep(j1:n ;  a)[r].
+
+i p(j1:i|hi(j1:i   1);   a).
+
+optimizing this objective numerically requires
+computing its gradient, whose exact value is in-
+tractable to obtain as the expectation is over high
+dimensional interaction sequences. by running
+s examples, an approximated gradient can be
+computed by the following reinforce algo-
+rithm (williams, 1992):
+
+     aj2(  a) =
+
+n(cid:88)
+ep(j1:n ;  a)[     a log p(j1:i|hi;   a)r]
+n(cid:88)
+s(cid:88)
+[     a log p(js
+
+i ;   a)rs]
+
+1:i|hs
+
+i=1
+
+    1
+s
+
+s=1
+
+i=1
+
+where the superscript s denotes a quantity be-
+longing to the s-th example. now the term
+
+1the i-th jumping step is usually not xi.
+2in the general case, one may receive (discounted) inter-
+mediate rewards after each jump. but in our case, we only
+consider    nal reward. it is equivalent to a special case that all
+intermediate rewards are identical and without discount.
+
+     a log p(j1:i|hi;   a) can be computed by stan-
+dard id26.
+although the above estimation of      aj2(  a) is
+unbiased, it may have very high variance. one
+widely used remedy to reduce the variance is to
+subtract a baseline value bs
+i from the reward rs,
+such that the approximated gradient becomes
+
+     aj2(  a)     1
+s
+
+s(cid:88)
+
+n(cid:88)
+[     a log p(js
+
+s=1
+
+i=1
+
+1:i|hs
+
+i ;   )(rs   bs
+i )]
+
+is shown (williams, 1992; zaremba and
+it
+i will yield an
+sutskever, 2015) that any number bs
+unbiased estimation. here, we adopt the strategy
+of mnih et al. (2014) that bs
+i + cb and the
+parameter   b = {wb, cb} is learned by minimizing
+(rs     bs
+i )2. now the    nal objective to minimize is
+
+i = wbhs
+
+j(  m,   a,   b) = j1(  m)   j2(  a)+
+
+(rs   bs
+
+i )2,
+
+s(cid:88)
+
+n(cid:88)
+
+s=1
+
+i=1
+
+which is fully differentiable and can be solved by
+standard id26.
+
+id136
+
+2.3
+during id136, we can either use sampling or
+greedy evaluation by selecting the most probable
+jumping step suggested by the jump softmax and
+follow that path. in the our experiments, we will
+adopt the sampling scheme.
+
+3 experimental results
+
+in this section, we present our empirical studies to
+understand the ef   ciency of the proposed model in
+reading text. the tasks under experimentation are:
+synthetic number prediction, id31,
+news topic classi   cation and automatic question
+answering. those, except the    rst one, are repre-
+sentative tasks in text reading involving different
+sizes of datasets and various levels of text process-
+ing, from character to word and to sentence. ta-
+ble 1 summarizes the statistics of the dataset in our
+experiments.
+
+to exclude the potential impact of advanced
+models, we restrict our comparison between
+the vanilla lstm (hochreiter and schmidhuber,
+1997) and our model, which is referred to as
+lstm-jump. in a nutshell, we show that, while
+achieving the same or even better testing accuracy,
+our model is up to 6 times and 66 times faster than
+the baseline lstm model in real and synthetic
+
+task
+
+number prediction
+id31
+id31
+news classi   cation
+
+q/a
+q/a
+
+dataset
+synthetic
+
+rotten tomatoes
+
+imdb
+
+level
+word
+word
+word
+
+ag
+
+character
+children book test-ne
+sentence
+children book test-cn sentence
+
+vocab
+100
+
+18,764
+112,540
+
+70
+
+53,063
+53,185
+
+avglen
+100 words
+22 words
+241 words
+
+200 characters
+20 sentences
+20 sentences
+
+#train
+1m
+8,835
+21,143
+101,851
+108,719
+120,769
+
+#valid
+10k
+1,079
+3,857
+18,149
+2,000
+2,000
+
+#test
+10k
+1,030
+25,000
+7,600
+2,500
+2,500
+
+#class
+100
+2
+2
+4
+10
+10
+
+table 1: task and dataset statistics.
+
+datasets, respectively, as we are able to selectively
+skip a large fraction of text.
+
+in fact, the proposed model can be readily ex-
+tended to other recurrent neural networks with so-
+phisticated mechanisms such as attention and/or
+hierarchical structure to achieve higher accuracy
+than those presented below. however, this is or-
+thogonal to the main focus of this work and would
+be left as an interesting future work.
+general experiment settings we use the
+adam optimizer (kingma and ba, 2014) with a
+learning rate of 0.001 in all experiments. we also
+apply gradient clipping to all the trainable vari-
+ables with the threshold of 1.0. the dropout rate
+between the lstm layers is 0.2 and the embed-
+ding dropout rate is 0.1. we repeat the notations
+n, k, r de   ned previously in table 2, so readers
+can easily refer to when looking at tables 4,5,6
+and 7. while k is    xed during both training and
+testing, we would    x r and n at training but vary
+their values during test to see the impact of pa-
+rameter changes. note that n is essentially a con-
+straint which can be relaxed. yet we prefer to en-
+force this constraint here to let the model learn to
+read fewer tokens. finally, the reported test time
+is measured by running one pass of the whole test
+set instance by instance, and the speedup is over
+the base lstm model. the code is written with
+tensorflow.3
+
+notation
+
+meaning
+
+n
+k
+r
+
+number of jumps allowed
+maximum size of jumping
+
+number of tokens read before a jump
+
+table 2: notations referred to in experiments.
+
+3.1 number prediction with a synthetic
+
+dataset
+
+we    rst test whether lstm-jump is indeed able
+to learn how to jump if a very clear jumping sig-
+
+3https://www.tensorflow.org/
+
+nal is given in the text. the input of the task is
+a sequence of l positive integers x0:t   1 and the
+output is simply xx0. that is, the output is chosen
+from the input sequence, with index determined by
+x0 . here are two examples to illustrate the idea:
+
+input1 : 4, 5, 1, 7, 6, 2. output1 : 6
+input2 : 2, 4, 9, 4, 5, 6. output2 : 9
+
+one can see that x0 is essentially the oracle jump-
+ing signal, i.e. the indicator of how many steps the
+reading should jump to get the exact output and
+obviously, the remaining number of the sequence
+are useless. after reading the    rst token, a    smart   
+network should be able to learn from the training
+examples to jump to the output position, skipping
+the rest.
+
+we generate 1 million training and 10,000 val-
+idation examples with the rule above, each with
+sequence length t = 100. we also impose
+1     x0 < t to ensure the index is valid. we
+   nd that directly training the lstm-jump with
+full sequence is unlikely to converge, therefore,
+we adopt a curriculum training scheme. more
+speci   cally, we generate sequences with lengths
+{10, 20, 30, 40, 50, 60, 70, 80, 90, 100} and train
+the model starting from the shortest. whenever
+the training accuracy reaches a threshold, we shift
+to longer sequences. we also train an lstm with
+the same curriculum training scheme. the train-
+ing stops when the validation accuracy is larger
+than 98%. we choose such stopping criterion sim-
+ply because it is the highest that both models can
+achieve.4 all the networks are single layered, with
+hidden size 512, embedding size 32 and batch size
+100. during testing, we generate sequences of
+lengths 10, 100 and 1000 with the same rule, each
+having 10,000 examples. as the training size is
+large enough, we do not have to worry about over-
+   tting so dropout is not applied. in fact, we    nd
+that the training, validation and testing accuracies
+are almost the same.
+
+4in fact, our model can get higher but we stick to 98% for
+
+ease of comparison.
+
+seq length
+
+10
+100
+1000
+
+10
+100
+1000
+
+lstm-jump
+
+lstm
+
+test accuracy
+
+98%
+98%
+90%
+
+96%
+96%
+80%
+
+test time (avg tokens read)
+13.5s (2.1)
+18.9s (10)
+13.9s (2.2)
+120.4s (100)
+18.9s (3.0)
+1250s (1000)
+
+speedup
+
+n/a
+n/a
+n/a
+
+1.40x
+8.66x
+66.14x
+
+table 3: testing accuracy and time of synthetic
+number prediction problem. the jumping level is
+number.
+
+the results of lstm and our method, lstm-
+jump, are shown in table 3. the    rst observa-
+tion is that lstm-jump is faster than lstm; the
+longer the sequence is, the more signi   cant speed-
+up lstm-jump can gain. this is because the
+well-trained lstm-jump is aware of the jump-
+ing signal at the    rst token and hence can directly
+jump to the output position to make prediction,
+while lstm is agnostic to the signal and has to
+read the whole sequence. as a result, the read-
+ing speed of lstm-jump is hardly affected by the
+length of sequence, but that of lstm is linear with
+respect to length. besides, lstm-jump also out-
+performs lstm in terms of test accuracy under all
+cases. this is not surprising either, as lstm has to
+read a large amount of tokens that are potentially
+not helpful and could interfere with the prediction.
+in summary, the results indicate lstm-jump is
+able to learn to jump if the signal is clear.
+
+3.2 word level id31 with
+rotten tomatoes and imdb datasets
+
+as lstm-jump has shown great speedups in the
+synthetic dataset, we would like to understand
+whether it could carry this bene   t to real-world
+data, where    jumping    signal is not explicit. so
+in this section, we conduct id31 on
+two movie review datasets, both containing equal
+numbers of positive and negative reviews.
+
+the    rst dataset is rotten tomatoes, which con-
+tains 10,662 documents. since there is not a stan-
+dard split, we randomly select around 80% for
+training, 10% for validation, and 10% for test-
+ing. the average and maximum lengths of the re-
+views are 22 and 56 words respectively, and we
+pad each of them to 60. we choose the pre-trained
+id97 embeddings5 (mikolov et al., 2013) as
+
+our    xed id27 that we do not update
+this matrix during training. both lstm-jump and
+lstm contain 2 layers, 256 hidden units and the
+batch size is 100. as the amount of training data is
+small, we slightly augment the data by sampling a
+continuous 50-word sequence in each padded re-
+views as one training sample. during training,
+we enforce lstm-jump to read 8 tokens before
+a jump (r = 8), and the maximum skipping to-
+kens per jump is 10 (k = 10), while the number
+of jumps allowed is 3 (n = 3).
+
+the testing result is reported in table 4. in a
+nutshell, lstm-jump is always faster than lstm
+under different combinations of r and n. at the
+same time, the accuracy is on par with that of
+lstm. in particular, the combination of (r, n ) =
+(7, 4) even achieves slightly better accuracy than
+lstm while having a 1.5x speedup.
+
+model
+
+lstm-jump
+
+lstm
+
+(r, n ) accuracy
+(9, 2)
+(8, 3)
+(7, 4)
+n/a
+
+0.783
+0.789
+0.793
+0.791
+
+time
+6.3s
+7.3s
+8.1s
+12.5s
+
+speedup
+1.98x
+1.71x
+1.54x
+
+1x
+
+table 4: testing time and accuracy on the rotten
+tomatoes review classi   cation dataset. the max-
+imum size of jumping k is set to 10 for all the
+settings. the jumping level is word.
+
+the second dataset
+
+is imdb (maas et al.,
+2011),6 which contains 25,000 training and 25,000
+testing movie reviews, where the average length of
+text is 240 words, much longer than that of rotten
+tomatoes. we randomly set aside about 15% of
+training data as validation set. both lstm-jump
+and lstm has one layer and 128 hidden units,
+and the batch size is 50. again, we use pretrained
+id97 embeddings as initialization but they are
+updated during training. we either pad a short se-
+quence to 400 words or randomly select a 400-
+word segment from a long sequence as a training
+example. during training, we set r = 20, k = 40
+and n = 5.
+
+as table 5 shows, the result exhibits a similar
+trend as found in rotten tomatoes that lstm-
+jump is uniformly faster than lstm under many
+settings. the various (r, n ) combinations again
+demonstrate the trade-off between ef   ciency and
+accuracy. if one cares more about accuracy, then
+allowing lstm-jump to read and jump more
+
+5https://code.google.com/archive/p/
+
+6http://ai.stanford.edu/amaas/data/
+
+id97/
+
+sentiment/index.html
+
+model
+
+lstm-jump
+
+lstm
+
+(r, n ) accuracy
+(80, 8)
+(80, 3)
+(70, 3)
+(50, 2)
+(100, 1)
+
+0.894
+0.892
+0.889
+0.887
+0.880
+0.891
+
+n/a
+
+time
+769s
+764s
+673s
+585s
+489s
+1243s
+
+speedup
+1.62x
+1.63x
+1.85x
+2.12x
+2.54x
+1x
+
+table 5: testing time and accuracy on the imdb
+id31 dataset. the maximum size of
+jumping k is set to 40 for all the settings. the
+jumping level is word.
+
+times is a good choice. otherwise, shrinking ei-
+ther one would bring a signi   cant speedup though
+at the price of losing some accuracy. neverthe-
+less, the con   guration with the highest accuracy
+still enjoys a 1.6x speedup compared to lstm.
+with a slight loss of accuracy, lstm-jump can be
+2.5x faster .
+
+3.3 character level news article
+classi   cation with ag dataset
+
+we now present results on testing the character
+level jumping with a news article classi   cation
+problem. the dataset contains four classes of top-
+ics (world, sports, business, sci/tech) from the
+ag   s news corpus,7 a collection of more than 1
+million news articles. the data we use is the subset
+constructed by zhang et al. (2015) for classi   ca-
+tion with character-level convolutional networks.
+there are 30,000 training and 1,900 testing ex-
+amples for each class respectively, where 15% of
+training data is set aside as validation. the non-
+space alphabet under use are:
+abcdefghijklmnopqrstuvwxyz0123456
+789-,;.!?:/\|_@#$%&*     +-=<>()[]{}
+since the vocabulary size is small, we choose 16 as
+the embedding size. the initialized entries of the
+embedding matrix are drawn from a uniform dis-
+tribution in [   0.25, 0.25], which are progressively
+updated during training. both lstm-jump and
+lstm have 1 layer and 64 hidden units and the
+batch sizes are 20 and 100 respectively. the train-
+ing sequence is again of length 400 that it is either
+padded from a short sequence or sampled from a
+long one. during training, we set r = 30, k = 40
+and n = 5.
+
+the result is summarized in table 6. it is inter-
+esting to see that even with skipping, lstm-jump
+
+is not always faster than lstm. this is mainly
+due to the fact that the embedding size and hidden
+layer are both much smaller than those used previ-
+ously, and accordingly the processing of a token is
+much faster. in that case, other computation over-
+head such as calculating and sampling from the
+jump softmax might become a dominating factor
+of ef   ciency. by this cross-task comparison, we
+can see that the larger the hidden unit size of re-
+current neural network and the embedding are, the
+more speedup lstm-jump can gain, which is also
+con   rmed by the task below.
+
+model
+
+lstm-jump
+
+lstm
+
+(r, n ) accuracy
+(50, 5)
+(40, 6)
+(40, 5)
+(30, 5)
+(30, 6)
+
+0.854
+0.874
+0.889
+0.885
+0.893
+0.881
+
+n/a
+
+time
+102s
+98.1s
+83.0s
+63.6s
+74.2s
+81.7s
+
+speedup
+0.80x
+0.83x
+0.98x
+1.28x
+1.10x
+
+1x
+
+table 6: testing time and accuracy on the ag
+news classi   cation dataset. the maximum size of
+jumping k is set to 40 for all the settings. the
+jumping level is character.
+
+3.4 sentence level automatic question
+
+answering with children   s book test
+dataset
+
+the last task is automatic id53, in
+which we aim to test the sentence level skimming
+of lstm-jump. we benchmark on the data set
+children   s book test (cbt) (hill et al., 2015).8
+in each document, there are 20 contiguous sen-
+tences (context) extracted from a children   s book
+followed by a query sentence. a word of the
+query is deleted and the task is to select the best
+   t for this position from 10 candidates. originally,
+there are four types of tasks according to the part
+of speech of the missing word, from which, we
+choose the most dif   cult two, i.e., the name en-
+tity (ne) and common noun (cn) as our focus,
+since simple language models can already achieve
+human-level performance for the other two types .
+the models, lstm or lstm-jump,    rstly read
+the whole query, then the context sentences and
+   nally output the predicted word. while lstm
+reads everything, our jumping model would de-
+cide how many context sentences should skip after
+reading one sentence. whenever a model    nishes
+reading, the context and query are encoded in its
+
+7http://www.di.unipi.it/  gulli/ag_
+
+corpus_of_news_articles.html
+
+8http://www.thespermwhale.com/
+
+jaseweston/babi/cbtest.tgz
+
+hidden state ho, and the best answer from the can-
+didate words has the same index that maximizes
+the following:
+
+softmax(cw ho)     r10,
+
+where c     r10  d is the id27 matrix
+of the 10 candidates and w     rd  hidden size is
+a trainable weight variable. using such bilinear
+form to select answer basically follows the idea
+of chen et al. (2016), as it is shown to have good
+performance. the task is now distilled to a classi-
+   cation problem of 10 classes.
+
+we either truncate or pad each context sentence,
+such that they all have length 20. the same pre-
+processing is applied to the query sentences ex-
+cept that the length is set as 30. for both models,
+the number of layers is 2, the number of hidden
+units is 256 and the batch size is 32. pretrained
+id97 embeddings are again used and they are
+not adjusted during training. the maximum num-
+ber of context sentences lstm-jump can skip per
+time is k = 5 while the number of total jumping
+is limited to n = 5. we let the model jump after
+reading every sentence, so r = 1 (20 words).
+
+the result is reported in table 7. the perfor-
+mance of lstm-jump is superior to lstm in
+terms of both accuracy and ef   ciency under all set-
+tings in our experiments. in particular, the fastest
+lstm-jump con   guration achieves a remarkable
+6x speedup over lstm, while also having respec-
+tively 1.4% and 4.4% higher accuracy in chil-
+dren   s book test - named entity and children   s
+book test - common noun.
+
+model
+
+(r, n ) accuracy
+
+time
+
+children   s book test - named entity
+
+lstm-jump
+
+lstm
+
+lstm-jump
+
+lstm
+
+(1, 5)
+(1, 3)
+(1, 1)
+n/a
+
+(1, 5)
+(1, 3)
+(1, 1)
+n/a
+
+0.468
+0.464
+0.452
+0.438
+
+0.493
+0.487
+0.497
+0.453
+
+40.9s
+30.3s
+19.9s
+124.5s
+
+39.3s
+29.7s
+19.8s
+121.5s
+
+children   s book test - common noun
+
+speedup
+
+3.04x
+4.11x
+6.26x
+1x
+
+3.09x
+4.09x
+6.14x
+1x
+
+table 7: testing time and accuracy on the chil-
+dren   s book test dataset. the maximum size of
+jumping k is set to 5 for all the settings. the
+jumping level is sentence.
+
+the dominant performance of lstm-jump
+over lstm might be interpreted as follows. after
+reading the query, both lstm and lstm-jump
+
+know what the question is. however, lstm still
+has to process the remaining 20 sentences and thus
+at the very end of the last sentence, the long de-
+pendency between the question and output might
+become weak that the prediction is hampered. on
+the contrary, the question can guide lstm-jump
+on how to read selectively and stop early when the
+answer is clear. therefore, when it comes to the
+output stage, the    memory    is both fresh and un-
+cluttered that a more accurate answer is likely to
+be picked.
+
+in the following, we show two examples of how
+the model reads the context given a query (bold
+face sentences are those read by our model in the
+increasing order). xxxxx is the missing word
+we want to    ll. note that due to truncation, a few
+sentences might look uncompleted.
+
+example 1 in the    rst example, the exact an-
+swer appears in the context multiple times, which
+makes the task relatively easy, as long as the reader
+has captured their occurrences.
+(a) query:    xxxxx!
+(b) context:
+1. said big klaus, and he ran off at once to
+
+little klaus.
+
+2.    where did you get so much money from?   
+3.    oh, that was from my horse-skin.
+4. i sold it yesterday evening.   
+5.    that    s certainly a good price!   
+6. said big klaus; and running home in great
+
+haste, he took an axe, knocked all his four
+
+7.    skins!
+8. skins!
+9. who will buy skins?   
+10. he cried through the streets.
+11. all the shoemakers and tanners came running
+
+to ask him what he wanted for them.   
+
+12. a bushel of money for each,    said big
+
+klaus.
+
+13.    are you mad?   
+14. they all exclaimed.
+15.    do you think we have money by the bushel?   
+16.    skins!
+17. skins!
+18. who will buy skins?   
+19. he cried again, and to all who asked him what
+
+they cost, he answered,    a bushel
+
+20.    he is making game of us,    they said; and the
+shoemakers seized their yard measures and
+(c) candidates: klaus | skins | game | haste |
+head | home | horses | money | price| streets
+
+(d) answer: skins
+
+the reading behavior might be interpreted as
+follows. the model tries to search for clues, and
+after reading sentence 8, it realizes that the most
+plausible answer is    klaus    or    skins   , as they
+both appear twice.    skins    is more likely to be
+the answer as it is followed by a    !   . the model
+searches further to see if    klaus!    is mentioned
+somewhere, but it only    nds    klaus    without    !   
+for the third time. after the last attempt at sen-
+tence 14, it is con   dent about the answer and stops
+to output with    skins   .
+
+example 2 in this example, the answer is illus-
+trated by a word    nuisance    that does not show up
+in the context at all. hence, to answer the query,
+the model has to understand the meaning of both
+the query and context and locate the synonym of
+   nuisance   , which is not merely verbatim and thus
+much harder than the previous example. neverthe-
+less, our model is still able to make a right choice
+while reading much fewer sentences.
+(a) query: yes, i call xxxxx a nuisance.
+(b) context:
+1. but to you and me it would have looked
+just as it did to cousin myra     a very dis-
+contented
+
+2.    i   m awfully glad to see you, cousin myra,
+
+   explained frank carefully,    and your
+
+3. but christmas is just a bore     a regular
+
+bore.   
+
+4. that was what uncle edgar called things
+that didn   t interest him, so that frank felt
+pretty sure of
+
+5. nevertheless, he wondered uncomfortably
+what made cousin myra smile so queerly.
+
+6.    why, how dreadful!   
+7. she said brightly.
+8.    i thought all boys and girls looked upon
+christmas as the very best time in the year.   
+
+9.    we don   t,    said frank gloomily.
+10.    it   s just the same old thing year in and
+
+year out.
+
+11. we know just exactly what is going to hap-
+
+pen.
+
+12. we even know pretty well what presents we
+
+are going to get.
+
+13. and christmas day itself is always the same.
+14. we   ll get up in the morning , and our stock-
+
+ings will be full of things, and half of
+
+15. then there    s dinner.
+16. it    s always so poky.
+
+17. and all the uncles and aunts come to dinner
+
+    just the same old crowd, every year, and
+
+18. aunt desda always says,    why, frankie, how
+
+you have grown!   
+
+19. she knows i hate to be called frankie.
+20. and after dinner they   ll sit round and talk the
+rest of the day, and that   s all.
+(c) candidates: christmas | boys | day | dinner |
+half | interest | rest | stockings | things | un-
+cles
+
+(d) answer: christmas
+
+the reading behavior can be interpreted as fol-
+lows. after reading the query, our model realizes
+that the answer should be something like a nui-
+sance. then it starts to process the text. once it
+hits sentence 3, it may begin to consider    christ-
+mas    as the answer, since    bore    is a synonym
+of    nuisance   . yet the model is not 100% sure,
+so it continues to read, very conservatively     it
+does not jump for the next three sentences. af-
+ter that, the model gains more con   dence on the
+answer    christmas    and it makes a large jump to
+see if there is something that can turn over the cur-
+rent hypothesis. it turns out that the last-read sen-
+tence is still talking about christmas with a neg-
+ative voice. therefore, the model stops to take
+   christmas    as the output.
+
+4 related work
+
+closely related to our work is the idea of learn-
+ing visual attention with neural networks (mnih
+et al., 2014; ba et al., 2014; sermanet et al., 2014),
+where a recurrent model is used to combine vi-
+sual evidence at multiple    xations processed by a
+convolutional neural network. similar to our ap-
+proach, the model is trained end-to-end using the
+reinforce algorithm (williams, 1992). how-
+ever, a major difference between those work and
+ours is that we have to sample from discrete jump-
+ing distribution, while they can sample from con-
+tinuous distribution such as gaussian. the differ-
+ence is mainly due to the inborn characteristics of
+text and image. in fact, as pointed out by mnih
+et al. (2014), it was dif   cult to learn policies over
+more than 25 possible discrete locations.
+
+this idea has recently been explored in the con-
+text of natural language processing applications,
+where the main goal is to    lter irrelevant content
+using a small network (choi et al., 2016). perhaps
+the most closely related to our work is the concur-
+rent work on learning to reason with reinforcement
+
+learning (shen et al., 2016). the key difference
+between our work and shen et al. (2016) is that
+they focus on early stopping after multiple pass of
+data to ensure accuracy whereas our method fo-
+cuses on selective reading with single pass to en-
+able fast processing.
+
+the concept of    hard    attention has also been
+used successfully in the context of making neu-
+ral network predictions more interpretable (lei
+et al., 2016). the key difference between our
+work and lei et al. (2016)   s method is that our
+method optimizes for faster id136, and is more
+dynamic in its jumping. likewise is the differ-
+ence between our approach and the    soft    atten-
+tion approach by (bahdanau et al., 2014). re-
+cently,
+(hahn and keller, 2016) investigate how
+machine can    xate and skip words, focusing on the
+comparison between the behavior of machine and
+human, while our goal is to make reading faster.
+they model the id203 that each single word
+should be read in an unsupervised way while ours
+directly model the id203 of how many words
+should be skipped with supervised learning.
+
+our method belongs to adaptive computation of
+neural networks, whose idea is recently explored
+by (graves, 2016; jernite et al., 2016), where dif-
+ferent amount of computations are allocated dy-
+namically per time step. the main difference
+between our method and graves; jernite et al.   s
+methods is that our method can set the amount
+of computation to be exactly zero for many steps,
+thereby achieving faster scanning over texts. even
+though our method requires policy gradient meth-
+ods to train, which is a disadvantage compared
+to (graves, 2016; jernite et al., 2016), we do not
+   nd training with id189 prob-
+lematic in our experiments.
+
+at the high-level, our model can be viewed as
+a simpli   ed trainable turing machine, where the
+controller can move on the input tape. it is there-
+fore related to the prior work on neural turing
+machines (graves et al., 2014) and especially its
+rl version (zaremba and sutskever, 2015). com-
+pared to (zaremba and sutskever, 2015), the out-
+put tape in our method is more simple and reward
+signals in our problems are less sparse, which ex-
+plains why our model is easy to train. it is worth
+noting that zaremba and sutskever report dif   -
+culty in using policy gradients to train their model.
+our method, by skipping irrelevant content,
+shortens the length of recurrent networks, thereby
+
+addressing the vanishing or exploding gradients
+in them (hochreiter et al., 2001). the baseline
+method itself, long short term memory (hochre-
+iter and schmidhuber, 1997), belongs to the same
+category of methods.
+in this category, there are
+several recent methods that try to achieve the same
+goal, such as having recurrent networks that oper-
+ate in different frequency (koutnik et al., 2014) or
+is organized in a hierarchical fashion (chan et al.,
+2015; chung et al., 2016).
+
+lastly, we should point out that we are among
+the recent efforts that deploy reinforcement learn-
+ing to the    eld of natural language processing,
+some of which have achieved encouraging re-
+sults in the realm of such as neural symbolic
+machine (liang et al., 2017), machine reason-
+ing (shen et al., 2016) and sequence genera-
+tion (ranzato et al., 2015).
+
+5 conclusions
+
+in this paper, we focus on learning how to skim
+text for fast reading.
+in particular, we pro-
+pose a    jumping    model that after reading every
+few tokens, it decides how many tokens should
+be skipped by sampling from a softmax. such
+jumping behavior is modeled as a discrete de-
+cision making process, which can be trained by
+id23 algorithm such as rein-
+force. in four different tasks with six datasets
+(one synthetic and    ve real), we test the ef   ciency
+of the proposed method on various levels of text
+jumping, from character to word and then to sen-
+tence. the results indicate our model is several
+times faster than, while the accuracy is on par with
+the baseline lstm model.
+
+acknowledgments
+
+the authors would like to thank the google brain
+team, especially zhifeng chen and yuan yu for
+helpful discussion about the implementation of
+this model on tensor   ow. the    rst author also
+wants to thank chen liang, hanxiao liu, yingtao
+tian, fish tung, chiyuan zhang and yu zhang for
+their help during the project. finally, the authors
+appreciate the invaluable feedback from anony-
+mous reviewers.
+
+references
+daniel andor, chris alberti, david weiss, aliaksei
+severyn, alessandro presta, kuzman ganchev, slav
+
+petrov, and michael collins. 2016. globally nor-
+arxiv
+malized transition-based neural networks.
+preprint arxiv:1603.06042 .
+
+jimmy ba, volodymyr mnih, and koray kavukcuoglu.
+2014. multiple object recognition with visual atten-
+tion. arxiv preprint arxiv:1412.7755 .
+
+dzmitry bahdanau, kyunghyun cho, and yoshua ben-
+gio. 2014. id4 by jointly
+arxiv preprint
+learning to align and translate.
+arxiv:1409.0473 .
+
+william chan, navdeep jaitly, quoc v le, and oriol
+arxiv
+
+vinyals. 2015. listen, attend and spell.
+preprint arxiv:1508.01211 .
+
+a thorough examination of
+
+danqi chen, jason bolton, and christopher d. man-
+ning. 2016.
+the
+id98/daily mail reading comprehension task. in pro-
+ceedings of the 54th annual meeting of the associ-
+ation for computational linguistics, acl 2016, au-
+gust 7-12, 2016, berlin, germany, volume 1: long
+papers.
+
+eunsol choi, daniel hewlett, alexandre lacoste, illia
+polosukhin, jakob uszkoreit, and jonathan berant.
+2016. hierarchical id53 for long doc-
+uments. arxiv preprint arxiv:1611.01839 .
+
+junyoung chung, sungjin ahn, and yoshua bengio.
+2016. hierarchical multiscale recurrent neural net-
+works. arxiv preprint arxiv:1609.01704 .
+
+ronan collobert, jason weston, l  eon bottou, michael
+karlen, koray kavukcuoglu, and pavel kuksa.
+2011. natural language processing (almost) from
+journal of machine learning research
+scratch.
+12(aug):2493   2537.
+
+felix hill, antoine bordes, sumit chopra, and jason
+weston. 2015. the goldilocks principle: reading
+children   s books with explicit memory representa-
+tions. arxiv:1511.02301 .
+
+sepp hochreiter, yoshua bengio, paolo frasconi, and
+j  urgen schmidhuber. 2001. gradient    ow in recur-
+rent nets: the dif   culty of learning long-term depen-
+dencies.
+in s. c. kremer and j. f. kolen, editors,
+a field guide to dynamical recurrent neural net-
+works, ieee press.
+
+sepp hochreiter and j  urgen schmidhuber. 1997.
+neural computation
+
+long short-term memory.
+9(8):1735   1780.
+
+yacine jernite, edouard grave, armand joulin, and
+variable computation
+arxiv preprint
+
+tomas mikolov. 2016.
+in recurrent neural networks.
+arxiv:1611.06188 .
+
+nal kalchbrenner and phil blunsom. 2013. recurrent
+
+continuous translation models. in emnlp.
+
+yoon kim. 2014.
+
+works for sentence classi   cation.
+arxiv:1408.5882 .
+
+convolutional neural net-
+arxiv preprint
+
+diederik kingma and jimmy ba. 2014. adam: a
+method for stochastic optimization. arxiv preprint
+arxiv:1412.6980 .
+
+jan koutnik, klaus greff, faustino gomez, and juer-
+gen schmidhuber. 2014. a clockwork id56. in inter-
+national conference on machine learning.
+
+quoc v. le and tomas mikolov. 2014. distributed rep-
+resentations of sentences and documents. in inter-
+national conference on machine learning (icml).
+
+andrew m. dai and quoc v. le. 2015.
+
+semi-
+supervised sequence learning. in advances in neu-
+ral information processing systems. pages 3079   
+3087.
+
+kenton lee, tom kwiatkowski, ankur parikh, and di-
+panjan das. 2016. learning recurrent span repre-
+sentations for extractive id53. arxiv
+preprint arxiv:1611.01436 .
+
+alex graves. 2016.
+
+for recurrent neural networks.
+arxiv:1603.08983 .
+
+adaptive computation time
+arxiv preprint
+
+alex graves, greg wayne,
+
+2014. id63s.
+arxiv:1410.5401 .
+
+and ivo danihelka.
+arxiv preprint
+
+michael hahn and frank keller. 2016. modeling hu-
+in emnlp.
+
+man reading with neural attention.
+pages 85   95.
+
+karl moritz hermann, tomas kocisky, edward
+grefenstette, lasse espeholt, will kay, mustafa su-
+leyman, and phil blunsom. 2015. teaching ma-
+chines to read and comprehend. in advances in neu-
+ral information processing systems. pages 1693   
+1701.
+
+tao lei, regina barzilay, and tommi jaakkola. 2016.
+arxiv preprint
+
+rationalizing neural predictions.
+arxiv:1606.04155 .
+
+chen liang, jonathan berant, quoc le, kenneth d.
+forbus, and ni lao. 2017. neural symbolic ma-
+chines: learning semantic parsers on freebase with
+in proceedings of the 55th an-
+weak supervision.
+nual meeting of the association for computational
+linguistics, acl 2017: long papers.
+
+andrew l maas, raymond e daly, peter t. pham, dan
+huang, andrew y. ng, and christopher potts. 2011.
+learning word vectors for id31.
+in
+proceedings of the 49th annual meeting of the asso-
+ciation for computational linguistics: human lan-
+guage technologies-volume 1. association for com-
+putational linguistics, pages 142   150.
+
+tomas mikolov, ilya sutskever, kai chen, greg s cor-
+rado, and jeff dean. 2013. distributed representa-
+tions of words and phrases and their compositional-
+in advances in neural information processing
+ity.
+systems. pages 3111   3119.
+
+richard socher, alex perelygin, jean y. wu, jason
+chuang, christopher d. manning, andrew y. ng,
+christopher potts, et al. 2013. recursive deep mod-
+els for semantic compositionality over a sentiment
+treebank. in emnlp.
+
+volodymyr mnih, nicolas heess, alex graves, et al.
+2014. recurrent models of visual attention.
+in
+advances in neural information processing systems.
+pages 2204   2212.
+
+ramesh nallapati, bowen zhou, caglar gulcehre,
+bing xiang, et al. 2016. abstractive text summa-
+rization using sequence-to-sequence id56s and be-
+in conference on computational natural
+yond.
+language learning (conll).
+
+bo pang and lillian lee. 2005. seeing stars: ex-
+ploiting class relationships for sentiment categoriza-
+tion with respect to rating scales. in proceedings of
+the 43rd annual meeting on association for compu-
+tational linguistics. association for computational
+linguistics, pages 115   124.
+
+marc   aurelio ranzato, sumit chopra, michael auli,
+and wojciech zaremba. 2015.
+sequence level
+training with recurrent neural networks. corr
+abs/1511.06732. http://arxiv.org/abs/1511.06732.
+
+alexander m rush, sumit chopra, and jason weston.
+2015. a neural attention model for abstractive sen-
+tence summarization. in empirical methods in nat-
+ural language processing (emnlp).
+
+rico sennrich, barry haddow, and alexandra birch.
+2015. id4 of rare words with
+subword units. in annual meeting of the association
+for computational linguistics (acl).
+
+minjoon seo, aniruddha kembhavi, ali farhadi, and
+hannaneh hajishirzi. 2016. bidirectional attention
+   ow for machine comprehension. arxiv preprint
+arxiv:1611.01603 .
+
+pierre sermanet, andrea frome, and esteban real.
+2014. attention for    ne-grained categorization.
+arxiv preprint arxiv:1412.7054 .
+
+lifeng shang, zhengdong lu, and hang li. 2015.
+neural responding machine for short-text conversa-
+tion. in annual meeting of the association for com-
+putational linguistics (acl).
+
+yelong shen, po-sen huang, jianfeng gao, and
+weizhu chen. 2016. reasonet: learning to stop
+reading in machine comprehension. arxiv preprint
+arxiv:1609.05284 .
+
+richard socher, jeffrey pennington, eric h. huang,
+andrew y. ng, and christopher d. manning. 2011.
+semi-supervised recursive autoencoders for predict-
+in proceedings of the
+ing sentiment distributions.
+conference on empirical methods in natural lan-
+guage processing.
+
+alessandro sordoni, michel galley, michael auli,
+chris brockett, yangfeng ji, margaret mitchell,
+jian-yun nie, jianfeng gao, and bill dolan. 2015.
+a neural network approach to context-sensitive gen-
+eration of conversational responses. arxiv preprint
+arxiv:1506.06714 .
+
+ilya sutskever, oriol vinyals, and quoc v. le. 2014.
+sequence to sequence learning with neural net-
+works. in advances in neural information process-
+ing systems. pages 3104   3112.
+
+adam trischler, zheng ye, xingdi yuan, jing he,
+phillip bachman, and kaheer suleman. 2016.
+a parallel-hierarchical model for machine com-
+arxiv preprint
+prehension on sparse data.
+arxiv:1603.08884 .
+
+oriol vinyals and quoc le. 2015. a neural conversa-
+
+tional model. arxiv preprint arxiv:1506.05869 .
+
+shuohang wang and jing jiang. 2016. machine com-
+prehension using match-lstm and answer pointer.
+arxiv preprint arxiv:1608.07905 .
+
+zhiguo wang, haitao mi, wael hamza, and radu
+florian. 2016. multi-perspective context match-
+arxiv preprint
+ing for machine comprehension.
+arxiv:1612.04211 .
+
+jason weston, antoine bordes, sumit chopra, alexan-
+der m rush, bart van merri  enboer, armand joulin,
+and tomas mikolov. 2015. towards ai-complete
+id53: a set of prerequisite toy tasks.
+arxiv preprint arxiv:1502.05698 .
+
+ronald j. williams. 1992. simple statistical gradient-
+following algorithms for connectionist reinforce-
+ment learning. machine learning 8:229   256.
+
+yonghui wu, mike schuster, zhifeng chen, quoc v.
+le, mohammad norouzi, wolfgang macherey,
+maxim krikun, yuan cao, qin gao, klaus
+macherey, et al. 2016.
+google   s neural ma-
+chine translation system: bridging the gap between
+arxiv preprint
+human and machine translation.
+arxiv:1609.08144 .
+
+caiming xiong, victor zhong, and richard socher.
+2016. dynamic coattention networks for question
+answering. arxiv preprint arxiv:1611.01604 .
+
+wojciech zaremba and ilya sutskever. 2015. rein-
+forcement learning id63s-revised.
+arxiv preprint arxiv:1505.00521 .
+
+xiang zhang, junbo zhao, and yann lecun. 2015.
+character-level convolutional networks for text clas-
+in advances in neural information pro-
+si   cation.
+cessing systems. pages 649   657.
+
+

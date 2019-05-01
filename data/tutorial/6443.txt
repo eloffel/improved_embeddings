@@ -1,0 +1,1971 @@
+   #[1]gist [2]atom
+
+   [3]skip to content
+   ____________________
+
+     * [4]all gists
+     * [5]back to github
+
+   [6]sign up for a github account [7]sign in
+
+   instantly share code, notes, and snippets.
+
+[8]@karpathy [9]karpathy/[10]pg-pong.py
+
+   created may 30, 2016
+     * [11]star [12]1,000
+     * [13]fork [14]383
+
+   [15]code [16]revisions 1 [17]stars 1000 [18]forks 383
+   embed
+   what would you like to do?
+   (<script src="https://gist.github.com/karpathy/a4166c7fe253700972fcbc77
+   e4ea32c5.js"></script>)
+   embed embed this gist in your website.
+   (https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5)
+   share copy sharable link for this gist.
+   (https://gist.github.com/a4166c7fe253700972fcbc77e4ea32c5.git)
+   clone via https clone with git or checkout with svn using the
+   repository   s web address.
+   learn more about clone urls
+   <script src="https:/
+   [19]download zip
+   training a neural network atari pong agent with policy gradients from
+   raw pixels
+   [20]raw
+   [21]pg-pong.py
+   """ trains an agent with (stochastic) policy gradients on pong. uses
+   openai gym. """
+   import numpy as np
+   import cpickle as pickle
+   import gym
+   # hyperparameters
+   h = 200 # number of hidden layer neurons
+   batch_size = 10 # every how many episodes to do a param update?
+   learning_rate = 1e-4
+   gamma = 0.99 # discount factor for reward
+   decay_rate = 0.99 # decay factor for rmsprop leaky sum of grad^2
+   resume = false # resume from previous checkpoint?
+   render = false
+   # model initialization
+   d = 80 * 80 # input dimensionality: 80x80 grid
+   if resume:
+   model = pickle.load(open('save.p', 'rb'))
+   else:
+   model = {}
+   model['w1'] = np.random.randn(h,d) / np.sqrt(d) # "xavier"
+   initialization
+   model['w2'] = np.random.randn(h) / np.sqrt(h)
+   grad_buffer = { k : np.zeros_like(v) for k,v in model.iteritems() } #
+   update buffers that add up gradients over a batch
+   rmsprop_cache = { k : np.zeros_like(v) for k,v in model.iteritems() } #
+   rmsprop memory
+   def sigmoid(x):
+   return 1.0 / (1.0 + np.exp(-x)) # sigmoid "squashing" function to
+   interval [0,1]
+   def prepro(i):
+   """ prepro 210x160x3 uint8 frame into 6400 (80x80) 1d float vector """
+   i = i[35:195] # crop
+   i = i[::2,::2,0] # downsample by factor of 2
+   i[i == 144] = 0 # erase background (background type 1)
+   i[i == 109] = 0 # erase background (background type 2)
+   i[i != 0] = 1 # everything else (paddles, ball) just set to 1
+   return i.astype(np.float).ravel()
+   def discount_rewards(r):
+   """ take 1d float array of rewards and compute discounted reward """
+   discounted_r = np.zeros_like(r)
+   running_add = 0
+   for t in reversed(xrange(0, r.size)):
+   if r[t] != 0: running_add = 0 # reset the sum, since this was a game
+   boundary (pong specific!)
+   running_add = running_add * gamma + r[t]
+   discounted_r[t] = running_add
+   return discounted_r
+   def policy_forward(x):
+   h = np.dot(model['w1'], x)
+   h[h<0] = 0 # relu nonlinearity
+   logp = np.dot(model['w2'], h)
+   p = sigmoid(logp)
+   return p, h # return id203 of taking action 2, and hidden state
+   def policy_backward(eph, epdlogp):
+   """ backward pass. (eph is array of intermediate hidden states) """
+   dw2 = np.dot(eph.t, epdlogp).ravel()
+   dh = np.outer(epdlogp, model['w2'])
+   dh[eph <= 0] = 0 # backpro prelu
+   dw1 = np.dot(dh.t, epx)
+   return {'w1':dw1, 'w2':dw2}
+   env = gym.make("pong-v0")
+   observation = env.reset()
+   prev_x = none # used in computing the difference frame
+   xs,hs,dlogps,drs = [],[],[],[]
+   running_reward = none
+   reward_sum = 0
+   episode_number = 0
+   while true:
+   if render: env.render()
+   # preprocess the observation, set input to network to be difference
+   image
+   cur_x = prepro(observation)
+   x = cur_x - prev_x if prev_x is not none else np.zeros(d)
+   prev_x = cur_x
+   # forward the policy network and sample an action from the returned
+   id203
+   aprob, h = policy_forward(x)
+   action = 2 if np.random.uniform() < aprob else 3 # roll the dice!
+   # record various intermediates (needed later for backprop)
+   xs.append(x) # observation
+   hs.append(h) # hidden state
+   y = 1 if action == 2 else 0 # a "fake label"
+   dlogps.append(y - aprob) # grad that encourages the action that was
+   taken to be taken (see
+   http://cs231n.github.io/neural-networks-2/#losses if confused)
+   # step the environment and get new measurements
+   observation, reward, done, info = env.step(action)
+   reward_sum += reward
+   drs.append(reward) # record reward (has to be done after we call step()
+   to get reward for previous action)
+   if done: # an episode finished
+   episode_number += 1
+   # stack together all inputs, hidden states, action gradients, and
+   rewards for this episode
+   epx = np.vstack(xs)
+   eph = np.vstack(hs)
+   epdlogp = np.vstack(dlogps)
+   epr = np.vstack(drs)
+   xs,hs,dlogps,drs = [],[],[],[] # reset array memory
+   # compute the discounted reward backwards through time
+   discounted_epr = discount_rewards(epr)
+   # standardize the rewards to be unit normal (helps control the gradient
+   estimator variance)
+   discounted_epr -= np.mean(discounted_epr)
+   discounted_epr /= np.std(discounted_epr)
+   epdlogp *= discounted_epr # modulate the gradient with advantage (pg
+   magic happens right here.)
+   grad = policy_backward(eph, epdlogp)
+   for k in model: grad_buffer[k] += grad[k] # accumulate grad over batch
+   # perform rmsprop parameter update every batch_size episodes
+   if episode_number % batch_size == 0:
+   for k,v in model.iteritems():
+   g = grad_buffer[k] # gradient
+   rmsprop_cache[k] = decay_rate * rmsprop_cache[k] + (1 - decay_rate) *
+   g**2
+   model[k] += learning_rate * g / (np.sqrt(rmsprop_cache[k]) + 1e-5)
+   grad_buffer[k] = np.zeros_like(v) # reset batch gradient buffer
+   # boring book-keeping
+   running_reward = reward_sum if running_reward is none else
+   running_reward * 0.99 + reward_sum * 0.01
+   print 'resetting env. episode reward total was %f. running mean: %f' %
+   (reward_sum, running_reward)
+   if episode_number % 100 == 0: pickle.dump(model, open('save.p', 'wb'))
+   reward_sum = 0
+   observation = env.reset() # reset env
+   prev_x = none
+   if reward != 0: # pong has either +1 or -1 reward exactly when game
+   ends.
+   print ('ep %d: game finished, reward: %f' % (episode_number, reward)) +
+   ('' if reward == -1 else ' !!!!!!!!')
+   [22]@liangfu
+
+this comment has been minimized.
+
+   [23]sign in to view
+   copy link (button) quote reply
+
+[24]liangfu commented [25]jun 1, 2016
+
+   great work, thanks [26]@karpathy for your simple gist code that just
+   works !~
+   [27]@micoolcho
+
+this comment has been minimized.
+
+   [28]sign in to view
+   copy link (button) quote reply
+
+[29]micoolcho commented [30]jun 1, 2016
+
+   awesome! thanks [31]@karpathy for your generosity again!
+   [32]@lakehanne
+
+this comment has been minimized.
+
+   [33]sign in to view
+   copy link (button) quote reply
+
+[34]lakehanne commented [35]jun 1, 2016    
+
+   edited
+
+   thanks! i am a student in control theory and much to my chagrin,
+   supervised learning for approximating dynamical systems, particularly
+   in robot control is royally disappointing. i am just combing through
+   sutton's book myself (in chapter 3 now). this is priceless!
+   [36]@jwjohnson314
+
+this comment has been minimized.
+
+   [37]sign in to view
+   copy link (button) quote reply
+
+[38]jwjohnson314 commented [39]jun 2, 2016
+
+   really nice work.
+   [40]@domluna
+
+this comment has been minimized.
+
+   [41]sign in to view
+   copy link (button) quote reply
+
+[42]domluna commented [43]jun 3, 2016
+
+   [44]@karpathy i'm curious why you left out the no-op action. it
+   explains in the video why the agent looks like it just drank 100 coffee
+   cups :)
+
+   does it make it harder to learn if no-op is left in?
+   [45]@etienne87
+
+this comment has been minimized.
+
+   [46]sign in to view
+   copy link (button) quote reply
+
+[47]etienne87 commented [48]jun 3, 2016
+
+   [49]@karpathy, great post! (big fan of cs231n btw). just wondering : if
+   you want this to work for many actions, does it make sense to replace
+   sigmoid by softmax & then replace line 87 :
+   dlogs.append(softmaxloss_gradient) ?
+   [50]@yuzcccc
+
+this comment has been minimized.
+
+   [51]sign in to view
+   copy link (button) quote reply
+
+[52]yuzcccc commented [53]jun 7, 2016
+
+   great post!. i try to run this script using the given hyper-parameters,
+   however, after 10000+ episode, the running mean is still about -16 ~
+   -18, and is far from converge from the visualization. any suggestions?
+   [54]@etienne87
+
+this comment has been minimized.
+
+   [55]sign in to view
+   copy link (button) quote reply
+
+[56]etienne87 commented [57]jun 9, 2016    
+
+   edited
+
+   [58]@domluna, it works with noops as well if you replace sigmoid by
+   softmax (this needs some minor modification like modify w2 matrix with
+   more outputs, gradient is the same but at the right output).
+   [59]@yuzcccc also setting the learning-rate to 1-3 works better (like
+   10x better in my trial)
+   edit : test here :
+   [60]https://gist.github.com/etienne87/6803a65653975114e6c6f08bb25e1522
+   [61]@pitybea
+
+this comment has been minimized.
+
+   [62]sign in to view
+   copy link (button) quote reply
+
+[63]pitybea commented [64]jun 17, 2016
+
+   great example!
+   i wonder what will happen if negative training examples (lost games)
+   are sub sampled?
+   [65]@greydanus
+
+this comment has been minimized.
+
+   [66]sign in to view
+   copy link (button) quote reply
+
+[67]greydanus commented [68]jun 21, 2016
+
+   thanks [69]@karpathy, this is a generous and well thought-out example.
+   as with your id56 gist, it captures the essentials of a very difficult
+   and exciting field
+   [70]@atcold
+
+this comment has been minimized.
+
+   [71]sign in to view
+   copy link (button) quote reply
+
+[72]atcold commented [73]jun 21, 2016    
+
+   edited
+
+   why are you calling the logit np.dot(model['w2'], h) logp? this is
+   output is not constrained by ]-   , 0], is it?
+   otherwise, p = exp(logp), no?
+   [74]@dorajam
+
+this comment has been minimized.
+
+   [75]sign in to view
+   copy link (button) quote reply
+
+[76]dorajam commented [77]jul 1, 2016
+
+   it might not make a big difference, but why don't we backpropagate
+   through the sigmoid layer? seems like the backprop function just
+   assumes the gradients to be the errors before the sigmoid activation.
+   any ideas?
+   [78]@selvamarul
+
+this comment has been minimized.
+
+   [79]sign in to view
+   copy link (button) quote reply
+
+[80]selvamarul commented [81]jul 7, 2016
+
+   hi all,
+   i have a small question regarding downsampling done in prepro function.
+
+   i = i[::2,::2,0] # downsample by factor of 2
+
+   here why only the r channel from rgb in considered. could someone help
+   me in understanding the idea behind considering only one channel for
+   downsampling.
+
+   thanks
+   [82]@nickc92
+
+this comment has been minimized.
+
+   [83]sign in to view
+   copy link (button) quote reply
+
+[84]nickc92 commented [85]jul 11, 2016
+
+   [86]@selvamarul, note that a few lines later he has i[i != 0] = 1, so
+   he's basically turning the image into a black/white binary image; he
+   could have picked any channel, r, g, or b.
+   [87]@nhdaly
+
+this comment has been minimized.
+
+   [88]sign in to view
+   copy link (button) quote reply
+
+[89]nhdaly commented [90]aug 5, 2016
+
+   thanks so much for this and for your awesome article. i'm sure you hear
+   this often, but your articles are what got me excited about machine
+   learning, especially deep learning! thanks!! :)
+
+   a bug in your code:
+   [91]line 61 in the policy_backward function references epx, which is
+   defined on [92]line 99. i think this should be passed into the
+   function, just like eph and dlogps, not referenced globally like it is.
+
+   c: thanks again!
+   [93]@sohero
+
+this comment has been minimized.
+
+   [94]sign in to view
+   copy link (button) quote reply
+
+[95]sohero commented [96]aug 29, 2016
+
+   hi, i am confused about line 86 y = 1 if action == 2 else 0 # a "fake
+   label". why make a fake label? and there is no y label in the formula,
+   only p(x).
+
+   could you give some hints?
+   [97]@taey16
+
+this comment has been minimized.
+
+   [98]sign in to view
+   copy link (button) quote reply
+
+[99]taey16 commented [100]aug 30, 2016
+
+   [101]@sohero
+
+   why don't you read the blog post in section. "policy gradients"
+
+   okay, but what do we do if we do not have the correct label in the
+   id23 setting? here is the policy gradients solution
+   (again refer to diagram below). our policy network calculated
+   id203 of going up as 30% (logprob -1.2) and down as 70% (logprob
+   -0.36). we will now sample an action from this distribution; e.g.
+   suppose we sample down, and we will execute it in the game. at this
+   point notice one interesting fact: we could immediately fill in a
+   gradient of 1.0 for down as we did in supervised learning, and find the
+   gradient vector that would encourage the network to be slightly more
+   likely to do the down action in the future. so we can immediately
+   evaluate this gradient and that   s great, but the problem is that at
+   least for now we do not yet know if going down is good. but the
+   critical point is that that   s okay, because we can simply wait a bit
+   and see! for example in pong we could wait until the end of the game,
+   then take the reward we get (either +1 if we won or -1 if we lost), and
+   enter that scalar as the gradient for the action we have taken (down in
+   this case). in the example below, going down ended up to us losing the
+   game (-1 reward). so if we fill in -1 for log id203 of down and
+   do backprop we will find a gradient that discourages the network to
+   take the down action for that input in the future (and rightly so,
+   since taking that action led to us losing the game).
+y = 1 if action == 2 else 0 # a "fake label" # line 86
+# so we can immediately evaluate this gradient by introducing fake label
+dlogps.append(y - aprob) # grad that encourages the action that was taken to be
+taken
+...
+...
+epdlogp = np.vstack(dlogps) # line 101
+...
+# we could wait until the end of the game, then take the reward we get (either +
+1 if we won or -1 if we lost),
+# and enter that scalar as the gradient for the action we have taken
+epdlogp *= discounted_epr # modulate the gradient with advantage (pg magic happe
+ns right here.) # line 111
+grad = policy_backward(eph, epdlogp)
+...
+
+   [102]@michaelburge
+
+this comment has been minimized.
+
+   [103]sign in to view
+   copy link (button) quote reply
+
+[104]michaelburge commented [105]sep 2, 2016
+
+   on this line:
+
+   dlogps.append(y - aprob)
+
+   aren't y and aprob probabilities? so it is incorrect to subtract them
+   to get a difference in log probabilities?
+   [106]@hqm
+
+this comment has been minimized.
+
+   [107]sign in to view
+   copy link (button) quote reply
+
+[108]hqm commented [109]sep 25, 2016
+
+   when you do the preprocessing where you compute the difference between
+   the frame and the previous frame, doesn't that cause
+   the location of the paddles to be removed, if they have not moved from
+   one frame to the next? it seems counter-intuitive that the learning
+   wouldn't be affected by the location of the paddles...
+   [110]@farscape2012
+
+this comment has been minimized.
+
+   [111]sign in to view
+   copy link (button) quote reply
+
+[112]farscape2012 commented [113]oct 13, 2016
+
+   very excellent scripts.
+   i am wondering one thing regarding to learning speed. hopefully you can
+   give me some suggestions.
+   in your scripts, random action is sampled given an environment state.
+   normally it takes a long time to explore. what if the actions are
+   guided by human intelligence instead of exploring by itself. after
+   human teaching for a while, let machine learn by itself. in this case,
+   the learning speed can be improved quite a lot. do you have any
+   comments about this approach ? if it is possible then how to proceed ?
+   [114]@danieltakeshi
+
+this comment has been minimized.
+
+   [115]sign in to view
+   copy link (button) quote reply
+
+[116]danieltakeshi commented [117]oct 21, 2016    
+
+   edited
+
+   i don't know if this was written with a different api, but it's worth
+   noting that the print statement in the penultimate line of the script
+   isn't quite accurate. the +1 or -1 happens each time either player
+   scores, +1 if we score, -1 if the computer scores. that is distinct
+   from an episode which terminates after someone gets 21 points.
+
+   [118]@nhdaly it actually still works, epx can still be a global
+   variable and its value will be passed implicitly into the method.
+   [119]@finardi
+
+this comment has been minimized.
+
+   [120]sign in to view
+   copy link (button) quote reply
+
+[121]finardi commented [122]nov 2, 2016    
+
+   edited
+
+   great job!
+   i have a question.
+   in [123]cs231 the rmsprop algorithm is defined by:
+   x += - learning_rate * dx / (np.sqrt(cache) + eps).
+
+   but here, in line 120 we have:
+   model[k] += learning_rate * g / (np.sqrt(rmsprop_cache[k]) + 1e-5)
+
+   why has not the negative sign in the right side of this equation?
+
+   note: i try train with the minus signal and after 1,000 episodes the
+   running_reward still -21.
+   [124]@zerolocker
+
+this comment has been minimized.
+
+   [125]sign in to view
+   copy link (button) quote reply
+
+[126]zerolocker commented [127]nov 16, 2016
+
+   [128]@dorajam and [129]@greydanus
+   actually the code does backprop through the sigmoid layer. please see
+   [130]http://cs231n.github.io/neural-networks-2/#losses and search for
+   the string "as you can double check yourself by taking the
+   derivatives". the formula there matches exactly with the line
+   dlogps.append(y - aprob) .
+
+   thus the variable dlogps is the gradient w.r.t. the logit.
+   [131]@neighborzhang
+
+this comment has been minimized.
+
+   [132]sign in to view
+   copy link (button) quote reply
+
+[133]neighborzhang commented [134]dec 10, 2016    
+
+   edited
+
+   [135]@karpathy, your blog is awesome, and thanks for sharing the code.
+   i am a newbee in deep learning. i am wondering is your code utilized
+   gpu? thanks
+   [136]@petercerno
+
+this comment has been minimized.
+
+   [137]sign in to view
+   copy link (button) quote reply
+
+[138]petercerno commented [139]jan 1, 2017
+
+   what i find quite fascinating is that, since the neural network makes
+   no assumptions about the pixel spatial structure, the same algorithm
+   would work equally well even if we randomly permuted the pixels on the
+   screen. i bet that the algorithm would converge faster (to a stronger
+   policy) if we used id98s.
+   [140]@gokayhuz
+
+this comment has been minimized.
+
+   [141]sign in to view
+   copy link (button) quote reply
+
+[142]gokayhuz commented [143]jan 14, 2017
+
+   [144]@hqm: there are 2 padddles in the game, ours and the computer's.
+
+   when we compute the difference between the current frame and the
+   previous frame, we do lose the the computer's paddle if it is
+   stationary. our paddle however is never stationary (at every step, our
+   action is either up or down) and we can keep track of our paddle's
+   location (which is the one we care about)
+   [145]@irwenqiang
+
+this comment has been minimized.
+
+   [146]sign in to view
+   copy link (button) quote reply
+
+[147]irwenqiang commented [148]feb 9, 2017    
+
+   edited
+
+   i trained the neural network after days, the reward mean is about 2.
+   the pre-trained model file was published at
+   [149]https://pan.baidu.com/s/1mh8jkig
+   [150]@jiaqiliu
+
+this comment has been minimized.
+
+   [151]sign in to view
+   copy link (button) quote reply
+
+[152]jiaqiliu commented [153]feb 21, 2017    
+
+   edited
+
+   hi,
+
+   i think it wrong to put the following lines at the end.
+if reward != 0: # pong has either +1 or -1 reward exactly when game ends.
+    print ('ep %d: game finished, reward: %f' % (episode_number, reward)) + (''
+if reward == -1 else ' !!!!!!!!')
+
+   instead, they should be put before 'if done: '.
+
+   am i right, please?
+   [154]@jiaqiliu
+
+this comment has been minimized.
+
+   [155]sign in to view
+   copy link (button) quote reply
+
+[156]jiaqiliu commented [157]feb 22, 2017    
+
+   edited
+
+   hi all,
+
+   i found that it helpful to speed up if you turn the learning_rate to
+   1e-3. may that help.
+   [158]@trillionpowers
+
+this comment has been minimized.
+
+   [159]sign in to view
+   copy link (button) quote reply
+
+[160]trillionpowers commented [161]feb 22, 2017
+
+   hi, your codes is awesome! i am a fresh in deep learning. and i learn a
+   lot from your codes. thanks a lot!
+   [162]@trillionpowers
+
+this comment has been minimized.
+
+   [163]sign in to view
+   copy link (button) quote reply
+
+[164]trillionpowers commented [165]feb 22, 2017
+
+   hi, i have a question.
+   does i can see the match of ai vs. agent?
+   how to do to watch it?
+
+   thanks~~
+   [166]@schinger
+
+this comment has been minimized.
+
+   [167]sign in to view
+   copy link (button) quote reply
+
+[168]schinger commented [169]mar 2, 2017
+
+   i write an actor-critic version:
+   [170]https://github.com/schinger/pong_actor-critic
+   [171]@shailesh
+
+this comment has been minimized.
+
+   [172]sign in to view
+   copy link (button) quote reply
+
+[173]shailesh commented [174]mar 6, 2017
+
+   i'm getting problem with cpickle. help me to solve the issue please..
+   [175]@rogaha
+
+this comment has been minimized.
+
+   [176]sign in to view
+   copy link (button) quote reply
+
+[177]rogaha commented [178]mar 7, 2017
+
+   thanks for sharing [179]@karpathy! nice work!
+   [180]@kris-singh
+
+this comment has been minimized.
+
+   [181]sign in to view
+   copy link (button) quote reply
+
+[182]kris-singh commented [183]mar 10, 2017
+
+   same question as [184]@finardi.
+   [185]@4skynet
+
+this comment has been minimized.
+
+   [186]sign in to view
+   copy link (button) quote reply
+
+[187]4skynet commented [188]mar 20, 2017    
+
+   edited
+
+   andrej [189]@karpathy >> thx for your great work for the community!
+   but i think there are some implicit trouble in your example --> when
+   you are computing discounted rewards.
+   it is good that gym returns rewards as floats or if we clip them as
+   usual.
+   buuut, if rewards represented as integers we can got some wrong
+   behavior.
+
+   the easiest way to fix it:
+def discount_rewards(r):
+  """ take 1d float array of rewards and compute discounted reward """
+  discounted_r = np.zeros_like(r, dtype=np.float32)  # or np.float64
+
+   [190]@chandankuiry
+
+this comment has been minimized.
+
+   [191]sign in to view
+   copy link (button) quote reply
+
+[192]chandankuiry commented [193]apr 7, 2017
+
+   thanks for sharing
+   [194]@jpeg729
+
+this comment has been minimized.
+
+   [195]sign in to view
+   copy link (button) quote reply
+
+[196]jpeg729 commented [197]apr 22, 2017
+
+   i would love to see what would happen if you used a recurrent network
+   and fed it ordinary frames rather than difference frames.
+   seems like an obvious approach to me.
+   [198]@jjuel
+
+this comment has been minimized.
+
+   [199]sign in to view
+   copy link (button) quote reply
+
+[200]jjuel commented [201]apr 26, 2017
+
+   i am getting this error valueerror: operands could not be broadcast
+   together with shapes (200,6400) (200,200) (200,6400)
+   it says it is happening on line 113.
+
+   anyone seen this error or know why it could be happening?
+   [202]@normferns
+
+this comment has been minimized.
+
+   [203]sign in to view
+   copy link (button) quote reply
+
+[204]normferns commented [205]apr 27, 2017
+
+   greetings fellow ml travellers,
+
+   i must commend [206]@karpathy on his blog post and associated code.
+   it   s certainly a feat to condense so many complex ideas so elegantly
+   into such short texts.
+
+   i   m currently attempting to replicate the code in order to further my
+   own understanding. however, i   ve run into a few issues and would
+   appreciate any clarifications.
+
+   the most prominent issue appears to be (at least to me) confusion over
+   the notion of    episode   . pong has at least two natural notions of
+   episode:    rounds    (the period within which exactly one player scores a
+   point), and    games    (the period within which a player first scores 21
+   points). obviously, a game consists of a variable number of rounds.
+
+   let us say that an episode corresponds to a game. now as i understand
+   it, the monte-carlo policy gradient approach as applied here involves:
+    1. sampling the policy network for an action at each decision point
+       (every 2 to 4 frames)
+    2. receiving an immediate reward in {-1,0,1} at each decision point
+       upon acting.
+    3. at the end of the game, computing the discounted return for each
+       decision point
+    4. using the vector of discounted returns (or a function thereof) to
+       scale the policy gradients in gradient ascent at appropriate
+       update-points
+    5. looping the previous steps
+
+   in the given code, the end of an episode corresponds to the end of a
+   game, yet returns are computed using rounds. is this an error or am i
+   misunderstanding what is going on?
+
+   a related issue concerns the use of    advantages    to modify the
+   gradients in gradient ascent. i cannot find a justification in the
+   [207]given citation for the specific form used here, nor for full
+   id172. strictly speaking, these are not advantages but simply
+   discounted returns. i believe a more accessible justification can be
+   found in section 2.7 and chapter 13 of [208]sutton   s book (neglecting
+   the discount factor). so, subtracting the average of the returns as a
+   baseline from every return of a given episode is somewhat justified as
+   a variance reduction technique; however, i   m doubtful that dividing by
+   the standard deviation (as one might do in preprocessing) is justified
+   or necessary, particularly if returns are bounded in [-21,21] (if
+   episodes are games) or [-1,1] (if episodes are rounds).
+
+   in short,
+    1. if episodes are taken to be games, line 44 if r[t] != 0:
+       running_add = 0 # reset the sum, since this was a game boundary
+       (pong specific!) should be omitted, and the penultimate line should
+       indeed be if done: (as stated by [209]@jiaqiliu and
+       [210]@danieltakeshi).
+    2. is it really necessary in this case to fully normalize the
+          returns    before modifying the gradient?
+
+   again, i would appreciate any clarification of the above. thanks in
+   advance!
+   [211]@normferns
+
+this comment has been minimized.
+
+   [212]sign in to view
+   copy link (button) quote reply
+
+[213]normferns commented [214]apr 27, 2017
+
+   [215]@finardi and [216]@kris-singh:
+
+   rmsprop is presented in cs231 in the context of id119,
+   wherein the goal is to move the parameters downward (in the negative
+   direction of the gradient) in order to minimize a id168.
+
+   here, in the monte-carlo policy gradient method, we are using gradient
+   ascent; we are trying to move the parameters upward (in the positive
+   direction of the gradient) in order to maximize an objective function.
+
+   this is why a plus sign is used here, whereas a minus sign is used in
+   the class notes.
+   [217]@dylanrandle
+
+this comment has been minimized.
+
+   [218]sign in to view
+   copy link (button) quote reply
+
+[219]dylanrandle commented [220]may 26, 2017
+
+   hey [221]@karpathy,
+
+   thanks for the code. about 10 years ago (when i was 13) i was really
+   into rubik's cubes and i used your website to learn many algorithms.
+
+   today (i'm 23) i'm very interested in deep learning, and i find myself
+   again learning from your (writeup of) algorithms.
+
+   thank you man!
+
+   cheers
+   dylan
+   [222]@hyonaldo
+
+this comment has been minimized.
+
+   [223]sign in to view
+   copy link (button) quote reply
+
+[224]hyonaldo commented [225]jun 21, 2017    
+
+   edited
+
+   hi, [226]@normferns:
+   i appreciate your kind reply, but i need to modify some of your answers
+   about rmsprop & positive/negative sign.
+   that is not due to maximize the loss(obj func), but because of the line
+dlogps.append(y - aprob)
+
+   if the line was "dlogps.append( -1 * (y - aprob) )" or "dlogps.append(
+   aprob - y )"
+   , the line 120 should be
+model[k] -= learning_rate * g / (np.sqrt(rmsprop_cache[k]) + 1e-5)
+
+   because "x += - learning_rate * dx / (np.sqrt(cache) + eps)." in cs231.
+
+   in [227]http://cs231n.github.io/neural-networks-3/#update,
+   "dx" means gradient of id168.
+   so,
+dx =  -1 * ( t - y ) * g' * x # see https://en.wikipedia.org/wiki/delta_rule
+dx ~ -1 * ( t - y ) # negative sign
+
+   but, in karpathy's code,
+g = (y - aprob) * g' * x
+g ~ (y - aprob) # positive sign
+
+   as you said, in the monte-carlo policy gradient method, we are using
+   gradient ascent to maximize     a * logp(y   x).
+   that's right!
+   however, this code uses     1/2 (y - aprob)^2 (i.e sse for rmsprop)
+   instead, like just a supervised learning!
+
+   [228]@finardi and [229]@kris-singh
+   what do you think about this?
+   [230]@kryptonbond
+
+this comment has been minimized.
+
+   [231]sign in to view
+   copy link (button) quote reply
+
+[232]kryptonbond commented [233]jul 20, 2017
+
+   hi this is great work i am able to run the whole thing in aws ec2.
+   can you please provide me how to run get the output of the game/? as
+   its a remote computer.
+   [234]@rrivera1849
+
+this comment has been minimized.
+
+   [235]sign in to view
+   copy link (button) quote reply
+
+[236]rrivera1849 commented [237]jul 28, 2017
+
+   thanks for sharing this andrej.
+   [238]@xmfbit
+
+this comment has been minimized.
+
+   [239]sign in to view
+   copy link (button) quote reply
+
+[240]xmfbit commented [241]aug 7, 2017    
+
+   edited
+
+   [242]@hyonaldo it is not sse(maybe you mean mse) loss. actually, the
+   author used y-aprob because it is the gradient of logsoftmax(x). see
+   computing the analytic gradient with id26 section in
+   [243]http://cs231n.github.io/neural-networks-case-study/ for detail.
+   [244]@hyonaldo
+
+this comment has been minimized.
+
+   [245]sign in to view
+   copy link (button) quote reply
+
+[246]hyonaldo commented [247]aug 12, 2017
+
+   [248]@xmfbit
+   you're right, i meant mse. but whether sse or mse or rmse does not
+   matter.
+   the point is that why the author used "y - aprob" is not to maximize
+   the gain ( i.e.     a * logp(y   x) ), but to minimize the loss ( e.g. sse
+   or mse or rmse or cross id178, ...... or whatever )
+   [249]@ibmua
+
+this comment has been minimized.
+
+   [250]sign in to view
+   copy link (button) quote reply
+
+[251]ibmua commented [252]aug 17, 2017    
+
+   edited
+
+   can anyone, please, say how many "episodes" it took them to get to 50%,
+   or some other win rate?
+   [253]@regmeg
+
+this comment has been minimized.
+
+   [254]sign in to view
+   copy link (button) quote reply
+
+[255]regmeg commented [256]aug 30, 2017    
+
+   edited
+
+   when you discount the rewards running_add = running_add * gamma + r[t]
+   and they all happen to be positive/negative, you will produce a mean
+   which will be bigger than the smallest reward (consider a corner case
+   when it is the first reward in the list). when you standardise it
+   discounted_epr -= np.mean(discounted_epr) you are going to invert the
+   signs the smallest negative/positive rewards, is it an issue in terms
+   of calculating derivatives later on, namely it will produce a
+   derivative which will contradict to the value of the reward? would it
+   be better to simply norm them, so that signs don't get inverted ?
+   [257]@abhishekashokdubey
+
+this comment has been minimized.
+
+   [258]sign in to view
+   copy link (button) quote reply
+
+[259]abhishekashokdubey commented [260]sep 16, 2017
+
+   for the back-prop explanation at one place:
+   [261]https://github.com/abhishekashokdubey/rl/blob/master/karpathy-ping
+   -pong/readme.md
+   :)
+   [262]@maitchison
+
+this comment has been minimized.
+
+   [263]sign in to view
+   copy link (button) quote reply
+
+[264]maitchison commented [265]sep 18, 2017
+
+   [266]@ibmua the algorithm trains very slowly with the default
+   learning_rate of 1e-4. it takes me around 20,000 (3 nights of training)
+   to get a score of around -10. if you change the learning rate to 1e-3
+   you should get an average score of 0 (i.e. competitive with ai) in
+   around 6,000 episodes. 3e-3 works too but seems less stable once we get
+   above 0.
+
+   hope that helps :)
+   -matthew.
+
+   [267]image
+   [268]@yugnaynehc
+
+this comment has been minimized.
+
+   [269]sign in to view
+   copy link (button) quote reply
+
+[270]yugnaynehc commented [271]nov 3, 2017    
+
+   edited
+
+   hello everyone! i want to give an explanation about "dlogps.append(y -
+   aprob)", which i had been very curious about. firstly, here we want to
+   produce a id203 to take certain action. in this case, karpathy
+   use only one output to represent the id203 to take up action, and
+   denote it as 'aprob' (i think it is better to use up_prob), hence the
+   id203 to take down is '1-aprob'. then, for the origin reinforce
+   formula, we could think it as using log p(action) as the objected
+   function (just temporarily leave rewards aside). now the problem
+   becomes "how to maximize the log p(action)", and we can calculate the
+   gradient w.r.t. logit :
+   [272]logit
+
+   when the taken action was up, the id203 is aprob, so the gradient
+   is 1-aprob, and when the taken action was down, the id203 is
+   1-aprob, so the gradient is 1 - (1-aprob) = -aprob. now it is clear why
+   the code introduce the fake label y.
+
+   if i was wrong, please correct me. many thanks!
+   [273]@kartikeyasaxena1012
+
+this comment has been minimized.
+
+   [274]sign in to view
+   copy link (button) quote reply
+
+[275]kartikeyasaxena1012 commented [276]dec 9, 2017
+
+   hello people whenever i try to run this code for pong on my windows
+   machine this error pops up
+   " \pong.py", line 24, in
+   grad_buffer = { k : np.zeros_like(v) for k,v in model.iteritems() } #
+   update buffers that add up gradients over a batch
+   attributeerror: 'dict' object has no attribute 'iteritems' "
+   can someone help me
+   thanks
+   [277]@pankajb64
+
+this comment has been minimized.
+
+   [278]sign in to view
+   copy link (button) quote reply
+
+[279]pankajb64 commented [280]dec 10, 2017    
+
+   edited
+
+   [281]@abhishekashokdubey thanks for the explanation, that helped me
+   understand the policy_backward method.
+   [282]@karpathy great post! thank you so much!
+
+   [283]@kartikeyasaxena1012 you're probably using python 3, in which case
+   you should use model.items() instead.
+   [284]@herokillerever
+
+this comment has been minimized.
+
+   [285]sign in to view
+   copy link (button) quote reply
+
+[286]herokillerever commented [287]jan 16, 2018
+
+   a silly question, looking forward to reply.
+
+   i am quite astonished to see that when i run the code, it is occupying
+   all the cpus in my server. since i know numpy is only using 1 cpu,
+   which part of the code enables the parallel computing?
+   [288]@yonghuangsjtu
+
+this comment has been minimized.
+
+   [289]sign in to view
+   copy link (button) quote reply
+
+[290]yonghuangsjtu commented [291]jan 23, 2018
+
+   i see many comments about "dlogps.append(y - aprob)" and i'm also
+   confused about that line.
+   let's suppose aprob is 0.9, and award is 1 for up and -1 for down. if y
+   is 1, then gradient epdlogp is (1-0.9) 1 = 0.1; but if y happens to be
+   0, then gradient epdlogp is (0-0.9) -1 = 0.9. the direction is still
+   correct but not in same scale.
+   y comes from np.random.uniform() < aprob,i think no matter what random
+   number we get, it should not affect back propagation of w1 and w2,
+   using aprod directly maybe better.
+   i don't have much experience in rl, welcome any comments if i
+   misunderstand anything :)
+   [292]@kelvin-zhong
+
+this comment has been minimized.
+
+   [293]sign in to view
+   copy link (button) quote reply
+
+[294]kelvin-zhong commented [295]feb 3, 2018
+
+   [296]@taey16 thank you for your explanation :)
+   [297]@kelvin-zhong
+
+this comment has been minimized.
+
+   [298]sign in to view
+   copy link (button) quote reply
+
+[299]kelvin-zhong commented [300]feb 3, 2018
+
+   [301]@yonghuangsjtu i have the confusion same as yours
+   [302]@emraherden
+
+this comment has been minimized.
+
+   [303]sign in to view
+   copy link (button) quote reply
+
+[304]emraherden commented [305]feb 6, 2018    
+
+   edited
+
+   [306]@finardi
+
+   in some papers they are using cost (where negative values wanted, and
+   cost minimized), in this one karpathy used rewards (where positive
+   values wanted, rewards maximized). sign discrepancy probably caused
+   from that.
+   [307]@hadxu
+
+this comment has been minimized.
+
+   [308]sign in to view
+   copy link (button) quote reply
+
+[309]hadxu commented [310]feb 13, 2018
+
+   could anyone share pytorch verison? thanks
+   [311]@marianivedha
+
+this comment has been minimized.
+
+   [312]sign in to view
+   copy link (button) quote reply
+
+[313]marianivedha commented [314]feb 16, 2018
+
+   [315]@yonghuangsjtu, [316]@kelvin-zhong
+   it works like this..
+   the 'aprob' gives the id203 of taking the up action and thus
+   aprob=1 tells that the up action must be taken(which means down action
+   must not be taken). likewise, aprob=0 tells that the up action must not
+   be taken(which means down action must be taken). this line "action = 2
+   if np.random.uniform() < aprob else 3 " is to take randomly a up action
+   or a down action.
+
+   suppose if we get aprob=0.4 and on random, we get to sample for down
+   action, then we do gradient (0-0.4=-0.4) since this -ve 0.4 tells to
+   move down to the lower boundary 0(which is highest id203 of
+   taking the down action).
+
+   suppose if we get aprob=0.4 and on random, we get to sample for up
+   action, then we do gradient(1-0.4=0.6) since this +ve 0.6 tells to move
+   up to the upper boundary 1(which is highest id203 of taking the
+   up action)
+   see the below image for understanding..
+   [317]image
+   [318]@akathirkathir
+
+this comment has been minimized.
+
+   [319]sign in to view
+   copy link (button) quote reply
+
+[320]akathirkathir commented [321]feb 26, 2018
+
+   hey, i need some clear idea at line number 61. why we use 'epx'. can
+   you write down id26 formula for w1 and w2.
+   [322]@xombio
+
+this comment has been minimized.
+
+   [323]sign in to view
+   copy link (button) quote reply
+
+[324]xombio commented [325]mar 16, 2018
+
+   question 1: i'm not a python person so i'm trying to write this code in
+   matlab. i noticed that xs, hs, dlogps, and drs are initialized to
+   [],[],[],[] and reset to [],[],[],[] after each episode. but epx, eph,
+   epdlogp, and epr are neither initialized nor reset. they seem to keep
+   growing for ever (lines 99-102). i'm not familiar with the nuances of
+   np.vstack. am i correct?
+
+   question 2: if i had a game with player movement options up, down,
+   right, and left, how would i need to modify this code to make it work
+   (beside the obvious modification to 4 nodes in the output layer)?
+
+   thanks.
+   [326]@rayedbar
+
+this comment has been minimized.
+
+   [327]sign in to view
+   copy link (button) quote reply
+
+[328]rayedbar commented [329]mar 20, 2018
+
+   is there a pre-trained network available which can be deployed in a gym
+   environment and played with?
+   [330]@mashoujiang
+
+this comment has been minimized.
+
+   [331]sign in to view
+   copy link (button) quote reply
+
+[332]mashoujiang commented [333]mar 22, 2018
+
+   hi, [334]@normferns
+   i have the same confuse with you about the concept of episode. in line
+   95: if done: # an episode finished, i think maybe it is an error. and i
+   noticed that the done=true only after 20 round finished. but reward!=0
+   happened for every round game.
+   i find nobody recurred this issue.. and this code worked! i can't
+   understand..
+   [335]@bighopes
+
+this comment has been minimized.
+
+   [336]sign in to view
+   copy link (button) quote reply
+
+[337]bighopes commented [338]mar 31, 2018    
+
+   edited
+
+   while running the code on python 3.5, i faced some issues and solve
+   them, happy to share:
+   (note: the code won't work on windows cause atari_py won't work)
+
+   1- cpickle didn't work so just change it to: import pickle
+
+   2- model.iteritems() didn't work, change it to: model.items()
+
+   3- error: no module named : 'atari_py'. ,
+   install atari dependencies by running 'pip install gym[atari]'.)
+
+   4- name 'xrange' is not defined ... use range instead
+
+   then make: render = true, and enjoy watching it learning (the rl agent
+   is the green one) :)
+   [339]@felixdae
+
+this comment has been minimized.
+
+   [340]sign in to view
+   copy link (button) quote reply
+
+[341]felixdae commented [342]apr 4, 2018
+
+   reimplemented it with tensorflow, hope it helps
+   [343]https://github.com/gameofdimension/policy-gradient-pong
+   [344]@lucdaodainhan
+
+this comment has been minimized.
+
+   [345]sign in to view
+   copy link (button) quote reply
+
+[346]lucdaodainhan commented [347]apr 29, 2018    
+
+   edited
+
+   thank for great post, anyone can help me, i done with entire code but
+   just display only log result without gameplay of pong when running,
+   i run code with idle shell python 2.7.14 with my os window 10 32 bit,
+   what problem with me? i mean just only shell running and no gameplay of
+   pong appeare ??
+   [348]pongnotdone
+   [349]@alro10
+
+this comment has been minimized.
+
+   [350]sign in to view
+   copy link (button) quote reply
+
+[351]alro10 commented [352]may 29, 2018
+
+   hi! @lucdaoinhan, add this command after gym.make("pong-v0")
+
+   env = gym.wrappers.monitor(env, '.', force=true)
+   [353]@crowjdh
+
+this comment has been minimized.
+
+   [354]sign in to view
+   copy link (button) quote reply
+
+[355]crowjdh commented [356]jun 19, 2018
+
+   thanks for sharing great work :)
+   you really should have added your blog post url somewhere, which
+   illustrates this code in really comprehensive way.
+
+   for anyone who may benefit, here is the link:
+   [357]http://karpathy.github.io/2016/05/31/rl/
+   [358]@javaswinger
+
+this comment has been minimized.
+
+   [359]sign in to view
+   copy link (button) quote reply
+
+[360]javaswinger commented [361]jul 9, 2018    
+
+   edited
+
+   i added a revision for python 3.6.6 that works and it required more mac
+   setup that was in the original post:
+
+     git clone [362]https://github.com/openai/gym.git; cd gym; brew
+     install cmake boost boost-python sdl2 swig wget; pip install -e
+     '.[atari]'
+
+   [363]@nkcr
+
+this comment has been minimized.
+
+   [364]sign in to view
+   copy link (button) quote reply
+
+[365]nkcr commented [366]nov 20, 2018
+
+     hey, i need some clear idea at line number 61. why we use 'epx'. can
+     you write down id26 formula for w1 and w2.
+
+   here is the formula involved in the forward and backward functions, it
+   appears clearly why the use of epx.
+
+   first, let's draw a picture of our neural network :
+
+   i used the general notation, but showed the corresponding values from
+   the code (h and p).
+
+   what the forward function does is computing the following:
+
+   [367]\\ z_1 = w_1 x \\ a_1 = relu(z_1) = h \\ z_2 = w_2 a_1 = logp \\
+   a_2 = sig(z_2) = p
+
+   for the backward pass, we use the standard back propagation
+   formula^[368]1, which are:
+
+   [369]\\ \frac{\partial c}{\partial w_l} = a_{l-1} \delta_l \\
+   \delta_{l2} = \nabla_a c \odot \sigma'(z_2)\\ \delta_l = ((w_{l+1})^t
+   \delta_{l+1}) \odot \sigma'(z_l)
+
+   so we can use those to compute the gradients for w_1 and w_2.
+
+   for w_2:
+
+   [370]\\ \frac{\partial c}{\partial w_2} = a_{1} \delta_{l2} = a_1
+   \nabla_a c \odot \sigma'(z_2) \\ \texttt{from the code,} \delta_{l2}
+   \texttt{ is 'epdlogp' and } a_1 \texttt{ is 'h', so we have:}\\
+   \frac{\partial c}{\partial w_2} = h^t \cdot epdlogp
+
+   note we use the transpose of h to match the dimensions.
+
+   for w_1:
+
+   [371]\\ \frac{\partial c}{\partial w_1} = a_{0} \delta_{l1} = a_0
+   ((w_{2})^t \delta_{l2}) \odot \sigma'(z_1) \\ \texttt{from the code, }
+   a_0 \texttt{ is 'epx' and } \delta_{l1} \texttt{ is ('dh')):}\\
+   \frac{\partial c}{\partial w_1} = (dh)^t \cdot epx
+   [372]@vbordalo
+
+this comment has been minimized.
+
+   [373]sign in to view
+   copy link (button) quote reply
+
+[374]vbordalo commented [375]dec 5, 2018
+
+   last line... the position of the close bracket (parenthesis):
+   print ('ep %d: game finished, reward: %f' % (episode_number, reward) +
+   ('' if reward == -1 else ' !!!!!!!!'))
+   [376]@bassamalghram
+
+this comment has been minimized.
+
+   [377]sign in to view
+   copy link (button) quote reply
+
+[378]bassamalghram commented [379]dec 30, 2018
+
+   hi, i have problem with the code can you help me
+   i am using python3.6 and it seem the code is wrong at this line
+   grad_buffer = { k : np.zeros_like(v) for k,v in model.iteritems() } #
+   update buffers that add up gradients over a batch
+   rmsprop_cache = { k : np.zeros_like(v) for k,v in model.iteritems() } #
+   rmsprop memory
+   [380]image
+   [381]capture
+   [382]@bassamalghram
+
+this comment has been minimized.
+
+   [383]sign in to view
+   copy link (button) quote reply
+
+[384]bassamalghram commented [385]dec 30, 2018
+
+   the line
+   env=pygame.make(pong-n0).is wrong
+   it said the make attribute is not attribute of pygame
+   [386]@omkarv
+
+this comment has been minimized.
+
+   [387]sign in to view
+   copy link (button) quote reply
+
+[388]omkarv commented [389]dec 30, 2018
+
+   for anyone trying to understand the code in this gist, i found the
+   following video from deep rl bootcamp really helpful, probably more
+   helpful than andrej's blog:
+
+   [390]https://www.youtube.com/watch?v=tqrcjhundmq
+   [391]@djcordhose
+
+this comment has been minimized.
+
+   [392]sign in to view
+   copy link (button) quote reply
+
+[393]djcordhose commented [394]jan 1, 2019    
+
+   edited
+
+   i made this code into a colab notebook running python 3 that allows you
+   to run this without local installation and keep training it. it also
+   allows to display episodes played. i added some fixes/adjustments
+   mentioned by several people in the comments here.
+
+   [395]https://colab.research.google.com/github/djcordhose/ai/blob/master
+   /notebooks/rl/pg-from-scratch.ipynb
+
+   it performs ok after a few hours of training, but might take 1-2 days
+   before it actually outperforms the computer player
+   [396]@omkarv
+
+this comment has been minimized.
+
+   [397]sign in to view
+   copy link (button) quote reply
+
+[398]omkarv commented [399]jan 9, 2019
+
+   i've [400]forked the repo added some explanatory comments to the code,
+   and fixed a minor bug which helps me to get a bit better performance
+   (although this could be explained by randomness stumbling on a better
+   reward return...
+
+   basically the base repo trims off 35px from the start of the width of
+   the input image, but only 15px off the end - which would mean the
+   network is still training off when the ball passes the paddle, which
+   isn't useful. trimming more off the end of the image seemed to boost
+   performance:
+
+   using a learning rate of 1e-3 it took 12000 episodes to reach a
+   trailing reward score of -5.
+   with the bugfix in place and a learning rate of 1e-3, the trailing
+   average reward at 10000 episodes was 3ish
+   [401]@studentra
+
+this comment has been minimized.
+
+   [402]sign in to view
+   copy link (button) quote reply
+
+[403]studentra commented [404]feb 19, 2019
+
+   i had platform win 64 bit , can this program work on it
+   [405]sign up for free to join this conversation on github. already have
+   an account? [406]sign in to comment
+
+     *    2019 github, inc.
+     * [407]terms
+     * [408]privacy
+     * [409]security
+     * [410]status
+     * [411]help
+
+     * [412]contact github
+     * [413]pricing
+     * [414]api
+     * [415]training
+     * [416]blog
+     * [417]about
+
+   (button) you can   t perform that action at this time.
+
+   you signed in with another tab or window. [418]reload to refresh your
+   session. you signed out in another tab or window. [419]reload to
+   refresh your session.
+
+   (button)
+
+references
+
+   visible links
+   1. https://gist.github.com/opensearch-gist.xml
+   2. https://gist.github.com/karpathy.atom
+   3. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#start-of-content
+   4. https://gist.github.com/discover
+   5. https://github.com/
+   6. https://gist.github.com/join?source=header-gist
+   7. https://gist.github.com/auth/github?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+   8. https://gist.github.com/karpathy
+   9. https://gist.github.com/karpathy
+  10. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  11. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  12. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/stargazers
+  13. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  14. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/forks
+  15. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  16. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/revisions
+  17. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/stargazers
+  18. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/forks
+  19. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/archive/06d092624118444f7350a22653e8ba9d1c6e63d6.zip
+  20. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5/raw/06d092624118444f7350a22653e8ba9d1c6e63d6/pg-pong.py
+  21. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#file-pg-pong-py
+  22. https://gist.github.com/liangfu
+  23. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  24. https://gist.github.com/liangfu
+  25. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1791222
+  26. https://github.com/karpathy
+  27. https://gist.github.com/micoolcho
+  28. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  29. https://gist.github.com/micoolcho
+  30. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1791223
+  31. https://github.com/karpathy
+  32. https://gist.github.com/lakehanne
+  33. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  34. https://gist.github.com/lakehanne
+  35. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1791224
+  36. https://gist.github.com/jwjohnson314
+  37. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  38. https://gist.github.com/jwjohnson314
+  39. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1792718
+  40. https://gist.github.com/domluna
+  41. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  42. https://gist.github.com/domluna
+  43. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1793150
+  44. https://github.com/karpathy
+  45. https://gist.github.com/etienne87
+  46. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  47. https://gist.github.com/etienne87
+  48. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1793632
+  49. https://github.com/karpathy
+  50. https://gist.github.com/yuzcccc
+  51. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  52. https://gist.github.com/yuzcccc
+  53. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1795684
+  54. https://gist.github.com/etienne87
+  55. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  56. https://gist.github.com/etienne87
+  57. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1797545
+  58. https://github.com/domluna
+  59. https://github.com/yuzcccc
+  60. https://gist.github.com/etienne87/6803a65653975114e6c6f08bb25e1522
+  61. https://gist.github.com/pitybea
+  62. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  63. https://gist.github.com/pitybea
+  64. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1803593
+  65. https://gist.github.com/greydanus
+  66. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  67. https://gist.github.com/greydanus
+  68. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1807034
+  69. https://github.com/karpathy
+  70. https://gist.github.com/atcold
+  71. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  72. https://gist.github.com/atcold
+  73. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1807042
+  74. https://gist.github.com/dorajam
+  75. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  76. https://gist.github.com/dorajam
+  77. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1815425
+  78. https://gist.github.com/selvamarul
+  79. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  80. https://gist.github.com/selvamarul
+  81. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1820458
+  82. https://gist.github.com/nickc92
+  83. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  84. https://gist.github.com/nickc92
+  85. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1823286
+  86. https://github.com/selvamarul
+  87. https://gist.github.com/nhdaly
+  88. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  89. https://gist.github.com/nhdaly
+  90. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1842609
+  91. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#file-pg-pong-py-l61
+  92. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#file-pg-pong-py-l99
+  93. https://gist.github.com/sohero
+  94. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  95. https://gist.github.com/sohero
+  96. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1860353
+  97. https://gist.github.com/taey16
+  98. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  99. https://gist.github.com/taey16
+ 100. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1861194
+ 101. https://github.com/sohero
+ 102. https://gist.github.com/michaelburge
+ 103. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 104. https://gist.github.com/michaelburge
+ 105. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1864740
+ 106. https://gist.github.com/hqm
+ 107. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 108. https://gist.github.com/hqm
+ 109. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1882505
+ 110. https://gist.github.com/farscape2012
+ 111. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 112. https://gist.github.com/farscape2012
+ 113. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1896662
+ 114. https://gist.github.com/danieltakeshi
+ 115. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 116. https://gist.github.com/danieltakeshi
+ 117. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1903413
+ 118. https://github.com/nhdaly
+ 119. https://gist.github.com/finardi
+ 120. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 121. https://gist.github.com/finardi
+ 122. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1912409
+ 123. http://cs231n.github.io/neural-networks-3/
+ 124. https://gist.github.com/zerolocker
+ 125. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 126. https://gist.github.com/zerolocker
+ 127. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1923035
+ 128. https://github.com/dorajam
+ 129. https://github.com/greydanus
+ 130. http://cs231n.github.io/neural-networks-2/#losses
+ 131. https://gist.github.com/neighborzhang
+ 132. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 133. https://gist.github.com/neighborzhang
+ 134. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1942807
+ 135. https://github.com/karpathy
+ 136. https://gist.github.com/petercerno
+ 137. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 138. https://gist.github.com/petercerno
+ 139. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1960513
+ 140. https://gist.github.com/gokayhuz
+ 141. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 142. https://gist.github.com/gokayhuz
+ 143. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1971480
+ 144. https://github.com/hqm
+ 145. https://gist.github.com/irwenqiang
+ 146. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 147. https://gist.github.com/irwenqiang
+ 148. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-1992179
+ 149. https://pan.baidu.com/s/1mh8jkig
+ 150. https://gist.github.com/jiaqiliu
+ 151. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 152. https://gist.github.com/jiaqiliu
+ 153. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2006732
+ 154. https://gist.github.com/jiaqiliu
+ 155. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 156. https://gist.github.com/jiaqiliu
+ 157. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2007445
+ 158. https://gist.github.com/trillionpowers
+ 159. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 160. https://gist.github.com/trillionpowers
+ 161. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2007701
+ 162. https://gist.github.com/trillionpowers
+ 163. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 164. https://gist.github.com/trillionpowers
+ 165. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2008025
+ 166. https://gist.github.com/schinger
+ 167. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 168. https://gist.github.com/schinger
+ 169. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2015674
+ 170. https://github.com/schinger/pong_actor-critic
+ 171. https://gist.github.com/shailesh
+ 172. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 173. https://gist.github.com/shailesh
+ 174. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2018718
+ 175. https://gist.github.com/rogaha
+ 176. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 177. https://gist.github.com/rogaha
+ 178. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2020115
+ 179. https://github.com/karpathy
+ 180. https://gist.github.com/kris-singh
+ 181. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 182. https://gist.github.com/kris-singh
+ 183. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2023754
+ 184. https://github.com/finardi
+ 185. https://gist.github.com/4skynet
+ 186. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 187. https://gist.github.com/4skynet
+ 188. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2031990
+ 189. https://github.com/karpathy
+ 190. https://gist.github.com/chandankuiry
+ 191. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 192. https://gist.github.com/chandankuiry
+ 193. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2049806
+ 194. https://gist.github.com/jpeg729
+ 195. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 196. https://gist.github.com/jpeg729
+ 197. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2071259
+ 198. https://gist.github.com/jjuel
+ 199. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 200. https://gist.github.com/jjuel
+ 201. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2075218
+ 202. https://gist.github.com/normferns
+ 203. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 204. https://gist.github.com/normferns
+ 205. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2076427
+ 206. https://github.com/karpathy
+ 207. http://arxiv.org/abs/1506.02438
+ 208. http://incompleteideas.net/sutton/book/the-book-2nd.html
+ 209. https://github.com/jiaqiliu
+ 210. https://github.com/danieltakeshi
+ 211. https://gist.github.com/normferns
+ 212. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 213. https://gist.github.com/normferns
+ 214. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2076436
+ 215. https://github.com/finardi
+ 216. https://github.com/kris-singh
+ 217. https://gist.github.com/dylanrandle
+ 218. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 219. https://gist.github.com/dylanrandle
+ 220. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2107319
+ 221. https://github.com/karpathy
+ 222. https://gist.github.com/hyonaldo
+ 223. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 224. https://gist.github.com/hyonaldo
+ 225. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2128629
+ 226. https://github.com/normferns
+ 227. http://cs231n.github.io/neural-networks-3/#update
+ 228. https://github.com/finardi
+ 229. https://github.com/kris-singh
+ 230. https://gist.github.com/kryptonbond
+ 231. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 232. https://gist.github.com/kryptonbond
+ 233. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2152594
+ 234. https://gist.github.com/rrivera1849
+ 235. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 236. https://gist.github.com/rrivera1849
+ 237. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2161404
+ 238. https://gist.github.com/xmfbit
+ 239. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 240. https://gist.github.com/xmfbit
+ 241. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2169877
+ 242. https://github.com/hyonaldo
+ 243. http://cs231n.github.io/neural-networks-case-study/
+ 244. https://gist.github.com/hyonaldo
+ 245. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 246. https://gist.github.com/hyonaldo
+ 247. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2174619
+ 248. https://github.com/xmfbit
+ 249. https://gist.github.com/ibmua
+ 250. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 251. https://gist.github.com/ibmua
+ 252. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2179186
+ 253. https://gist.github.com/regmeg
+ 254. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 255. https://gist.github.com/regmeg
+ 256. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2189246
+ 257. https://gist.github.com/abhishekashokdubey
+ 258. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 259. https://gist.github.com/abhishekashokdubey
+ 260. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2205025
+ 261. https://github.com/abhishekashokdubey/rl/blob/master/karpathy-ping-pong/readme.md
+ 262. https://gist.github.com/maitchison
+ 263. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 264. https://gist.github.com/maitchison
+ 265. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2205995
+ 266. https://github.com/ibmua
+ 267. https://user-images.githubusercontent.com/4619344/30533350-fd47845e-9cac-11e7-850e-11e8fa054bf5.png
+ 268. https://gist.github.com/yugnaynehc
+ 269. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 270. https://gist.github.com/yugnaynehc
+ 271. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2246647
+ 272. https://user-images.githubusercontent.com/3363655/32367110-f1844980-c0bb-11e7-9639-19fcc0cf449f.png
+ 273. https://gist.github.com/kartikeyasaxena1012
+ 274. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 275. https://gist.github.com/kartikeyasaxena1012
+ 276. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2280311
+ 277. https://gist.github.com/pankajb64
+ 278. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 279. https://gist.github.com/pankajb64
+ 280. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2280829
+ 281. https://github.com/abhishekashokdubey
+ 282. https://github.com/karpathy
+ 283. https://github.com/kartikeyasaxena1012
+ 284. https://gist.github.com/herokillerever
+ 285. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 286. https://gist.github.com/herokillerever
+ 287. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2322302
+ 288. https://gist.github.com/yonghuangsjtu
+ 289. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 290. https://gist.github.com/yonghuangsjtu
+ 291. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2329213
+ 292. https://gist.github.com/kelvin-zhong
+ 293. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 294. https://gist.github.com/kelvin-zhong
+ 295. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2340611
+ 296. https://github.com/taey16
+ 297. https://gist.github.com/kelvin-zhong
+ 298. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 299. https://gist.github.com/kelvin-zhong
+ 300. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2340621
+ 301. https://github.com/yonghuangsjtu
+ 302. https://gist.github.com/emraherden
+ 303. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 304. https://gist.github.com/emraherden
+ 305. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2343482
+ 306. https://github.com/finardi
+ 307. https://gist.github.com/hadxu
+ 308. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 309. https://gist.github.com/hadxu
+ 310. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2350214
+ 311. https://gist.github.com/marianivedha
+ 312. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 313. https://gist.github.com/marianivedha
+ 314. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2353223
+ 315. https://github.com/yonghuangsjtu
+ 316. https://github.com/kelvin-zhong
+ 317. https://user-images.githubusercontent.com/35573423/36304906-6e3e8c38-1337-11e8-930b-d864c1b59112.png
+ 318. https://gist.github.com/akathirkathir
+ 319. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 320. https://gist.github.com/akathirkathir
+ 321. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2362426
+ 322. https://gist.github.com/xombio
+ 323. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 324. https://gist.github.com/xombio
+ 325. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2382758
+ 326. https://gist.github.com/rayedbar
+ 327. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 328. https://gist.github.com/rayedbar
+ 329. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2386277
+ 330. https://gist.github.com/mashoujiang
+ 331. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 332. https://gist.github.com/mashoujiang
+ 333. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2388637
+ 334. https://github.com/normferns
+ 335. https://gist.github.com/bighopes
+ 336. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 337. https://gist.github.com/bighopes
+ 338. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2397452
+ 339. https://gist.github.com/felixdae
+ 340. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 341. https://gist.github.com/felixdae
+ 342. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2401074
+ 343. https://github.com/gameofdimension/policy-gradient-pong
+ 344. https://gist.github.com/lucdaodainhan
+ 345. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 346. https://gist.github.com/lucdaodainhan
+ 347. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2573995
+ 348. https://user-images.githubusercontent.com/38840531/39409488-10068fa8-4c12-11e8-82c6-36b35f0e5d8a.png
+ 349. https://gist.github.com/alro10
+ 350. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 351. https://gist.github.com/alro10
+ 352. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2603223
+ 353. https://gist.github.com/crowjdh
+ 354. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 355. https://gist.github.com/crowjdh
+ 356. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2623736
+ 357. http://karpathy.github.io/2016/05/31/rl/
+ 358. https://gist.github.com/javaswinger
+ 359. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 360. https://gist.github.com/javaswinger
+ 361. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2642301
+ 362. https://github.com/openai/gym.git
+ 363. https://gist.github.com/nkcr
+ 364. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 365. https://gist.github.com/nkcr
+ 366. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2764531
+ 367. https://camo.githubusercontent.com/9378ec438105bab46a7c1f0b5322286d9d58c179/68747470733a2f2f6c617465782e636f6465636f67732e636f6d2f6769662e6c617465783f5c5c2673706163653b5a5f312673706163653b3d2673706163653b575f312673706163653b582673706163653b5c5c2673706163653b415f312673706163653b3d2673706163653b52654c55285a5f31292673706163653b3d2673706163653b682673706163653b5c5c2673706163653b5a5f322673706163653b3d2673706163653b575f322673706163653b415f312673706163653b3d2673706163653b6c6f67702673706163653b5c5c2673706163653b415f322673706163653b3d2673706163653b736967285a5f32292673706163653b3d2673706163653b70
+ 368. http://neuralnetworksanddeeplearning.com/chap2.html
+ 369. https://camo.githubusercontent.com/d072ce90a509337b69852c4f99461945b5f95590/68747470733a2f2f6c617465782e636f6465636f67732e636f6d2f6769662e6c617465783f5c5c2673706163653b5c667261637b5c7061727469616c2673706163653b437d7b5c7061727469616c2673706163653b575f6c7d2673706163653b3d2673706163653b415f7b6c2d317d2673706163653b5c44656c74615f6c2673706163653b5c5c2673706163653b5c44656c74615f7b4c327d2673706163653b3d2673706163653b5c6e61626c615f612673706163653b432673706163653b5c6f646f742673706163653b5c7369676d6127285a5f32295c5c2673706163653b5c44656c74615f6c2673706163653b3d2673706163653b2828575f7b6c2b317d295e542673706163653b5c64656c74615f7b6c2b317d292673706163653b5c6f646f742673706163653b5c7369676d6127287a5f6c29
+ 370. https://camo.githubusercontent.com/1f8935c5ee5a2a60ade2640d91ff357c3f9e6ce1/68747470733a2f2f6c617465782e636f6465636f67732e636f6d2f6769662e6c617465783f5c5c2673706163653b5c667261637b5c7061727469616c2673706163653b437d7b5c7061727469616c2673706163653b575f327d2673706163653b3d2673706163653b415f7b317d2673706163653b5c44656c74615f7b4c327d2673706163653b3d2673706163653b415f312673706163653b5c6e61626c615f612673706163653b432673706163653b5c6f646f742673706163653b5c7369676d6127285a5f32292673706163653b5c5c2673706163653b5c7465787474747b46726f6d2673706163653b7468652673706163653b636f64652c7d2673706163653b5c44656c74615f7b4c327d2673706163653b5c7465787474747b2673706163653b69732673706163653b276570646c6f6770272673706163653b616e642673706163653b7d2673706163653b415f312673706163653b5c7465787474747b2673706163653b69732673706163653b2768272c2673706163653b736f2673706163653b77652673706163653b686176653a7d5c5c2673706163653b5c667261637b5c7061727469616c2673706163653b437d7b5c7061727469616c2673706163653b575f327d2673706163653b3d2673706163653b685e542673706163653b5c63646f742673706163653b6570646c6f6770
+ 371. https://camo.githubusercontent.com/51fc5fbfe873a43772244fb03f7ed2a50b076a39/68747470733a2f2f6c617465782e636f6465636f67732e636f6d2f6769662e6c617465783f5c5c2673706163653b5c667261637b5c7061727469616c2673706163653b437d7b5c7061727469616c2673706163653b575f317d2673706163653b3d2673706163653b415f7b307d2673706163653b5c44656c74615f7b4c317d2673706163653b3d2673706163653b415f302673706163653b2828575f7b327d295e542673706163653b5c44656c74615f7b4c327d292673706163653b5c6f646f742673706163653b5c7369676d6127287a5f31292673706163653b5c5c2673706163653b5c7465787474747b46726f6d2673706163653b7468652673706163653b636f64652c2673706163653b7d2673706163653b415f302673706163653b5c7465787474747b2673706163653b69732673706163653b27657078272673706163653b616e642673706163653b7d2673706163653b5c44656c74615f7b4c317d2673706163653b5c7465787474747b2673706163653b69732673706163653b282764682729293a7d5c5c2673706163653b5c667261637b5c7061727469616c2673706163653b437d7b5c7061727469616c2673706163653b575f317d2673706163653b3d2673706163653b286468295e542673706163653b5c63646f742673706163653b657078
+ 372. https://gist.github.com/vbordalo
+ 373. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 374. https://gist.github.com/vbordalo
+ 375. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2777746
+ 376. https://gist.github.com/bassamalghram
+ 377. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 378. https://gist.github.com/bassamalghram
+ 379. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2797545
+ 380. https://user-images.githubusercontent.com/35939848/50547724-d44d4580-0c58-11e9-9166-687bde942a1f.png
+ 381. https://user-images.githubusercontent.com/35939848/50547732-ed55f680-0c58-11e9-8fce-38af207bf9ad.png
+ 382. https://gist.github.com/bassamalghram
+ 383. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 384. https://gist.github.com/bassamalghram
+ 385. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2797567
+ 386. https://gist.github.com/omkarv
+ 387. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 388. https://gist.github.com/omkarv
+ 389. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2797664
+ 390. https://www.youtube.com/watch?v=tqrcjhundmq
+ 391. https://gist.github.com/djcordhose
+ 392. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 393. https://gist.github.com/djcordhose
+ 394. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2798760
+ 395. https://colab.research.google.com/github/djcordhose/ai/blob/master/notebooks/rl/pg-from-scratch.ipynb
+ 396. https://gist.github.com/omkarv
+ 397. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 398. https://gist.github.com/omkarv
+ 399. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2804698
+ 400. https://github.com/omkarv/pong-from-pixels
+ 401. https://gist.github.com/studentra
+ 402. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 403. https://gist.github.com/studentra
+ 404. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5#gistcomment-2841479
+ 405. https://gist.github.com/join?source=comment-gist
+ 406. https://gist.github.com/login?return_to=https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 407. https://github.com/site/terms
+ 408. https://github.com/site/privacy
+ 409. https://github.com/security
+ 410. https://githubstatus.com/
+ 411. https://help.github.com/
+ 412. https://github.com/contact
+ 413. https://github.com/pricing
+ 414. https://developer.github.com/
+ 415. https://training.github.com/
+ 416. https://github.blog/
+ 417. https://github.com/about
+ 418. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+ 419. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+
+   hidden links:
+ 421. https://gist.github.com/
+ 422. https://help.github.com/articles/which-remote-url-should-i-use
+ 423. https://camo.githubusercontent.com/f1a0bf47abff75d9f97a80e6aad7a5c9f81e516a/68747470733a2f2f73746f726167652e676f6f676c65617069732e636f6d2f6e6b63725f706572736f6e616c5f73746f726167652f63646e2f6d73652f4d542f726c5f7374727563742e737667
+ 424. https://github.com/

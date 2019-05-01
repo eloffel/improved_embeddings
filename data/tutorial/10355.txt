@@ -1,0 +1,1177 @@
+6
+1
+0
+2
+
+ 
+r
+p
+a
+1
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+4
+v
+1
+0
+3
+2
+0
+
+.
+
+1
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2016
+
+the goldilocks principle: reading children   s
+books with explicit memory representations
+
+felix hill   , antoine bordes, sumit chopra & jason weston
+facebook ai research
+770 broadway
+new york, usa
+felix.hill@cl.cam.ac.uk,{abordes,spchopra,jase}@fb.com
+
+abstract
+
+we introduce a new test of how well language models capture meaning in chil-
+dren   s books. unlike standard language modelling benchmarks, it distinguishes
+the task of predicting syntactic function words from that of predicting lower-
+frequency words, which carry greater semantic content. we compare a range of
+state-of-the-art models, each with a different way of encoding what has been previ-
+ously read. we show that models which store explicit representations of long-term
+contexts outperform state-of-the-art neural language models at predicting seman-
+tic content words, although this advantage is not observed for syntactic function
+words. interestingly, we    nd that the amount of text encoded in a single memory
+representation is highly in   uential to the performance: there is a sweet-spot, not
+too big and not too small, between single words and full sentences that allows the
+most meaningful information in a text to be effectively retained and recalled. fur-
+ther, the attention over such window-based memories can be trained effectively
+through self-supervision. we then assess the generality of this principle by ap-
+plying it to the id98 qa benchmark, which involves identifying named entities in
+paraphrased summaries of news articles, and achieve state-of-the-art performance.
+
+1
+
+introduction
+
+humans do not interpret language in isolation. the context in which words and sentences are un-
+derstood, whether a conversation, book chapter or road sign, plays an important role in human com-
+prehension (altmann & steedman, 1988; binder & desai, 2011). in this work, we investigate how
+well statistical models can exploit such wider contexts to make predictions about natural language.
+our analysis is based on a new benchmark dataset (the children   s book test or cbt) designed to
+test the role of memory and context in language processing and understanding. the test requires
+predictions about different types of missing words in children   s books, given both nearby words and
+a wider context from the book. humans taking the test predict all types of word with similar levels
+of accuracy. however, they rely on the wider context to make accurate predictions about named
+entities or nouns, whereas it is unimportant when predicting higher-frequency verbs or prepositions.
+as we show, state-of-the-art language modelling architectures, recurrent neural networks (id56s)
+with long-short term memory (lstms), perform differently to humans on this task. they are
+excellent predictors of prepositions (on, at) and verbs (run, eat), but lag far behind humans when
+predicting nouns (ball, table) or named entities (elvis, france). this is because their predictions are
+based almost exclusively on local contexts. in contrast, memory networks (weston et al., 2015b) are
+one of a class of    contextual models    that can interpret language at a given point in text conditioned
+directly on both local information and explicit representation of the wider context. on the cbt,
+memory networks designed in a particular way can exploit this information to achieve markedly
+better prediction of named-entities and nouns than conventional language models. this is important
+for applications that require coherent semantic processing and/or language generation, since nouns
+and entities typically encode much of the important semantic information in language.
+
+   the majority of this work was done while fh was at facebook ai research, and was completed at his
+
+current af   liation, university of cambridge, computer laboratory, cambridge, uk.
+
+1
+
+published as a conference paper at iclr 2016
+
+however, not all contextual models reach this level of performance. we    nd the way in which wider
+context is represented in memory to be critical. if memories are encoded from a small window
+around important words in the context, there is an optimal size for memory representations between
+single words and entire sentences, that depends on the class of word to be predicted. we have nick-
+named this effect the goldilocks principle after the well-known english fairytale (hassall, 1904).
+in the case of memory networks, we also    nd that self-supervised training of the memory access
+mechanism yields a clear performance boost when predicting named entities, a class of word that
+has typically posed problems for neural language models. indeed, we train a memory network with
+these design features to beat the best reported performance on the id98 qa test of entity prediction
+from news articles (hermann et al., 2015).
+
+2 the children   s book test
+
+the experiments in this paper are based on a new resource, the children   s book test, designed to
+measure directly how well language models can exploit wider linguistic context. the cbt is built
+from books that are freely available thanks to project gutenberg.1 using children   s books guarantees
+a clear narrative structure, which can make the role of context more salient. after allocating books
+to either training, validation or test sets, we formed example    questions    (denoted x) from chapters
+in the book by enumerating 21 consecutive sentences.
+in each question, the    rst 20 sentences form the context (denoted s), and a word (denoted a) is
+removed from the 21st sentence, which becomes the query (denoted q). models must identify the
+answer word a among a selection of 10 candidate answers (denoted c) appearing in the context
+sentences and the query. thus, for a question answer pair (x, a): x = (q, s, c); s is an ordered
+list of sentences; q is a sentence (an ordered list q = q1, . . . ql of words) containing a missing word
+symbol; c is a bag of unique words such that a     c, its cardinality |c| is 10 and every candidate
+word w     c is such that w     q     s. an example question is given in figure 1.
+
+figure 1: a named entity question from the cbt (right), created from a book passage (left, in
+blue). in this case, the candidate answers c are both entities and common nouns, since fewer than
+ten named entities are found in the context.
+
+for    ner-grained analyses, we evaluated four classes of question by removing distinct types of word:
+named entities, (common) nouns, verbs and prepositions (based on output from the pos tagger
+and named-entity-recogniser in the stanford core nlp toolkit (manning et al., 2014)). for a given
+question class, the nine incorrect candidates are selected at random from words in the context having
+the same type as the answer. the exact number of questions in the training, validation and test sets is
+shown in table 1. full details of the candidate selection algorithm (e.g. how candidates are selected
+if there are insuf   cient words of a given type in the context) can be found with the dataset.2
+
+1https://www.gutenberg.org/
+2the dataset can be downloaded from http://fb.ai/babi/.
+
+2
+
+published as a conference paper at iclr 2016
+
+classical language modelling evaluations are based on average perplexity across all words in a
+text. they therefore place proportionally more emphasis on accurate prediction of frequent words
+such as prepositions and articles than the less frequent words that transmit the bulk of the meaning
+in language (baayen & lieber, 1996). in contrast, because the cbt allows focused analyses on
+semantic content-bearing words, it should be a better proxy for how well a language model can lend
+semantic coherence to applications including machine translation, dialogue and question-answering
+systems.
+
+training validation
+
+test
+
+number of books
+number of questions (context+query)
+average words in contexts
+average words in queries
+distinct candidates
+vocabulary size
+
+669,343
+
+98
+
+465
+31
+
+37,242
+
+5
+
+8,000
+435
+27
+
+5,485
+53,628
+
+5
+
+10,000
+
+445
+29
+
+7,108
+
+table 1: statistics of the cbt. breakdown by question class is provided with the data set    les.
+
+2.1 related resources
+
+there are clear parallels between the cbt and the microsoft research sentence completion chal-
+lenge (msrcc) (zweig & burges, 2011), which is also based on project gutenberg (but not chil-
+dren   s books, speci   cally). a fundamental difference is that, where examples in the msrcc are
+made of a single sentence, each query in the cbt comes with a wider context. this tests the sen-
+sitivity of language models to semantic coherence beyond sentence boundaries. the cbt is also
+larger than the mrscc (10,000 vs 1,040 test questions), requires models to select from more can-
+didates on each question (10 vs 5), covers missing words of different (pos) types and contains large
+training and validation sets that match the form of the test set.
+there are also similarities between the cbt and the id98/daily mail (id98 qa) dataset recently
+released by hermann et al. (2015). this task requires models to identify missing entities from bullet-
+point summaries of online news articles. the id98 qa task therefore focuses more on id141
+parts of a text, rather than making id136s and predictions from contexts as in the cbt. it also
+differs in that all named entities in both questions and articles are anonymised so that models cannot
+apply knowledge that is not apparent from the article. we do not anonymise entities in the cbt,
+as we hope to incentivise models that can apply background knowledge and information from im-
+mediate and wider contexts to the language understanding problem.3 at the same time, the cbt
+can be used as a benchmark for general-purpose language models whose downstream application is
+semantically focused generation, prediction or correction. the cbt is also similar to the mctest of
+machine comprehension (richardson et al., 2013), in which children   s stories written by annotators
+are accompanied by four multiple-choice questions. however, it is very dif   cult to train statistical
+models only on mctest because its training set consists of only 300 examples.
+
+3 studying memory representation with memory networks
+
+memory networks (weston et al., 2015b) have shown promising performance at various tasks such
+as reasoning on the babi tasks (weston et al., 2015a) or language modelling (sukhbaatar et al.,
+2015). applying them on the cbt enables us to examine the impact of various ways of encoding
+context on their semantic processing ability over naturally occurring language.
+
+3.1 encoding memories and queries
+
+context sentences of s are encoded into memories, denoted mi, using a feature-map   (s) mapping
+sequences of words s     s from the context to one-hot representations in [0, 1]d, where d is typically
+the size of the word vocabulary. we considered several formats for storing the phrases s:
+    lexical memory: each word occupies a separate slot in the memory (each phrase s is a single
+word and   (s) has only one non-zero feature). to encode word order, time features are added as
+embeddings indicating the index of each memory, following sukhbaatar et al. (2015).
+
+3see appendix d for a sense of how anonymisation changes the cbt.
+
+3
+
+published as a conference paper at iclr 2016
+
+    window memory: each phrase s corresponds to a window of text from the context s centred
+on an individual mention of a candidate c in s. hence, memory slots are    lled using windows
+of words {wi   (b   1)/2 . . . wi . . . wi+(b   1)/2} where wi     c is an instance of one of the candidate
+words in the question.4 note that the number of phrases s is typically greater than |c| since
+candidates can occur multiple times in s. the window size b is tuned on the validation set. we
+experimented with encoding as a standard bag-of-words, or by having one dictionary per window
+position, where the latter performed best.
+
+    sentential memory: this setting follows the original implementation of memory networks for
+the babi tasks where the phrases s correspond to complete sentences of s. for the cbt, this
+means that each question yields exactly 20 memories. we also use positional encoding (pe) as
+introduced by sukhbaatar et al. (2015) to encode the word positions.
+
+the order of occurrence of memories is less important for sentential and window formats than for
+lexical memory. so, instead of using a full embedding for each time index, we simply use a scalar
+value which indicates the position in the passage, ranging from 1 to the number of memories. an
+additional parameter (tuned on the validation set) scales the importance of this feature. as we show
+in appendix c, time features only gave a marginal performance boost in those cases.
+for sentential and window memory formats, queries are encoded in a similar way to the memories:
+as a bag-of-words representation of the whole sentence and a window of size b centred around the
+missing word position respectively. for the lexical memory, memories are made of the n words
+preceding the word to be predicted, whether these n words come from the context or from the query,
+and the query embedding is set to a constant vector 0.1.
+
+3.2 end-to-end memory networks
+
+the memn2n architecture, introduced by sukhbaatar et al. (2015), allows for a direct training of
+memory networks through id26, and consists of two main steps.
+first,    supporting memories   , those useful to    nd the correct answer to the query q, are retrieved.
+this is done by embedding both the query and all memories into a single space of dimension p
+using an embedding matrix a     rp  d yielding the query embedding q = a  (q) and memory
+embeddings {ci = a  (si)}i=1,...n, with n the number of memories.the match between q and each
+memory ci in the embedding space is fed through a softmax layer giving a distribution {  i}i=1,...n
+of matching scores which are used as an attention mechanism over the memories to return the    rst
+supporting memory:
+
+(cid:88)
+
+i=1...n
+
+i q(cid:80)
+ec(cid:62)
+j ec(cid:62)
+
+j q
+
+mo1 =
+
+  imi ,
+
+with   i =
+
+, i = 1, . . . n,
+
+(1)
+
+and where {mi}i=1,...n is a set of memory embeddings obtained in the same way as the ci, but using
+another embedding matrix b     rp  d.
+a characteristic of memory networks is their ability to perform several hops in the memory before
+returning an answer. hence the above process can be repeated k times by recursively using qk =
+qk   1 + mok   1 instead of the original q1 = q. there are several ways of connecting the layers
+corresponding to distinct hops. we chose to share the embedding matrices a and b across all layers
+and add a linear mapping across hops, that is qk = hqk   1 + mok   1 with h     rp  p. for the
+lexical memory setting, we also applied relu operations to half of the units in each layer following
+sukhbaatar et al. (2015).5
+in a second stage, an answer distribution   a = softmax(uqk+1) is returned given k retrieved mem-
+ories mo1, . . . mok and the query q. here, u     rd  p is a separate weight matrix that can potentially
+be tied with a, and   a     rd is a distribution over the whole vocabulary. the predicted answer   a
+among candidates is then simply   a = arg maxw   c   a(c), with   a(w) indicating the id203 of
+word w in   a. for the lexical memory variant,   a is selected not only by using the id203 of each
+of the ten candidate words, but also of any words that follow the missing word marker in the query.
+
+4see appendix e for discussion and analysis of using candidates in window representations and training.
+5for the lexical memory we use the code available at https://github.com/facebook/memnn.
+
+4
+
+published as a conference paper at iclr 2016
+
+during training,   a is used to minimise a standard cross-id178 loss with the true label a against all
+other words in the dictionary (i.e. the candidates are not used in the training loss), and optimization is
+carried out using stochastic id119 (sgd). extra experimental details and hyperparameters
+are given in appendix a.
+
+3.3 self-supervision for window memories
+
+after initial experiments, we observed that the capacity to execute multiple hops in accessing mem-
+ories was only bene   cial in the lexical memory model. we therefore also tried a simpler, single-hop
+memory network, i.e. using a single memory to answer, that exploits a stronger signal for learning
+memory access. a related approach was successfully applied by bordes et al. (2015) to question
+answering about knowledge bases.
+memory supervision (knowing which memories to attend to) is not provided at training time but
+is inferred automatically using the following procedure: since we know the correct answer during
+training, we hypothesize the correct supporting memory to be among the window memories whose
+corresponding candidate is the correct answer. in the common case where more than one memory
+contains the correct answer, the model picks the single memory   m that is already scored highest by
+itself, i.e. scored highest by the query in the embedding space de   ned by a.6
+we train by making gradient steps using sgd to force the model, for each example, to give a higher
+score to the supporting memory   m relative to any other memory from any other candidate. instead
+of using eq (1), the model selects its top relevant memory using:
+
+mo1 = arg max
+i=1,...n
+
+c(cid:62)
+i q .
+
+(2)
+
+if mo1 happens to be different from   m, then the model is updated.
+at test time, rather than use a hard selection as in eq (2) the model scores each candidate not only
+with its highest scoring memory but with the sum of the scores of all its corresponding windows
+after passing all scores through a softmax. that is, the score of a candidate is de   ned by the sum of
+the   i (as used in eq (1)) of the windows it appears in. this relaxes the effects of the max operation
+and allows for all windows associated with a candidate to contribute some information about that
+candidate. as shown in the ablation study in appendix c, this results in slightly better performance
+on the id98 qa benchmark compared to hard selection at test time.
+note that self-supervised memory networks do not exploit any new label information beyond the
+training data. the approach can be understood as a way of achieving hard attention over memories,
+to contrast with the soft attention-style selection described in section 3.2. hard attention yields
+signi   cant improvements in image captioning (xu et al., 2015). however, where xu et al. (2015) use
+the reinforce algorithm (williams, 1992) to train through the max of eq (2), our self-supervision
+heuristic permits direct id26.
+
+4 baseline and comparison models
+
+in addition to memory network variants, we also applied many different types of language modelling
+and machine reading architectures to the cbt.
+
+4.1 non-learning baselines
+
+we implemented two simple baselines based on word frequencies. for the    rst, we selected the most
+frequent candidate in the entire training corpus. in the second, for a given question we selected the
+most frequent candidate in its context. in both cases we broke ties with a random choice.
+we also tried two more sophisticated ways to rank the candidates that do not require any learning
+on the training data. the    rst is the    sliding window    baseline applied to the mctest by richardson
+et al. (2013). in this method, ten    windows    of the query concatenated with each possible candidate
+are slid across the context word-by-word, overlapping with a different subsequence at each position.
+
+6tf-idf similarity worked almost as well in our experiments, but a random choice over positives did not.
+
+5
+
+published as a conference paper at iclr 2016
+
+the overlap score at a given position is simply word-overlap weighted tfidf-style based on fre-
+quencies in the context (to emphasize less frequent words). the chosen candidate corresponds to the
+window that achieves the maximum single overlap score for any position. ties are broken randomly.
+the second method is the word distance benchmark applied by hermann et al. (2015). for a given
+instance of a candidate wi in the context, the query q is    superimposed    on the context so that the
+missing word lines up with wi, de   ning a subsequence s of the context. for each word qi in q, an
+alignment penalty p = min(minj=1...|s|{|i     j| : sj = qi}, m) is incurred. the model predicts
+the candidate with the instance in the context that incurs the lowest alignment penalty. we tuned the
+maximum single penalty m = 5 on the validation data.
+
+4.2 id165 language models
+
+we trained an id165 language model using the kenlm toolkit (hea   eld et al., 2013). we used
+knesser-ney smoothing, and a window size of 5, which performed best on the validation set. we also
+compare with a variant of language model with cache (kuhn & de mori, 1990), where we linearly
+interpolate the id165 model probabilities with unigram probabilities computed on the context.
+
+4.3 supervised embedding models
+
+to directly test how much of the cbt can be resolved by good quality dense representations of words
+(id27s), we implement a supervised embedding model similar to that of (weston et al.,
+2010). in these models we learn both input and output embedding matrices a, b     rp  d for each
+word in the vocabulary (p is still the embedding dimension and d the vocabulary size). for a given
+input passage q and possible answer word w, the score is computed as s(q, w) =   (q)a(cid:62)b  (w),
+with    the feature function de   ned in section 3. these models can be considered as lobotomised
+memory networks with zero hops, i.e. the attention over the memory component is removed.
+we encode various parts of the question as the input passage: the entire context + query, just the
+query, a sub-sequence of the query de   ned by a window of maximum b words centred around the
+missing word, and a version (window + position) in which we use a different embedding matrix for
+encoding each position of the window. we tune the window-size d = 5 on the validation set.
+
+4.4 recurrent language models
+
+we trained probabilistic id56 language models with lstm activation units on the training stories
+(5.5m words of text) using minibatch sgd to maximise the negative log-likelihood of the next word.
+hyper-parameters were tuned on the validation set. the best model had both hidden layer and word
+embeddings of dimension 512. when answering the questions in the cbt, we allow one variant of
+this model (context + query) to    burn in    by reading the entire context followed by the query and
+another version to read only the query itself (and thus have no access to the context). unlike the
+canonical language-modelling task, all models have access to the query words after the missing word
+(i.e if k is the position of the missing word, we rank candidate c based on p(q1 . . . qk   1, c, qk+1 . . . ql)
+rather than simply p(q1 . . . qk   1, c)).
+mikolov & zweig (2012) previously observed performance boosts for recurrent language models by
+adding the capacity to jointly learn a document-level representation. we similarly apply a context-
+based recurrent model to our language-modelling tasks, but opt for the convolutional representation
+of the context applied by rush et al. (2015) for summarisation. our contextual lstm (clstm)
+learns a convolutional attention over windows of the context given the objective of predicting all
+words in the query. we tuned the window size (w = 5) on the validation set. as with the standard
+lstm, we trained the clstm on the running-text of the cbt training set (rather than the structured
+query and context format used with the memory networks) since this proved much more effective,
+and we report results in the best setting for each method.
+
+4.5 human performance
+
+we recruited 15 native english speakers to attempt a randomly-selected 10% from each question type
+of the cbt, in two modes either with question only or with question+context (shown to different
+
+6
+
+published as a conference paper at iclr 2016
+
+prepositions
+
+methods
+humans (query)(   )
+humans (context+query)(   )
+maximum frequency (corpus)
+maximum frequency (context)
+sliding window
+word distance model
+kneser-ney language model
+kneser-ney language model + cache
+embedding model (context+query)
+embedding model (query)
+embedding model (window)
+embedding model (window+position)
+lstms (query)
+lstms (context+query)
+contextual lstms (window context)
+memnns (lexical memory)
+memnns (window memory)
+memnns (sentential memory + pe)
+memnns (window memory + self-sup.)
+
+0.676
+0.708
+0.315
+0.275
+0.101
+0.237
+0.768
+0.679
+0.315
+0.535
+0.589
+0.670
+0.802
+0.791
+0.806
+0.764
+0.674
+0.326
+0.703
+table 2: results on cbt test set. (   )human results were collected on 10% of the test set.
+
+named entities common nouns verbs
+0.716
+0.828
+0.373
+0.285
+0.182
+0.380
+0.778
+0.772
+0.421
+0.614
+0.637
+0.736
+0.813
+0.818
+0.805
+0.798
+0.692
+0.502
+0.690
+
+0.644
+0.816
+0.158
+0.281
+0.196
+0.364
+0.544
+0.577
+0.259
+0.400
+0.415
+0.506
+0.541
+0.560
+0.582
+0.562
+0.554
+0.305
+0.630
+
+0.520
+0.816
+0.120
+0.335
+0.168
+0.398
+0.390
+0.439
+0.253
+0.351
+0.362
+0.402
+0.408
+0.418
+0.436
+0.431
+0.493
+0.318
+0.666
+
+annotators), giving 2000 answers in total. to our knowledge, this is the    rst time human performance
+has been quanti   ed on a language modelling task based on different word types and context lengths.
+
+4.6 other related approaches
+
+the idea of conditioning language models on extra-sentential context is not new. access to
+document-level features can improve both classical language models (mikolov & zweig, 2012)
+and id27s (huang et al., 2012). unlike the present work, these studies did not explore
+different representation strategies for the wider context or their effect on interpreting and predicting
+speci   c word types.
+the original memory networks (weston et al., 2015b) used hard memory selection with additional
+labeled supervision for the memory access component, and were applied to question-answering tasks
+over knowledge bases or simulated worlds. sukhbaatar et al. (2015) and kumar et al. (2015) trained
+memory networks with id56 components end-to-end with soft memory access, and applied them
+to additional language tasks. the attention-based reading models of hermann et al. (2015) also have
+many commonalities with memory networks, differing in word representation choices and attention
+procedures. both kumar et al. (2015) and hermann et al. (2015) propose bidirectional id56s as a
+way of representing previously read text. our experiments in section 5 provide a possible explana-
+tion for why this is an effective strategy for semantically-focused language processing: bidirectional
+id56s naturally focus on small windows of text in similar way to window-based memory networks.
+other recent papers have proposed id56-like architectures with new ways of reading, storing and
+updating information to improve their capacity to learn algorithmic or syntactic patterns (joulin &
+mikolov, 2015; dyer et al., 2015; grefenstette et al., 2015). while we do not study these models in
+the present work, the cbt would be ideally suited for testing this class of model on semantically-
+focused language modelling.
+
+5 results
+
+modelling syntactic    ow in general, there is a clear difference in model performance according
+to the type of word to be predicted. our main results in table 2 show conventional language models
+are very good at predicting prepositions and verbs, but less good at predicting named entities and
+nouns. among these language models, and in keeping with established results, id56s with lstms
+demonstrate a small gain on id165 models across the board, except for named entities where the
+cache is bene   cial. in fact, lstm models are better than humans at predicting prepositions, which
+suggests that there are cases in which several of the candidate prepositions are    correct   , but anno-
+tators prefer the less frequent one. even more surprisingly, when only local context (the query) is
+available, both lstms and id165 models predict verbs more accurately than humans. this may
+be because the models are better attuned to the distribution of verbs in children   s books, whereas
+
+7
+
+published as a conference paper at iclr 2016
+
+humans are unhelpfully in   uenced by their wider knowledge of all language styles.7 when access
+to the full context is available, humans do predict verbs with slightly greater accuracy than id56s.
+
+capturing semantic coherence the best performing memory networks predict common nouns
+and named entities more accurately than conventional language models. clearly, in doing so, these
+models rely on access to the wider context (the supervised embedding model (query), which is
+equivalent to the memory network but with no contextual memory, performs poorly in this regard).
+the fact that lstms without attention perform similarly on nouns and named entities whether or
+not the context is available con   rms that they do not effectively exploit this context. this may be
+a symptom of the dif   culty of storing and retaining information across large numbers of time steps
+that has been previously observed in recurrent networks (see e.g. bengio et al. (1994)).
+
+getting memory representations    just right    not all memory networks that we trained exploited
+the context to achieve decent prediction of nouns and named entities. for instance, when each
+sentence in the context is stored as an ordered sequence of id27s (sentence mem + pe),
+performance is quite poor in general. encoding the context as an unbroken sequence of individual
+words (lexical memory) works well for capturing prepositions and verbs, but is less effective with
+nouns and entities. in contrast, window memories centred around the candidate words are more
+useful than either word-level or sentence-level memories when predicting named entities and nouns.
+
+figure 2: correct predictions of memnns (window memory + self-supervision) on cbt on
+named entity (left) and verb (right). circled phrases indicate all considered windows; red ones are
+the ones corresponding to the returned (correct) answer; the blue windows represent the queries.
+
+self-supervised memory retrieval the window-based memory network with self-supervision
+(in which a hard attention selection is made among window memories during training) outperforms
+all others at predicting named entities and common nouns. examples of predictions made by this
+model for two cbt questions are shown in figure 2. it is notable that this model is able to achieve
+the strongest performance with only a simple window-based strategy for representing questions.
+
+5.1 news article id53
+
+to examine how well our conclusions generalise to different machine reading tasks and language
+styles, we also tested the best-performing memory networks on the id98 qa task (hermann et al.,
+2015).8 this dataset consists of 93k news articles from the id98 website, each coupled with a
+question derived from a bullet point summary accompanying the article, and a single-word answer.
+the answer is always a named entity, and all named entities in the article function as possible
+candidate answers.
+
+7we did not require the human annotators warm up by reading the 98 novels in the training data, but this
+
+might have led to a fairer comparison.
+
+8the id98 qa dataset was released after our primary experiments were completed, hence we experiment
+
+only with one of the two large datasets released with that paper.
+
+8
+
+published as a conference paper at iclr 2016
+
+methods
+maximum frequency (article)(   )
+sliding window
+word distance model(   )
+deep lstms (article+query)(   )
+contextual lstms (   attentive reader   )(   )
+contextual lstms (   impatient reader   )(   )
+memnns (window memory)
+memnns (window memory + self-sup.)
+memnns (window memory + ensemble)
+memnns (window memory + self-sup. + ensemble)
+memnns (window + self-sup. + ensemble + exclud. coocurrences)
+
+validation
+
+0.305
+0.005
+0.505
+0.550
+0.616
+0.618
+0.580
+0.634
+0.612
+0.649
+0.662
+
+test
+0.332
+0.006
+0.509
+0.570
+0.630
+0.638
+0.606
+0.668
+0.638
+0.684
+0.694
+
+table 3: results on id98 qa. (   )results taken from hermann et al. (2015).
+
+as shown in table 3, our window model without self-supervision achieves similar performance
+to the best approach proposed for the task by hermann et al. (2015) when using an ensemble of
+memnn models. our use of an ensemble is an alternative way of replicating the application of
+dropout (hinton et al., 2012) in the previous best approaches (hermann et al., 2015) as ensemble
+averaging has similar effects to dropout (wan et al., 2013). when self-supervision is added, the
+memory network greatly surpasses the state-of-the-art on this task. finally, the last line of table 3
+(excluding co-occurrences) shows how an additional heuristic, removing from the candidate list all
+named entities already appearing in the bullet point summary, boosts performance even further.
+some common principles may explain the strong performance of the best performing models on this
+task. the attentive/impatient reading models encode the articles using bidirectional id56s (graves
+et al., 2008). for each word in the article, the combined hidden state of such an id56 naturally
+focuses on a window-like chunk of surrounding text, much like the window-based memory network
+or the clstm. together, these results therefore support the principle that the most informative
+representations of text correspond to sub-sentential chunks. indeed, the observation that the most
+informative representations for neural language models correspond to small chunks of text is also
+consistent with recent work on id4, in which luong et al. (2015) demon-
+strated improved performance by restricting their attention mechanism to small windows of the
+source sentence.
+given these commonalities in how the reading models and memory networks represent context, the
+advantage of the best-performing memory network instead seems to stem from how it accesses or
+retrieves this information; in particular, the hard attention and self-supervision. jointly learning to
+access and use information is a dif   cult optimization. self-supervision in particular makes effective
+memory network learning more tractable.9
+
+6 conclusion
+
+we have presented the children   s book test, a new semantic language modelling benchmark. the
+cbt measures how well models can use both local and wider contextual information to make pre-
+dictions about different types of words in children   s stories. by separating the prediction of syntactic
+function words from more semantically informative terms, the cbt provides a robust proxy for how
+much language models can impact applications requiring a focus on semantic coherence.
+we tested a wide range of models on the cbt, each with different ways of representing and retaining
+previously seen content. this enabled us to draw novel insights into the optimal strategies for repre-
+senting and accessing semantic information in memory. one consistent    nding was that memories
+that encode sub-sentential chunks (windows) of informative text seem to be most useful to neural
+nets when interpreting and modelling language. however, our results indicate that the most useful
+text chunk size depends on the modeling task (e.g. semantic content vs. syntactic function words).
+we showed that memory networks that adhere to this principle can be ef   ciently trained using a
+simple self-supervision to surpass all other methods for predicting named entities on both the cbt
+and the id98 qa benchmark, an independent test of machine reading.
+
+9see the appendix for an ablation study in which optional features of the memory network are removed.
+
+9
+
+published as a conference paper at iclr 2016
+
+acknowledgments
+
+the authors would like to thank harsha pentapelli and manohar paluri for helping to collect the
+human annotations and gabriel synnaeve for processing the qa id98 data.
+
+references
+altmann, gerry and steedman, mark. interaction with context during human sentence processing.
+
+cognition, 30(3):191   238, 1988.
+
+baayen, r harald and lieber, rochelle. word frequency distributions and lexical semantics. com-
+
+puters and the humanities, 30(4):281   291, 1996.
+
+bengio, yoshua, simard, patrice, and frasconi, paolo. learning long-term dependencies with gra-
+
+dient descent is dif   cult. neural networks, ieee transactions on, 5(2):157   166, 1994.
+
+binder, jeffrey r and desai, rutvik h. the neurobiology of semantic memory. trends in cognitive
+
+sciences, 15(11):527   536, 2011.
+
+bordes, antoine, usunier, nicolas, chopra, sumit, and weston, jason. large-scale simple question
+
+answering with memory networks. arxiv preprint arxiv:1506.02075, 2015.
+
+dyer, chris, ballesteros, miguel, ling, wang, matthews, austin, and smith, noah a. transition-
+in proceedings of the annual
+
+based id33 with stack long short-term memory.
+meeting of the association for computational linguistics, 2015.
+
+graves, alex, liwicki, marcus, bunke, horst, schmidhuber, j  urgen, and fern  andez, santiago. un-
+constrained on-line handwriting recognition with recurrent neural networks. in advances in neu-
+ral information processing systems, pp. 577   584, 2008.
+
+grefenstette, edward, hermann, karl moritz, suleyman, mustafa, and blunsom, phil. learning to
+
+transduce with unbounded memory. nips, 2015.
+
+hassall, john. goldilocks and the three bears. in the old nursery stories and rhymes. blackie &
+
+son: london, 1904.
+
+hea   eld, kenneth, pouzyrevsky, ivan, clark, jonathan h., and koehn, philipp. scalable modi-
+   ed kneser-ney language model estimation. in proceedings of the 51st annual meeting of the
+association for computational linguistics, pp. 690   696, so   a, bulgaria, august 2013.
+
+hermann, karl moritz, ko  cisk  y, tom  a  s, grefenstette, edward, espeholt, lasse, kay, will, suley-
+in advances
+man, mustafa, and blunsom, phil. teaching machines to read and comprehend.
+in neural information processing systems (nips), 2015. url http://arxiv.org/abs/
+1506.03340.
+
+hinton, geoffrey e, srivastava, nitish, krizhevsky, alex, sutskever, ilya, and salakhutdinov, rus-
+lan r. improving neural networks by preventing co-adaptation of feature detectors. arxiv preprint
+arxiv:1207.0580, 2012.
+
+huang, eric h, socher, richard, manning, christopher d, and ng, andrew y.
+
+improving word
+in proceedings of the 50th
+representations via global context and multiple word prototypes.
+annual meeting of the association for computational linguistics: long papers-volume 1, pp.
+873   882. association for computational linguistics, 2012.
+
+joulin, armand and mikolov, tomas. inferring algorithmic patterns with stack-augmented recurrent
+
+nets. nips, 2015.
+
+kuhn, roland and de mori, renato. a cache-based natural language model for id103.
+
+pattern analysis and machine intelligence, ieee transactions on, 12(6):570   583, 1990.
+
+kumar, ankit, irsoy, ozan, su, jonathan, bradbury, james, english, robert, pierce, brian, on-
+druska, peter, gulrajani, ishaan, and socher, richard. ask me anything: dynamic memory net-
+works for natural language processing. http://arxiv.org/abs/1506.07285, 2015.
+
+10
+
+published as a conference paper at iclr 2016
+
+luong, minh-thang, pham, hieu, and manning, christopher d. effective approaches to attention-
+
+based id4. proceedings of emnlp, 2015.
+
+manning, christopher d, surdeanu, mihai, bauer, john, finkel, jenny, bethard, steven j, and mc-
+closky, david. the stanford corenlp natural language processing toolkit. in proceedings of 52nd
+annual meeting of the association for computational linguistics: system demonstrations, pp.
+55   60, 2014.
+
+mikolov, tomas and zweig, geoffrey. context dependent recurrent neural network language model.
+
+in slt, pp. 234   239, 2012.
+
+richardson, matthew, burges, christopher jc, and renshaw, erin. mctest: a challenge dataset for
+
+the open-domain machine comprehension of text. in emnlp, volume 1, pp. 2, 2013.
+
+rush, alexander m, chopra, sumit, and weston, jason. a neural attention model for abstractive
+
+sentence summarization. proceedings of emnlp, 2015.
+
+sukhbaatar, sainbayar, szlam, arthur, weston, jason, and fergus, rob. end-to-end memory net-
+
+works. proceedings of nips, 2015.
+
+wan, li, zeiler, matthew, zhang, sixin, cun, yann l, and fergus, rob. id173 of neural
+networks using dropconnect. in proceedings of the 30th international conference on machine
+learning (icml-13), pp. 1058   1066, 2013.
+
+weston, jason, bengio, samy, and usunier, nicolas. large scale image annotation: learning to rank
+
+with joint word-image embeddings. machine learning, 81(1):21   35, 2010.
+
+weston, jason, bordes, antoine, chopra, sumit, and mikolov, tomas. towards ai-complete question
+
+answering: a set of prerequisite toy tasks. arxiv preprint arxiv:1502.05698, 2015a.
+
+weston, jason, chopra, sumit, and bordes, antoine. memory networks. proceedings of iclr,
+
+2015b.
+
+williams, ronald j. simple statistical gradient-following algorithms for connectionist reinforcement
+
+learning. machine learning, 8(3-4):229   256, 1992.
+
+xu, kelvin, ba, jimmy, kiros, ryan, courville, aaron, salakhutdinov, ruslan, zemel, richard, and
+bengio, yoshua. show, attend and tell: neural image id134 with visual attention.
+in proceedings of the international conference on machine learning (icml   15), 2015. url
+http://arxiv.org/abs/1502.03044.
+
+zweig, geoffrey and burges, christopher jc. the microsoft research sentence completion chal-
+
+lenge. technical report, technical report msr-tr-2011-129, microsoft, 2011.
+
+a experimental details
+
+setting the text of questions is lowercased for all memory networks as well as for all non-
+learning baselines. lstms models use the raw text (although we also tried lowercasing, which
+made little difference). hyperparameters of all learning models have been set using grid search on
+the validation set. the main hyperparameters are embedding dimension p, learning rate   , window
+size b, number of hops k, maximum memory size n (n = all means using all potential memories).
+all models were implemented using the torch library (see torch.ch). for cbt, all models have
+been trained on all question types altogether. we did not try to experiment with id27s
+pre-trained on a bigger corpus.
+
+optimal hyper-parameter values on cbt:
+
+    embedding model (context+query): p = 300,    = 0.01.
+    embedding model (query): p = 300,    = 0.01.
+    embedding model (window): p = 300,    = 0.005, b = 5.
+
+11
+
+published as a conference paper at iclr 2016
+
+learning rate shrinking factor: 2.
+
+    embedding model (window+position): p = 300,    = 0.01, b = 5.
+    lstms (query & context+query): p = 512,    = 0.5, 1 layer, gradient clipping factor: 5,
+    contextual lstms: p = 256,    = 0.5, 1 layer, gradient clipping factor: 10, learning rate
+    memnns (lexical memory): n = 200,    = 0.01, p = 200, k = 7.
+    memnns (window memory): n = all, b = 5,    = 0.005, p = 100, k = 1.
+    memnns (sentential memory + pe): n = all,    = 0.001, p = 100, k = 1.
+    memnns (window memory + self-sup.): n = all, b = 5,    = 0.01, p = 300.
+
+shrinking factor: 2.
+
+optimal hyper-parameter values on id98 qa:
+
+    memnns (window memory): n = all, b = 5,    = 0.005, p = 100, k = 1.
+    memnns (window memory + self-sup.): n = all, b = 5,    = 0.025, p = 300, k = 1.
+    memnns (window memory + ensemble): 7 models with b = 5.
+    memnns (window memory + self-sup. + ensemble): 11 models with b = 5.
+
+b results on cbt validation set
+methods
+maximum frequency (corpus)
+maximum frequency (context)
+sliding window
+word distance model
+kneser-ney language model
+kneser-ney language model + cache
+embedding model (context+query)
+embedding model (query)
+embedding model (window)
+embedding model (window+position)
+lstms (query)
+lstms (context+query)
+contextual lstms (window context)
+memnns (lexical memory)
+memnns (window memory)
+memnns (sentential memory + pe)
+memnns (window memory + self-sup.)
+
+named entities common nouns verbs
+0.301
+0.219
+0.200
+0.332
+0.762
+0.755
+0.368
+0.575
+0.622
+0.722
+0.811
+0.820
+0.803
+0.818
+0.693
+0.451
+0.688
+
+0.192
+0.273
+0.199
+0.371
+0.577
+0.612
+0.297
+0.462
+0.486
+0.555
+0.613
+0.626
+0.628
+0.647
+0.591
+0.342
+0.642
+
+0.052
+0.299
+0.178
+0.436
+0.481
+0.500
+0.235
+0.418
+0.457
+0.488
+0.500
+0.512
+0.535
+0.519
+0.542
+0.297
+0.704
+
+prepositions
+
+0.346
+0.312
+0.091
+0.259
+0.791
+0.693
+0.356
+0.560
+0.619
+0.683
+0.819
+0.812
+0.798
+0.785
+0.704
+0.360
+0.696
+
+c ablation study on id98 qa
+test
+methods
+0.684
+memnns (window memory + self-sup. + exclud. coocurrences)
+0.668
+memnns (window memory + self-sup.)
+0.659
+memnns (window mem. + self-sup.) -time
+0.620
+memnns (window mem. + self-sup.) -soft memory weighting
+0.613
+memnns (window mem. + self-sup.) -time -soft memory weighting
+0.684
+memnns (window mem. + self-sup. + ensemble)
+0.679
+memnns (window mem. + self-sup. + ensemble) -time
+0.641
+memnns (window mem. + self-sup. + ensemble) -soft memory weighting
+memnns (window mem. + self-sup. + ensemble) -time -soft memory weighting
+0.640
+(soft memory weighting: the softmax to select the best candidate in test as de   ned in section 3.3)
+
+0.635
+0.634
+0.625
+0.604
+0.592
+0.649
+0.642
+0.612
+0.600
+
+validation
+
+d effects of anonymising entities in cbt
+methods
+memnns (word mem.)
+memnns (window mem.)
+memnns (sentence mem.+pe)
+memnns (window mem.+self-sup.)
+anonymized memnns (window +self-sup.)
+
+named entities common nouns verbs
+0.798
+0.692
+0.502
+0.690
+0.474
+
+0.562
+0.554
+0.305
+0.630
+0.473
+
+0.431
+0.493
+0.318
+0.666
+0.581
+
+prepositions
+
+0.764
+0.674
+0.326
+0.703
+0.522
+
+to see the impact of the anonymisation of entities and words as done in id98 qa on the self-
+supervised memory networks on the cbt, we conducted an experiment where we replaced the
+
+12
+
+published as a conference paper at iclr 2016
+
+mentions of the ten candidates in each question by anonymised placeholders in train, validation and
+test. the table above shows results on cbt test set in an anonymised setting (last row) compared
+to memnns in a non-anonymised setting (rows 2-5). results indicate that this has a relatively low
+impact on named entities but a larger one on more syntactic tasks like prepositions or verbs.
+
+e candidates and window memories in cbt
+
+in our main results in table 2 the window memory is constructed as the set of windows over the
+candidates being considered for a given question. training of memnns (window memory) is
+performed by making gradient steps for questions, with the true answer word as the target compared
+against all words in the dictionary as described in sec. 3.2. training of memnns (window
+memory + self-sup.) is performed by making gradient steps for questions, with the true answer
+word as the target compared against all other candidates as described in sec. 3.3. as memnns
+(window memory + self-sup.) is the best performing method for named entities and common
+nouns, to see the impact of these choices we conducted some further experiments with variants of it.
+firstly, window memories do not have to be restricted to candidates, we could consider all possible
+windows. note that this does not make any difference at evaluation time on cbt as one would still
+evaluate by multiple choice using the candidates, and those extra windows would not contribute to
+the scores of the candidates. however, this may make a difference to the weights if used at training
+time. we call this    all windows    in the experiments to follow.
+secondly, the self-supervision process does not have to rely on there being known candidates: all
+that is required is a positive label, in that case we can perform gradient steps with the true answer
+word as the target compared against all words in the dictionary (as opposed to only candidates) as
+described in sec. 3.2, while still using hard attention supervision as described in 3.3. we call this
+   all targets    in the experiments to follow.
+thirdly, one does not have to try to train on only the questions in cbt, but can treat the children   s
+books as a standard id38 task. in that case, all targets and all windows must be used,
+as multiple choice questions have not been constructed for every single word (although indeed many
+of them are covered by the four word classes). we call this    lm    (for id38) in the
+experiments to follow.
+results with these alternatives are presented in table 4, the new variants are the last three rows.
+overall, the differing approaches have relatively little impact on the results, as all of them provide
+superior results on named entities and common nouns than without self-supervision. however, we
+note that the use of all windows or lm rather than candidate windows does impact training and
+testing speed.
+
+methods
+memnns (lexical memory)
+memnns (window memory)
+memnns (sentential memory + pe)
+memnns (window memory + self-sup.)
+memnns (all windows + self-sup.)
+memnns (all windows + all targets + self-sup.)
+memnns (lm + self-sup.)
+
+named entities common nouns verbs
+0.798
+0.692
+0.502
+0.690
+0.711
+0.698
+0.692
+
+0.431
+0.493
+0.318
+0.666
+0.648
+0.639
+0.638
+
+0.562
+0.554
+0.305
+0.630
+0.604
+0.602
+0.605
+
+prepositions
+
+0.764
+0.674
+0.326
+0.703
+0.693
+0.667
+0.647
+
+table 4: results on cbt test set when considering all windows or targets.
+
+13
+
+

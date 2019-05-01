@@ -1,0 +1,511 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]becoming human: artificial intelligence magazine
+     * [9]     consulting
+     * [10]     tutorials
+     * [11]       submit an article
+     * [12]     communities
+     * [13]     our bot
+     __________________________________________________________________
+
+beat atari with deep id23! (part 1: id25)
+
+   [14]go to the profile of adrien lucas ecoffet
+   [15]adrien lucas ecoffet (button) blockedunblock (button)
+   followfollowing
+   aug 21, 2017
+   [1*u_sqg7rzqn0twrf1t9m__q.png]
+   [16]https://s-media-cache-ak0.pinimg.com/originals/4a/1c/2a/4a1c2a0dc94
+   3ab301a4b8b9ed1d27d00.jpg
+
+   note: before reading part 1, i recommend you read [17]beat atari with
+   deep id23! (part 0: intro to rl)
+
+   finally we get to implement some code!
+
+   in this post, we will attempt to reproduce the following paper by
+   deepmind: [18]playing atari with deep id23, which
+   introduces the notion of a deep q-network.
+   [1*mxh-yj_80o6qzb_vjc21ma.png]
+
+   after the end of this post, you will be able to code an ai that can do
+   this:
+   [1*bq0g9o26bo4nlvrwnw9mpw.gif]
+   the id25 i trained using the methods in this post. it reaches a score
+   of 251.
+
+   i strongly recommend that you skim through the paper before reading
+   this tutorial, and then read it more deeply when you are done. i will
+   be quoting it throughout. further, i recommend you really do try to
+   implement your id25 from what i am writing here.
+   [19]the chatbot conference
+   the chatbot conference on september 12, chatbot's life, will host our
+   first chatbot conference in san francisco. the   www.eventbrite.com
+
+   as you may remember from last time, we can achieve optimal policies for
+   our atari games by estimating the q(s, a) function, which gives us an
+   estimate of the discounted sum of rewards of taking action a in state
+   s, and playing optimally thereafter. playing the action with the
+   maximum q-value in any given state is the same as playing optimally!
+
+   the question is now: how do we estimate q(s, a)? well    how do you
+   estimate any function these days? with a deep neural network of course!
+   or as you might call it, a deep q-network (id25).
+
+   but before we discuss the implementation of a id25, let   s first figure
+   out how to simulate atari games on our computer.
+
+openai gym
+
+   the first library we will be using is called openai gym. openai is a
+   company created by elon musk that has been doing research in deep
+   id23.
+   [1*ppxe7b-vsnomtv_veqz4tw.png]
+
+   one of their many great contributions to the research community was
+   gym, a library that can simulate large numbers of reinforcement
+   learning environments, including atari games.
+
+   you can install gym by following the instructions [20]here. i recommend
+   you do a full install instead of a minimal install (i believe the
+   minimal install won   t install what   s necessary to simulate atari).
+
+   now that you have gym installed, we can play the
+   breakoutdeterministic-v4 environment using random actions:
+
+   iframe: [21]/media/edbb618e8388802377aa679b6aaa8d8e?postid=df57e8ff3b26
+
+   [1*kzm_n60yup_kw3l9tfdfgq.gif]
+   a random agent
+
+   the code above is literally all you need to know about gym for
+   implementing a id25! all our efforts from now on will be about replacing
+   the random action selection in the code above with something more
+   sensible!
+
+   you can see the list of all atari environments [22]here. note that in
+   this series of posts we will always replace    -v0    in the environment
+   names with    deterministic-v4   . it so happens that the deterministic-v4
+   version of the atari environments is exactly equivalent to what
+   deepmind used in their paper. specifically, this has to do with frame
+   skipping:    -v0    will randomly skip 2, 3 or 4 frames, whereas the paper
+   says:
+
+     [   ] the agent sees and selects actions on every kth frame instead of
+     every frame, and its last action is repeated on skipped frames. [   ]
+     we use k = 4 for all games except space invaders where we noticed
+     that using k = 4 makes the lasers invisible because of the period at
+     which they blink. we used k = 3 to make the lasers visible [   ].
+
+   which is exactly what using    deterministic-v4    does. this means that
+   you do not need to implement your own frame skipping for this project,
+   as it is already implemented in the environment.
+
+   note that    deterministic-v4    is not documented officially by openai.
+   see [23]the code for the actual definition.
+
+preprocessing
+
+   before we start talking about the model, let   s implement the
+   preprocessing specified in the paper.
+
+     working directly with raw atari frames, which are 210  160 pixel
+     images with a 128 color palette, can be computationally demanding,
+     so we apply a basic preprocessing step [   ]. the raw frames are
+     preprocessed by first converting their rgb representation to
+     gray-scale and down-sampling it to a 110  84 image.
+
+   here   s the code:
+
+   iframe: [24]/media/2529fe5b3b9bf0f793e7d787594a3142?postid=df57e8ff3b26
+
+   two important notes on the above:
+     * my downsampling downsamples to 105  80, not 110  84 as specified in
+       the paper. i am a bit confused as to why deepmind decided not to
+       downsample by exactly 2x like i did, and my implementation should
+       be faster.
+     * you   ll notice that i make sure to store the data in the uint8 type
+       (and that i don   t normalize it yet by dividing by 255). this is
+       because storing all of these frames in memory is quite costly and
+       uint8 is the smallest type available.
+
+     the final input representation is obtained by cropping an 84  84
+     region of the image [   ]. the final cropping stage is only required
+     because we use the gpu implementation of 2d convolutions[   ] which
+     expects square inputs.
+
+   i ignored this part: the implementation of 2d convolutions that we are
+   going to be using can handle rectangular inputs easily.
+
+     for the experiments in this paper, the function    from algorithm 1
+     applies this preprocessing to the last 4 frames of a history and
+     stacks them to produce the input to the q-function.
+
+   [1*7uxuyski8ncf_a_wi-seoq.gif]
+   a fully preprocessed state for breakout.
+
+   as mentioned in the previous post, this simply means that our state
+   should not be made up of single frames but instead of the 4 most recent
+   frames.
+
+   finally, we come to another fairly hacky aspect of this paper:
+
+     since the scale of scores varies greatly from game to game, we fixed
+     all positive rewards to be 1 and all negative rewards to be    1,
+     leaving 0 rewards unchanged. clipping the rewards in this manner
+     limits the scale of the error derivatives and makes it easier to use
+     the same learning rate across multiple games. at the same time, it
+     could affect the performance of our agent since it cannot
+     differentiate between rewards of different magnitude.
+
+   if you think this is outrageous    you   re right! of course. this will
+   later be changed to the much more reasonable use of huber loss, which
+   we will explain in the next post, but in the meantime   
+
+   iframe: [25]/media/6c92e67f405c08f7473df98cc6ead4f6?postid=df57e8ff3b26
+
+the model
+
+deep id24
+
+   now that we know how to play breakout (or any other atari game for that
+   matter), we can get back to estimating our q-function. as a reminder:
+
+     q(s, a) = r +    max      (q(s   , a   ))
+
+   our algorithm will play the game, each step saving the initial state,
+   the action it took, the reward it got and the next state it reached,
+   and this data will be used to train a neural network with keras.
+
+   the input of our neural network will be an initial state (ie a stack of
+   4 preprocessed frames), and its output will be its estimate of r +   
+   max      (q(s   , a   )), where r is the reward that was obtained when playing,
+      is our discount rate (0.99), and q(s   , a   ) comes from predicting the
+   q function for the next state using our current model. that   s right, in
+   some sense our neural net is trying to predict its own output.
+
+   if that seems outrageous to you, don   t worry, you   re not alone. i mean,
+   how could this possibly converge to the correct q function? heck, how
+   could it possibly converge at all?
+
+   well, the good news is that if our algorithm does converge, it will
+   tend to converge to the correct q function. the bad news is that there
+   is basically no guarantee that it will converge at all. in fact, neural
+   networks were abandoned in id23 for a while because
+   of that problem. fortunately, we will soon discover various techniques
+   that make our network more likely to converge.
+
+   another question you might ask is why did i say that the input of the
+   neural net is simply a state? doesn   t q(s, a) take both a state and an
+   action as an input?
+
+   well, there are two ways to approach this. one is to pass the action in
+   as an input, and the other is to have one output per action (which is
+   possible because we have relatively few actions). the latter option is
+   much faster, as clearly explained by the deepmind paper:
+
+     the main drawback of [passing the action as an input] is that a
+     separate forward pass is required to compute the q-value of each
+     action, resulting in a cost that scales linearly with the number of
+     actions. we instead use an architecture in which there is a separate
+     output unit for each possible action, and only the state
+     representation is an input to the neural network. the outputs
+     correspond to the predicted q-values of the individual action for
+     the input state. the main advantage of this type of architecture is
+     the ability to compute q-values for all possible actions in a given
+     state with only a single forward pass through the network.
+
+   this method is great for predicting which action to take at any given
+   time, but it makes fitting the network a little bit harder: each step
+   we play, we are only observing the outcome of a single action, so how
+   can we give keras multiple target values (one for each action)?
+
+   again, there are two approaches here. one is to predict the q value of
+   the current state using our network and then only change the value for
+   the action we observed, and use that as our target. this is fine, but
+   it means we need to go through an extra iteration of prediction, which
+   partly defeats the purpose of having multiple outputs, which is to
+   speed things up.
+
+   a much better strategy is to have the network multiply its outputs by a
+      mask    corresponding to the one-hot encoded action, which will set all
+   its outputs to 0 except the one for the action we actually saw. we can
+   then pass 0 as the target to for all unknown actions and our neural
+   network should thus perform fine. when we want to predict for all
+   actions, we can then simply pass a mask of all 1s.
+
+   finally we can implement our fit function:
+
+   iframe: [26]/media/6537d5e358c0239e5ed6f1fe8e84bb47?postid=df57e8ff3b26
+
+model definition
+
+   we can now define the actual model. you might have noticed in the code
+   above that we are passing multiple inputs to our model, which is quite
+   unusual in keras. this is all due to the [27]keras functional api. i
+   strongly recommend you read the doc for it, as it is very useful for
+   writing advanced models in keras.
+
+   now that you are familiar with the idea of having multiple inputs in a
+   keras model, let   s implement the model described by the paper:
+
+     the input to the neural network consists is an 84  84  4 [note: in our
+     case 110x80x4] image [   ]. the first hidden layer convolves 16 8  8
+     filters with stride 4 with the input image and applies a rectifier
+     nonlinearity [note: this is better known as relu]. the second hidden
+     layer convolves 32 4  4 filters with stride 2, again followed by a
+     rectifier nonlinearity. the final hidden layer is fully-connected
+     and consists of 256 rectifier units. the output layer is a
+     fully-connected linear layer with a single output for each valid
+     action.
+     [   ]
+     in these experiments, we used the rmsprop algorithm with minibatches
+     of size 32.
+
+   or in code:
+
+   iframe: [28]/media/d51a7240d34dc5829ba0a84a5ac7129f?postid=df57e8ff3b26
+
+   the specific parameters i passed to rmsprop comes from    human-level
+   control through deep id23   , another deepmind paper
+   (as does the image below). i give the full hyperparameter table at the
+   end of this post.
+   [1*vgfhed3ni1d9desb_4tncg.png]
+   a visual representation of the network.
+
+experience replay
+
+   we now finally reach the final piece of a basic id25: experience replay.
+   this is the key method that prevents our network from diverging. in
+   fact, i can resist showing you the amazing results that adding
+   experience replay gets us according to    human-level control through
+   deep id23   :
+   [1*v28vs2ju-xkllzjgdgwpjg.png]
+
+   the idea behind experience replay is quite simple: at each id24
+   iteration, you play one step in the game, but instead of updating the
+   model based on that last step, you add all the relevant information
+   from the step you just took (current state, next state, action taken,
+   reward and whether the next state is terminal) to a finite-size memory
+   (of 1,000,000 elements in this case), and then call fit_batch on a
+   sample of that memory (of 32 elements in our case). before doing any
+   iterations on the neural network, we prefill the memory with a random
+   policy up to a certain number of elements (50,000 in our case).
+
+   the reason why experience replay is helpful has to do with the fact
+   that in id23, successive states are highly similar.
+   this means that there is a significant risk that the network will
+   completely forget about what it   s like to be in state it hasn   t seen in
+   a while. replaying experience prevents this by still showing old frames
+   to the network.
+
+   an important note: experience replay requires a lot of memory. a single
+   preprocessed 110x80 frame takes a minimum of around 9kb (8,800 bytes to
+   be precise) to be stored. with experience replay, we need to store a
+   million of those, so that   s 9gb in frames, all of it in ram, not
+   counting any extra overhead python might add or the fact that we also
+   need to store the action and rewards etc.. this means you need to be
+   careful about how you use memory if you don   t want your id25 to
+   constantly crash. in particular:
+     * store your frames using the np.uint8 type and convert them to
+       floats in the [0, 1] range at the last moment (in the minibatch),
+       like i do in my example code. using np.float32 will use 4x as much
+       space. np.float64 (the default float type) will use 8x as much
+       (70gb just to store the frames!)
+     * never copy the frames. each frame will be part of 4 unique states,
+       each of which will be both a starting and a destination state.
+       please make sure each unique frame uses the same memory in each
+       state that it is a part of (otherwise you   ll be using 4x or even 8x
+       more memory than necessary). for this, make sure you don   t call
+       np.array() multiple times on a given frame, nor copy.copy. also be
+       careful if you serialize your memory, as most serialization
+       libraries will create multiple copies of the same frame when you
+       deserialize.
+
+   one final note on implementing a finite size memory: perhaps the
+   simplest way to do so is to use [29]deque in python, which even
+   supports a maxlen argument. unfortunately, i found that sampling from a
+   deque is extremely slow because it doesn   t support fast random
+   indexing. therefore, i implemented a simple ring buffer class that you
+   can use to actually store your memory:
+
+   iframe: [30]/media/c8b5daf5182103cbcab4eeca29be9c9c?postid=df57e8ff3b26
+
+   this ring buffer supports most of what you would expect (iteration,
+   getting an arbitrary item etc.), but won   t work with random.sample. i
+   recommend you simply implement a quick random sampling function for
+   this. it shouldn   t be hard.
+
+putting it all together
+
+   finally we get to our final id25 algorithm. the only thing that really
+   remains for us to talk about is exploration.
+
+   how do we choose which action to play while we are learning? clearly
+   while our id25 is still not very good, we want to explore actions it
+   wouldn   t have taken, otherwise it will keep following whatever our
+   initial random weight initialization told it to. on the other hand,
+   especially when our network has gotten better, we don   t want to keep
+   following a random policy forever because otherwise our network won   t
+   learn how to behave in an optimal manner in the more advanced stages of
+   the game, which it might never reach with a random policy!
+
+   this problem has a seemingly obvious solution: we should sometimes pick
+   actions randomly so that our model can learn more about the action it
+   doesn   t (yet?) think are optimal, but at the same time we should
+   sometimes pick actions according to our model so we can move forward in
+   the game and learn about more advanced states.
+
+   this simple strategy is known under the name of   -greedy: with
+   id203   , we choose an action at random, and otherwise we choose
+   the    greedy    action (ie the one that has the maximum q-value for that
+   state).
+
+   it is common to start with a high    and to reduce its value as your id25
+   goes through more iterations. this process is sometimes called
+      annealing   . annealing linearly simply means that the value of    is
+   reduced by a fixed amount at each iteration.
+
+   in the case of the paper at hand:
+
+     the behavior policy during training was   -greedy with    annealed
+     linearly from 1 to 0.1 over the first million frames, and fixed at
+     0.1 thereafter.
+
+   [1*kqnate9w58i-y1klviuoxq.png]
+   the simple    schedule used by the paper
+
+   now i can give you the code for a full id25 iteration. note that this
+   code doesn   t quite work as-is, but you now have all the tools to fix it
+   and implement all the missing functions that are necessary!
+
+   iframe: [31]/media/1d95cc85d847beb0491ea2b259c4ddbb?postid=df57e8ff3b26
+
+   i leave you with the full list of hyperparameters to use, according to
+      human-level control through deep id23   . note the
+      update frequency    parameter, which implies that you should play 4
+   steps in the game for each id24 iteration. this doesn   t seem to
+   be part of the paper we are looking at today but is an easy way to get
+   better performance, so i recommend you implement it. likewise, feel
+   free to implement    no-op max    as well.
+   [1*4hpmgfr27ahqek_ry3-d_a.png]
+
+   and as a reminder, this is the result you should be able to get by the
+   end of this tutorial:
+   [1*bq0g9o26bo4nlvrwnw9mpw.gif]
+
+   pretty fun, huh? feel free to try other atari games as well and to
+   share your results with all of us!
+     __________________________________________________________________
+
+   now that you   re done with part 1, you can make your way to [32]beat
+   atari with deep id23! (part 2: id25 improvements)
+
+   ps: i   m all about feedback. if anything was unclear or even incorrect
+   in this tutorial, please leave a comment so i can keep improving these
+   posts.
+
+   iframe: [33]/media/c43026df6fee7cdb1aab8aaf916125ea?postid=df57e8ff3b26
+
+   [34][1*2f7oqe2ajk1ksrhkmd9zmw.png]
+   [35][1*v-ppfkswhbvlwwamsvhhwg.png]
+   [36][1*wt2auqisieaozxj-i7brdq.png]
+
+     * [37]machine learning
+     * [38]artificial intelligence
+     * [39]deep learning
+     * [40]id23
+     * [41]ai
+
+   (button)
+   (button)
+   (button) 858 claps
+   (button) (button) (button) 18 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [42]go to the profile of adrien lucas ecoffet
+
+[43]adrien lucas ecoffet
+
+     (button) follow
+   [44]becoming human: artificial intelligence magazine
+
+[45]becoming human: artificial intelligence magazine
+
+   latest news, info and tutorials on artificial intelligence, machine
+   learning, deep learning, big data and what it means for humanity.
+
+     * (button)
+       (button) 858
+     * (button)
+     *
+     *
+
+   [46]becoming human: artificial intelligence magazine
+   never miss a story from becoming human: artificial intelligence
+   magazine, when you sign up for medium. [47]learn more
+   never miss a story from becoming human: artificial intelligence
+   magazine
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://becominghuman.ai/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/df57e8ff3b26
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://becominghuman.ai/lets-build-an-atari-ai-part-1-id25-df57e8ff3b26&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://becominghuman.ai/lets-build-an-atari-ai-part-1-id25-df57e8ff3b26&source=--------------------------nav_reg&operation=register
+   8. https://becominghuman.ai/?source=logo-lo_bzciuxmdrpaw---5e5bef33608a
+   9. https://becominghuman.ai/artificial-intelligence-software-developers-af09386dc05d
+  10. https://becominghuman.ai/tagged/tutorial
+  11. https://becominghuman.ai/write-for-us-48270209de63
+  12. https://becominghuman.ai/artificial-intelligence-communities-c305f28e674c
+  13. http://m.me/becominghumanai
+  14. https://becominghuman.ai/@adrienle?source=post_header_lockup
+  15. https://becominghuman.ai/@adrienle
+  16. https://s-media-cache-ak0.pinimg.com/originals/4a/1c/2a/4a1c2a0dc943ab301a4b8b9ed1d27d00.jpg
+  17. https://medium.com/@adrienle/lets-build-an-atari-ai-part-0-intro-to-rl-9b2c5336e0ec
+  18. https://www.cs.toronto.edu/~vmnih/docs/id25.pdf
+  19. https://www.eventbrite.com/e/the-chatbot-conference-tickets-34868758395?aff=cbl
+  20. https://gym.openai.com/docs
+  21. https://becominghuman.ai/media/edbb618e8388802377aa679b6aaa8d8e?postid=df57e8ff3b26
+  22. https://gym.openai.com/envs#atari
+  23. https://github.com/openai/gym/blob/5cb12296274020db9bb6378ce54276b31e7002da/gym/envs/__init__.py#l352
+  24. https://becominghuman.ai/media/2529fe5b3b9bf0f793e7d787594a3142?postid=df57e8ff3b26
+  25. https://becominghuman.ai/media/6c92e67f405c08f7473df98cc6ead4f6?postid=df57e8ff3b26
+  26. https://becominghuman.ai/media/6537d5e358c0239e5ed6f1fe8e84bb47?postid=df57e8ff3b26
+  27. https://keras.io/getting-started/functional-api-guide/
+  28. https://becominghuman.ai/media/d51a7240d34dc5829ba0a84a5ac7129f?postid=df57e8ff3b26
+  29. https://docs.python.org/2/library/collections.html#collections.deque
+  30. https://becominghuman.ai/media/c8b5daf5182103cbcab4eeca29be9c9c?postid=df57e8ff3b26
+  31. https://becominghuman.ai/media/1d95cc85d847beb0491ea2b259c4ddbb?postid=df57e8ff3b26
+  32. https://medium.com/@adrienle/beat-atari-with-deep-reinforcement-learning-part-2-id25-improvements-d3563f665a2c
+  33. https://becominghuman.ai/media/c43026df6fee7cdb1aab8aaf916125ea?postid=df57e8ff3b26
+  34. https://becominghuman.ai/artificial-intelligence-communities-c305f28e674c
+  35. https://upscri.be/8f5f8b
+  36. https://becominghuman.ai/write-for-us-48270209de63
+  37. https://becominghuman.ai/tagged/machine-learning?source=post
+  38. https://becominghuman.ai/tagged/artificial-intelligence?source=post
+  39. https://becominghuman.ai/tagged/deep-learning?source=post
+  40. https://becominghuman.ai/tagged/reinforcement-learning?source=post
+  41. https://becominghuman.ai/tagged/ai?source=post
+  42. https://becominghuman.ai/@adrienle?source=footer_card
+  43. https://becominghuman.ai/@adrienle
+  44. https://becominghuman.ai/?source=footer_card
+  45. https://becominghuman.ai/?source=footer_card
+  46. https://becominghuman.ai/
+  47. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  49. https://www.eventbrite.com/e/the-chatbot-conference-tickets-34868758395?aff=cbl
+  50. https://medium.com/p/df57e8ff3b26/share/twitter
+  51. https://medium.com/p/df57e8ff3b26/share/facebook
+  52. https://medium.com/p/df57e8ff3b26/share/twitter
+  53. https://medium.com/p/df57e8ff3b26/share/facebook

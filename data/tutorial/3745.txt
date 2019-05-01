@@ -1,0 +1,189 @@
+music id38 with recurrent neural networks
+
+tl;dr
+
+   i trained a [1]long short-term memory (lstm) recurrent neural network
+   on a dataset of around 650 jigs and folk tunes. i sampled from this
+   model to generate the following musical pieces:
+
+   you can find 8 more pieces [2]here
+
+introduction
+
+   neural networks are all the rage these days, and with good reason.
+   microsoft research's [3]winning model on the 2015 id163 competition
+   is classifying images with 3.57% error rate (human performance is
+   5.1%). google used a variant to [4]crush one of the world's best go
+   players 4-1. crazy things are happening in the field, with no sign of
+   slowing down. in this project, i've applied recurrent neural nets to
+   learn a predictive model over symbolic sequences of music.
+   disclaimer: this post assumes a familiarity with machine learning and
+   neural networks. for a good overview of id56's, i highly recommend
+   reading [5]andrej karpathy's excellent blog post here for an in-depth
+   explanation.
+
+music id38
+
+   music id38 is the problem of modeling symbolic sequences
+   of polyphonic music in a completely general piano roll representation.
+   piano roll representation is a key distinction here, meaning we're
+   going to use the symbolic note sequences as represented by sheet music,
+   as opposed to more complex, acoustically rich audio signals. midi files
+   are perfect for this, as they encode all the note information exactly
+   to how it would be displayed on a piano roll.
+   [encoding.png]
+
+   the most straightforward way to learn this way is to discretize a piece
+   of music into uniform time steps. there are 88 possible pitches from a0
+   to c8 in a midi file, so every time step is encoded into an
+   88-dimensional binary vector as shown above. a value of 1 at index i
+   indicates that pitch i is playing at a given time step. then we plug
+   this sequence of input vectors into an id56 architecture, where at each
+   step the target is to predict the next time step of the sequence. a
+   trained model outputs the conditional distribution of notes at a time
+   step, given the all the time steps that have occured before it.
+
+   one problem with this naive formulation is that the amount of potential
+   note configurations is too high ($2^{n}$ for $n$ possible notes) to
+   take the softmax classification approach normally used in image
+   classification and id38. instead, we need to use a sigmoid
+   cross-id178 id168 to predict the id203 of whether each
+   note class is active or not separately. however, this approach does not
+   make much sense for the complex joint distribution of notes usually
+   found in a time step. for example, c is much more likely than c# to be
+   playing when e and g are also active, but separate classification
+   targets implicity assumes independence between note probabilities at
+   the same time step. [6]modeling temporal dependencies in
+   high-dimensional sequences (boulanger-lewandowski, 2012), perhaps the
+   most succesful research paper on mlm so far, attempts to solve this
+   problem using energy based generative models such as the restricted
+   id82 (rbm). they propose the combined id56-rbm
+   architecture, which achieves state-of-the-art performance on several
+   music datasets.
+
+model
+
+   for my model, i decided to take the approach of introducing more
+   musical structure into learning. many musical pieces can be separated
+   into two parts: a melody and harmony. i make the two following
+   assumptions about a piece of music for my model: first, the melody is
+   monophonic (only one note at most playing at every time step). second,
+   the harmony at each time step can be classified into a chord class. for
+   example, a c, e, g active during a time step would is classified as c
+   major. these are strong assumptions, but they lead to the nice property
+   of exactly one active melody class and one active harmony class at
+   every time step. this allows us to take the sum of two softmax
+   functions as the id168 for our model.
+   [dual_softmax_fig.png]
+
+   my model works in the following way: for every time step i encode the
+   melody note into a one-hot-encoding binary vector. i then use the notes
+   playing in the harmony to infer the chord class, and turn that into a
+   one-hot-encoding binary vector as well. the full input vector is a
+   concatentation of the melody and harmony vectors. this input vector
+   then passes through hidden layer(s) of lstm cells. the id168 is
+   the sum of two separate softmax id168s over the respective
+   melody and harmony parts of the output layer.
+
+   $l(z, m, h) = \alpha \, log \bigg( \frac{ e^{z_m} }{ \sum_{n=0}^{m-1}{
+   e^{z_n}}} \bigg) + (1 - \alpha) \, log \bigg( \frac{ e^{z_{m+h}} }{
+   \sum_{n=m}^{m+h}{ e^{z_n}}} \bigg)$
+
+   if we have $m$ melody classes and $h$ harmony classes, the function
+   above describes the log-likelihood loss at a time step given the output
+   layer $z \in \mathbb{r}^{m+h}$, a target melody class $m$, and target
+   harmony class $h$. $\alpha$ is what i call the melody coefficient that
+   controls how much the id168 is affected by it's respective
+   melody and harmony loss terms.
+
+experiments
+
+   the [7]nottingham dataset is a collection of 1200 jigs and folk tunes,
+   most of which fit the assumptions specified above: they have a simple
+   monophonic melody on top of recognizable chords. you can download the
+   all the nottingham tunes as midi files [8]here. i discretized each of
+   these sequences into time steps of sixteenth notes (1/4 of a quarter
+   note), and used the [9]mingus python package to detect the chord
+   classes in the harmonies. after some filtering out some sequences that
+   didn't fit the assumptions, i ended up with 32 chord classes and 34
+   possible melody notes (1 class from each of these represented a rest)
+   for a total input dimension of 66 over 997 sequences. the average
+   length of a sequence was 516 (roughly 32 measures in 4/4). finally, all
+   the sequences were split up into 65% training, 15% validation, and 15%
+   testing.
+
+   an example musical sequence from the nottingham dataset
+
+   i used google's [10]tensorflow library to implement my model. the
+   architecture that i found worked best was 2 stacked hidden layers of
+   200 lstm units each. i batched sequences by length, and used an
+   unrolling length of 128 (8 measures in 4/4 time signature) for
+   [11]id26 through time (bptt). i used rmsprop with a learning
+   rate of 0.005 and decay rate of 0.9 for minibatch id119.
+   when searching over the hyperparameter space, i trained each model for
+   250 epochs, and saved the model with the lowest validation loss.
+   [overfitting.png]
+
+   training and validation loss plotted over num epochs for a model with 2
+   stacked layers of 200 lstm units, with 50% dropout on hidden layers and
+   80% dropout on input layers. overfitting issues start showing up after
+   about 20 epochs.
+
+   one big issue i ran into when training was extreme overfitting. adding
+   dropout on the non-recurrent connections helped some, but did not
+   completely eliminate the issue. the best dropout configuration i found
+   and ended up using was 50% on the hidden layers and 80% on the input
+   layers.
+
+results
+
+   the best model i found achieved on overall accuracy of 77.84% on the
+   test set. one nice consequence of my model is i can evaluate the melody
+   and harmony accuracies separately, which ended up being 64.15% and
+   91.57% for the melody and harmony respectively. the higher harmony
+   accuracy makes sense, because most of the pieces in the dataset hold
+   out chords for 8 or 16 time steps (a half or whole note in 4/4 time).
+
+   alright, enough numbers, let's get to the fun stuff. once the model is
+   trained, generating music from it is just a matter of sampling a melody
+   and harmony from the id203 distribution at each time step and
+   plugging it back into the network. rinse and repeat. i present to you 8
+   more pieces generated by my model below. i "primed" each with the
+   starting 16 time steps (1 measure in 4/4 time) from a random test
+   sequence, and then let them do their thing for 2048 time steps.
+
+   some turned out sounding better than others to my ears, but overall the
+   model clearly does not produce human-level compositions. the lack of
+   long-term structure such as repeated phrases and themes is especially
+   revealing. however, for the most part, the model seems to play a melody
+   in key with the harmony that it chooses. the melody also tends to stay
+   in the same key signature for short-term phrases, and sometimes the
+   harmony accompanies it with short chord progressions in that same key.
+   there does also seem to be small pieces of coherent rhythmic structure,
+   although the "time signature" overall throughout a piece is sporadic.
+     __________________________________________________________________
+
+   many thanks go out to [12]fei sha for providing valuable advice; this
+   work was completed as part of my final project for his research
+   seminar. if you're interested in learning more, [13]the final report
+   contains details about the model and a few more experimental results.
+   the source code is also [14]available on github here if you'd like to
+   use my code to train your own models! (warning: messy code)
+   .
+
+references
+
+   1. https://en.wikipedia.org/wiki/long_short-term_memory
+   2. http://yoavz.com/music_id56/#track-marker
+   3. http://image-net.org/challenges/lsvrc/2015/results
+   4. https://deepmind.com/alpha-go.html
+   5. http://karpathy.github.io/2015/05/21/id56-effectiveness/
+   6. http://www-etud.iro.umontreal.ca/~boulanni/icml2012.pdf
+   7. http://ifdo.ca/~seymour/nottingham/nottingham.html
+   8. http://www-etud.iro.umontreal.ca/~boulanni/icml2012
+   9. https://github.com/bspaans/python-mingus
+  10. https://www.tensorflow.org/
+  11. https://en.wikipedia.org/wiki/id26_through_time
+  12. http://web.cs.ucla.edu/~feisha/
+  13. http://yoavz.com/music_id56_paper.pdf
+  14. http://github.com/yoavz/music_id56

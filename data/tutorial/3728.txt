@@ -1,0 +1,1158 @@
+   [1][torch-logo.png]
+     * [2]docs
+     * [3]tutorials
+     * [4]community wiki
+     * [5]blog
+     * [6]who we are
+     * [7]support
+     * [8]github
+
+id38 a billion words
+
+   july 25, 2016 by [9]nicholas leonard
+     * [10]word versus character language models
+     * [11]recurrent neural network language models
+     * [12]loading the google billion words dataset
+     * [13]building a multi-layer lstm
+     * [14]training and evaluation scripts
+     * [15]results
+     * [16]future work
+     * [17]references
+
+   in our last post, we presented a [18]recurrent model for visual
+   attention which combined id23 with recurrent neural
+   networks. in this torch blog post, we use noise contrastive estimation
+   (nce) [19][2] to train a multi-gpu recurrent neural network language
+   model (id56lm) on the google billion words (gbw) dataset [20][7]. the
+   work presented here is the result of many months of on-and-off work at
+   [21]element-research. the enormity of the dataset caused us to
+   contribute some novel open-source torch modules, criteria and even a
+   multi-gpu tensor. we also provide scripts so that you can train and
+   evaluate your own language models.
+
+   if you are only interested in generated samples, perplexity and
+   learning curves, please jump to the [22]results section.
+
+word versus character language models
+
+   in recent months you may have noticed increased interest in generative
+   character-level id56lms like [23]char-id56 and the more recent
+   [24]torch-id56. these models are very interesting as they can be used to
+   generate sequences of characters like the following:
+<post>
+diablo
+<comment score=1>
+i liked this game so much!! hope telling that numbers' benefits and
+features never found out at that level is a total breeze
+because it's not even a developer/voice opening and rusher runs
+the game against so many people having noticeable purchases of selling
+the developers built or trying to run the patch to jagex.
+</comment>
+
+   the above was generated one character at a time using a sample of
+   [25]reddit comments. as you can see for yourself, the general structure
+   of the generated text looks good, at first view. the tags are opened
+   and closed appropriately. the first sentence looks good: i liked this
+   game so much!! and it is related to the subreddit of the post: diablo.
+   but reading the rest of it, we can start to see the limitations of
+   char-level language models. the spelling of individual words looks
+   great, but the meaning of the next sentence is difficult to understand
+   (it is also very long).
+
+   in this blog post we will show how torch can be used to train a
+   large-scale word-level language model to generate independent
+   sentences. word-level models have an important advantage over
+   char-level models. take the following sequence as an example (a quote
+   from robert a. heinlein):
+progress isn't made by early risers. it's made by lazy men trying to find easier
+ ways to do something.
+
+   after id121, the word-level model might view this sequence as
+   containing 22 tokens. on the other hand, the char-level will view this
+   sequence as containing 102 tokens. this longer sequence makes the task
+   of the character model harder than the word model, as it must take into
+   account dependencies between more tokens over more time-steps. another
+   issue with character language models is that they need to learn
+   spelling in addition to syntax, semantics, etc. in any case, word
+   language models will typically have lower error than character
+   models.[26][8]
+
+   the main advantage of character over word language models is that they
+   have a really small vocabulary. for example, the gbw dataset will
+   contain approximately 800 characters compared to 800,000 words (after
+   pruning low-frequency tokens). in practice this means that character
+   models will require less memory and have faster id136 than their
+   word counterparts. another advantage is that they do not require
+   id121 as a preprocessing step.
+
+recurrent neural network language models
+
+   our task is to build a language model which maximizes the likelihood of
+   the next word given the history of previous words in the sentence. the
+   following figure illustrates the workings of a simple recurrent neural
+   network (simple id56) language model:
+
+                                 [id56lm.png]
+
+   the exact implementation is as follows:
+h[t] =   (w[x->h]x[t] + w[h->h]h[t   1] + b[1->h])                      (1)
+y[t] = softmax(w[x->y]h[t] + b[1->y])                                (2)
+
+   for this particular example, the model should maximize    is    given
+      what   , and then    the    given    is    and so on. the simple id56 has an
+   internal hidden state h[t] which summarizes the sequence fed in so far,
+   as it relates to maximizing the likelihood of the remaining words in
+   the sequence. internally, the simple id56 has parameters from input to
+   hidden (id27s), hidden to hidden (recurrent connections) and
+   hidden to output (output embeddings that feed into a softmax). the
+   input to hidden parameters consist of a lookuptable that learns to
+   represent each word as a vector. these vectors form a embeddings space
+   for words. the input x[t] to the lookuptable is a unique integer
+   associated to the word w[t]. the embedding vector for that word is
+   obtained by indexing the embedding space w[x->h] which we represent by
+   w[x->h]x[t]. the hidden to hidden parameters model the temporal
+   dependencies of words by generating a hidden state h[t] given h[t-1]
+   and x[t]. this is where the actual recurrence takes place as h[t] is a
+   function of h[t-1] (and word x[t]). the hidden to output layer does an
+   affine transform (i.e. a linear module: w[x->y]h[t] + b[1->h]) followed
+   by a softmax. this is to estimate a id203 distribution y[t]over
+   the next word given the previous words which is emboddied by the hidden
+   state h[t]. the criterion is to maximize the likelihood of the next
+   word w[t+1] given previous words: p(w[t+1]|w[1],w[2],...,w[t]).
+
+   simple id56s are easy to build using the [27]id56 package (see [28]simple
+   id56 example), but they are not the only kind of model that can be used
+   model language. there are also the more advanced long short term memory
+   (lstm) models [29][3],[4],[5], which have special gated cells that
+   facilitate the id26 of gradients through longer sequences.
+
+                                 [lstm.png]
+
+   the exact implementation is as follows:
+i[t] =   (w[x->i]x[t] + w[h->i]h[t   1] + b[1->i])                      (3)
+f[t] =   (w[x->f]x[t] + w[h->f]h[t   1] + b[1->f])                      (4)
+z[t] = tanh(w[x->c]x[t] + w[h->c]h[t   1] + b[1->c])                   (5)
+c[t] = f[t]c[t   1] + i[t]z[t]                                         (6)
+o[t] =   (w[x->o]x[t] + w[h->o]h[t   1] + b[1->o])                      (7)
+h[t] = o[t]tanh(c[t])                                                (8)
+
+   the main advantage is that lstms can learn dependencies between words
+   seperated between much longer time-steps. it isn   t as prone to the
+   problems of vanishing gradients as the different gates can preserve the
+   gradients during back-propagation. to create a lm, the id27s
+   (w[x->h]x[t] in eq.1) would be fed to the lstm and the resulting hidden
+   state would be fed to eq. 2.
+
+   the error of language model is traditionally measured using perplexity.
+   perplexity is a measure of how surprised the model is to see a sequence
+   of text. if you feed it in a sequence of words, and for each successive
+   word the model is able to predict with high likelihood what word comes
+   next, it will have low perplexity. if the next word in the sequence s
+   of length t is indexed by s[t] and the model-inferred likelihood is
+   y[t] such that the likelihood of that word is y[t][s[t]], then the
+   perplexity of that sequence of words is:
+                 log(y[1][s[1]) + log(y[2][s[2]) + ... + log(y[t][s[t])
+ppl(s,y) = exp( -------------------------------------------------------- )
+                                          -t
+
+   the lower the perplexity, the better.
+
+loading the google billion words dataset
+
+   for our word-level language model we use the gbw dataset. the dataset
+   is different from penn tree bank in that sentences are kept independent
+   of each other. so then our dataset consists of a set of independent
+   variable-length sequences. the dataset can be easily loaded using the
+   [30]dataload package:
+local dl = require 'dataload'
+local train, valid, test = dl.loadgbw(batchsize)
+
+   the above will automatically download the data if not found on disk and
+   return the training, validation and test set. these are
+   [31]dl.multisequence instances which have the following constructor:
+dataloader = dl.multisequence(sequences, batchsize)
+
+   the sequences argument is a lua table or [32]tds.vector where each
+   element is a tensor containing an independent sequence. for example:
+sequences = {
+  torch.longtensor{424,158,115,667,28,505,228},
+  torch.longtensor{389,456,188},
+  torch.longtensor{77,172,760,687,552,529}
+}
+batchsize = 2
+dataloader = dl.multisequence(sequences, batchsize)
+
+   note how the sequences vary in length. like all [33]dl.dataloader
+   sub-classes, the dl.multisequence loader provides a method for
+   sub-sampling a batch of inputs and targets from the dataset:
+local inputs, targets = dataloader:sub(1, 10)
+
+   the sub method takes the start and end indices of sub-sequences to
+   index. internally, these indices are only used to determine length
+   (seqlen) of the requested multi-sequences. each successive call to sub
+   will return multi-sequences contiguous to the previous ones.
+
+   the returned inputs and targets are seqlen x batchsize [x inputsize]
+   tensors containg a batch of 2 multi-sequences, each containing 8
+   time-steps. starting with the inputs :
+print(inputs)
+  0    0
+ 424   77
+ 158  172
+ 115  760
+ 667  687
+  28  552
+ 505    0
+   0  424
+[torch.doubletensor of size 8x2]
+
+   each column is a vector containing potentially multiple sequences, i.e.
+   a multi-sequence. independent sequences are seperated by zeros. in the
+   next section, we will see how the [34]id56 package can use these
+   zero-masked time-steps to efficiently forget its hidden state between
+   independent sequences (at the granularity of columns). for now, notice
+   how the original sequences are contained in the returned inputs and
+   separated by zeros.
+
+   the targets are similar to the inputs, but use masks of 1 to separate
+   sequences (as classnllcriterion will otherwise complain). as is typical
+   in language models, the task is to predict the next word, such that the
+   targets are delayed by one time-step with respect to the commensurate
+   inputs:
+print(targets)
+   1    1
+ 158  172
+ 115  760
+ 667  687
+  28  552
+ 505  529
+ 228    1
+   1  158
+[torch.doubletensor of size 8x2]
+
+   the train, valid and test returned by the call to dl.loadgbw have the
+   same properties as the above. except that the dataset is much bigger
+   (it has one billion words). for debugging and such, we can choose to
+   load a smaller subset of the training set. this will load much faster
+   than the default training set file:
+local train, valid, test = dl.loadgbw({2,2,2}, 'train_tiny.th7')
+
+   the above will use a batchsize of 2 for all sets. iteration through the
+   dataloader is made easier using the [35]subiter :
+local seqlen, epochsize = 3, 10
+for i, inputs, targets in train:subiter(seqlen, epochsize) do
+   print("t = " .. i)
+   print(inputs)
+end
+
+   which will output:
+t = 3
+ 0       0
+ 793470  793470
+ 211427    6697
+[torch.doubletensor of size 3x2]
+
+t = 6
+ 477149  400396
+ 720601  213235
+ 660496  368322
+[torch.doubletensor of size 3x2]
+
+t = 9
+ 676607   61007
+ 161927  767587
+ 248714  635004
+[torch.doubletensor of size 3x2]
+
+t = 10
+ 280570  130510
+[torch.doubletensor of size 1x2]
+
+
+   we could also return the above batches as one big chunk instead:
+train:reset() -- resets the internal sequence iterator
+print(train:sub(1,10))
+      0       0
+ 793470  793470
+ 211427    6697
+ 477149  400396
+ 720601  213235
+ 660496  368322
+ 676607   61007
+ 161927  767587
+ 248714  635004
+ 280570  130510
+[torch.doubletensor of size 10x2]
+
+   notice how the above small batches are aligned with this big chunk.
+   which means that the data is iterated in sequence.
+
+   each sentence in the gbw dataset is encapsulated by <s> and </s> tokens
+   to indicate the start and end of the sequence, respectively. each token
+   is mapped to an integer. so for example, you can see that <s> is mapped
+   to integer 793470 in the above example. now that we feel confident in
+   our dataset, lets look at the model.
+
+building a multi-layer lstm
+
+   in this section, we get down to the business of actually building our
+   multi-layer lstm. we will introduce nce once we get to the output
+   layer, starting from the input layer.
+
+   the input layer of the the lm model is a lookup table :
+lm = nn.sequential()
+
+-- input layer (i.e. id27 space)
+local lookup = nn.lookuptablemaskzero(#trainset.ivocab, opt.inputsize)
+lm:add(lookup) -- input is seqlen x batchsize
+
+   a sub-class of lookuptable, we use the [36]lookuptablemaskzero to learn
+   id27s. the main difference is that it supports zero-indexes,
+   which are forwarded as zero-tensors. then we have the actual
+   multi-layer lstm implementation, which uses the [37]seqlstm module:
+local inputsize = opt.inputsize
+for i,hiddensize in ipairs(opt.hiddensize) do
+   local id56 = nn.seqlstm(inputsize, hiddensize)
+   id56.maskzero = true
+   lm:add(id56)
+   if opt.dropout > 0 then
+      lm:add(nn.dropout(opt.dropout))
+   end
+   inputsize = hiddensize
+end
+
+   as demonstrated in the [38]id56-benchmarks repository, the seqlstm
+   implemention is very fast. next we split the output of the seqlstm
+   (which is a seqlen x batchsize x outputsize tensor) into a table
+   containing a batchsize x outputsize tensor for each time-step:
+lm:add(nn.splittable(1))
+
+the problem: bottleneck at the output layer
+
+   with its small vocabulary of 10000 words, the penn tree bank dataset is
+   relatively easy to use to build word-level language models. the output
+   layer is still computationally tractable for both training and
+   id136, especially for gpus. for these smaller vocabularies, the
+   output layer is basically a linear followed by a softmax:
+outputlayer = nn.sequential()
+   :add(nn.linear(hiddensize, vocabsize))
+   :add(nn.softmax())
+
+   however, when training with large vocabularies, like the 793471 words
+   that makes up the gbw dataset , the output layer quickly becomes a
+   bottleneck. for example, if you are training your model with a
+   batchsize = 128 (number of sequences per batch) and a seqlen = 50 (size
+   of sequence to backpropagate through time), the output of that layer
+   will have shape seqlen x batchsize x vocabsize, or 128 x 50 x 793471.
+   for a floattensor or cudatensor, that single tensor will take up 20gb
+   of memory! the number can be double for gradinput (i.e. gradients with
+   respect to input), and double again as both linear and softmax store a
+   copy for the output.
+
+                               [lm-linear.png]
+
+   excluding parameters and their gradients, the above figure outlines the
+   approximate memory consumption of a 4-layer lstm with 2048 units with a
+   seqlen=50. even if somehow you can find a way to put 80gb on a gpu (or
+   distribute it over many), you still run into the problem of
+   forward/backward propagating through that outputlayer in a reasonable
+   time-frame.
+
+the solution: noise contrastive estimation
+
+   the output layer of the lm uses nce to speed up training and reduce
+   memory consumption:
+local unigram = trainset.wordfreq:float()
+local ncemodule = nn.ncemodule(inputsize, #trainset.ivocab, opt.k, unigram, opt.
+z)
+
+-- nce requires {input, target} as inputs
+lm = nn.sequential()
+   :add(nn.paralleltable()
+      :add(lm):add(nn.identity()))
+   :add(nn.ziptable())
+
+-- encapsulate stepmodule into a sequencer
+lm:add(nn.sequencer(nn.maskzero(ncemodule, 1)))
+
+   the [39]ncemodule is a more efficient version of:
+nn.sequential():add(nn.linear(inputsize, #trainset.ivocab)):add(nn.logsoftmax())
+
+   for evaluating perplexity, the model still implements linear + softmax.
+   nce is useful for reducing the memory consumption during training
+   (compare to the figure above):
+
+                                [lm-nce.png]
+
+   along with the [40]ncecriterion, the ncemodule implements the algorithm
+   is described in [41][1]. i won   t go into the details of the algorithm
+   as it involves a lot of math which is more appropriately detailed in
+   the reference papers. the way it works is that for each target word
+   (the likelihood of which we want to maximize), k words are sampled from
+   a noise distribution, which is typically the unigram distribution.
+
+   remember that a softmax is basically:
+                  exp(x[i])
+y[i] = ---------------------------------                             (9)
+       exp(x[1])+exp(x[2])+...+exp(x[n])
+
+   where x[i] is the i-th output of the output linear layer. the above
+   denominator is the cause of the bottleneck as the linear needs to be
+   computed for each output x[i]. for a n=797470 vocabulary, this is
+   prohibitively expensive. nce goes around this problem by replacing the
+   denominator of eq. 9 with a constant z during training:
+         exp(x[i])
+y[i] = ------------                                                  (10)
+             z
+
+   now this is not what actually happens during training as
+   back-propagating through the above will not produce gradients for the
+   x[j] where j~=i (j not equal i). notice that backpropagating through
+   eq. 9 will produce gradients for all outputs x of the linear (i.e. for
+   all i). another problem with eq. 10 is that nothing is pushing
+   exp(x[1])+exp(x[2])+...+exp(x[n]) to approximate z. what nce does is
+   formulate the problem such that k noise samples can be included in the
+   equation to both make sure that some (at most k) negative samples (i.e.
+   x[j] where j) get gradients and that the denominator of eq. 9
+   approximates the denominator of eq. 10. the k noise samples are sampled
+   from a noise distribution, i.e. the unigram distribution. the output
+   layer linear need only be computed for the target and noise-sampled
+   words, which is where the efficiency is gained.
+
+   the unigram variable above is a tensor of size 793470 where each
+   element is the frequency of the commensurate word in the corpus.
+   sampling from such a large distribution using something like
+   [42]torch.multinomial can become a bottleneck during training. so we
+   implemented a more efficient version in [43]torch.aliasmultinomial. the
+   latter multinomial sampler requires more setup time than the former,
+   but this isn   t a problem as the unigram distribution is constant.
+
+   nce uses the noise samples to approximate a id172 term z where
+   the output distribution is exp(x[i])/z and x[i] is the output of the
+   linear for word i. for the softmax, which nce tries to approximate, the
+   z is the sum over the exp(x[i']) over all words i'. for nce, the z is
+   typically fixed to z=1. our initial experiments found that setting z to
+   z=n*mean(exp(x[i])) (where n is the number of words and the mean is
+   approximated over a small batch of word samples i) gave much better
+   results, but this is because we weren   t appropriately initializing the
+   output layer parameters.
+
+   one notable aspect of nce papers (there are many) is that they often
+   forget to mention the importance of this parameter initialization.
+   setting z=1 is only really possible if the ncemodule.bias is
+   initialized to bias[i] = -log(n). this is what the authors of [44][2]
+   use, although it isn   t mentioned in the paper (i contacted one of the
+   authors to find out).
+
+   sampling k noise samples per time-step and per batch-row means that the
+   ncemodule needs to internally use something like [45]torch.baddbmm to
+   compute the output. reference [46][2] implement a faster version where
+   the noise samples are drawn once and used for the entire batch (but
+   still once for each time-step). this makes the code a bit faster as the
+   more efficient [47]torch.addmm can be used instead of torch.baddbmm.
+   this faster nce version described in [48][2] is the default
+   implementation of the ncemodule. sampling per batch-row can be turned
+   on with ncemodule.rownoise=true.
+
+training and evaluation scripts
+
+   the experiments presented here use three scripts: two for training (you
+   only need to use one) and one for evaluation. the training scripts only
+   differ in the amount of gpus to use. both train a language model on the
+   training set and do early-stopping on the validation set. the
+   evaluation script is used to measure the perplexity of a trained model
+   on the test set, or to generate sentences.
+
+single-gpu training script
+
+   we provide training scripts for a single gpu via the
+   [49]noise-contrastive-estimate.lua script. running the following on a
+   12gb nvidia titan x should resulted in a test set perplexity of 65.6
+   after 321 epochs:
+th examples/noise-contrastive-estimate.lua --cuda --device 2 --startlr 1 --satur
+ate 300 --cutoff 10 --progress --uniform 0.1 --seqlen 50 --batchsize 128 --train
+size 400000 --validsize 40000 --hiddensize '{250,250}' --k 400 --minlr 0.001 --m
+omentum 0.9
+
+   the resulting model will look like this:
+nn.serial @ nn.sequential {
+  [input -> (1) -> (2) -> (3) -> output]
+  (1): nn.paralleltable {
+    input
+      |`-> (1): nn.sequential {
+      |      [input -> (1) -> (2) -> (3) -> (4) -> output]
+      |      (1): nn.lookuptablemaskzero
+      |      (2): nn.seqlstm
+      |      (3): nn.seqlstm
+      |      (4): nn.splittable
+      |    }
+      |`-> (2): nn.identity
+       ... -> output
+  }
+  (2): nn.ziptable
+  (3): nn.sequencer @ nn.recursor @ nn.maskzero @ nn.ncemodule(250 -> 793471)
+}
+
+   to use about one third less memory, you can set momentum of 0.
+
+evaluation script
+
+   the evaluation script can be used to measure perplexity on the test set
+   or sample independent sentences. to evaluate a saved model, you can use
+   the [50]evaluate-id56lm.lua script:
+th scripts/evaluate-id56lm.lua --xplogpath /home/nicholas14/save/id56lm/gbw:uranus
+:1466538423:1.t7 --cuda
+
+   where you should replace
+   /home/nicholas14/save/id56lm/gbw:uranus:1466538423:1.t7 with the path to
+   your own trained model. evaluating on the test set can take a while as
+   it must use the less efficient linear + softmax, and thus a very small
+   batch size (so as not to use too much memory).
+
+   the evaluation script can also be used to generate samples from the
+   language model:
+th scripts/evaluate-id56lm.lua --xplogpath /home/nicholas14/save/id56lm/gbw:uranus
+:1466790001:1.t7 --cuda --nsample 200 --temperature 0.7
+
+   the --nsample flag specifies how many tokens to sample. the first token
+   input to the language model is the start-of-sentence tag (<s>). when
+   the end-of-sentence tag (</s>), the model   s hidden states are set to
+   zero, such that each sentence is sampled independently. the
+   --temperature flag can be reduced to make the sampling more
+   deterministic.
+<s> there were a number of players in the starting lineup during the season and
+in recent weeks , in recent years , some fans have been frustrated . </s>
+<s> washington ( reuters ) - the government plans to cut greenhouse gases by as
+much as 12 % on the global economy , a new report said . </s>
+<s> one of the most important things about the day was that the two companies ha
+d just been guilty of the same nature . </s>
+<s> " it has been as much a bit of a public service as a public organisation . <
+/s>
+<s> in a nutshell , it 's not only the fate of the economy . </s>
+<s> it was last modified at 23.31 gmt on saturday 22 december 2009 . </s>
+<s> he told the newspaper the prosecution had been treating the small boy as " a
+ young man who was playing for a while . </s>
+<s> " we are astounded that our employees are not made aware of the risks and ri
+sks they are pursuing during this period of time , " he said . </s>
+<s> " i had a right to come up with the idea . </s>
+
+multi-gpu training script
+
+   as can be observed in the previous section, training a 2-layer lstm
+   with only 250 hidden units will not yield the best generated samples.
+   the model needs much more capacity than what can fit on a 12gb gpu. for
+   parameters and their gradients, a 4x2048 lstm model requires the
+   following:
+
+                               [lm-params.png]
+
+   this doesn   t include all the intermediate buffers required for the
+   different modules (outlined in [51]nce section). the solution was of
+   course to distribution the model over more gpus. the
+   [52]multigpu-nce-id56lm.lua script is thus provided to train a language
+   model on four gpus.
+
+   it uses the [53]gpu (which we contributed it to the [54]nn) to decorate
+   modules such that all their operations and memory are hosted on a
+   specified device. the gpu module won   t parallelize kernel execution
+   over different gpu-devices. but it does allow us to distribute large
+   models over devices.
+
+   for our lm, the input id27s (i.e. lookuptablemaskzero) and
+   output layer (i.e. ncemodule) take up most of the memory. the first was
+   pretty easy to distribute:
+lm = nn.sequential()
+lm:add(nn.convert())
+
+-- input layer (i.e. id27 space)
+local concat = nn.concat(3)
+for device=1,2 do
+   local inputsize = device == 1 and torch.floor(opt.inputsize/2) or torch.ceil(
+opt.inputsize/2)
+   local lookup = nn.lookuptablemaskzero(#trainset.ivocab, inputsize)
+   lookup.maxnormout = -1 -- prevent weird maxnormout behaviour
+   concat:add(nn.gpu(lookup, device):cuda()) -- input is seqlen x batchsize
+end
+
+   basically, the embedding space is split into two tables. for a 2048
+   unit embedding space, half, i.e. 1024 units, are located on each of two
+   devices. we use [55]concat to concatenate them back together after a
+   forward.
+
+   for the hidden layers (i.e. seqlstm), we just distribute them on the
+   devices used by the input layer. the hidden layers use up little memory
+   (approximately 1gb each) so they aren   t the problem. we locate them on
+   the same devices as the input layer as the output layer utilizes more
+   memory (for buffers).
+local inputsize = opt.inputsize
+for i,hiddensize in ipairs(opt.hiddensize) do
+   local id56 = nn.seqlstm(inputsize, hiddensize)
+   id56.maskzero = true
+   local device = i <= #opt.hiddensize/2 and 1 or 2
+   lm:add(nn.gpu(id56, device):cuda())
+   if opt.dropout > 0 then
+      lm:add(nn.gpu(nn.dropout(opt.dropout), device):cuda())
+   end
+   inputsize = hiddensize
+end
+
+lm:add(nn.gpu(nn.splittable(1), 3):cuda())
+
+   the ncemodule was a bit more difficult to distribute as it cannot be so
+   easily parallelized as lookuptablemaskzero. our solution was to provide
+   a simple [56]multicuda() method to distribute the weight on gradweight
+   on different devices. this is accomplished by swaping the weight
+   tensors for our own : [57]torch.multicudatensor. lua has no severe
+   type-checking system, so you can fake a tensor by creating a
+   torch.class table with the same methods. to save time, the current
+   version of multicudatensor only supports the operations required by the
+   ncemodule. the advantage of this approach is that it requires minimal
+   changes to the ncemodule and maintains backward compatiblity without
+   requiring redundant code or excessive refactoring.
+-- output layer
+local unigram = trainset.wordfreq:float()
+ncemodule = nn.ncemodule(inputsize, #trainset.ivocab, opt.k, unigram, opt.z)
+ncemodule:reset() -- initializes bias to get approx. z = 1
+ncemodule.batchnoise = not opt.rownoise
+-- distribute weight, gradweight and momentum on devices 3 and 4
+ncemodule:multicuda(3,4)
+
+-- nce requires {input, target} as inputs
+lm = nn.sequential()
+   :add(nn.paralleltable()
+      :add(lm):add(nn.identity()))
+   :add(nn.ziptable())
+
+-- encapsulate stepmodule into a sequencer
+local masked = nn.maskzero(ncemodule, 1):cuda()
+lm:add(nn.gpu(nn.sequencer(masked), 3, opt.device):cuda())
+
+   to reproduce the results in [58][2] run the following:
+th examples/multigpu-nce-id56lm.lua --startlr 0.7 --saturate 300 --minlr 0.001 --
+cutoff 10 --progress --uniform 0.1 --seqlen 50 --batchsize 128 --trainsize 40000
+0 --validsize 40000 --hiddensize '{2048,2048,2048,2048}' --dropout 0.2 --k 400 -
+-z 1 --momentum -1
+
+   notable differences to paper are the following:
+     * we use a [59]gradient norm clipping [60][3] (with a cutoff norm of
+       10) to counter exploding and vanishing gradient;
+     * they use an adaptive learning rate schedule (which isn   t specified
+       in the paper). we linearly decay from a learning rate of 0.7 (which
+       they also start from) such that it reaches 0.001 after 300 epochs;
+     * we use k=400 samples whereas they use k=100. why? i didn   t see a
+       major drop in speed, so why not?
+     * we use a sequence length of seqlen=50 for truncated bptt. they use
+       100 (again, not in the paper). the average length of sentences in
+       the dataset is 27 so 50 is more than enough.
+
+   like them, we use a dropout=0.2 between lstm layers. this is what the
+   resulting model looks like:
+nn.serial @ nn.sequential {
+  [input -> (1) -> (2) -> (3) -> output]
+  (1): nn.paralleltable {
+    input
+      |`-> (1): nn.sequential {
+      |      [input -> (1) -> (2) -> (3) -> (4) -> (5) -> (6) -> (7) -> (8) -> (
+9) -> (10) -> (11) -> (12) -> output]
+      |      (1): nn.convert
+      |      (2): nn.gpu(2) @ nn.concat {
+      |        input
+      |          |`-> (1): nn.gpu(1) @ nn.lookuptablemaskzero
+      |          |`-> (2): nn.gpu(2) @ nn.lookuptablemaskzero
+      |           ... -> output
+      |      }
+      |      (3): nn.gpu(2) @ nn.dropout(0.2, busy)
+      |      (4): nn.gpu(1) @ nn.seqlstm
+      |      (5): nn.gpu(1) @ nn.dropout(0.2, busy)
+      |      (6): nn.gpu(1) @ nn.seqlstm
+      |      (7): nn.gpu(1) @ nn.dropout(0.2, busy)
+      |      (8): nn.gpu(2) @ nn.seqlstm
+      |      (9): nn.gpu(2) @ nn.dropout(0.2, busy)
+      |      (10): nn.gpu(2) @ nn.seqlstm
+      |      (11): nn.gpu(2) @ nn.dropout(0.2, busy)
+      |      (12): nn.gpu(3) @ nn.splittable
+      |    }
+      |`-> (2): nn.identity
+       ... -> output
+  }
+  (2): nn.ziptable
+  (3): nn.gpu(3) @ nn.sequencer @ nn.recursor @ nn.maskzero @ nn.ncemodule(2048
+-> 793471)
+}
+
+results
+
+   on the 4-layer lstm with 2048 hidden units, [61][1] obtain 43.2
+   perplexity on the gbw test set. after early-stopping on a sub-set of
+   the validation set (at 100 epochs of training where 1 epoch is 128
+   sequences x 400k words/sequence), our model was able to reach 40.61
+   perplexity.
+
+   this model was run on 4x12gb nvidia titan x gpus. training requires
+   approximately 40gb of memory distributed across the 4 gpu devices, and
+   2-3 weeks of training. as in the original paper, we do not make use of
+   momentum as it provides little benefit and requires 1/2 more memory.
+
+   training runs at about 3800 words/second.
+
+learning curves
+
+   the following figure outlines the learning curves for the above 4x2048
+   lstm model. the figure plots the nce training and validation error for
+   the model, which is the error output but the ncemodule. test set error
+   isn   t plotted as doing so for any epoch requires about 3 hours because
+   test set id136 uses linear + softmax with batchsize=1.
+
+                            [lstm-nce-curve.png]
+
+   as you can see, most of the learning is done in the first epochs.
+   nevertheless, the training and validation error are consistently
+   reduced training progresses.
+
+   the following figure compares the valiation learning curves (again, nce
+   error) for a small 2x250 lstm (no dropout) and big 4x2048 lstm (with
+   dropout).
+
+                           [small-vs-big-lstm.png]
+
+   what i find impressive about this figure is how quickly the
+   higher-capacity model bests the lower-capacity model. this clearly
+   demonstrates the importance of capacity when optimizing large-scale
+   language models.
+
+generating sentences
+
+   here are some sentences sampled independently from the 4-layer lstm
+   with a temperature or 0.7:
+<s> the first , for a lot of reasons , is the " asian glory " : an american mili
+tary outpost in the middle of an iranian desert . </s>
+<s> but the first new stage of the project will be a new <unk> tunnel linking th
+e new terminal with the new terminal at the airport . </s>
+<s> the white house said bush would also sign a memorandum of understanding with
+ iraq , which will allow the americans to take part in the poll . </s>
+<s> the folks who have campaigned for his nomination know that he is in a fight
+for survival . </s>
+<s> the three survivors , including a woman whose name was withheld and not auth
+orized to speak , were buried saturday in a makeshift cemetery in the town and s
+even people were killed in the town of eldoret , which lies around a dozen miles
+ ( 40 kilometers ) southwest of kathmandu . </s>
+<s> the art of the garden was created by pouring water over a small brick wall a
+nd revealing that an older , more polished design was leading to the creation of
+ a new house in the district . </s>
+<s> she added : " the club has not made any concession to the club 's fans and w
+as not notified of the fact they had reached an agreement with the club . </s>
+<s> the times has learnt that the former officer who fired the fatal shots must
+have known about the fatal carnage . </s>
+<s> obama supporters say they 're worried about the impact of the healthcare and
+ energy policies of congress . </s>
+<s> not to mention the painful changes to the way that women are treated in the
+workplace . </s>
+<s> the dollar stood at 14.38 yen ( <unk> ) and <unk> swiss francs ( <unk> ) . <
+/s>
+<s> the current , the more intractable <unk> , the <unk> and the <unk> about a l
+ot of priorities . </s>
+<s> the job , which could possibly be completed in 2011 , needs to be approved i
+n a new compact between the two companies . </s>
+<s> " the most important thing for me is to get back to the top , " he said . </
+s>
+<s> it was a one-year ban and the right to a penalty . </s>
+<s> the government of president michelle bachelet has promised to maintain a " s
+trong and systematic " military presence in key areas and to tackle any issue of
+ violence , including kidnappings . </s>
+<s> the six were scheduled to return to washington on wednesday . </s>
+<s> " it 's a ... mistake , " he said . </s>
+<s> the government 's offensive against the rebels and insurgents has been criti
+cized by the united nations and un agencies . </s>
+<s> " our <unk> model is not much different from many of its competitors , " sai
+d richard bangs , ceo of the national center for science in the public interest
+in chicago . </s>
+<s> he is now a large part of a group of young people who are spending less time
+ studying and work in the city . </s>
+<s> he said he was confident that while he and his wife would have been comforta
+ble working with him , he would be able to get them to do so . </s>
+<s> the summer 's financial meltdown is the worst in decades . </s>
+<s> it was a good night for stuart broad , who took the ball to ravi bopara at s
+hort leg to leave england on 88 for five at lunch . </s>
+<s> and even for those who worked for them , almost everything was at risk . </s
+>
+<s> the new strategy is all part of a stepped-up war against taliban and al-qaid
+a militants in northwest pakistan . </s>
+<s> the governor 's office says the proposal is based on a vision of an outsider
+ in the town who wants to preserve the state 's image . </s>
+<s> " the fact that there is no evidence to support the claim made by the govern
+ment is entirely convincing and that dr mohamed will have to be detained for a f
+urther two years , " he said . </s>
+<s> the country 's tiny nuclear power plants were the first to use nuclear techn
+ology , and the first such reactors in the world . </s>
+<s> " what is also important about this is that we can go back to the way we wor
+ked and work and fight , " he says . </s>
+<s> and while he has been the star of " the wire " and " the office , " mr. murp
+hy has been a careful , intelligent , engaging competitor for years . </s>
+<s> on our return to the water , we found a large abandoned house . </s>
+<s> the national average for a gallon of regular gas was $ 5.99 for the week end
+ing jan . </s>
+<s> the vote was a rare early start for the contest , which was held after a par
+tial recount in 26 percent of the vote . </s>
+<s> the first one was a show of force by a few , but the second was an attempt t
+o show that the country was serious about peace . </s>
+<s> it was a little more than half an hour after the first reports of a shooting
+ . </s>
+<s> the central bank is expected to cut interest rates further by purchasing mor
+e than $ 100 billion of commercial paper and treasuries this week . </s>
+<s> easy , it 's said , to have a child with autism . </s>
+<s> he said : " i am very disappointed with the outcome because the board has no
+t committed itself . </s>
+<s> " there is a great deal of tension between us , " said mr c. </s>
+<s> the odds that the fed will keep its benchmark interest rate unchanged are at
+ least half as much as they were at the end of 2008 . </s>
+<s> for them , investors have come to see that : a ) the government will maintai
+n a stake in banks and ( 2 ) the threat of financial regulation and supervision
+; and ( 3 ) it will not be able to raise enough capital from the private sector
+to support the economy . </s>
+<s> the court heard he had been drinking and drank alcohol at the time of the at
+tack . </s>
+<s> " the whole thing is quite a bit more intense . </s>
+<s> this is a very important project and one that we are working closely with .
+</s>
+<s> " we are confident that in this economy and in the current economy , we will
+ continue to grow , " said john lipsky , who chaired the imf 's board of governo
+rs for several weeks . </s>
+<s> the researchers said they found no differences among how men drank and wheth
+er they were obese . </s>
+<s> even though there are many brands that have low voice and no connection to t
+he internet , the iphone is a great deal for consumers . </s>
+<s> the    7m project is a new project for the city of milton keynes and aims to
+launch a new challenge for the british government . </s>
+<s> but he was not without sympathy for his father . </s>
+
+   the syntax seems quite reasonable, especially when comparing it to the
+   previous results obtained from the [62]single-gpu 2x250 lstm. however,
+   in some cases, the semantics, i.e. the meaning of the words, is not so
+   good. for example, the sentence
+<s> easy , it 's said , to have a child with autism . </s>
+
+   would make more sense, to me at least, by replacing easy with not easy.
+
+   on the other hand, sentences like this one demonstrate good semantics:
+<s> the government of president michelle bachelet has promised to maintain a " s
+trong and systematic " military presence in key areas and to tackle any issue of
+ violence , including kidnappings . </s>`.
+
+   [63]michelle bachelet was actually a president of chile. in her earlier
+   life, she was also [64]kidnapped by military men, so it kind of makes
+   sense that she would be strong on the issue of kidnappings.
+
+   here is an example of some weird semantics :
+<s> even though there are many brands that have low voice and no connection to t
+he internet , the iphone is a great deal for consumers . </s>
+
+   the first part about load voice doesn   t mean anything to me. and i fail
+   to see how there being many brands that have no connection to the
+   internet relates to the iphone is a great deal for consumers. but of
+   course, all these sentences are generated independently, so the lm
+   needs to learn to generate a meaning on the fly. this is hard as there
+   is no context to the sentence being generated.
+
+   in any case, i am quite happy with the results as they are definitely
+   some of the most natural-looking synthetic sentences i have seen so
+   far.
+
+future work
+
+   i am currently working on a id38 dataset based on one
+   month of [65]reddit.com data. each sequence is basically a reddit
+   submission consisting of a title, selftext (or url), score, author and
+   a thread of comments. these sequences are much longer (average of 205
+   tokens) than the sentences that make up the gbw dataset (average of 26
+   tokens). training is still underway, but to pique your interest, this
+   is an example of generated data (indentation and line breaks added for
+   clarity):
+<submission>
+   <author> http://www.reddit.com/u/[deleted] </author>
+   <score> 0 </score>
+   <title>
+      [ wp ] you take a picture of a big bang .
+      you discover an alien that lives in the center of the planet in an unknown
+ way .
+      you can say " what the fuck is that ? "
+   </title>
+   <comments>
+      <comment>
+         <score> 2 </score>
+         <author> http://www.reddit.com/u/nev2k </author>
+         <body>
+            i have a question .
+            when i was younger , my parents had a house that had a living room i
+n it .
+            one that was only a small portion of an entire level .
+            this was a month before i got my money .
+            if i was living in a house with a " legacy " i would make some mista
+kes .
+            when i was a child , i did n't know how to do shit about the house .
+
+            my parents got me into my own house and i never found a place to liv
+e .
+            so i decide to go to college .
+            i was so freaked out , i didnt have the drive to see them .
+            i never had a job , i was n't going anywhere .
+            i was so happy .
+            i knew i was going to be there .
+            i gave myself a job and my parents came .
+            that 's when i realized that i was in the wrong .
+            so i started to go .
+            i couldnt decide how long i wanted to live in this country .
+            i was so excited about the future .
+            i had a job .
+            i saved my money .
+            i did n't have a job .
+            i went to a highschool in a small town .
+            i had a job .
+            a job .
+            i did n't know what to do .
+            i was terrified of losing my job .
+            so i borrowed my $ 1000 in an hour .
+            i could n't afford to pay my rent .
+            i was so low on money .
+            i had my parents and i got into a free college .
+            i got in touch with my parents .
+            all of my friends were dead .
+            i was still with my family for a week .
+            i became a good parent .
+            i was a good choice .
+            when i got on my hss i was going to go to my parents ' house .
+            i started to judge my parents .
+            i had a minor problem .
+            my parents .
+            i was so fucking bad .
+            my sister had a voice that was very loud .
+            i 'm sure my cousins were in a place where i could just hear my voic
+e .
+            i felt like i was supposed to be angry .
+            i was so angry .
+            to cope with this .
+            my dad and i were both on break and i felt so alone .
+            i got unconscious and my mum left .
+            when i got to college , i was back in school .
+            i was a good kid .
+            i was happy .
+            and i told myself i was ready .
+            i told my parents .
+            they always talked about how they were going to be a good mom , and
+that i was going to be ready for that .
+            they always wanted to help me .
+            i did n't know what to do .
+            i had to .
+            i tried to go back to my dad , because i knew a lot about my mom .
+            i loved her .
+            i cared about her .
+            we cared for our family .
+            the time together was my only relationship .
+            i loved my heart .
+            and i hated my mother .
+            i chose it .
+            i cried . i cried . i cried . i cried . i cried . i cried . i cried
+.
+            the tears were gone .
+            i cried . i cried . i cried . i cried . i cried . i cried . i cried
+. i cried . i cried . i cried .
+            i do n't know how to do it .
+            i do n't know how to deal with it .
+            i ca n't feel my emotions .
+            i ca n't get out of bed .
+            i ca n't sleep .
+            i ca n't tell my friends .
+            i just need to leave .
+            i want to leave .
+            i hate myself .
+            i hate feeling like i 'm being selfish .
+            i feel like i 'm not good enough anymore .
+            i need to find a new job .
+            i hate that i have to get my shit together .
+            i love my job .
+            i 'm having a hard time .
+            why do i need to get a job ?
+            i have no job .
+            i have n't been feeling good lately .
+            i feel like i 'm going to be so much worse in the long run .
+            i feel so alone .
+            i ca n't believe i 'm so sad about going through my entire life .
+         </body>
+         <author> http://www.reddit.com/u/scarbarella </author>
+      </comment>
+   </comments>
+   <subreddit> http://www.reddit.com/r/offmychest </subreddit>
+   <selftext>
+      i do n't know what to do anymore .
+      i feel like i 'm going to die and i 'm going to be sick because i have no
+more friends .
+      i do n't know what to do about my depression and i do n't know where to go
+ from here .
+      i do n't know how i do because i know i 'm scared of being alone .
+      any advice would be appreciated .
+      love .
+   </selftext>
+</submission>
+
+   this particular sample is a little depressing, but that might just be
+   the nature of the offmychest subreddit. conditioned on the opening
+   <submission> token, this generated sequence, although imperfect, is
+   incredibly human. reading through the comment, i feel like i am reading
+   a story written by an actual (somewhat schizophrenic) person. the
+   ability to similuate human creativity is one of the reasons i am so
+   interested in using reddit data for id38.
+
+   a less depressing sample is the following, which concerns the
+   [66]destiny video game:
+<submission>
+   <subreddit> http://www.reddit.com/r/destinythegame </subreddit>
+   <title>
+      does anyone have a link to the destiny grimoire that i can use to get my x
+box 360 to play ?
+   </title>
+   <comments>
+      <comment>
+         <author> http://www.reddit.com/u/cursedsun </author>
+         <body>
+            i 'd love to have a weekly reset .
+         </body>
+         <score> 1 </score>
+      </comment>
+   </comments>
+   <score> 0 </score>
+   <selftext>
+      i have a few friends who are willing to help me out .
+      if i get to the point where i 'm not going to have to go through all the w
+eekly raids , i 'll have to " complete " the raid .
+      i 'm doing the weekly strike and then doing the weekly ( and hopefully als
+o the weekly ) on monday .
+      i 'm not planning to get the chest , but i am getting my first exotic that
+ i just got done from my first crota raid .
+      i 'm not sure how well it would work for the nightfall and weekly , but i
+do n't want to loose my progress .
+      i 'd love to get some other people to help me , and i 'm open to all sugge
+stions .
+      i have a lot of experience with this stuff , so i figured it 's a good ide
+a to know if i 'm getting the right answer .
+      i 'm truly sorry for the inconvenience .
+   </selftext>
+   <author> <oov> </author>
+</submission>
+
+   for those not familiar with this game, terms like [67]grimoire,
+   [68]weekly reset, [69]raids, [70]nightfall stike, [71]exotics and
+   [72]crota raid may seem odd. but these are all part of the game
+   vocabulary.
+
+   the particular model (a 4x1572 lstm with dropout) only backpropagates
+   through 50 time-steps. what i would like to see is for the comments to
+   actually answer the question posed by the title and selftext. this is a
+   very difficult semantic problem which i hope the reddit dataset will
+   help solve. more to follow in my next torch blog post.
+
+references
+
+    1. a mnih, yw teh, [73]a fast and simple algorithm for training neural
+       probabilistic language models
+    2. b zoph, a vaswani, j may, k knight, [74]simple, fast
+       noise-contrastive estimation for large id56 vocabularies
+    3. r pascanu, t mikolov, y bengio, [75]on the difficulty of training
+       recurrent neural networks
+    4. s hochreiter, j schmidhuber, [76]long short term memory
+    5. a graves, a mohamed, g hinton, [77]id103 with deep
+       recurrent neural networks
+    6. k greff, rk srivastava, j koutn  k, [78]lstm: a search space odyssey
+    7. c chelba, t mikolov, m schuster, q ge, t brants, p koehn, t
+       robinson, [79]one billion word benchmark for measuring progress in
+       statistical id38
+    8. a graves, [80]generating sequences with recurrent neural networks,
+       table 1
+
+   please enable javascript to view the [81]comments powered by disqus.
+   [82]comments powered by disqus
+
+   torch7 maintained by ronan, cl  ment, koray and soumith.
+
+references
+
+   1. http://torch.ch/
+   2. http://torch.ch/docs/getting-started.html#_
+   3. http://torch.ch/docs/tutorials.html
+   4. https://github.com/torch/torch7/wiki/cheatsheet
+   5. http://torch.ch/blog/index.html
+   6. http://torch.ch/whoweare.html
+   7. http://torch.ch/support.html
+   8. http://github.com/torch/torch7
+   9. https://github.com/nicholas-leonard
+  10. http://torch.ch/blog/2016/07/25/nce.html#nce.char
+  11. http://torch.ch/blog/2016/07/25/nce.html#nce.id56lm
+  12. http://torch.ch/blog/2016/07/25/nce.html#nce.gbw
+  13. http://torch.ch/blog/2016/07/25/nce.html#nce.lstm
+  14. http://torch.ch/blog/2016/07/25/nce.html#nce.script
+  15. http://torch.ch/blog/2016/07/25/nce.html#nce.result
+  16. http://torch.ch/blog/2016/07/25/nce.html#nce.future
+  17. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  18. http://torch.ch/blog/2015/09/21/rmva.html
+  19. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  20. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  21. https://www.discoverelement.com/research
+  22. http://torch.ch/blog/2016/07/25/nce.html#nce.result
+  23. https://github.com/karpathy/char-id56
+  24. https://github.com/jcjohnson/torch-id56
+  25. https://www.reddit.com/
+  26. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  27. https://github.com/element-research/id56
+  28. https://github.com/element-research/id56/blob/master/examples/simple-recurrence-network.lua
+  29. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  30. https://github.com/element-research/dataload
+  31. https://github.com/element-research/dataload#dl.multisequence
+  32. https://github.com/torch/tds#d--tdsvec--tbl
+  33. https://github.com/element-research/dataload#dl.dataloader
+  34. https://github.com/element-research/id56
+  35. https://github.com/element-research/dataload#iterator-subiterbatchsize-epochsize-
+  36. https://github.com/element-research/id56#id56.lookuptablemaskzero
+  37. https://github.com/element-research/id56#id56.seqlstm
+  38. https://github.com/glample/id56-benchmarks#lstm
+  39. https://github.com/element-research/dpnn#nn.ncemodule
+  40. https://github.com/element-research/dpnn#nn.ncecriterion
+  41. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  42. https://github.com/torch/torch7/blob/master/doc/maths.md#torch.multinomial
+  43. https://github.com/nicholas-leonard/torchx/blob/master/aliasmultinomial.lua
+  44. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  45. https://github.com/torch/torch7/blob/master/doc/maths.md#torch.baddbmm
+  46. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  47. https://github.com/torch/torch7/blob/master/doc/maths.md#torch.addmm
+  48. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  49. https://github.com/element-research/id56/blob/master/examples/noise-contrastive-estimate.lua
+  50. https://github.com/element-research/id56/blob/master/scripts/evaluate-id56lm.lua
+  51. http://torch.ch/blog/2016/07/25/nce.html#nce.nce
+  52. https://github.com/element-research/id56/blob/master/examples/multigpu-nce-id56lm.lua
+  53. https://github.com/torch/nn/blob/master/doc/simple.md#nn.gpu
+  54. https://github.com/torch/nn
+  55. https://github.com/torch/nn/blob/master/doc/containers.md#nn.concat
+  56. https://github.com/element-research/dpnn/blob/26edf00f7f22edd1e090619bb10528557cede4df/ncemodule.lua#l419-l439
+  57. https://github.com/nicholas-leonard/torchx/blob/master/multicudatensor.lua
+  58. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  59. https://github.com/element-research/dpnn#nn.module.gradparamclip
+  60. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  61. http://torch.ch/blog/2016/07/25/nce.html#nce.ref
+  62. http://torch.ch/blog/2016/07/25/nce.html#nce.eval
+  63. https://en.wikipedia.org/wiki/michelle_bachelet
+  64. https://www.theguardian.com/world/2005/nov/22/chile.gender
+  65. https://www.reddit.com/
+  66. https://en.wikipedia.org/wiki/destiny_(video_game)
+  67. http://destiny.wikia.com/wiki/grimoire
+  68. https://www.vg247.com/tag/destiny-weekly-reset/
+  69. http://destiny.wikia.com/wiki/raid
+  70. http://destiny.wikia.com/wiki/weekly_nightfall_strike
+  71. http://destiny.wikia.com/wiki/exotic
+  72. http://destiny.wikia.com/wiki/crota's_end
+  73. https://www.cs.toronto.edu/~amnih/papers/ncelm.pdf
+  74. http://www.isi.edu/natural-language/mt/simple-fast-noise.pdf
+  75. http://www.jmlr.org/proceedings/papers/v28/pascanu13.pdf
+  76. http://web.eecs.utk.edu/~itamar/courses/ece-692/bobby_paper1.pdf
+  77. http://arxiv.org/pdf/1303.5778.pdf
+  78. http://arxiv.org/pdf/1503.04069
+  79. http://arxiv.org/pdf/1312.3005
+  80. http://arxiv.org/pdf/1308.0850v5.pdf
+  81. http://disqus.com/?ref_noscript
+  82. http://disqus.com/

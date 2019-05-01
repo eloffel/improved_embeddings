@@ -1,0 +1,5567 @@
+1
+0
+0
+2
+
+ 
+
+g
+u
+a
+9
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+5
+0
+0
+8
+0
+1
+0
+/
+s
+c
+:
+v
+i
+x
+r
+a
+
+a bit of progress in id38
+
+extended version
+joshua t. goodman
+
+machine learning and applied statistics group
+
+microsoft research
+one microsoft way
+redmond, wa 98052
+
+joshuago@microsoft.com
+
+february 2008
+
+technical report
+msr-tr-2001-72
+
+microsoft research
+
+microsoft corporation
+
+one microsoft way
+redmond, wa 98052
+
+http://www.research.microsoft.com
+
+1 introduction
+
+1.1 overview
+
+id38 is the art of determining the id203 of a sequence of
+words. this is useful in a large variety of areas including id103,
+id42, handwriting recognition, machine translation, and
+id147 (church, 1988; brown et al., 1990; hull, 1992; kernighan et
+al., 1990; srihari and baltus, 1992). the most commonly used language models
+are very simple (e.g. a katz-smoothed trigram model). there are many improve-
+ments over this simple model however, including caching, id91, higher-
+order id165s, skipping models, and sentence-mixture models, all of which we
+will describe below. unfortunately, these more complicated techniques have
+rarely been examined in combination. it is entirely possible that two techniques
+that work well separately will not work well together, and, as we will show, even
+possible that some techniques will work better together than either one does by
+itself. in this paper, we will    rst examine each of the aforementioned techniques
+separately, looking at variations on the technique, or its limits. then we will ex-
+amine the techniques in various combinations, and compare to a katz smoothed
+trigram with no count cuto   s. on a small training data set, 100,000 words, we
+can get up to a 50% perplexity reduction, which is one bit of id178. on larger
+data sets, the improvement declines, going down to 41% on our largest data set,
+284,000,000 words. on a similar large set without punctuation, the reduction is
+38%. on that data set, we achieve an 8.9% word error rate reduction. these are
+perhaps the largest reported perplexity reductions for a language model, versus
+a fair baseline.
+
+the paper is organized as follows. first, in this section, we will describe
+our terminology, brie   y introduce the various techniques we examined, and
+describe our evaluation methodology. in the following sections, we describe each
+technique in more detail, and give experimental results with variations on the
+technique, determining for each the best variation, or its limits. in particular,
+for caching, we show that trigram caches have nearly twice the potential of
+unigram caches. for id91, we    nd variations that work slightly better than
+traditional id91, and examine the limits. for id165 models, we examine
+up to 20-grams, but show that even for the largest models, performance has
+plateaued by 5 to 7 grams. for skipping models, we give the    rst detailed
+comparison of di   erent skipping techniques, and the    rst that we know of at
+the 5-gram level. for sentence mixture models, we show that mixtures of up
+to 64 sentence types can lead to improvements. we then give experiments
+comparing all techniques, and combining all techniques in various ways. all of
+our experiments are done on three or four data sizes, showing which techniques
+improve with more data, and which get worse. in the concluding section, we
+discuss our results. finally, in the appendices, we give a proof helping to justify
+kneser-ney smoothing and we describe implementation tricks and details for
+handling large data sizes, for optimizing parameters, for id91, and for
+smoothing.
+
+1
+
+1.2 technique introductions
+
+the goal of a language model is to determine the id203 of a word se-
+quence w1...wn, p (w1...wn). this id203 is typically broken down into its
+component probabilities:
+
+p (w1...wi) = p (w1)    p (w2|w1)    ...    p (wi|w1...wi   1)
+
+since it may be di   cult to compute a id203 of the form p (wi|w1...wi   1)
+for large i, we typically assume that the id203 of a word depends on only
+the two previous words, the trigram assumption:
+
+p (wi|w1...wi   1)     p (wi|wi   2wi   1)
+
+which has been shown to work well in practice. the trigram probabilities can
+then be estimated from their counts in a training corpus. we let c(wi   2wi   1wi)
+represent the number of occurrences of wi   2wi   1wi in our training corpus, and
+similarly for c(wi   2wi   1). then, we can approximate:
+
+p (wi|wi   2wi   1)    
+
+c(wi   2wi   1wi)
+c(wi   2wi   1)
+
+unfortunately, in general this approximation will be very noisy, because there
+are many three word sequences that never occur. consider, for instance, the se-
+quence    party on tuesday   . what is p (tuesday|party on)? our training corpus
+might not contain any instances of the phrase, so c(party on tuesday) would
+be 0, while there might still be 20 instances of the phrase    party on   . thus, we
+would predict p (tuesday|party on) = 0, clearly an underestimate. this kind of
+0 id203 can be very problematic in many applications of language models.
+for instance, in a speech recognizer, words assigned 0 id203 cannot be
+recognized no matter how unambiguous the acoustics.
+
+smoothing techniques take some id203 away from some occurrences.
+imagine that we have in our training data a single example of the phrase    party
+on stan chen   s birthday   .1 typically, when something occurs only one time, it
+is greatly overestimated. in particular,
+
+p (stan|party on)    
+
+1
+20
+
+=
+
+c(party on stan)
+
+c(party on)
+
+by taking some id203 away from some words, such as    stan    and re-
+distributing it to other words, such as    tuesday   , zero probabilities can be
+avoided. in a smoothed trigram model, the extra id203 is typically dis-
+tributed according to a smoothed bigram model, etc. while the most commonly
+used smoothing techniques, katz smoothing (katz, 1987) and jelinek-mercer
+smoothing (jelinek and mercer, 1980) (sometimes called deleted interpolation)
+work    ne, even better smoothing techniques exist. in particular, we have previ-
+ously shown (chen and goodman, 1999) that versions of kneser-ney smoothing
+
+1
+
+feb. 25. stan will provide cake. you are all invited.
+
+2
+
+(ney et al., 1994) outperform all other smoothing techniques. in the appendix,
+we give a proof partially explaining this optimality. in kneser-ney smoothing,
+the backo    distribution is modi   ed: rather than a normal bigram distribution,
+a special distribution is used. using kneser-ney smoothing instead of more
+traditional techniques is the    rst improvement we used.
+
+the most obvious extension to trigram models is to simply move to higher-
+order id165s, such as four-grams and    ve-grams. we will show that in fact,
+signi   cant improvements can be gotten from moving to    ve-grams. further-
+more, in the past, we have shown that there is a signi   cant interaction between
+smoothing and id165 order (chen and goodman, 1999): higher-order id165s
+work better with kneser-ney smoothing than with some other methods, espe-
+cially katz smoothing. we will also look at how much improvement can be
+gotten from higher order id165s, examining up to 20-grams.
+
+another simple extension to id165 models is skipping models (rosenfeld,
+1994; huang et al., 1993; ney et al., 1994), in which we condition on a di   er-
+ent context than the previous two words. for instance, instead of computing
+p (wi|wi   2wi   1), we could instead compute p (wi|wi   3wi   2). this latter model
+is probably not as good, but can be combined with the standard model to yield
+some improvements.
+
+id91 (also called classing) models attempt to make use of the similar-
+ities between words. for instance, if we have seen occurrences of phrases like
+   party on monday    and    party on wednesday   , then we might imagine that
+the word    tuesday   , being similar to both    monday    and    wednesday   , is also
+likely to follow the phrase    party on.    the majority of the previous research on
+word id91 has focused on how to get the best clusters. we have concen-
+trated our research on the best way to use the clusters, and will report results
+showing some novel techniques that work a bit better than previous methods.
+we also show signi   cant interactions between id91 and smoothing.
+
+caching models (kuhn, 1988; kuhn and de mori, 1990; kuhn and de mori,
+1992) make use of the observation that if you use a word, you are likely to use
+it again. they tend to be easy to implement and to lead to relatively large
+perplexity improvements, but relatively small word-error rate improvements.
+we show that by using a trigram cache, we can get almost twice the improvement
+as from a unigram cache.
+
+sentence mixture models (iyer and ostendorf, 1999; iyer et al., 1994) make
+use of the observation that there are many di   erent sentence types, and that
+making models for each type of sentence may be better than using one global
+model. traditionally, only 4 to 8 types of sentences are used, but we show that
+improvements can be gotten by going to 64 mixtures, or perhaps more.
+
+1.3 evaluation
+
+in this section, we    rst describe and justify our use of perplexity or id178 as an
+evaluation technique. we then describe the data and experimental techniques
+used in the experiments in the following sections.
+
+3
+
+the most commonly used method for measuring language model perfor-
+mance is perplexity. a language model that assigned equal id203 to 100
+words would have perplexity 100. in general, the perplexity of a language model
+is equal to the geometric average of the inverse id203 of the words mea-
+sured on test data:
+
+n
+
+nvuut
+yi=1
+
+1
+
+p (wi|w1...wi   1)
+
+perplexity has many properties that make it attractive as a measure of language
+model performance; among others, the    true    model for any data source will
+have the lowest possible perplexity for that source. thus, the lower the perplex-
+ity of our model, the closer it is, in some sense, to the true model. while several
+alternatives to perplexity have been shown to correlate better with speech recog-
+nition performance, they typically have free variables that need to be optimized
+for a particular speech recognizer; others are signi   cantly more di   cult to com-
+pute in our framework.
+
+an alternative, but equivalent measure to perplexity is id178, which is
+simply log2 of perplexity. id178 has the nice property that it is the average
+number of bits per word that would be necessary to encode the test data using
+an optimal coder. for those familiar with id205, what we actually
+measure is the cross id178 of the test data given the model. since this is by
+far the most common type of id178 measured, we abuse the term by simply
+saying id178, when what we really mean is a particular cross id178.
+
+we will use both id178 and perplexity measurements in this paper: id178
+reductions have several nice properties, including being additive and graphing
+well, but perplexity reductions are more common in the literature.2 the fol-
+lowing table may be helpful. notice that the relationship between id178 and
+perplexity reductions is roughly linear up through about .2 bits.
+
+reduction
+id178
+perplexity
+
+.01
+0.69% 6.7% 10% 13% 19% 24% 29% 41% 50%
+
+.75
+
+.16
+
+.2
+
+.5
+
+.1
+
+.3
+
+.4
+
+1
+
+all of our experiments were performed on the nab (north american busi-
+ness news) corpus (stern, 1996). we performed most experiments at 4 di   erent
+training data sizes: 100,000 words, 1,000,000 words, 10,000,000 words, and the
+whole corpus     except 1994 wsj data     approximately 284,000,000 words. in
+all cases, we performed parameter optimization on a separate set of heldout
+data, and then performed testing on a set of test data. none of the three data
+sets overlapped. the heldout and test sets were always every    ftieth sentence
+from two non-overlapping sets of 1,000,000 words, taken from the 1994 section.
+in the appendix, we describe implementation tricks we used; these tricks made
+it possible to train very complex models on very large amounts of training data,
+
+2probably because it sounds much better to get a 20% perplexity reduction than to get a
+
+0.32 bit id178 reduction.
+
+4
+
+but made it hard to test on large test sets. for this reason, we used only 20,000
+words total for testing or heldout data. on the other hand, we did not simply
+want to use, say, a 20,000 word contiguous test or heldout set, since this would
+only constitute a few articles, and thus risk problems from too much homogene-
+ity; thus we chose to use every 50   th sentence from non-overlapping 1,000,000
+word sets. all of our experiments were done using the same 58,546 word vo-
+cabulary. end-of-sentence, end-of-paragraph, and end-of-article symbols were
+included in perplexity computations, but out-of-vocabulary words were not.
+
+it would have been interesting to try our experiments on other corpora, as
+well as other data sizes. in our previous work (chen and goodman, 1999), we
+compared both across corpora and across data sizes. we found that di   erent
+corpora were qualitatively similar, and that the most important di   erences were
+across training data sizes. we therefore decided to concentrate our experiments
+on di   erent training data sizes, rather than on di   erent corpora.
+
+our toolkit is unusual in that it allows all parameters to be jointly optimized.
+in particular, when combining many techniques, there are many interpolation
+and smoothing parameters that need to be optimized. we used powell   s algo-
+rithm (press et al., 1988) over the heldout data to jointly optimize all of these
+parameters.
+
+2 smoothing
+
+there are many di   erent smoothing techniques that can be used, and the sub-
+ject is a surprisingly subtle and complicated one. those interested in smoothing
+should consult our previous work (chen and goodman, 1999), where detailed
+descriptions and detailed comparisons of almost all commonly used smooth-
+ing algorithms are done. we will limit our discussion here to four main tech-
+niques: simple interpolation, katz smoothing, backo    kneser-ney smoothing,
+and interpolated kneser-ney smoothing. in this section, we describe those four
+techniques, and recap previous results, including the important result that in-
+terpolated kneser-ney smoothing, or minor variations on it, outperforms all
+other smoothing techniques.
+
+the simplest way to combine techniques in id38 is to simply
+interpolate them together. for instance, if one has a trigram model, a bigram
+model, and a unigram model, one can use
+
+pinterpolate(w|wi   2wi   1) =
+
+  ptrigram(w|wi   2wi   1) + (1       )[  pbigram(w|wi   1) + (1       )punigram(w)]
+
+in practice, we also
+where    and    are constants such that 0       ,        1.
+;
+interpolate with the uniform distribution puniform(w) =
+size of vocabulary
+this ensures that no word is assigned id203 0. also, we need to deal with
+the case when, for instance, the trigram context wi   2wi   1 has never been seen,
+c(wi   2wi   1) = 0. in this case, we use an interpolated bigram model, etc. given
+its simplicity, simple interpolation works surprisingly well, but other techniques,
+such as katz smoothing, work even better.
+
+1
+
+5
+
+this section is
+a recap of
+chen and
+goodman
+(1999). if you
+have read
+that, skip this.
+
+katz smoothing (katz, 1987) is based on the good-turing formula (good,
+1953). notice that if a particular word sequence (i.e.    party on stan   ) occurs
+only once (out of perhaps a billion words) it is probably signi   cantly overes-
+timated     it probably just showed up by chance, and its true id203 is
+much less than one one billionth. it turns out that the same thing is true to a
+lesser degree for sequences that occurred twice, and so on. let nr represent the
+number of id165s that occur r times, i.e.
+
+nr = |{wi   n+1...wi|c(wi   n+1...wi) = r}|
+
+good proved that under some very weak assumptions that for any id165 that
+occurs r times, we should discount it, pretending that it occurs disc(r) times
+where
+
+disc(r) = (r + 1)
+
+nr+1
+nr
+
+(disc(r) is more typically written as r   ). in id38, the estimate
+disc(r) will almost always be less than r. this will leave a certain amount of
+id203    left-over.    in fact, letting n represent the total size of the training
+set, this left-over id203 will be equal to n1
+n ; this represents the amount
+of id203 to be allocated for events that were never seen. this is really
+quite an amazing and generally useful fact, that we can predict how often we
+expect something to happen that has never happened before, by looking at the
+proportion of things that have occurred once.
+
+for a given context, katz smoothing uses one of two formulae.
+
+if the
+word sequence wi   n+1...wi has been seen before, then katz smoothing uses
+the discounted count of the sequence, divided by the the counts of the context
+wi   n+1...wi   1. on the other hand, if the sequence has never been seen before,
+then we back o    to the next lower distribution, wi   n+2...wi   1. basically, we
+use the following formula:
+
+pkatz(wi|wi   n+1...wi   1)
+
+disc(c(wi   n+1...wi))
+
+c(wi   n+1...wi   1)
+
+if c(wi   n+1...wi) > 0
+
+  (wi   n+1...wi   1)    pkatz(wi|wi   n+1...wi   1) otherwise
+
+where   (wi   n+1...wi   1) is a id172 constant chosen so that the proba-
+bilities sum to 1.3
+
+katz smoothing is one of the most commonly used smoothing techniques, but
+it turns out that other techniques work even better. chen and goodman (1999)
+performed a detailed comparison of many smoothing techniques and found that
+a modi   ed interpolated form of kneser-ney smoothing (ney et al., 1994) consis-
+tently outperformed all other smoothing techniques. the basic insight behind
+
+3chen and goodman (1999) as well as the appendix give the details of our implementation
+of katz smoothing. brie   y, we also smooth the unigram distribution using additive smoothing;
+we discount counts only up to k, where we determine k to be as large as possible, while still
+giving reasonable discounts according to the good-turing formula; we add pseudo-counts   
+for any context with no discounted counts. tricks are used to estimate nr.
+
+6
+
+=          
+      
+
+kneser-ney smoothing is the following. consider a conventional bigram model
+of a phrase such as pkatz(francisco|on). since the phrase san francisco is fairly
+common, the conventional unigram id203 (as used by katz smoothing or
+techniques like deleted interpolation) c(francisco)
+means that using, for instance, a model such as katz smoothing, the id203
+
+will also be fairly high. this
+
+c(w)
+
+pw
+
+pkatz(on francisco) = ( disc(c(on francisco))
+
+c(on)
+
+  (on)  pkatz(francisco) otherwise
+
+if c(on francisco) > 0
+
+=   (on)    pkatz(francisco)
+
+will also be fairly high. but, the word francisco occurs in exceedingly few con-
+texts, and its id203 of occuring in a new one is very low. kneser-ney
+smoothing uses a modi   ed backo    distribution based on the number of contexts
+each word occurs in, rather than the number of occurrences of the word. thus,
+a id203 such as pkn(francisco|on) would be fairly low, while for a word
+like tuesday that occurs in many contexts, pkn(tuesday|on) would be relatively
+high, even if the phrase on tuesday did not occur in the training data. kneser-
+ney smoothing also uses a simpler discounting scheme than katz smoothing:
+rather than computing the discounts using good-turing, a single discount, d,
+(optimized on held-out data) is used. in particular, backo    kneser-ney smooth-
+ing uses the following formula (given here for a bigram) where |{v|c(vwi) > 0}|
+is the number of words v that wi can occur in the context of.
+
+pbkn(wi|wi   1) =      
+   
+
+c(wi   1wi)   d
+
+c(wi   1)
+
+  (wi   1)
+
+pw
+
+|{v|c(vwi)>0}|
+
+|{v|c(vw)>0}|
+
+if c(wi   1wi) > 0
+otherwise
+
+again,    is a id172 constant such that the probabilities sum to 1. the
+formula can be easily extended to higher order id165s in general. for instance,
+for trigrams, both the unigram and bigram distributions are modi   ed.
+
+chen and goodman (1999) showed that methods like katz smoothing and
+backo    kneser-ney smoothing that backo    to lower order distributions only
+when the higher order count is missing do not do well on low counts, such as
+one counts and two counts. this is because the estimates of these low counts
+are fairly poor, and the estimates ignore useful information in the lower order
+distribution.
+interpolated models always combine both the higher-order and
+the lower order distribution, and typically work better. in particular, the basic
+formula for interpolated kneser-ney smoothing is
+
+pikn(wi|wi   1) = c(wi   1wi)   d
+
+c(wi   1) +   (wi   1)
+
+|{v|c(vwi)>0}|
+
+|{v|c(vw)>0}|
+
+where   (wi   1) is a id172 constant such that the probabilities sum to
+1. chen and goodman (1999) proposed one additional modi   cation to kneser-
+ney smoothing, the use of multiple discounts, one for one counts, another for
+two counts, and another for three or more counts. this formulation, modi-
+   ed kneser-ney smoothing, typically works slightly better than interpolated
+
+pw
+
+7
+
+kneser-ney. however, in our experiments on combining techniques, it would
+have nearly tripled the number of parameters our system needed to search, and
+in a pilot study, when many techniques were combined, it did not work better
+than interpolated kneser-ney. thus, in the rest of this paper, we use inter-
+polated kneser-ney instead of modi   ed kneser-ney. in the appendix, we give
+a few more details about our implementation of our smoothing techniques, in-
+cluding standard re   nements used for katz smoothing. we also give arguments
+justifying kneser-ney smoothing, and example code, showing that interpolated
+kneser-ney smoothing is easy to implement.
+
+for completeness, we show the exact formula used for an interpolated kneser-
+ney smoothed trigram.
+in practice, to avoid zero probabilities, we always
+smooth the unigram distribution with the uniform distribution, but have om-
+mitted unigram smoothing from other formulas for simplicity; we include it here
+for completeness. let |v | represent the size of the vocabulary.
+
+pikn(wi|wi   2wi   1) = c(wi   2wi   1wi)   d3
+
+c(wi   2wi   1)
+
++   (wi   2wi   1)pikn-mod-bigram (wi|wi   1)
+
+pikn-mod-bigram(wi|wi   1) = |{v|c(vwi   1wi)>0}|   d2
+|{v|c(vwi   1w)>0}|
+
++   (wi   1)pikn-mod-unigram (wi)
+
+pikn-mod-unigram(wi|wi   1) = |{v|vwi)>0}|   d1
+|{v|c(vw)>0}|
+
++    1
+|v |
+
+pw
+
+pw
+
+in figure 1, we repeat results from chen and goodman (1999). these are
+the only results in this paper not run on exactly the same sections of the corpus
+for heldout, training, and test as the rest of the paper, but we expect them to be
+very comparable. the baseline used for these experiments was a simple version
+of jelinek-mercer smoothing, using a single bucket; that version is identical to
+the    rst smoothing technique we described, simple interpolation. kneser-ney
+smoothing is the interpolated version of kneser-ney smoothing used throughout
+this paper, and kneser-ney mod is the version with three discounts instead of
+a single discount. katz smoothing is essentially the same as the version in this
+paper.
+j-m is short for jelinek mercer smoothing, sometimes called deleted
+interpolation elsewhere; abs-disc-interp is the interpolated version of absolute
+discounting. training set size was measured in sentences, rather than in words,
+with about 20 words per sentence. notice that jelinek-mercer smoothing and
+katz smoothing cross, one being better at lower data sizes, the other at higher
+sizes. this was part of our motivation for running all experiments in this paper
+on multiple data sizes. on the other hand, in those experiments, which were
+done on multiple corpora, we did not    nd any techniques where one technique
+worked better on one corpus, and another worked better on another one. thus,
+we feel reasonably con   dent in our decision not to run on multiple corpora.
+chen and goodman (1999) give a much more complete comparison of these
+techniques, as well as much more in depth analysis. chen and goodman (1998)
+gives a superset that also serves as a tutorial introduction.
+
+8
+
+)
+n
+e
+k
+o
+t
+/
+s
+t
+i
+b
+(
+ 
+e
+n
+i
+l
+e
+s
+a
+b
+m
+o
+r
+f
+ 
+
+ 
+
+y
+p
+o
+r
+t
+n
+e
+-
+s
+s
+o
+r
+c
+ 
+t
+s
+e
+t
+ 
+
+n
+i
+ 
+f
+f
+i
+d
+
+relative performance of algorithms on wsj/nab corpus, 3-gram
+
+abs-disc-interp
+
+witten-bell-backoff
+
+jelinek-mercer-baseline
+
+j-m
+
+kneser-ney
+
+katz
+
+kneser-ney-mod
+
+0.1
+
+0.05
+
+0
+
+-0.05
+
+-0.1
+
+-0.15
+
+-0.2
+
+-0.25
+
+-0.3
+
+100
+
+1000
+
+10000
+
+100000
+
+1e+06
+
+1e+07
+
+training set size (sentences)
+
+figure 1: smoothing results across data sizes
+
+9
+
+ 
+
+z
+t
+a
+k
+0
+0
+0
+0
+0
+1
+
+,
+
+ 
+
+n
+k
+0
+0
+0
+0
+0
+1
+
+,
+
+ 
+
+z
+t
+a
+k
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+n
+k
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+z
+t
+a
+k
+0
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+n
+k
+0
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+z
+t
+a
+k
+
+ 
+l
+l
+
+a
+
+n
+k
+
+ 
+l
+l
+
+a
+
+0
+2
+
+0
+1
+
+9
+
+8
+
+7
+
+6
+
+5
+
+4
+
+3
+
+2
+
+1
+
+ 
+
+r
+e
+d
+r
+o
+m
+a
+r
+g
+-
+n
+
+0
+1
+
+5
+
+.
+
+9
+
+59
+
+58
+
+57
+
+56
+
+.
+
+8
+
+.
+
+7
+
+.
+
+6
+
+.
+
+5
+
+id178
+
+lated kneser-ney smoothing on id165 orders from 1 to 10, as well as 20, and
+over our standard data sizes. the results are shown in figure 2.
+
+as can be seen, and has been previously observed (chen and goodman,
+1999), the behavior for katz smoothing is very di   erent than the behavior for
+kneser-ney smoothing. chen and goodman determined that the main cause of
+this di   erence was that backo    smoothing techniques, such as katz smoothing,
+or even the backo    version of kneser-ney smoothing (we use only interpolated
+kneser-ney smoothing in this work), work poorly on low counts, especially
+one counts, and that as the id165 order increases, the number of one counts
+increases. in particular, katz smoothing has its best performance around the
+trigram level, and actually gets worse as this level is exceeded. kneser-ney
+smoothing on the other hand is essentially monotonic even through 20-grams.
+the plateau point for kneser-ney smoothing depends on the amount of
+training data available. for small amounts, 100,000 words, the plateau point
+is at the trigram level, whereas when using the full training data, 280 million
+words, small improvements occur even into the 6-gram (.02 bits better than
+5-gram) and 7-gram (.01 bits better than 6-gram.) di   erences of this size are
+interesting, but not of practical importance. the di   erence between 4-grams and
+5-grams, .06 bits, is perhaps important, and so, for the rest of our experiments,
+we often use models built on 5-gram data, which appears to give a good tradeo   
+between computational resources and performance.
+
+note that in practice, going beyond trigrams is often impractical. the trade-
+o    between memory and performance typically requires heavy pruning of 4-
+grams and 5-grams, reducing the potential improvement from them. through-
+out this paper, we ignore memory-performance tradeo   s, since this would overly
+complicate already di   cult comparisons. we seek instead to build the single
+best system possible, ignoring memory issues, and leaving the more practical,
+more interesting, and very much more complicated issue of    nding the best sys-
+tem at a given memory size, for future research (and a bit of past research, too
+(goodman and gao, 2000)). note that many of the experiments done in this
+section could not be done at all without the special tool described brie   y at the
+end of this paper, and in more detail in the appendix.
+
+4 skipping
+
+as one moves to larger and larger id165s, there is less and less chance of having
+seen the exact context before; but the chance of having seen a similar context,
+one with most of the words in it, increases. skipping models (rosenfeld, 1994;
+huang et al., 1993; ney et al., 1994; martin et al., 1999; siu and ostendorf,
+2000) make use of this observation. there are also variations on this technique,
+such as techniques using lattices (saul and pereira, 1997; dupont and rosenfeld,
+1997), or models combining classes and words (blasig, 1999).
+
+when considering a    ve-gram context, there are many subsets of the    ve-
+gram we could consider, such as p (wi|wi   4wi   3wi   1) or p (wi|wi   4wi   2wi   1).
+perhaps we have never seen the phrase    show john a good time    but we
+
+11
+
+have seen the phrase    show stan a good time.    a normal 5-gram predict-
+ing p (time|show john a good) would back o    to p (time|john a good) and from
+there to p (time|a good), which would have a relatively low id203. on the
+other hand, a skipping model of the form p (wi|wi   4wi   2wi   1) would assign
+high id203 to p (time|show
+
+a good).
+
+these skipping 5-grams are then interpolated with a normal 5-gram, forming
+
+models such as
+
+  p (wi|wi   4wi   3wi   2wi   1) +   p (wi|wi   4wi   3wi   1) + (1          )p (wi|wi   4wi   2wi   1)
+
+where, as usual, 0            1 and 0            1 and 0     (1              )     1.
+
+another (and more traditional) use for skipping is as a sort of poor man   s
+
+higher order id165. one can, for instance, create a model of the form
+
+  p (wi|wi   2wi   1) +   p (wi|wi   3wi   1) + (1              )p (wi|wi   3wi   2)
+
+in a model of this form, no component id203 depends on more than two
+previous words, like a trigram, but the overall id203 is 4-gram-like, since
+it depends on wi   3, wi   2, and wi   1. we can extend this idea even further,
+combining in all pairs of contexts in a 5-gram-like, 6-gram-like, or even 7-gram-
+like way, with each component id203 never depending on more than the
+previous two words.
+
+we performed two sets of experiments, one on 5-grams and one on trigrams.
+for the 5-gram skipping experiments, all contexts depended on at most the
+previous four words, wi   4, wi   3, wi   2, wi   1, but used the four words in a variety
+of ways. we tried six models, all of which were interpolated with a baseline 5-
+gram model. for readability and conciseness, we de   ne a new notation, letting
+v = wi   4, w = wi   3, x = wi   2 and y = wi   1, allowing us to avoid numerous
+subscripts in what follows. the results are shown in figure 3.
+
+the    rst model interpolated dependencies on vw y and v xy. this simple
+model does not work well on the smallest training data sizes, but is competitive
+for larger ones. next, we tried a simple variation on this model, which also inter-
+polated in vwx . making that simple addition leads to a good-sized improvement
+at all levels, roughly .02 to .04 bits over the simpler skipping model. our next
+variation was analogous, but adding back in the dependencies on the missing
+words.
+in particular, we interpolated together xvwy, wvxy, and yvwx; that
+is, all models depended on the same variables, but with the interpolation order
+modi   ed. for instance, by xvwy, we refer to a model of the form p (z|vwxy) in-
+terpolated with p (z|vw y) interpolated with p (z|w y) interpolated with p (z|y)
+interpolated with p (z|y) interpolated with p (z). all of these experiments were
+done with interpolated kneser-ney smoothing, so all but the    rst id203
+uses the modi   ed backo    distribution. this model is just like the previous one,
+but for each component starts the interpolation with the full 5-gram. we had
+hoped that in the case where the full 5-gram had occurred in the training data,
+this would make the skipping model more accurate, but it did not help at all.4
+
+4in fact, it hurt a tiny bit, 0.005 bits at the 10,000,000 word training level. this turned
+
+12
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0
+
+-0.01
+
+-0.02
+
+-0.03
+
+-0.04
+
+-0.05
+
+-0.06
+
+-0.07
+
+-0.08
+
+-0.09
+
+-0.1
+
+100,000
+
+1,000,000 10,000,000
+
+all
+
+training data size
+
+vw_y, v_xy -- skipping
+
+vw_y, v_xy, vwx_ -- skipping
+
+xvwy, wvxy, yvwx, --
+rearranging
+
+vwyx, vxyw, wxyv --
+rearranging
+
+vwyx, vywx, yvwx --
+rearranging
+
+vwyx, vxyw, wxyv, vywx,
+yvwx, xvwy, wvxy --
+rearranging, everything
+
+figure 3: 5-gram skipping techniques versus 5-gram baseline
+
+13
+
+we also wanted to try more radical approaches. for instance, we tried inter-
+polating together vwyx with vxyw and wxyv (along with the baseline vwxy).
+this model puts each of the four preceding words in the last (most important)
+position for one component. this model does not work as well as the previous
+two, leading us to conclude that the y word is by far the most important. we
+also tried a model with vwyx, vywx, yvwx, which puts the y word in each
+possible position in the backo    model. this was overall the worst model, recon-
+   rming the intuition that the y word is critical. however, as we saw by adding
+vwx to vw y and v xy, having a component with the x position    nal is also
+important. this will also be the case for trigrams.
+
+finally, we wanted to get a sort of upper bound on how well 5-gram models
+could work. for this, we interpolated together vwyx, vxyw, wxyv, vywx, yvwx,
+xvwy and wvxy. this model was chosen as one that would include as many
+pairs and triples of combinations of words as possible. the result is a marginal
+gain     less than 0.01 bits     over the best previous model.
+
+we do not    nd these results particularly encouraging. in particular, when
+compared to the sentence mixture results that will be presented later, there
+seems to be less potential to be gained from skipping models. also, while
+sentence mixture models appear to lead to larger gains the more data that
+is used, skipping models appear to get their maximal gain around 10,000,000
+words. presumably, at the largest data sizes, the 5-gram model is becoming
+well trained, and there are fewer instances where a skipping model is useful but
+the 5-gram is not.
+
+we also examined trigram-like models. these results are shown in figure
+4. the baseline for comparison was a trigram model. for comparison, we also
+show the relative improvement of a 5-gram model over the trigram, and the
+relative improvement of the skipping 5-gram with vw y, v xy and vwx . for the
+trigram skipping models, each component never depended on more than two of
+the previous words. we tried 5 experiments of this form. first, based on the
+intuition that pairs using the 1-back word (y) are most useful, we interpolated
+xy, wy, vy, uy and ty models. this did not work particularly well, except
+at the largest sizes. presumably at those sizes, a few appropriate instances
+of the 1-back word had always been seen. next, we tried using all pairs of
+words through the 4-gram level: xy, wy and wx. considering its simplicity, this
+worked very well. we tried similar models using all 5-gram pairs, all 6-gram
+pairs and all 7-gram pairs; this last model contained 15 di   erent pairs. however,
+the improvement over 4-gram pairs was still marginal, especially considering the
+large number of increased parameters.
+
+the trigram skipping results are, relative to their baseline, much better
+than the 5-gram skipping results. they do not appear to have plateaued when
+more data is used and they are much more comparable to sentence mixture
+models in terms of the improvement they get. furthermore, they lead to more
+
+out to be due to technical smoothing issues.
+in particular, after some experimentation, this
+turned out to be due to our use of interpolated kneser-ney smoothing with a single discount,
+even though we know that using multiple discounts is better. when using multiple discounts,
+the problem goes away.
+
+14
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0
+
+-0.02
+
+-0.04
+
+-0.06
+
+-0.08
+
+-0.1
+
+-0.12
+
+-0.14
+
+-0.16
+
+pairs using 1-back
+
+pairs to 4-gram
+
+pairs to 5-gram
+
+pairs to 6-gram
+
+pairs to 7-gram
+
+5-gram
+
+skip 5-gram
+
+100,000
+
+1,000,000
+training data size
+
+10,000,000
+
+all
+
+improvement than a 5-gram alone does when used on small amounts of data
+(although, of course, the best 5-gram skipping model is always better than the
+best trigram skipping model.) this makes them a reasonable technique to use
+with small and intermediate amounts of training data, especially if 5-grams
+cannot be used.
+
+5 id91
+
+5.1 using clusters
+
+next, we describe our id91 techniques, which are a bit di   erent (and, as we
+will show, slightly more e   ective) than traditional id91 (brown et al., 1992;
+ney et al., 1994). consider a id203 such as p (tuesday|party on). perhaps
+the training data contains no instances of the phrase    party on tuesday   , al-
+though other phrases such as    party on wednesday    and    party on friday    do
+appear. we can put words into classes, such as the word    tuesday    into the
+class weekday. now, we can consider the id203 of the word    tuesday   
+given the phrase    party on   , and also given that the next word is a weekday.
+we will denote this id203 by p (tuesday|party on weekday). we can
+then decompose the id203
+
+p (tuesday|party on)
+
+= p (weekday|party on)    p (tuesday|party on weekday)
+
+when each word belongs to only one class, which is called hard id91, this
+decompostion is a strict equality a fact that can be trivially proven. let wi
+represent the cluster of word wi. then,
+
+p (wi|wi   2wi   1)    p (wi|wi   2wi   1wi) =
+
+p (wi   2wi   1wi)
+
+p (wi   2wi   1)
+
+  
+
+p (wi   2wi   1wiwi)
+p (wi   2wi   1wi)
+
+=
+
+p (wi   2wi   1wiwi)
+
+p (wi   2wi   1)
+
+(1)
+
+now, since each word belongs to a single cluster, p (wi|wi) = 1, and thus
+
+p (wi   2wi   1wiwi) = p (wi   2wi   1wi)    p (wi|wi   2wi   1wi)
+
+= p (wi   2wi   1wi)    p (wi|wi)
+= p (wi   2wi   1wi)
+
+(2)
+
+substituting equation 2 into equation 1, we get
+
+p (wi|wi   2wi   1)    p (wi|wi   2wi   1wi) =
+
+p (wi   2wi   1wi)
+p (wi   2wi   1)
+
+= p (wi|wi   2wi   1)
+
+(3)
+
+now, although equation 3 is a strict equality, when smoothing is taken into
+consideration, using the clustered id203 will be more accurate than the
+
+16
+
+non-clustered id203. for instance, even if we have never seen an example
+of    party on tuesday   , perhaps we have seen examples of other phrases, such
+as    party on wednesday    and thus, the id203 p (weekday|party on)
+will be relatively high. and although we may never have seen an example of
+   party on weekday tuesday   , after we backo    or interpolate with a lower or-
+der model, we may be able to accurately estimate p (tuesday|on weekday).
+thus, our smoothed clustered estimate may be a good one. we call this partic-
+ular kind of id91 predictive id91. (on the other hand, we will show
+that if the clusters are poor, predictive id91 can also lead to degradation.)
+note that predictive id91 has other uses as well as for improving per-
+plexity. predictive id91 can be used to signi   cantly speed up maximum
+id178 training (goodman, 2001), by up to a factor of 35, as well as to compress
+language models (goodman and gao, 2000).
+
+another type of id91 we can do is to cluster the words in the con-
+texts. for instance, if    party    is in the class event and    on    is in the class
+preposition, then we could write
+
+p (tuesday|party on)     p (tuesday|event preposition)
+
+or more generally
+
+p (w|wi   2wi   1)     p (w|wi   2wi   1)
+
+(4)
+
+combining equation 4 with equation 3 we get
+
+p (w|wi   2wi   1)     p (w |wi   2wi   1)    p (w|wi   2wi   1w )
+
+(5)
+
+since equation 5 does not take into account the exact values of the previous
+words, we always (in this work) interpolate it with a normal trigram model. we
+call the interpolation of equation 5 with a trigram fullibm id91. we call it
+fullibm because it is a generalization of a technique invented at ibm (brown et
+al., 1992), which uses the approximation p (w|wi   2wi   1w )     p (w|w ) to get
+
+p (w|wi   2wi   1)     p (w |wi   2wi   1)    p (w|w )
+
+(6)
+
+which, when interpolated with a normal trigram, we refer to as ibm id91.
+given that fullibm id91 uses more information than regular ibm id91,
+we assumed that it would lead to improvements.5 as will be shown, it works
+about the same, at least when interpolated with a normal trigram model.
+
+alternatively, rather than always discarding information, we could simply
+
+change the backo    order, called index id91:
+
+pindex(tuesday|party on) = p (tuesday|party event on preposition)
+
+(7)
+here, we abuse notation slightly to use the order of the words on the right
+side of the | to indicate the backo   /interpolation order. thus, equation 7
+
+5in fact, we originally used the name goodibm instead of fullibm on the assumption that
+
+it must be better.
+
+17
+
+implies that we would go from p (tuesday|party event on preposition)
+to p (tuesday|event on preposition) to p (tuesday|on preposition)
+to p (tuesday|preposition) to p (tuesday). notice that since each word
+belongs to a single cluster, some of these variables are redundant. for instance,
+in our notation
+
+c(party event on preposition) = c(party on)
+
+and
+
+c(event on preposition) = c(event on)
+
+we generally write an index clustered model as p (wi|wi   2wi   2wi   1wi   1).
+
+there is one especially noteworthy technique, fullibmpredict. this is the best
+performing technique we have found (other than combination techniques.) this
+technique makes use of the intuition behind predictive id91, factoring the
+problem into prediction of the cluster, followed by prediction of the word given
+the cluster. in addition, at each level, it smooths this prediction by combining
+a word-based and a cluster-based estimate. it is not interpolated with a normal
+trigram model. it is of the form
+
+pfullibmpredict(w|wi   2wi   1) = (  p (w |wi   2wi   1) + (1     )p (w |wi   2wi   1))  
+(  p (w|wi   2wi   1w ) + (1     )p (w|wi   2wi   1w )
+
+there are many variations on these themes. as it happens, none of the
+others works much better than ibm id91, so we describe them only very
+brie   y. one is indexpredict, combining index and predictive id91:
+
+pindexpredict(wi|wi   2wi   1) =
+
+p (wi|wi   2wi   2wi   1wi   1)    p (wi|wi   2wi   2wi   1wi   1wi)
+
+another is combinepredict, interpolating a normal trigram with a predictive
+clustered trigram:
+
+pcombinepredict (wi|wi   2wi   1) =
+
+  p (wi|wi   1wi   2) + (1       )p (wi|wi   2wi   1)    p (wi|wi   2wi   1wi)
+
+finally, we wanted to get some sort of upper bound on how much could be gained
+by id91, so we tried combining all these id91 techniques together, to
+get what we call allcombinenotop, which is an interpolation of a normal trigram,
+a fullibm-like model, an index model, a predictive model, a true fullibm model,
+and an indexpredict model.
+
+pallcombinenotop(wi|wi   2wi   1) =
+
+begin boring
+details
+
+  p (wi|wi   2wi   1)
++  p (wi|wi   2wi   1)
++  p (wi|wi   2wi   2wi   1wi   1)
++  p (wi|wi   2wi   1)    p (wi|wi   2wi   1wi)
++  p (wi|wi   2wi   1)    p (wi|wi   1wi   2wi)
++(1                            )p (wi|wi   2wi   2wi   1wi   1)    p (wi|wi   2wi   2wi   1wi   1wi)
+
+18
+
+t
+c
+i
+d
+e
+r
+p
+e
+n
+i
+b
+m
+o
+c
+ 
+r
+e
+s
+e
+n
+k
+
+t
+c
+i
+d
+e
+r
+p
+x
+e
+d
+n
+i
+ 
+r
+e
+s
+e
+n
+k
+
+m
+b
+i
+l
+l
+u
+f
+ 
+r
+e
+s
+e
+n
+k
+
+m
+b
+i
+ 
+r
+e
+s
+e
+n
+k
+
+p
+o
+t
+o
+n
+e
+n
+i
+b
+m
+o
+c
+l
+l
+a
+ 
+r
+e
+s
+e
+n
+k
+
+t
+c
+i
+d
+e
+r
+p
+m
+b
+i
+l
+l
+u
+f
+ 
+r
+e
+s
+e
+n
+k
+
+e
+n
+i
+b
+m
+o
+c
+l
+l
+a
+ 
+r
+e
+s
+e
+n
+k
+
+r
+e
+t
+s
+u
+l
+c
+o
+n
+ 
+r
+e
+s
+e
+n
+k
+
+r
+e
+t
+s
+u
+l
+c
+o
+n
+
+ 
+z
+t
+a
+k
+
+t
+c
+i
+d
+e
+r
+p
+ 
+r
+e
+s
+e
+n
+k
+
+x
+e
+d
+n
+i
+ 
+r
+e
+s
+e
+n
+k
+
+l
+l
+
+a
+
+0
+0
+0
+0
+0
+0
+0
+1
+
+0
+0
+0
+0
+0
+0
+1
+
+0
+0
+0
+0
+0
+1
+
+1
+0
+
+.
+
+0
+
+1
+
+.
+
+0
+-
+
+2
+
+.
+
+0
+-
+
+3
+
+.
+
+0
+-
+
+4
+
+.
+
+0
+-
+
+5
+
+.
+
+0
+-
+
+relative id178
+
+e
+z
+i
+
+ 
+
+s
+a
+t
+a
+d
+g
+n
+
+ 
+
+i
+
+n
+
+i
+a
+r
+t
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0.3
+
+0.2
+
+0.1
+
+0
+
+-0.1
+
+-0.2
+
+-0.3
+
+-0.4
+
+katz indexpredict
+
+katz nocluster
+
+katz index
+
+katz fullibmpredict
+
+katz ibm
+
+kneser nocluster
+
+kneser index
+
+kneser indexpredict
+
+kneser ibm
+
+kneser fullibmpredict
+
+100000
+
+1000000
+
+10000000
+
+all
+
+training data size
+
+of id91 decreases with training data; at small data sizes, it is about 0.2
+bits for the best clustered model; at the largest sizes, it is only about 0.1 bits.
+since id91 is a technique for dealing with data sparseness, this is unsur-
+prising. next, notice that ibm id91 consistently works very well. of all
+the other techniques we tried, only 4 others worked as well or better: fullibm
+id91, which is a simple variation; allcombine and allcombinenotop, which
+interpolate in a fullibm; and fullibmpredict. fullibmpredict works very well    
+as much as 0.05 bits better than ibm id91. however, it has a problem at
+the smallest training size, in which case it is worse. we believe that the clusters
+at the smallest training size are very poor, and that predictive style id91
+gets into trouble when this happens, since it smooths across words that may be
+unrelated, while ibm id91 interpolates in a normal trigram model, making
+it more robust to poor clusters. all of the models that use predict id91 and
+do not interpolate an unclustered trigram are actually worse than the baseline
+at the smallest training size.
+
+note that our particular experiments, which use a    xed vocabulary, are a
+severe test of id91 at the smallest levels. many of the words in the 58,000
+word vocabulary do not occur at all in 100,000 words of training data. we
+attempted to partially deal with this by adding a    pseudo-count    to every word,
+a co-occurrence with a fake word. this would have the property of making
+all unseen words, and words with very low counts, similar, hopefully putting
+them in the same cluster. the data with 100,000 words of training should be
+interpreted more as how well a system will work with bad clusters, and less
+about how a realistic system, in which the vocabulary would match the training
+data, would work.
+
+in figure 6 we show a comparison of several techniques using katz smoothing
+and the same techniques with kneser-ney smoothing. the results are similar,
+with some interesting exceptions: in particular, indexpredict works well for the
+kneser-ney smoothed model, but very poorly for the katz smoothed model.
+this shows that smoothing can have a signi   cant e   ect on other techniques,
+such as id91. the other result is that across all nine id91 techniques,
+at every size, the kneser-ney version always outperforms the katz smoothed
+version. in fact, the kneser-ney smoothed version also outperformed both in-
+terpolated and backo    absolute discounting versions of each technique at every
+size.
+
+there are two other ways to perform id91, which we will not explore
+here. first, one can cluster groups of words     complete contexts     instead
+of individual words. that is, to change notation for a moment, instead of
+computing
+
+p (w|word-cluster(wi   2)word-cluster(wi   1))
+
+one could compute
+
+p (w|context-cluster(wi   2wi   1))
+
+for instance, in a trigram model, one could cluster contexts like    new york   
+and    los angeles    as    city   , and    on wednesday    and    late tomorrow    as
+   time   . there are many di   cult issues to solve for this kind of id91.
+
+21
+
+another kind of conditional id91 one could do is to empirically determine,
+for a given context, the best combination of clusters and words to use, the
+varigram approach (blasig, 1999).
+
+5.2 finding clusters
+
+a large amount of previous research has focused on how best to    nd the clusters
+(brown et al., 1992; kneser and ney, 1993; yamamoto and sagisaka, 1999;
+ueberla, 1995; pereira et al., 1993; bellegarda et al., 1996). most previous
+research has found only small di   erences between di   erent techniques for    nding
+clusters. one result however is that automatically derived clusters outperform
+part-of-speech tags (niesler et al., 1998), at least when there is enough training
+data (ney et al., 1994). we did not explore di   erent techniques for    nding
+clusters, but simply picked one we thought would be good, based on previous
+research.
+
+there is no need for the clusters used for di   erent positions to be the same.
+in particular, for a model like ibm id91, with p (wi|wi)  p (wi|wi   2wi   1),
+we will call the wi cluster a predictive cluster, and the clusters for wi   1 and
+wi   2 conditional clusters. the predictive and conditional clusters can be dif-
+ferent (yamamoto and sagisaka, 1999). for instance, consider a pair of words
+like a and an.
+in general, a and an can follow the same words, and so, for
+predictive id91, belong in the same cluster. but, there are very few words
+that can follow both a and an     so for conditional id91, they belong in
+di   erent clusters. we have also found in pilot experiments that the optimal
+number of clusters used for predictive and conditional id91 are di   erent;
+in this paper, we always optimize both the number of conditional and predictive
+clusters separately, and reoptimize for each technique at each training data size.
+this is a particularly time consuming experiment, since each time the number
+of clusters is changed, the models must be rebuilt from scratch. we always try
+numbers of clusters that are powers of 2, e.g. 1, 2, 4, etc, since this allows
+us to try a wide range of numbers of clusters, while never being more than a
+factor of 2 away from the optimal number. examining charts of performance on
+heldout data, this seems to produce numbers of clusters that are close enough
+to optimal.
+
+the clusters are found automatically using a tool that attempts to mini-
+mize perplexity. in particular, for the conditional clusters we try to minimize
+the perplexity of training data for a bigram of the form p (wi|wi   1), which is
+equivalent to maximizing
+
+n
+
+p (wi|wi   1)
+
+yi=1
+
+for the predictive clusters, we try to minimize the perplexity of training data of
+p (wi|wi   1)    p (wi|wi).
+because we are doing our minimization on unsmoothed training data, and the
+latter formula would thus be equal to p (wi|wi   1) for any id91. if we were
+to use the method of leaving-one-out (kneser and ney, 1993), then we could use
+
+(we do not minimize p (wi|wi   1)    p (wi|wi   1wi), begin boring
+
+details
+
+22
+
+the latter formula, but that approach is more di   cult.) now,
+
+p (wi|wi   1)    p (wi|wi) =
+
+n
+
+yi=1
+
+=
+
+=
+
+p (wi   1wi)
+
+p (wi   1)
+
+  
+
+p (wiwi)
+p (wi)
+
+p (wiwi)
+p (wi   1)
+
+  
+
+p (wi   1wi)
+
+p (wi)
+
+p (wi)
+p (wi   1)
+
+   p (wi   1|wi)
+
+n
+
+n
+
+yi=1
+yi=1
+yi=1
+
+n
+
+now, p (wi)
+
+to try to maximizeqn
+
+p (wi   1) will be independent of the id91 used; therefore, it is su   cient
+i=1 p (wi   1|wi).6 this is very convenient, since it is exactly
+the opposite of what was done for conditional id91. it means that we can
+use the same id91 tool for both, and simply switch the order used by the
+program used to get the raw counts for id91. we give more details about end boring
+the id91 algorithm used in section 9.
+
+details
+
+6 caching
+
+if a speaker uses a word, it is likely that he will use the same word again in the
+near future. this observation is the basis of caching (kuhn, 1988; kuhn and
+de mori, 1990; kuhn and de mori, 1992; kupiec, 1989; jelinek et al., 1991). in
+particular, in a unigram cache, we form a unigram model from the most recently
+spoken words (all those in the same article if article markers are available, or a
+   xed number of previous words if not.) this unigram cache can then be linearly
+interpolated with a conventional id165.
+
+another type of cache model depends on the context. for instance, we could
+form a smoothed bigram or trigram from the previous words, and interpolate
+this with the standard trigram. in particular, we use
+
+ptrigram-cache(w|w1...wi   2wi   1) =
+
+  psmooth(w|wi   2wi   1) + (1       )ptricache(w|w1...wi   1)
+
+where ptricache(w|w1...wi   1) is a simple interpolated trigram model, using
+counts from the preceding words in the same document.
+
+yet another technique is to use conditional caching. in this technique, we
+weight the trigram cache di   erently depending on whether or not we have pre-
+viously seen the context or not.
+
+we digress here for a moment to mention a trick that we use. when inter-
+
+polating three probabilities p1(w), p2(w), and p3(w), rather than use
+
+begin boring
+details
+
+  p1(w) +   p2(w) + (1              )p3(w)
+
+6thanks to lillian lee
+
+23
+
+we actually use
+
+  
+
+   +    +   
+
+p1(w) +
+
+  
+
+   +    +   
+
+p2(w) +
+
+  
+
+   +    +   
+
+p3(w)
+
+this allows us to simplify the constraints of the search, and we also believe aids
+our parameter search routine, by adding a useful dimension to search through. it
+is particularly useful when sometimes we do not use one of the three components.
+in particular, for conditional caching, we use the following formula:
+
+pconditionaltrigram (w|w1...wi   2wi   1) =
+
+  
+
+  +  +   psmooth(w|wi   2wi   1)
++   
++   
+
+  +  +   punicache(w|w1...wi   1)
+  +  +   ptricache(w|w1...wi   1)
+
+if wi   1 in cache
+
+  
+  +   psmooth(w|wi   2wi   1)
++   
+
+  +   punicache(w|w1...wi   1)
+
+otherwise
+
+                           
+                        
+
+we tried one additional improvement. we assume that the more data we
+have, the more useful each cache is. thus, we make   ,    and    be linear
+functions of the amount of data in the cache (number of words so far in the
+current document.)
+
+  (wordsincache ) =   startweight +  multiplier   
+
+min(wordsincache ,   maxwordsweight )
+
+  maxwordsweight
+
+where, as usual,   startweight ,   multiplier and   maxwordsweight are parameters esti-
+mated on heldout data. however, our parameter search engine nearly always set
+  maxwordsweight to at or near the maximum value we allowed it to have, 1,000,000,
+while assigning   multiplier to a small value (typically 100 or less) meaning that
+the variable weighting was essentially ignored.
+
+finally, we can try conditionally combinging unigram, bigram, and trigram
+
+caches.
+
+  
+
+pconditionaltrigram (w|w1...wi   2wi   1) =
+  +  +  +   psmooth(w|wi   2wi   1)
++
++
++
+
+  +  +  +   punicache(w|w1...wi   1)
+  +  +  +   pbicache(w|w1...wi   1)
+  +  +  +   ptricache(w|w1...wi   1)
+
+  
+
+  
+
+  
+
+  
+
+  +  +   psmooth(w|wi   2wi   1)
++   
++   
+
+  +  +   punicache(w|w1...wi   1)
+  +  +   pbicache(w|w1...wi   1)
+
+if wi   2wi   1 in cache
+
+if wi   1 in cache
+
+  
+  +   psmooth(w|wi   2wi   1)
++   
+
+  +   punicache(w|w1...wi   1)
+
+otherwise
+
+24
+
+                                                            
+                                                         
+
+m
+a
+r
+g
+i
+n
+u
+
+m
+a
+r
+g
+i
+b
+
+m
+a
+r
+g
+i
+r
+t
+
+ 
+
+d
+n
+o
+c
+ 
++
+m
+a
+r
+g
+i
+n
+u
+
+m
+a
+r
+g
+i
+r
+t
+
+ 
+
+d
+n
+o
+c
+ 
++
+m
+a
+r
+g
+i
+n
+u
+
+ 
+
+d
+n
+o
+c
+ 
++
+m
+a
+r
+g
+i
+b
+
+m
+a
+r
+g
+i
+r
+t
+
+l
+l
+
+a
+
+0
+0
+0
+,
+0
+0
+0
+,
+0
+1
+
+0
+0
+0
+,
+0
+0
+0
+1
+
+,
+
+,
+
+0
+0
+0
+0
+0
+1
+
+.
+
+1
+0
+-
+
+5
+1
+0
+-
+
+.
+
+.
+
+2
+0
+-
+
+5
+2
+0
+-
+
+.
+
+.
+
+3
+0
+-
+
+5
+3
+0
+-
+
+.
+
+.
+
+4
+0
+-
+
+5
+4
+0
+-
+
+.
+
+.
+
+5
+0
+-
+
+5
+5
+0
+-
+
+.
+
+.
+
+6
+0
+-
+
+relative id178
+
+ 
+
+e
+z
+i
+s
+a
+t
+a
+d
+g
+n
+i
+n
+i
+a
+r
+t
+
+ 
+
+product is potentially a much harder problem.
+
+7 sentence mixture models
+
+iyer and ostendorf (1999; iyer et al.
+(1994) observed that within a corpus,
+there may be several di   erent sentence types; these sentence types could be
+grouped by topic, or style, or some other criterion. no matter how they are
+grouped, by modeling each sentence type separately, improved performance can
+be achieved. for instance, in wall street journal data, we might assume that
+there are three di   erent sentence types:    nancial market sentences (with a great
+deal of numbers and stock names), business sentences (promotions, demotions,
+mergers), and general news stories. we can compute the id203 of a sen-
+tence once for each sentence type, then take a weighted sum of the probabilities
+across sentence types. because long-distance correlations within a sentence (lots
+of numbers, or lots of promotions) are captured by such a model, the overall
+model is better. of course, in general, we do not know the sentence type until
+we have heard the sentence. therefore, instead, we treat the sentence type as a
+hidden variable.
+
+let sj denote the condition that the sentence under consideration is a sen-
+tence of type j. then the id203 of the sentence, given that it is of type j
+can be written as
+
+n
+
+p (wi|wi   2wi   1sj)
+
+yi=1
+
+sometimes, the global model (across all sentence types) will be better than any
+individual sentence type. let s0 be a special context that is always true:
+
+p (wi|wi   2wi   1s0) = p (wi|wi   2wi   1)
+
+let there be s di   erent sentence types (4     s     8 is typical); let   0...  s be
+sentence interpolation parameters optimized on held-out data subject to the
+j=0   j = 1. the overall id203 of a sentence w1...wn is equal
+
+constraint ps
+
+to
+
+  j
+
+p (wi|wi   2wi   1sj)
+
+(8)
+
+s
+
+n
+
+xj=0
+
+yi=1
+
+equation 8 can be read as saying that there is a hidden variable, the sen-
+tence type; the prior id203 for each sentence type is   j. we compute the
+id203 of a test sentence once for each sentence type, and then sum these
+probabilities according to the prior id203 of that sentence type.
+
+the probabilities p (wi|wi   2wi   1sj) may su   er from data sparsity, so they
+are linearly interpolated with the global model p (wi|wi   2wi   1), using interpo-
+lation weights optimized on held-out data.
+
+  j
+
+s
+
+xj=0
+
+n
+
+yi=1
+
+  jp (wi|wi   2wi   1sj) + (1       j)p (wi|wi   2wi   1)
+
+26
+
+ 
+
+m
+a
+r
+g
+3
+0
+0
+0
+0
+0
+1
+
+,
+
+ 
+
+m
+a
+r
+g
+5
+0
+0
+0
+0
+0
+1
+
+,
+
+ 
+
+m
+a
+r
+g
+3
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+m
+a
+r
+g
+5
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+m
+a
+r
+g
+3
+0
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+m
+a
+r
+g
+5
+0
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+ 
+
+m
+a
+r
+g
+5
+0
+0
+0
+0
+0
+0
+0
+1
+
+,
+
+,
+
+m
+a
+r
+g
+3
+
+ 
+l
+l
+
+a
+
+m
+a
+r
+g
+5
+
+ 
+l
+l
+
+a
+
+8
+2
+1
+
+4
+6
+
+2
+3
+
+6
+1
+
+8
+
+4
+
+2
+
+1
+
+s
+e
+p
+y
+t
+ 
+e
+c
+n
+e
+t
+n
+e
+s
+ 
+f
+o
+
+ 
+r
+e
+b
+m
+u
+n
+
+figure 8: number of sentence types versus id178
+
+sentence types for the training data were found by using the same cluster-
+ing program used for id91 words; in this case, we tried to minimize the
+sentence-cluster unigram perplexities. that is, let s(i) represent the sentence
+type assigned to the sentence that word i is part of. (all words in a given sen-
+tence are assigned to the same sentence type.) we tried to put sentences into
+i=1 p (wi|s(i)) was maximized. this is a much
+simpler technique than that used by iyer and ostendorf (1999). they use a
+two stage process, the    rst stage of which is a unigram-similarity agglomerative
+id91 method; the second stage is an em-based id165 based reestimation.
+also, their technique used soft clusters, in which each sentence could belong to
+multiple clusters. we assume that their technique results in better models than
+ours.
+
+clusters in such a way that qn
+
+we performed a fairly large number of experiments on sentence mixture
+models. we sought to study the relationship between training data size, id165
+order, and number of sentence types. we therefore ran a number of experiments
+using both trigrams and 5-grams, at our standard data sizes, varying the number
+of sentence types from 1 (a normal model without sentence mixtures) to 128.
+
+9
+
+5
+8
+
+.
+
+8
+
+7
+
+.
+
+5
+7
+27
+id178
+
+5
+6
+
+.
+
+6
+
+5
+5
+
+.
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0
+
+-0.05
+
+-0.1
+
+-0.15
+
+2
+8
+
+-0.2
+
+-0.25
+
+-0.3
+
+f
+i
+g
+u
+r
+e
+
+9
+:
+
+n
+u
+m
+b
+e
+r
+
+o
+f
+
+s
+e
+n
+t
+e
+n
+c
+e
+
+t
+y
+p
+e
+s
+
+v
+e
+r
+s
+u
+s
+
+e
+n
+t
+r
+o
+p
+y
+,
+
+r
+e
+l
+a
+t
+i
+v
+e
+
+t
+o
+
+b
+a
+s
+e
+l
+i
+n
+e
+
+1
+
+2
+
+4
+
+8
+
+16
+
+32
+
+64
+
+128
+
+number of sentence types
+
+100,000 3gram
+
+100,000 5gram
+
+1,000,000 3gram
+
+1,000,000 5gram
+
+10,000,000 3gram
+
+10,000,000 5gram
+
+10,000,000 5gram
+
+all 3gram
+
+all 5gram
+
+all experiments were done with kneser-ney smoothing. the results are shown
+in figure 8. we give the same results again, but graphed relative to their
+respective id165 model baselines, in figure 9. note that we do not trust
+results for 128 mixtures; for these experiments, we used the same 20,000 words
+of heldout data used in our other experiments. with 128 sentence types, there
+are 773 parameters, and the system may not have had enough heldout data to
+accurately estimate the parameters. in particular, the plateau shown at 128 for
+10,000,000 and all training data does not show up in the heldout data. ideally,
+we would run this experiment with a larger heldout set, but it already required
+5.5 days with 20,000 words, so this is impractical.
+
+the results are very interesting for a number of reasons. first, we suspected
+that sentence mixture models would be more useful on larger training data
+sizes, and indeed they are; with 100,000 words, the most improvement from a
+sentence mixture model is only about .1 bits, while with 284,000,000 words, it
+is nearly .3 bits. this bodes well for the future of sentence mixture models:
+as computers get faster and larger, training data sizes should also increase.
+second, we had suspected that because both 5-grams and sentence mixture
+models attempt to model long distance dependencies, the improvement from
+their combination would be less than the sum of the individual improvements.
+as can be seen in figure 8, for 100,000 and 1,000,000 words of training data, the
+di   erence between trigrams and 5-grams is very small anyway, so the question
+is not very important. for 10,000,000 words and all training data, there is some
+negative interaction. for instance, with 4 sentence types on all training data, the
+improvement is 0.12 bits for the trigram, and 0.08 bits for the 5-gram. similarly,
+with 32 mixtures, the improvement is .27 on the trigram and .18 on the 5-gram.
+so, approximately one third of the improvement seems to be correlated.
+
+iyer and ostendorf (1999) reported experiments on both 5-mixture compo-
+nents and 8 components and found no signi   cant di   erence, using 38 million
+words of training data. however, our more thorough investigation shows that
+indeed there is substantial room for improvement by using larger numbers of
+mixtures, especially when using more training data, and that this potential ex-
+tends at least to 64 sentence types on our largest size. this is an important
+result, leading to almost twice the potential improvement of using only a small
+number of components.
+
+we think this new result is one of the most interesting in our research. in
+particular, the techniques we used here were relatively simple, and many exten-
+sions to these techniques might lead to even larger improvements. for instance,
+rather than simply smoothing a sentence type with the global model, one could
+create sentence types and supertypes, and then smooth together the sentence
+type with its supertype and with the global model, all combined. this would
+alleviate the data sparsity e   ects seen with the largest numbers of mixtures.
+
+our sentence mixture model results are encouraging, but disappointing when
+compared to previous results. while iyer and ostendorf (1999) achieve about
+19% perplexity reduction and about 3% word error rate reduction with 5 mix-
+tures, on similar data we achieve only about 9% and (as we will show later) 1.3%
+reductions with 4 mixtures. the largest di   erence we are aware of between their
+
+29
+
+begin boring
+details
+
+system and ours is the di   erence in id91 technique: we used a fairly simple
+technique, and they used a fairly complex one. other possibilities include the
+di   erent smoothing that they used (witten-bell smoothing) versus our katz or
+interpolated kneser-ney smoothing; and the fact that they used    ve clusters
+while we used four. however, katz and interpolated kneser-ney are very dif-
+ferent techniques, but, as we will report later, sentence mixture models produce
+about the same improvement with both, so we do not think the di   erence in
+smoothing explains the di   erent results. also, iyer and ostendorf (1999) found
+no signi   cant di   erence when using 8 clusters instead of 5, and we found only
+a 4% di   erence when using 8 instead of 4 on similar data.
+it is noteworthy
+that iyer and ostendorf have a baseline perplexity of 211, versus our baseline
+perplexity of 95, with the same training set, but di   erent vocabularies and test
+sets. perhaps whatever unknown factor accounts for this di   erence in baseline
+perplexities gives more room for improvement from sentence mixture models.
+it is worth noting that our improvement from caching is also much less than
+iyer and ostendorf   s: about 7.8% versus their 16.7%. our cache implementa-
+tions were very similar, the main di   erence being their exclusion of stop-words.
+this adds support to the    di   erent baseline/test condition    explanation.
+if
+the di   erence in perplexity reduction is due to some di   erence in the mixture
+model implementation, rather than in the test conditions, then an additional
+10% perplexity reduction could be achieved, an amount that merits additional
+exploration.
+
+sentence mixture models can also be useful when combining very di   erent
+language model types. for instance, jurafsky et al.
+(1995) uses a sentence
+mixture model to combine a stochastic context-free grammar (sid18) model
+with a bigram model, resulting in marginally better results than either model
+used separately. the model of jurafsky et al. is actually of the form
+
+p (wi|w1...wi   1) =
+
+p (sid18|w1...wi   1)    p (wi|w1...wi   1, sid18)
++p (bigram|w1...wi   1)    p (wi|w1...wi   1, bigram)
+
+which turns out to be equivalent to a model in the form of equation 8. this
+version of the equations has the advantage that when used in a stack-decoder,
+it allows sentence mixture models to be used with relatively little overhead,
+compared to equation 8 charniak (2001), as discussed in section 10.5, uses
+a sentence level mixture model to combine a linguistic model with a trigram
+model, achieving signi   cant perplexity reduction.
+
+8 combining techniques
+
+in this section, we present additional results on combining techniques. while
+each of the techniques we have presented works well separately, we will show that
+some of them work together synergistically, and that some of them are partially
+redundant. for instance, we have shown that the improvement from kneser-
+ney modeling and 5-gram models together is larger than the improvement from
+
+30
+
+end boring
+details
+
+either one by itself. similarly, as we have already shown, the improvement from
+sentence mixture models when combined with 5-grams is only about 2
+3 of the
+improvment of sentence mixture models by themselves, because both techniques
+increase data sparsity. in this section, we systematically study three issues: what
+e   ect does smoothing have on each technique; how much does each technique
+help when combined with all of the others; and how does each technique a   ect
+word error rate, separately and together.
+
+there are many di   erent ways to combine techniques. the most obvious way
+to combine techniques is to simply linearly interpolate them, but this is not likely
+to lead to the largest possible improvement. instead, we try to combine concepts.
+to give a simple example, recall that a fullibmpredict clustered trigram is of the
+form:
+
+(  p (w |wi   2wi   1) + (1       )p (w |wi   2wi   1))  
+(  p (w|wi   2wi   1w ) + (1       )p (w|wi   2wi   1w )
+
+one could simply interpolate this clustered trigram with a normal 5-gram, but
+of course it makes much more sense to combine the concept of a 5-gram with
+the concept of fullibmpredict, using a clustered 5-gram:
+
+(  p (w |wi   4wi   3wi   2wi   1) + (1       )p (w |wi   4wi   3wi   2wi   1))  
+(  p (w|wi   4wi   3wi   2wi   1w ) + (1       )p (w|wi   4wi   3wi   2wi   1w )
+
+we will follow this idea of combining concepts, rather than simply interpolating
+throughout this section. this tends to result in good performance, but complex
+models.
+
+when we combine sentence mixture models with caches, we need to answer
+additional questions. iyer and ostendorf (1999) used separate caches for each
+sentence type, putting each word into the cache for the most likely sentence type.
+this would have required a great deal of additional work in our system; also, we
+did pilot experiments combining sentence mixture models and caches with only
+a single global cache, and found that the improvement from the combination
+was nearly equal to the sum of the individual improvements. since iyer and
+ostendorf also get an improvement nearly equal to the sum, we concluded that
+not using separate caches was a reasonable combination technique.
+
+our overall combination technique is somewhat complicated. at the highest
+level, we use a sentence mixture model, in which we sum over sentence-speci   c
+models for each sentence type. within a particular sentence mixture model, we
+combine di   erent techniques with predictive id91. that is, we combine
+sentence-speci   c, global, cache, and global skipping models    rst to predict the
+cluster of the next word, and then again to predict the word itself given the
+cluster.
+
+for each sentence type, we wish to linearly interpolate the sentence-speci   c
+5-gram model with the global 5-gram model, the three skipping models, and
+the two cache models. since we are using fullibmpredict id91, we wish to
+do this based on both words and clusters. let   1,j...  12,j,   1,j...  12,j be inter-
+polation parameters. then, we de   ne the following two very similar functions.
+
+31
+
+begin boring
+details
+
+end boring
+details
+
+first,7
+
+senclusterj(w, wi   4...wi   1) =
+
+  1,jp (w |wi   4wi   3wi   2wi   1sj) +   2,jp (w |wi   4wi   3wi   2wi   1sj) +
+  3,jp (w |wi   4wi   3wi   2wi   1) +   4,jp (w |wi   4wi   3wi   2wi   1) +
+  5,jp (w |wi   4wi   3wi   1) +   6,jp (w |wi   4wi   3wi   1) +
+  7,jp (w |wi   4wi   2wi   1) +   8,jp (w |wi   4wi   2wi   1) +
+  9,jp (w |wi   4wi   3wi   2) +   10,jp (w |wi   4wi   3wi   2) +
+  11,jpunicache(w ) +   12,jptricache(w |wi   2wi   1)
+
+next, we de   ne the analogous function for predicting words given clusters:
+
+senwordj(w, wi   4...wi   1, w ) =
+
+  1,jp (w|wi   4wi   3wi   2wi   1w sj) +   2,jp (w|wi   4wi   3wi   2wi   1w sj) +
+  3,jp (w|wi   4wi   3wi   2wi   1w ) +   4,jp (w|wi   4wi   3wi   2wi   1w ) +
+  5,jp (w|wi   4wi   3wi   1w ) +   6,jp (w|wi   4wi   3wi   1w ) +
+  7,jp (w|wi   4wi   2wi   1w ) +   8,jp (w|wi   4wi   2wi   1w ) +
+  9,jp (w|wi   4wi   3wi   2w ) +   10,jp (w|wi   4wi   3wi   2w ) +
+  11,jpunicache(w|w ) +   12,jptricache(w|wi   2wi   1w )
+
+now, we can write out our id203 model:
+
+peverything(w1...wn ) =
+
+s
+
+n
+
+  j
+
+xj=0
+
+senclusterj(wi, wi   4...wi   1)  senwordj(wi, wi   4...wi   1, wi)
+
+yi=1
+
+(9)
+
+clearly, combining all of these techniques together is not easy, but as we
+will show, the e   ects of combination are very roughly additive, and the e   ort is
+worthwhile.
+
+we performed several sets of experiments. in these experiments, when we
+perform caching, it is with a unigram cache and conditional trigram cache; when
+we use sentence mixture models, we use 4 mixtures; when we use trigram skip-
+ping, it is w y and wx ; and when we use 5-gram skipping it is vw y interpolated
+with v xy and vwx . our word error rate experiments were done without punc-
+tuation, so, to aid comparisons, we perform additional id178 experiments in
+this section on    all-no-punc   , which is the same as the    all    set, but without
+punctuation.
+
+7this formula is actually an oversimpli   cation because the values   11,j and   12,j depend
+on the amount of training data in a linear fashion, and if the context wi   1 does not occur in
+the cache, then the trigram cache is not used. in either case, the values of the      s have to be
+renormalized for each context so that they sum to 1.
+
+32
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0.2
+
+0.1
+
+0
+
+-0.1
+
+-0.2
+
+-0.3
+
+-0.4
+
+-0.5
+
+-0.6
+
+-0.7
+
+100,000
+
+1,000,000 10,000,000
+
+all
+
+all no punc
+
+training data size
+
+baseline: katz
+trigram
+
+kneser trigram
+
+katz 5-gram
+
+katz cache
+
+katz skip
+
+katz cluster
+
+katz sentence
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0.3
+
+0.2
+
+0.1
+
+0
+
+-0.1
+
+-0.2
+
+-0.3
+
+-0.4
+
+-0.5
+
+-0.6
+
+-0.7
+
+100,000
+
+1,000,000 10,000,000
+
+all
+
+all no punc
+
+training data size
+
+katz 3-gram
+
+baseline:    
+kneser trigram
+kneser 5-gram
+
+kneser cache
+
+kneser skip
+
+kneser cluster
+
+kneser sentence
+
+0.6
+
+0.5
+
+0.4
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0.3
+
+0.2
+
+0.1
+
+0
+
+100,000
+
+1,000,000
+
+10,000,000
+
+all
+
+all no punc
+
+training data size
+
+baseline:
+everything
+
+everything -
+kneser
+
+everything -
+5gram
+
+everything -
+cache
+
+everything -
+skip
+
+everything -
+cluster
+
+everything -
+sentence
+
+y
+p
+o
+r
+t
+n
+e
+ 
+e
+v
+i
+t
+a
+l
+e
+r
+
+0.2
+
+0.0
+
+-0.2
+
+-0.4
+
+-0.6
+
+-0.8
+
+-1.0
+
+100,000
+
+1,000,000 10,000,000
+
+all
+
+all no punc
+
+training data size
+
+baseline: katz trigram
+kneser trigram
+katz 5-gram
+katz cache
+katz skip
+katz cluster
+katz sentence
+kneser 5-gram
+kneser cache
+kneser skip
+kneser cluster
+kneser sentence
+everything
+everything - kneser
+everything - 5gram
+everything - cache
+everything - skip
+everything - cluster
+everything - sentence
+everything + normal5gram
+
+in the    rst set of experiments, we used each technique separately, and katz
+smoothing. the results are shown in figure 10. next, we performed experi-
+ments with the same techniques, but with kneser-ney smoothing; the results
+are shown in figure 11. the results are similar for all techniques independent
+of smoothing, except 5-grams, where kneser-ney smoothing is clearly a large
+gain; in fact, without kneser-ney smoothing, 5-grams actually hurt at small
+and medium data sizes. this is a wonderful example of synergy, where the two
+techniques together help more than either one separately. caching is the largest
+gain at small and medium data sizes, while, when combined with kneser-ney
+smoothing, 5-grams are the largest gain at large data sizes. caching is still key
+at most data sizes, but the advantages of kneser-ney smoothing and id91
+are clearer when they are combined with the other techniques.
+
+in the next set of experiments, shown in figure 12, we tried removing each
+technique from the combination of all techniques (equation 9). the baseline
+is all techniques combined        everything   , and then we show performance of,
+for instance, everything except kneser-ney, everything except 5-gram models,
+etc.
+in figure 12 we show all techniques together versus a katz smoothed
+trigram. we add one additional point to this graph. with 100,000 words, our
+everything model was at .91 bits below a normal katz model, an excellent
+result, but we knew that the 100,000 word model was being hurt by the poor
+performance of fullibmpredict id91 at the smallest data size. we therefore
+interpolated in a normal 5-gram at the word level, a technique indicated as
+   everything + normal5gram.    this led to an id178 reduction of 1.0061     1
+bit. this gain is clearly of no real-world value     most of the id178 gains at
+the small and medium sizes come from caching, and caching does not lead to
+substantial word error rate reductions. however, it does allow a nice title for
+the paper. interpolating the normal 5-gram at larger sizes led to essentially no
+improvement.
+
+we also performed word-error rate experiments rescoring 100-best lists of
+wsj94 dev and eval, about 600 utterances. the 1-best error rate for the 100-
+best lists was 10.1% (our recognizer   s models were slightly worse than even the
+baseline used in rescoring) and the 100-best error rate (minimum possible from
+rescoring) was 5.2%. we were not able to get word-error rate improvements
+by using caching (when the cache consisted of the output of the recognizer),
+and were actually hurt by the use of caching when the interpolation param-
+eters were estimated on correct histories, rather than on recognized histories.
+figure 14 shows word-error rate improvement of each technique, either with
+katz smoothing, kneser-ney smoothing, or removed from everything, except
+caching. the most important single factor for word-error rate was the use of
+kneser-ney smoothing, which leads to a small gain by itself, but also makes
+skipping, and 5-grams much more e   ective. id91 also leads to signi   -
+cant gains. in every case except id91, the kneser-ney smoothed model
+has lower word-error rate than the corresponding katz smoothed model. the
+strange id91 result (the katz id178 is higher) might be due to noise, or
+might be due to the fact that we optimized the number of clusters separately for
+the two systems, optimizing perplexity, perhaps leading to a number of clusters
+
+37
+
+y
+p
+o
+r
+t
+n
+e
+
+6.9
+
+6.8
+
+6.7
+
+6.6
+
+6.5
+
+6.4
+
+6.3
+
+6.2
+
+6.1
+
+katz
+
+kn
+
+katz cluster
+
+kn cluster
+
+katz 5-gram
+
+katz skip
+
+katz sentence
+
+kn sentence
+
+kn skip
+
+kn 5gram
+
+all-cache-5gram
+
+all-cache-
+sentence
+
+all-cache all-cache-skip
+
+all-cache-kn
+
+all-cache-cluster
+
+8.8
+
+9
+
+9.2
+
+9.4
+
+9.6
+
+9.8
+
+10
+
+word error rate
+
+that was not optimal for word error rate reduction. overall, we get an 8.9%
+word error rate reduction over a katz smoothed baseline model. this is very
+good, although not as good as one might expect from our perplexity reductions.
+this is probably due to our rescoring of n-best lists rather than integrating our
+language model directly into the search, or rescoring large lattices.
+
+9 implementation notes
+
+actually implementing the model described here is not straightforward. we
+give here a few notes on the most signi   cant implementation tricks, some of
+which are reasonably novel, and in the appendix give more details. first, we
+describe our parameter search technique. next, we discuss techniques we used
+to deal with the very large size of the models constructed. then, we consider
+architectural strategies that made the research possible. finally, we give a few
+hints on implementing our id91 methods.
+
+the size of the models required for this research is very large. in particu-
+lar, many of the techniques have a roughly multiplicative e   ect on data sizes:
+moving to    ve-grams from trigrams results in at least a factor of two increase;
+fullibmpredict id91 results in nearly a factor of 4 increase; and the combi-
+nation of sentence-mixture models and skipping leads to about another factor
+of four. the overall model size then, is, very roughly, 32 times the size of a
+standard trigram model. building and using such a complex model would be
+impractical.
+
+instead, we use a simple trick. we    rst make a pass through the test data
+(either text, or n-best lists), and the heldout data (used for parameter optimiza-
+tion), and determine the complete set of values we will need for our experiments.
+then, we go through the training data, and record only these values. this dras-
+tically reduces the amount of memory required to run our experiments, reducing
+it to a managable 1.5 gigabytes roughly. another trick we use is to divide the
+test data into pieces     the less test data there is, the fewer values we need to
+store. the appendix describes some ways that we veri   ed that this    cheating   
+resulted in the same results that a non-cheating model would have gotten.
+
+careful design of the system was also necessary. in particular, we used a
+concept of a    model   , an abstract object, with a set of parameters, that could
+return the id203 of a word or class given a history. we created models
+that could compose other models, by interpolating them at the word level, the
+class level, or the sentence level, or even by multiplying them together as done
+in predictive id91. this allowed us to compose primitive models that
+implemented caching, various smoothing techniques, etc., in a large variety of
+ways.
+
+both our smoothing techniques and interpolation require the optimization of
+free parameters. in some cases, these free parameters can be estimated from the
+training data by leaving-one-out techniques, but better results are obtained by
+using a powell search of the parameters, optimizing the perplexity of held-out
+data (chen and goodman, 1999), and that is the technique used here. this
+
+39
+
+allowed us to optimize all parameters jointly, rather than say optimizing one
+model, then another, then their interpolation parameters, as is typically done.
+it also made it relatively easy to, in essentially every experiment in this paper,
+   nd the optimal parameter settings for that model, rather than use suboptimal
+guesses or results from related models.8
+
+although all smoothing algorithms were reimplemented for this research
+(reusing only a small amount of code), the details closely follow chen and
+goodman (1999). this includes our use of additive smoothing of the unigram
+distribution for both katz smoothing and kneser-ney smoothing. that is, we
+found a constant b which was added to all unigram counts; this leads to bet-
+ter performance in small training-data situations, and allowed us to compare
+perplexities across di   erent training sizes, since no unigram received 0 counts,
+meaning 0 probabilities were never returned.
+
+there is no shortage of techniques for generating clusters, and there appears
+to be little evidence that di   erent techniques that optimize the same criterion
+result in a signi   cantly di   erent quality of clusters. we note, however, that dif-
+ferent algorithms may require signi   cantly di   erent amounts of run time. in par-
+ticular, agglomerative id91 algorithms may require signi   cantly more time
+than top-down, splitting algorithms. within top-down, splitting algorithms,
+additional tricks can be used, including the techniques of buckshot (cutting et
+al., 1992). we also use computational tricks adapted from brown et al. (1992).
+many more details about the id91 techniques used are given in appendix
+b.4.
+
+10 other techniques
+
+in this section, we brie   y discuss several other techniques that have received
+recent interest for id38; we have done a few experiments with
+some of these techniques. these techniques include maximum id178 models,
+whole sentence maximum id178 models,
+latent semantic analysis, parsing
+based models, and neural network based models. rosenfeld (2000) gives a much
+broader, di   erent perspective on the    eld, as well as additional references for
+the techniques discussed in this paper.
+
+10.1 maximum id178 models
+
+maximum id178 models (darroch and ratcli   , 1972) have received a fair
+amount of attention since their introduction for id38 by rosenfeld
+(1994). maximum id178 models are models of the form
+
+pmaxent(w|w1...wi   1) =
+
+exp(pk   kfk(w, w1...wi   1))
+
+z(w1...wi   1)
+
+8the only exception was that for katz smoothed    everything    models we estimated the
+number of clusters from simple katz clustered models; large katz smoothed models are ex-
+tremely time consuming because of the need to    nd the      s after each potential parameter
+change.
+
+40
+
+where z is a id172 function, simply set equal to
+
+xw
+
+exp(xk
+
+  kfk(w, w1...wi   1))
+
+the   k are real numbers, learned by a learning algorithm such as generalized
+iterative scaling (gis) (darroch and ratcli   , 1972). the fk are arbitrary func-
+tions of their input, typically returning 0 or 1. they can be used to capture
+id165s, caches, and clusters, and skipping models. they can also be used for
+more sophisticated techniques, such as triggers, described below. the general-
+ity and power of the fk are one of the major attractions of maximum id178
+models. there are other attractions to maximum id178 models as well. given
+training data w1...wt , it is possible to    nd   s such that for each every k,
+
+xw x1   i   t
+
+pmaxent(w|w1...wi   1)fk(w, w1...wi   1) = x1   i   t
+
+fk(w,w1...wi   1)
+
+in other words, the number of times we expect fk to occur given the model
+is the number of times we observe it in training data. that is, we can de   ne
+arbitrary predicates over words w and histories w1...wi   1, and build a model
+such that all of these predicates are true as often as we observed. in addition,
+this model maximizes id178, in the sense that it is also as smooth as possible
+(as close to the uniform distribution) while meeting these constraints. this is a
+quite seductive capability.
+
+furthermore, there have been two pieces of recent research that have made us
+especially optimistic about the use of maximum id178 models. the    rst is the
+the smoothing technique of chen and rosenfeld (1999b), which is the    rst max-
+imum id178 smoothing technique that works as well (or better than) kneser-
+ney smoothing. the second is our own recent speedup techniques (goodman,
+2001), which lead to up to a factor of 35, or more, speedup over traditional
+maximum id178 training techniques, which can be very slow.
+
+there are reasons both for optimism and pessimism with respect to maxi-
+mum id178 models. on the one hand, maximum id178 models have lead
+to some of the largest reported perplexity reductions. rosenfeld (1994) reports
+up to a 39% perplexity reduction when using maximum id178 models, com-
+bined with caching and a conventional trigram. on the other hand, our own
+pilot experiments with maximum id178 were negative, when we compared to
+comparable interpolated id165 models: we are not aware of any research in
+which maximum id178 models yield a signi   cant improvement over compa-
+rable id165 models. furthermore, maximum id178 models are extremely
+time consuming to train, even with our speedup techniques, and also slow to
+use during test situations. overall, maximum id178 techniques may be too
+impractical for real-world use.
+
+one special aspect of maximum id178 models worth mentioning is word
+triggers (rosenfeld, 1994). word triggers are the source of the most substantial
+gain in maximum id178 models. in trigger models, a word such as    school   
+increases the its own id203, as well as the id203 of similar words, such
+
+41
+
+as    teacher.    rosenfeld gets approximately a 25% perplexity reduction by using
+word triggers, although the gain is reduced to perhaps 7%-15% when combining
+with a model that already contains a cache. tillmann and ney (1996) achieves
+about a 7% perplexity reduction when combined with a model that already has
+a cache, and zhang et al. (2000) reports an 11% reduction.
+
+10.2 whole sentence maximum id178 models
+
+a recent variation of the maximum id178 approach is the whole sentence max-
+imum id178 approach (rosenfeld et al., 2001). in this variation, the proba-
+bility of whole sentences is predicted, instead of the probabilities of individual
+words. this allows features of the entire sentence to be used, e.g. coherence
+(cai et al., 2000) or parsability, rather than word level features. if s represents
+an entire sentence, then a whole sentence maximum id178 model is of the
+form
+
+p (s) =
+
+  kfk(s)
+
+1
+z
+
+p0(s) expxk
+
+where p0(s) is some starting model, e.g. an id165 model. notice that the
+id172 factor z is in this case a constant, eliminating the need to compute
+the id172 factor separately for each context. in fact, it is not necessary
+to compute it at all, for most uses. this is one of the main bene   ts of these
+models, according to their proponents, although other techniques (goodman,
+2001) also reduce the burden of id172.
+
+there are several problems with the whole sentence approach. first, training
+whole sentence maximum id178 models is particularly complicated (chen and
+rosenfeld, 1999a), requiring in practice sampling methods such as monte carlo
+markov chain techniques. second, the bene   ts of a whole sentence model may
+be small when divided over all the words. consider a feature such as parsability:
+is the sentence parsable according to some grammar. imagine that this feature
+contributes an entire bit of information per sentence. (note that in practice, a
+grammar broad coverage enough to parse almost all grammatical sentences is
+broad coverage enough to parse many ungrammatical sentences as well, reducing
+the information it provides.) now, in an average 20 word sentence, 1 bit of
+information reduces id178 by only .05 bits per word, a relatively small gain
+for a very complex feature. another problem we see with these models is that
+most of their features can be captured in other ways. for instance, a commonly
+advocated feature for whole sentence maximum id178 models is    coherence   ,
+the notion that the words of a sentence should all be on similar topics. but
+other techniques, such as caching, triggering, and sentence mixture models are
+all ways to improve the coherence of a sentence that do not require the expense
+of a whole sentence approach. thus, we are pessimistic about the long term
+potential of this approach.9
+
+9of course, we are pessimistic about almost everything.
+
+42
+
+10.3 latent semantic analysis
+
+bellegarda (2000) shows that techniques based on latent semantic analysis
+(lsa) are very promising. lsa is similar to principle components analysis
+(pca) and other id84 techniques, and seems to be a good
+way to reduce the data sparsity that plagues id38. the technique
+leads to signi   cant perplexity reductions (about 20%) and word error rate re-
+ductions (about 9% relative) when compared to a katz trigram on 42 million
+words. it would be interesting to formally compare these results to conventional
+caching results, which exploit similar long term information. bellegarda gets ad-
+ditional improvement over these results by using id91 techniques based on
+lsa; the perplexity reductions appear similar to the perplexity reductions from
+conventional ibm-style id91 techniques.
+
+10.4 neural networks
+
+there has been some interesting recent work on using neural networks for lan-
+guage modeling, by bengio et al. (2000). in order to deal with data sparsity,
+they    rst map each word to a vector of 30 continuous features, and then the
+id203 of various outputs is learned as a function of these continuous fea-
+tures. the mapping is learned by id26 in the same way as the other
+weights in the network. the best result is about a 25% perplexity reduction
+over a baseline deleted-interpolation style trigram.
+
+we wanted to see how the neural network model compared to standard clus-
+tering models. we performed some experiments on the same corpus, vocabulary,
+and splits into training, test, and heldout data as used by bengio et al. and we
+are gratful to them for supplying us with the relevant data. first, we veri   ed
+that their baseline was correct; we got a perplexity of 350.6 using simple inter-
+polation, versus 348 for a deleted-interpolation style baseline, which seems very
+reasonable. on the other hand, a kneser-ney smoothed trigram had a perplex-
+ity of 316. the remaining experiments we did were with kneser-ney smoothing.
+we next tried an ibm-clustered 4-gram model, which is in some ways similar
+to the neural network model with three words of context. the clustered model
+has perplexity 271, compared to the neural network perplexity of 291. however,
+the 291 number does not interpolate with a trigram, while our clustered model
+does. we also ran a 6-gram ibm-clustered model. this model had a perplexity
+of 271, which is about 5% worse than the best neural network model score of
+258; the 258 model was interpolated with a trigram, so this is a fair comparison.
+finally, we tried to build a    pull-out-all-the-stops    model. this was not the
+very best model we could build     it did not include caching, for instance     but
+it was the best model we could build using the same inputs as the best neural
+network, the previous 5 words. actually, we used only the previous 4 words,
+since we were not getting much bene   t from the 5   th word back. this model
+was of the form
+
+pall-the-stops (w|wn   4wn   3wn   2wn   1) =
+
+43
+
+begin boring
+details
+
+  p (w|wn   4wn   3wn   2wn   1) +   p (w |wn   4wn   3wn   2wn   1)    p (w|w ) +
+  p (w|wn   4wn   3wn   2wn   1) +   p (w|wn   4wn   3wn   2wn   1) +
+  p (w|wn   4wn   4wn   3wn   3wn   2wn   2wn   1wn   1) +
+  p (w |wn   4wn   3wn   2wn   1)    p (w|wn   4wn   3wn   2wn   1w ) +
+(1                                ) p (w |wn   4wn   4wn   3wn   3wn   2wn   2wn   1wn   1)  
+p (w|wn   4wn   4wn   3wn   3wn   2wn   2wn   1wn   1w )
+
+and had a perplexity of 254.6, a meaningless 2% better than the best neural
+network. the best neural network model relied on interpolation with a trigram
+model, and used the trigram model exclusively for low frequency events. since
+their trigram model had a relatively high perplexity of 348, compared to a
+kneser-ney smoothed trigram   s 316, we assume that a signi   cant perplexity
+reduction could be gotten simply from using a kneser-ney smoothed trigram.
+this means that the neural network model results really are very good.
+
+it would be very interesting to see how much the neural network model has
+in common with traditional clustered models. one simple experiment would
+interpolate a neural network model with a clustered model, to see how much of
+the gains were additive. given the relative simplicity of the neural network used,
+and the very good results, this seems like a very promising area of research.
+
+10.5 structured language models
+
+one of the most interesting and exciting new areas of id38 research
+has been structured language models (slms). the    rst successful structured
+language model was the work of chelba and jelinek (1998), and other more
+recent models have been even more successful (charniak, 2001). the basic
+idea behind structured language models is that a properly phrased statistical
+parser can be thought of as a generative model of language. furthermore,
+statistical parsers can often take into account longer distance dependencies,
+such as between a subject and its direct or indirect objects. these dependencies
+are likely to be more useful than the previous two words, as captured by a
+trigram model. chelba is able to achieve an 11% perplexity reduction over a
+baseline trigram model, while charniak achieves an impressive 24% reduction.
+we hypothesized that much of the bene   t of a structured language model
+might be redundant with other techniques, such as skipping, id91, or 5-
+grams. the question of how much information one model has that another
+model already captures turns out to be a di   cult one. while formulas for
+measuring the conditional id178 of a word given two di   erent models are well
+known, they rely on computing joint probabilities. if the two models already are
+sparsely estimated, such as a conventional trigram and a structured language
+model, then computing these joint probabilities is hopeless. so, we decided to
+use more approximate measures. one simple, practical technique is to simply try
+interpolating the two models. it seems, at    rst glance, that if the interpolation
+leads to no gain, then the models must be capturing the same information,
+and if the gains are additive over a common baseline, then the information
+
+44
+
+end boring
+details
+
+begin boring
+details
+
+is independent. unfortunately, at least the    rst assumption is incorrect.
+in
+particular, when comparing the structured language model to a kneser-ney
+smoothed trigram interpolated with a trigram cache, with which we assume the
+overlap in information is minimal, we end up getting almost no gain from the
+interpolation versus the cache model/kneser-ney trigram alone. this is simply
+because interpolation is such a crude way to combine information (although
+we don   t know any that are much better). the cache model is so much better
+than the structured language model that the interpolation weight all goes to
+the cache model, and thus the structured language model cannot help; we learn
+nothing except that the cache model had a lower perplexity, which we already
+knew.
+
+our strategy then was a bit more complex, and a bit harder to interpret.
+first, we used versions of both systems with simple interpolation for the smooth-
+ing. this was the only smoothing technique that was already implemented in
+both the slm program and our toolkit. this removed smoothing as a fac-
+tor. next, we tried comparing the slm to a trigram with various cache sizes
+(although, of course, we never cached beyond document boundaries), and in-
+terpolating that with the slm. we assumed that the slm and the cache, of
+whatever size, were capturing roughly orthogonal information. this let us    gure
+out the amount of perplexity reduction we would expect if the two models were
+uncorrelated. for instance, the baseline slm, not interpolated with a trigram,
+had a perplexity of 167.5. a fullibm clustered model had a perplexity of 144.7;
+similarly, a trigram with trigram cache with 160 words of context had a per-
+plexity of 143.4     about the same as the clustered model. the combination of
+the slm with the 160 word context cache had a perplexity of 130.7, a reduction
+of 8.8% over the cache alone. when combined with the fullibm clustered model,
+the perplexity was 137.0, a 5.3% reduction over the fullibm clustered model. so,
+if the improvements were uncorrelated, we would have assumed an 8.8% reduc-
+tion, and instead we only saw a 5.3% reduction. this is 60% of the reduction
+we would have expected. thus, we say that the overlap with a clustered model
+is very roughly 40%.
+
+the following table shows the results of our various experiments. the
+   model    column describes the model we interpolated with the slm. the    rst
+   perplex    column shows the perplexity of the model, and the    rst    reduction   
+column shows the reduction from interpolating the model with the slm. the
+second    perplex    column shows the perplexity of the most similar cache model
+and the second    reduction    column shows the perplexity reduction from inter-
+polating this cache model with the slm. the    nal column,    overlap   , shows
+the ration between the    rst reduction and the second: the presumed overlap
+between the model and the slm.
+
+45
+
+model
+
+closest cache
+
+model
+fullibm
+kneser-ney
+5-gram
+trigram skipping
+special cluster 1
+special cluster 2
+
+perplex
+144.7
+144.9
+160.0
+157.0
+141.4
+143.6
+
+reduction
+5.3%
+6.7%
+9.9%
+8.5%
+4.5%
+5.0%
+
+perplex
+160
+143.4
+162.6
+155.0
+141.8
+143.4
+
+reduction
+8.8%
+8.8%
+10.5%
+9.8%
+8.5%
+8.8%
+
+overlap
+40%
+23%
+6%
+13%
+45%
+43%
+
+the trigram skipping model was a model with all pairs, through the 5-gram
+level. the special cluster 1 and special cluster 2 models were clustered skipping
+models designed to capture contexts similar to what we assumed the structured
+language model was doing.
+
+we would have liked to have looked at combinations, such as kneser-ney
+smoothing with fullibm id91, but the best cache model we tested had a
+perplexity of 141.8, while the kneser-ney clustered model had a much lower
+perplexity.
+
+it is di   cult to draw any too strong conclusions from these results. one odd
+result is the large overlap with kneser-ney smoothing     23%. we suspect that
+somehow the breakdown of the language model into individual components in
+the structured lm has a smoothing e   ect. or, perhaps our entire evaluation is
+   awed.
+
+we also looked at the correlation of individual word probabilities. we ex-
+amined for each model for each word the di   erence from the id203 of the
+baseline trigram model. we then measured the correlation of the di   erences.
+these results were similar to the other results.
+
+it would be interesting to perform these same kind of experiments with other
+structured language models. unfortunately, the current best, charniak   s, does
+not predict words left to right. therefore, charniak can only interpolate at the
+sentence level. sentence level interpolation would make these experiments even
+harder to interpret.
+
+overall, we are reasonably con   dent that some large portion of the increase
+from the slm     on the order of 40% or more     comes from information similar
+to id91. this is not surprising, given that the slm has explicit models
+for part of speech tags and non-terminals, objects that behave similarly to word
+clusters. we performed these experiments with ciprian chelba, and reached
+opposite conclusions: we concluded that the glass was half empty, while chelba
+concluded that the glass was half full.
+
+11 conclusion
+
+11.1 previous combinations
+
+there has been relatively little previous research that attempted to combine
+more than two techniques, and even most of the previous research combining
+two techniques was not particularly systematic. furthermore, one of the two
+
+46
+
+end boring
+details
+
+techniques typically combined was a cache-based language model. since the
+cache model is simply linearly interpolated with another model, there is not
+much room for interaction.
+
+a few previous papers do merit mentioning. the most recent is that of
+(1999). they combined interpolated kneser-ney smoothing,
+martin et al.
+classes, word-phrases, and skipping. unfortunately, they do not compare to
+the same baseline we use, but instead compare to what they call interpolated
+linear discounting, a poor baseline. however, their improvement over interpo-
+lated kneser-ney is also given; they achieve about 14% perplexity reduction over
+this baseline, versus our 34% over the same baseline. their improvement from
+id91 is comparable to ours, as is their improvement from skipping models;
+their improvement from word-phrases, which we do not use, is small (about
+3%); thus, the di   erence in results is due mainly to our implementation of addi-
+tional techniques: caching, 5-grams, and sentence-mixture models. their word
+error rate reduction over interpolated kneser-ney is 6%, while ours is 7.3%.
+we assume that the reason our word error rate reduction is not proportional to
+our perplexity reduction is two-fold. first, 4% of our perplexity reduction came
+from caching, which we did not use in our word error-rate results. second, they
+were able to integrate their simpler model directly into a recognizer, while we
+needed to rescore n-best lists, reducing the number of errors we could correct.
+another piece of work well worth mentioning is that of rosenfeld (1994).
+in that work, a large number of techniques are combined, using the maximum
+id178 framework and interpolation. many of the techniques are tested at
+multiple training data sizes. the best system interpolates a katz-smoothed
+trigram with a cache and a maximum id178 system. the maximum id178
+system incorporates simple skipping techniques and triggering. the best system
+has perplexity reductions of 32% to 39% on data similar to ours. rosenfeld gets
+approximately 25% reduction from word triggers alone (p. 45), a technique we
+do not use. overall, rosenfeld   s results are excellent, and would quite possibly
+exceed ours if more modern techniques had been used, such as kneser-ney
+smoothing the trigram model (which is interpolated in), using smaller cuto   s
+made possible by faster machines and newer training techniques, or smoothing
+the maximum id178 model with newer techniques. rosenfeld experiments
+with some simple class-based techniques without success; we assume that more
+modern classing technology could also be used. rosenfeld achieves about a 10%
+word error rate reductionwhen using unsupervised adaptation (the same way
+we adapted. he achieves 13% assuming supervsion     users correct mistakes
+immediately.).
+
+there is surprisingly little other work combining more than two techniques.
+the only other noteworthy research we are aware of is that of weng et al. (1997),
+who performed experiments combining multiple corpora, fourgrams, and a class-
+based approach similar to sentence-mixture models. combining all of these
+techniques leads to an 18% perplexity reduction from a hub4-only language
+model. this model was trained and tested on a di   erent text genre than our
+models, and so no comparison to our work can be made.
+
+47
+
+begin long
+rambling
+cynical
+diatribe     no
+results or
+particularly
+novel ideas.
+grad students
+thinking about
+research in
+language
+modeling
+should read
+this section
+
+11.2 all hope abandon, ye who enter here
+
+in this section,10 we argue that meaningful, practical reductions in word error
+rate are hopeless. we point out that trigrams remain the de facto standard not
+because we don   t know how to beat them, but because no improvements justify
+the cost. we claim with little evidence that id178 is a more meaningful mea-
+sure of progress than perplexity, and that id178 improvements are small. we
+conclude that most id38 research, including ours, by comparing
+to a straw man baseline and ignoring the cost of implementations, presents the
+illusion of progress without the substance. we go on to describe what, if any,
+id38 research is worth the e   ort.
+
+11.2.1 practical word error rate reductions are hopeless
+
+most id38 improvements require signi   cantly more space than
+the trigram baseline compared to, and also typically require signi   cantly more
+time. most id38 papers contain a paragraph such as    trigram
+models are state-of-the-art. trigram models are obviously braindamaged. we
+did something slightly less braindamaged. our model has much lower perplexity
+and somewhat lower word error rates than a trigram.    however, what the
+papers don   t say, but what almost universally applies, is that the resulting
+model requires much more space and/or time than a simple trigram model.
+trigram models are state-of-the-art in the sense that they are used in most
+commercial speech recognizers and as at least the    rst pass of most research
+recognizers. this is for the following two reasons: they are fairly space e   cient,
+and all sorts of tricks can be used to integrate the trigram storage with the
+search. for instance, in our recognizers at microsoft, we use a storage method
+in which the trigrams are stored as phonetic trees (alleva et al., 1996). many
+more complex id38 techniques, especially id91 techniques,
+are incompatible with this type of storage, and thus much less e   cient in a
+practical, optimized recognizer.
+
+consider in practice each of the techniques we implemented. sentence mix-
+ture models require substantially more storage than corresponding global mod-
+els, since di   erent models have to be stored for each mixture, and a global model
+still needs to be stored, to interpolate with the mixture-speci   c models. fur-
+thermore, if integrated into the    rst pass of a recognizer, a di   erent path has to
+be explored for each mixture type, signi   cantly slowing the recognizer. caching
+has problems we have already discussed: while it does not signi   cantly increase
+the storage for the recognizer, it requires users to correct all their mistakes after
+each sentence; otherwise, mistakes are    locked in.    clustered models of the sort
+we have described here substantially increase storage, and interact very poorly
+with the kinds of pre   x trees used for search. 5-grams require substantially more
+
+10given that this extended version is a technical report, rather than a full paper, we can
+rant and rave without fear of editorial review, willy nilly titling sections, and scaring innocent
+graduate students. we can express our own bitterness and frustration and vent it on unsus-
+pecting readers. those with a natural predisposition to pessismism should skip this section,
+or risk the consequences.
+
+48
+
+space than trigrams and also slow the search. kneser-ney smoothing leads to
+improvements in theory, but in practice, most language models are built with
+high count cuto   s, to conserve space, and speed the search; with high count
+cuto   s, smoothing doesn   t matter. skipping models require both a more com-
+plex search and more space and lead to marginal improvements. in short, none
+of the improvements we studied is likely to make a di   erence in a real system in
+the forseeable future, with the exception of caching, which is typically available,
+but often turned o    by default, because users don   t like to or can   t be trained
+to consistently correct recognizer errors.
+
+our results have surveyed and reimplemented the majority of promising lan-
+guage modeling techniques introduced since katz (1987). the improvement in
+perplexity is one of the largest ever reported, but the improvement in word error
+rate is relatively small. this partially re   ects our own emphasis on perplexity
+rather than word error rate, and    aws in the experiments. perhaps rescor-
+ing lattices rather than n-best lists would have lead to larger improvements.
+perhaps integrating the id38 into the search would have helped.
+perhaps trying to optimize parameters and techniques for word error rate reduc-
+tion, rather than perplexity reduction would have worked better. but, despite
+all these    aws, we think our results are reasonably representative. others who
+have tried their best to get id38 improvements have had mixed
+results. for instance, martin et al. (1999) gets a 12% relative word error rate
+reduction from a fair baseline (larger from an easier baseline), slightly better
+than ours. but the cost of most of their improvements is high     a quadrupling
+in size of the language model and 32 times the cpu time. larger improvements
+could probably be gotten more easily and cheaply simply by increasing the
+number of mixture components or loosening search thresholds in the acoustic
+model. in fact, simply by using more language model training data, comparable
+improvements could probably be had.11
+
+11.2.2 perplexity is the wrong measure
+
+in this subsubsection, we claim with little evidence that word error rate corre-
+lates better with id178 than with perplexity. since relative id178 reductions
+are much smaller than relative perplexity reductions, it is di   cult to get useful
+word error rate reductions.
+
+we considered doing the following experiment: incrementally add portions of
+the test data to our training set, and use this to compute perplexity/id178 and
+word error rates. however, we noticed that actually conducting the experiment
+is unneccessary, since (in a slightly idealized world) we can predict the results.
+if we add in x% of the test data, then we will have perfect information for that
+x%. with a su   ciently powerful id165 model (say a 1000-gram), and no search
+errors, our speech recognizer will get that portion exactly correct, leading to an
+
+11these criticisms apply not just to the work of martin et al. but to our own as well. we
+use martin   s system as an example because quirks of our tool (see appendix b) make it hard
+for us to measure the size of the models we used and our acoustic modeling was done as o   ine
+n-best rescoring, rather than integrated with the search.
+
+49
+
+t
+e
+s
+ 
+t
+s
+e
+t
+ 
+n
+o
+ 
+e
+t
+a
+r
+ 
+r
+o
+r
+r
+e
+-
+d
+r
+o
+w
+
+52
+
+50
+
+48
+
+46
+
+44
+
+42
+
+40
+
+38
+
+36
+
+34
+
+abs-disc-interp
+katz
+kneser-ney-fix
+kneser-ney-mod
+
+7
+
+7.5
+
+8
+
+8.5
+
+9
+
+cross-id178 of test set
+
+9.5
+
+10
+
+10.5
+
+figure 15: word error rate versus id178
+
+x% relative reduction in word error rate. similarly, it will require essentially 0
+bits to predict the portion of the training data we have already seen, leading to
+an x% reduction in id178. this theoretical analysis leads us to hypothesize a
+linear relationship between id178 and word error rate.
+
+of course, one could perform more realistic experiments to see whether per-
+plexity or id178 corellates better with word error rate. our own recent exper-
+iments do not shed light on this question     the correlation between word error
+rate and id178, and the correlation between word error rate and perplexity
+are the same, over the relatively narrow range of perplexities we tested. how-
+ever, consider previous work by chen and goodman (1998). in figure 15, we
+show experiments done on the correlation between word error rate and id178.
+obviously, the relationship is very strong and appears linear over a large range,
+including a roughly 0 intercept, just as our analysis predicted.12
+
+consider also other domains, such as text compression. here, trivially, the
+relationship between id178 and the objective function, number of bits required
+
+12we prefer to make all of our predictions after seeing the data; this vastly increases their
+
+accuracy.
+
+50
+
+to represent the data, is again linear.
+
+these are not strong arguments, especially in light of the many researchers
+who have gotten results where id178 and word error rate do not correlate.
+still, they are worrisome. if true, they imply that we must get very large reduc-
+tions in perplexity to get meaningful word error rate reductions. for instance, a
+10% perplexity reduction, from say 100 to 90, corresponds to a reduction from
+6.64 bits to 6.49 bits, which is only a 2% id178 reduction. what appears as
+a meaningful perplexity reduction is a trivial id178 reduction. we fear that
+this means that commercially useful reductions in perplexity are unlikely.
+
+11.2.3 progress is illusory
+
+a common and related pitfall in id38 research is the straw man
+baseline. most id38 papers point out a problem with trigram
+models, typically that they cannot capture long distance dependencies, and then
+proceed to give some way to model longer contexts. these papers almost never
+even compare to a well-smoothed 5-gram, which would be a simple, obvious way
+to make a trigram capture longer contexts, never mind comparing to a trigram
+with a cache, a technique known for over 10 years, or to more recent models,
+such as sentence mixture models. the result is yet another way to beat trigrams,
+assuming we don   t care about speed or space. whether these new techniques
+are better than the previous ones, or can be combined with them for larger
+improvements, or o   er a better speed or space tradeo    than other techniques,
+is only very rarely explored. when a cache comparison is used, it is typically
+in the context of combining the cache with their own model, rather than with
+the baseline trigram. perplexity results in the introduction, conclusion, and
+abstract will usually compare to their technique with a cache, versus a trigram
+without one. sometimes the cache does not look like a cache.
+it might, for
+instance, be a trigger model if maximum id178 is being done. but since the
+most useful triggers are just self triggers, which are basically cache features, it
+is just a cache after all.
+
+poor experimental technique and misleading papers are by no means unique
+to id38. but the prevalence of the trigram baseline in practice,
+allowing researchers to call it    state-of-the-art    with a straight face, makes it
+particularly easy to give the illusion of progress.13
+
+11.2.4 so, what now?
+
+given the previous sections, should anyone do any id38 research
+at all? maybe. there are four areas where i see some hope:
+language model
+compression, language model adapatation, new applications of language model-
+ing, and basic research.
+
+13wait a minute, doesn   t this paper do all those same bad things? no. our paper doesn   t
+claim that trigrams are state of the art (although it does, misleadingly, call them a fair
+baseline), and it fairly compares all techniques. 14
+
+14
+
+sounds like weasling to me. hypocrite!
+
+51
+
+language model compression or pruning is an area that has received rel-
+atively little research, although good work has been done by kneser (1996),
+seymore and rosenfeld (1996), stolcke (1998), siu and ostendorf (2000), and
+by us (goodman and gao, 2000). care is needed here. for instance, the tech-
+niques of seymore et al. and stolcke can be used with almost any recognizer, but
+our own techniques use id91, and interact poorly with the search in some
+speech recognizers. still, this seems like an area where progress can be made.
+similarly, there has been no comprehensive work showing the space/perplexity
+tradeo   s of all of the techniques we examined in this paper, nor has there been
+any work on pruning interpolated models, such as skipping models or sentence
+mixture models.
+
+another area for id38 research is language model adaptation.
+a very common product scenario involves only a very small amount of in-domain
+training data, and lots of out-of-domain data. there has been a moderate
+amount of research in this area. much of the research does not compare to simply
+interpolating together the in-domain and out-of-domain language models, which
+in our experiments works quite well. the best research in this area is probably
+that of iyer and ostendorf (1997). we suspect that better techniques could be
+found, but our own attempts have failed.
+
+language models work very well and are well understood, and can be applied
+to many domains (church, 1988; brown et al., 1990; hull, 1992; kernighan et
+al., 1990; srihari and baltus, 1992). rather than trying to improve them, trying
+to use them in new ways can be fruitful. almost any machine learning problem
+could potentially use id38 techniques as a solution, and identifying
+new areas where language models work well is likely to be as useful as trying to
+do basic research.
+
+there are many un   nished areas of id38 basic research. none
+of these will have a huge practical impact, but they will help advance the    eld.
+one area is a continuous version of kneser-ney smoothing. interpolated kneser-
+ney smoothing is wonderful. no matter what kind of model we have used, it
+has worked better with kneser-ney smoothing than with any other smoothing
+technique we have tried. but kneser-ney smoothing is limited to discrete distri-
+butions; it cannot handle fractional counts. fractional counts are very common
+with, for instance, expectation maximization (em) algorithms. this means
+that we do not currently know how to do smoothing for distributions learned
+through em, such as most instances of id48 or of probabilis-
+tic context-free grammars. a continuous version of kneser-ney could be used
+in all of these areas. a related area that needs more research is soft-id91
+versus hard id91. hard id91 assigns each word to a single cluster,
+while soft id91 allows the same word to be placed in di   erent clusters.
+there has been essentially no work comparing hard id91 to soft id91,
+but several soft-style techniques, including the work of bengio et al. (2000) and
+of bellegarda (2000) have had good success, hinting that these techniques may
+be more e   ective. one reason we have not tried soft id91 is because we
+do not know how to properly smooth it: soft clustered models have fractional
+counts and would work best with a continuous version of kneser-ney smoothing.
+
+52
+
+end long
+rambling
+cynical
+diatribe
+
+11.2.5 some hope is left
+
+to summarize, id38 is a very di   cult area, but not one that
+is completely hopeless. basic research is still possible, and there continue to
+be new, if not practical, then certainly interesting id38 results.
+there also appear to be a few areas in which useful id38 research
+is promising. but id38, like most research, but perhaps more so,
+is not an area for the faint of heart or easily depressed.
+
+11.3 discussion
+
+we believe our results     a 50% perplexity reduction on a very small data set,
+and a 41% reduction on a large one (38% for data without punctuation)     are
+the best ever reported for id38, as measured by improvement from
+a fair baseline, a katz smoothed trigram model with no count cuto   s. we also
+systematically explored smoothing, higher order id165s, skipping, sentence
+mixture models, caching, and id91.
+
+our most important result is perhaps the superiority of interpolated kneser-
+ney smoothing in every situation we have examined. we previously showed
+(chen and goodman, 1998) that kneser-ney smoothing is always the best tech-
+nique across training data sizes, corpora types, and id165 order. we have now
+shown that it is also the best across id91 techniques, and that it is one
+of the most important factors in building a high performance language model,
+especially one using 5-grams.
+
+we have carefully examined higher-order id165s, showing that performance
+improvements plateau at about the 5-gram level, and we have given the    rst
+results at the 20-gram level, showing that there is no improvement to be gained
+past 7 grams.
+
+we have systematically examined skipping techniques. we examined trigram-
+like models, and found that using pairs through to the 5-gram level captures
+almost all of the bene   t. we also performed experiments on 5-gram skipping
+models,    nding a combination of 3 contexts that captures most of the bene   t.
+we carefully explored sentence mixture models, showing that much more
+improvement can be had than was previously expected by increasing the number
+of mixtures. in our experiments, increasing the number of sentence types to 64
+allows nearly twice the improvement over a small number of types.
+
+our caching results show that caching is by far the most useful technique
+for perplexity reduction at small and medium training data sizes. they also
+show that a trigram cache can lead to almost twice the id178 reduction of a
+unigram cache.
+
+next, we systematically explored id91, trying 9 di   erent techniques,
+   nding a new id91 technique, fullibmpredict, that is a bit better than
+standard ibm id91, and examining the limits of improvements from clus-
+tering. we also showed that id91 performance may depend on smoothing
+in some cases.
+
+53
+
+our word-error rate reduction of 8.9% from combining all techniques except
+
+caching is also very good.
+
+finally, we put all the techniques together, leading to a 38%-50% reduction
+in perplexity, depending on training data size. the results compare favorably
+to other recently reported combination results (martin et al., 1999), where,
+essentially using a subset of these techniques, from a comparable baseline (ab-
+solute discounting), the perplexity reduction is half as much. our results show
+that smoothing can be the most important factor in id38, and its
+interaction with other techniques cannot be ignored.
+
+in some ways, our results are a bit discouraging. the overall model we built
+is so complex, slow and large that it would be completely impractical for a
+product system. despite this size and complexity, our word error rate improve-
+ments are modest. to us, this implies that the potential for practical bene   t to
+speech recognizers from language model research is limited. on the other hand,
+id38 is useful for many    elds beyond id103, and is
+an interesting test bed for machine learning techniques in general.
+
+furthermore, parts of our results are very encouraging. first, they show
+that progress in id38 continues to be made. for instance, one
+important technique in our system, sentence mixture models, is only a few
+years old, and, as we showed, its potential has only been partially tapped.
+similarly, the combination of so many techniques is also novel. furthermore, our
+results show that the improvements from these di   erent techniques are roughly
+additive: one might expect an improvement of .9 bits for the largest training size
+based on simply adding up the results of figure 11, and instead the total is about
+.8 bits     very similar. this means that further incremental improvements may
+also lead to improvements in the best models, rather than simply overlapping
+or being redundant.
+
+as we noted in section 10, there are many other promising language mod-
+eling techniques currently being pursued, such as maximum id178 models,
+neural networks, latent semantic analysis, and structured language models. fig-
+uring out how to combine these techniques with the ones we have already im-
+plemented should lead to even larger gains, but also yet more complex models.
+
+acknowledgements
+
+i would like to thank the entire microsoft speech.net research team for their
+help, especially milind mahajan, x. d. huang, alex acero, ciprian chelba, as
+well as jianfeng gao. i would also like to thank the anonymous reviewers, sarah
+schwarm, roland kuhn, eric brill, hisami suzuki, and shaojun wang for their
+comments on drafts of this paper. i would like to especially thank stanley chen
+for useful discussions; in addition, small amounts of text and code used for
+this implementation and paper irrespectively were originally coauthored with
+stanley chen.
+
+54
+
+references
+
+[alleva et al.1996] fil alleva, xuedong huang, and mei-yuh hwang.
+
+improvements on the pronunciation pre   x tree search organization.
+icassp-96, volume 1, pages 133   136.
+
+1996.
+in
+
+[bellegarda et al.1996] j. r. bellegarda, j. w. butzberger, yen-lu chow, n. b.
+coccaro, and d. naik. 1996. a novel word id91 algorithm based on
+latent semantic analysis. in icassp-96, volume 1, pages 172     175.
+
+[bellegarda2000] j.r. bellegarda. 2000. exploiting latent semantic information
+in statistical id38. proceedings of the ieee, 88:1279   1296,
+august.
+
+[bengio et al.2000] yoshua bengio, rejean ducharme, and pascal vincent. 2000.
+a neural probabilistic language model. technical report 1178, d  epartement
+d   informatique et recherche op  erationnelle, universit  e de montr  eal.
+
+[blasig1999] reinhard blasig. 1999. combination of words and word categories
+
+in varigram histories. in icassp-99, volume 1, pages 529   532.
+
+[brown et al.1990] peter f. brown, john cocke, stephen a. dellapietra, vin-
+cent j. dellapietra, frederick jelinek, john d. la   erty, robert l. mercer,
+and paul s. roossin. 1990. a statistical approach to machine translation.
+computational linguistics, 16(2):79   85, june.
+
+[brown et al.1992] peter f. brown, vincent j. dellapietra, peter v. desouza,
+jennifer c. lai, and robert l. mercer. 1992. class-based id165 models of
+natural language. computational linguistics, 18(4):467   479, december.
+
+[cai et al.2000] can cai, ronald rosenfeld, and larry wasserman. 2000. ex-
+ponential language models, id28, and semantic coherence. in
+proc. nist/darpa speech transcription workshop, may.
+
+[charniak2001] eugene charniak. 2001. immediate-head parsing for language
+
+models. in acl-01, pages 116   123, july.
+
+[chelba and jelinek1998] ciprian chelba and frederick jelinek. 1998. exploit-
+ing syntactic structure for id38. in proceedings of the 36th
+annual meeting of the acl, august.
+
+[chen and goodman1998] stanley f. chen and joshua t. goodman.
+
+1998.
+an empirical
+language model-
+ing. technical report tr-10-98, harvard university. available from
+http://www.research.microsoft.com/~joshuago.
+
+smoothing techniques
+
+study of
+
+for
+
+[chen and goodman1999] stanley f. chen and joshua goodman. 1999. an
+empirical study of smoothing techniques for id38. computer
+speech and language, 13:359   394, october.
+
+55
+
+[chen and rosenfeld1999a] stanley chen and ronald rosenfeld. 1999a. e   -
+cient sampling and feature selection in whole sentence maximum id178
+language models. in proc. icassp    99, march.
+
+[chen and rosenfeld1999b] stanley f. chen and ronald rosenfeld. 1999b. a
+gaussian prior for smoothing maximum id178 models. technical report
+cmu-cs-99-108, computer science department, carnegie mellon univer-
+sity.
+
+[church1988] kenneth church. 1988. a stochastic parts program and noun
+phrase parser for unrestricted text. in proceedings of the second conference
+on applied natural language processing, pages 136   143.
+
+[cutting et al.1992] douglas r. cutting, david r. karger, jan r. pedersen, and
+john w. tukey. 1992. scatter/gather: a cluster-based approach to browsing
+large document collections. in sigir 92.
+
+[darroch and ratcli   1972] j.n. darroch and d. ratcli   . 1972. generalized it-
+erative scaling for id148. the annals of mathematical statistics,
+43:1470   1480.
+
+[dupont and rosenfeld1997] pierre dupont and ronald rosenfeld. 1997. lat-
+tice based language models. technical report cmu-cs-97-173, school of
+computer science, carnegie mellon university, pittsburgh, pa, september.
+
+[good1953] i.j. good. 1953. the population frequencies of species and the
+
+estimation of population parameters. biometrika, 40(3 and 4):237   264.
+
+[goodman and gao2000] joshua goodman and jianfeng gao. 2000. language
+
+model size reduction by pruning and id91. in icslp 2000.
+
+[goodman2001] joshua goodman. 2001. classes for fast maximum id178
+
+training. in icassp 2001.
+
+[huang et al.1993] x. huang, f. alleva, h.-w. hon, m.-y. hwang, k.-f. lee,
+and r. rosenfeld. 1993. the sphinx-ii id103 system: an
+overview. computer, speech, and language, 2:137   148.
+
+[hull1992] jonathon hull. 1992. combining syntactic knowledge and visual text
+recognition: a hidden markov model for id52 in a word
+recognition algorithm.
+in aaai symposium: probabilistic approaches to
+natural language, pages 77   83.
+
+[iyer and ostendorf1997] rukmini iyer and mari ostendorf. 1997. transform-
+ing out-of-domain estimates to improve in-domain language models. in eu-
+rospeech97, volume 4, pages 1975   1978.
+
+[iyer and ostendorf1999] rukmini iyer and mari ostendorf. 1999. modeling
+long distance dependence in language: topic mixtures versus dynamic cache
+models.
+ieee transactions on acoustics, speech and audio processing,
+7:30   39, january.
+
+56
+
+[iyer et al.1994] rukmini iyer, mari ostendorf, and j. robin rohlicek. 1994.
+in darpa-hlt, pages
+
+id38 with sentence-level mixtures.
+82   86.
+
+[jelinek and mercer1980] frederick jelinek and robert l. mercer. 1980. inter-
+polated estimation of markov source parameters from sparse data. in pro-
+ceedings of the workshop on pattern recognition in practice, amsterdam,
+the netherlands: north-holland, may.
+
+[jelinek et al.1991] f. jelinek, b. merialdo, s. roukos, and m. strauss. 1991.
+a dynamic lm for id103. in proc. arpa workshop on speech
+and natural language, pages 293   295.
+
+[jurafsky et al.1995] daniel jurafsky, chuck wooters, jonathan segal, eric fos-
+ler, gary tajchman, and nelson morgan. 1995. using a stochastic context-
+free grammar as a language model for id103. in icassp-95,
+pages 189   192.
+
+[katz1987] slava m. katz. 1987. estimation of probabilities from sparse data for
+the langauge model component of a speech recognizer. ieee transactions
+on acoustics, speech and signal processing, assp-35(3):400   401, march.
+
+[kernighan et al.1990] m.d. kernighan, k.w. church, and w.a. gale. 1990. a
+id147 program based on a id87. in proceedings
+of the thirteenth international conference on computational linguistics,
+pages 205   210.
+
+[kneser and ney1993] reinhard kneser and hermann ney. 1993.
+
+improved
+id91 techniques for class-based statistical id38. in eu-
+rospeech 93, volume 2, pages 973   976.
+
+[kneser and ney1995] reinhard kneser and hermann ney. 1995.
+
+improved
+backing-o    for m-gram id38. in proceedings of the ieee inter-
+national conference on acoustics, speech and signal processing, volume 1,
+pages 181   184.
+
+[kneser1996] reinhard kneser. 1996. statistical id38 using a
+
+variable context length. in icslp-96, volume 1, pages 494   497.
+
+[kuhn and de mori1990] r. kuhn and r. de mori. 1990. a cache-based natural
+ieee transactions on pattern
+
+language model for speech reproduction.
+analysis and machine intelligence, 12(6):570   583.
+
+[kuhn and de mori1992] r. kuhn and r. de mori. 1992. correction to a cache-
+based natural language model for speech reproduction. ieee transactions
+on pattern analysis and machine intelligence, 14(6):691   692.
+
+[kuhn1988] r. kuhn. 1988. id103 and the frequency of recently
+used words: a modi   ed markov model for natural language. in 12th interna-
+tional conference on computational linguistics, pages 348   350, budapest,
+august.
+
+57
+
+[kupiec1989] j. kupiec. 1989. probabilistic models of short and long distance
+word dependencies. in proc. arpa workshop on speech and natural lan-
+guage, pages 290   295.
+
+[mackay and peto1995] david j. c. mackay and linda c. peto. 1995. a hier-
+archical dirichlet language model. natural language engineering, 1(3):1   19.
+
+[martin et al.1999] sven martin, christoph hamacher, j  org liermann, frank
+wessel, and hermann ney. 1999. assessment of smoothing methods and
+complex stochastic id38.
+in 6th european conference on
+speech communication and technology, volume 5, pages 1939   1942, bu-
+dapest, hungary, september.
+
+[ney et al.1994] hermann ney, ute essen, and reinhard kneser. 1994. on
+structuring probabilistic dependences in stochastic id38.
+computer, speech, and language, 8:1   38.
+
+[niesler et al.1998] t. r. niesler, e. w. d. whittaker, and p. c. woodland.
+1998. comparison of part-of-speech and automatically derived category-
+based language models for id103.
+in icassp-98, volume 1,
+pages 177   180.
+
+[pereira et al.1993] fernando pereira, naftali tishby, and lillian lee. 1993. dis-
+tributional id91 of english words. in proceedings of the 31st annual
+meeting of the acl. to appear.
+
+[press et al.1988] w.h. press, b.p. flannery, s.a. teukolsky, and w.t. vetter-
+ling. 1988. numerical recipes in c. cambridge university press, cam-
+bridge.
+
+[rosenfeld et al.2001] ronald rosenfeld, stanley f. chen, and xiaojin zhu.
+2001. whole-sentence exponential language models: a vehicle for linguistic-
+statistical integration. computer speech and language. to appear.
+
+[rosenfeld1994] ronald rosenfeld. 1994. adaptive statistical language model-
+ing: a maximum id178 approach. ph.d. thesis, carnegie mellon univer-
+sity, april.
+
+[rosenfeld2000] ronald rosenfeld. 2000. two decades of statistical language
+modeling: where do we go from here? proc. of the ieee, 88:1270   1278,
+august.
+
+[saul and pereira1997] lawrence saul and fernando pereira. 1997. aggregate
+and mixed-order markov models for statistical language processing. in pro-
+ceedings of the second conference on empirical methods in natural lan-
+guage processing, pages 81   89.
+
+[seymore and rosenfeld1996] kristie seymore and ronald rosenfeld.
+
+1996.
+
+scalable backo    language models. in icslp   96.
+
+58
+
+[siu and ostendorf2000] manhung siu and mari ostendorf. 2000. variable n-
+grams and extensions for conversational speech id38. ieee
+transactions on speech and audio processing, 8:63   75.
+
+[srihari and baltus1992] rohini srihari and charlotte baltus. 1992. combin-
+ing statistical and syntactic methods in recognizing handwritten sentences.
+in aaai symposium: probabilistic approaches to natural language, pages
+121   127.
+
+[stern1996] richard m. stern. 1996. speci   cation of the 1995 arpa hub 3
+evaluation: unlimited vocabulary nab news baseline. in proceedings of the
+darpa id103 workshop, pages 5   7.
+
+[stolcke1998] andreas stolcke. 1998. id178-based pruning of backo    language
+models. in proc. darpa broadcast news transcription and understanding
+workshop, pages 270   274. see online version for corrections.
+
+[tillmann and ney1996] christoph tillmann and hermann ney. 1996. statisti-
+cal id38 and word triggers. in proceedings of the int. work-
+shop    speech and computer    (specom 96), pages 22   27, october.
+
+[ueberla1995] joeg p. ueberla. 1995. more e   cient id91 of id165s for
+
+statistical id38. in eurospeech-95, pages 1257   1260.
+
+[weng et al.1997] f. weng, a. stolcke, and a. sankar. 1997. hub4 language
+modeling using domain interpolation and data id91. in 1997 darpa
+id103 workshop, pages 147   151, february.
+
+[yamamoto and sagisaka1999] hirofumi yamamoto and yoshinori sagisaka.
+1999. multi-class composite id165 based on connection direction. in pro-
+ceedings of the ieee international conference on acoustics, speech and
+signal processing, phoenix, arizona, may.
+
+[zhang et al.2000] ruiqiang zhang, ezra black, andrew finch, and yoshinori
+sagisaka. 2000. integrating detailed information into a language model. in
+icassp-2000, pages 1595   1598.
+
+59
+
+a kneser-ney smoothing
+
+in this section, we    rst brie   y justify interpolated kneser-ney smoothing, giving
+a proof that helps explain why preserving marginals is useful. then, we give
+some implementation tips for kneser-ney smoothing.
+
+a.1 proof
+
+first, we give a short theoretical argument for why kneser-ney smoothing. most
+of our argument is actually given by chen and goodman (1999), derived from
+work done by kneser and ney (1995). we prove one additional fact that was
+previously an assumption, somewhat strengthening our argument. in particu-
+lar, we will show that any optimal smoothing algorithm must preserve known
+marginal distributions.
+
+first, we mention that it is impossible to prove that any smoothing tech-
+nique is optimal, without making at least a few assumptions. for instance, work
+by mackay and peto (1995) proves the optimality of a particular, simple inter-
+polated model, subject to the assumption of a dirichlet prior. here, we prove
+the optimality of kneser-ney smoothing, based on other assumptions. we note
+however, that the assumption of a dirichlet prior is probably, empirically, a bad
+one. the dirichlet prior is a bit odd, and, at least in our work on language
+modeling, does not seem to correspond well to reality. the assumptions we
+make are empirically based, rather than based on mathematical convenience.
+we note also that we are not aware of any case in which another smoothing
+method outperforms kneser-ney smoothing, which is another excellent piece of
+evidence.
+
+the argument for kneser-ney smoothing is as follows. first, absolute dis-
+counting empirically works reasonably well, and approximates the true discounts
+(which can be measured on real data.) second, interpolated techniques fairly
+consistently outperform backo    techniques, especially with absolute-discounting
+style smoothing. these are empirical facts based on many experiments (chen
+and goodman, 1999). next, chen and goodman (1999) and kneser and ney
+(1995) make an assumption that preserving marginal distributions is good. it is
+this assumption that we will prove below. finally, chen and goodman (1999)
+prove (following an argument of kneser and ney (1995)) that the smoothing
+technique that uses absolute discounting, interpolation, and preserves marginals
+is interpolated kneser-ney smoothing. thus, the contribution of this section is
+to prove what was previously an assumption, strengthening the argument for
+interpolated kneser-ney smoothing to one that relies on empirical facts and
+proofs derived from those facts, with only a very small amount of hand waving.
+we previously assumed that smoothing techniques that preserve marginal
+distributions (e.g. smoothing the bigram such that the unigram distribution is
+preserved) is a good thing. in this section, we prove that any modeling technique
+that does not preserve known marginal distributions can be improved by pre-
+serving those distributions. admittedly, when we smooth a kneser-ney bigram
+while preserving the observed unigram distribution, the observed unigram dis-
+
+60
+
+tribution is not the true unigram distribution; it is simply a good approximation
+to the true unigram.1516
+
+the proof is as follows. let p represent an estimated distribution, and let
+p represent the true id203. consider an estimated bigram distribution of
+
+the form p(z|y) such that for some z   , py p(z   |y)p (y) 6= p (z   ). then, we show
+
+that the id178 with respect to p is reduced by using a new distribution, with
+a multiplier   . we simply take the old distribution, multiply the id203 of
+p(z   |y) by   , and renormalize:
+
+p   (z|y) =(
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+p (z   ).
+
+it will turn out that the optimal value for    is the one such thatpy p   (z   |y)p (y) =
+
+the proof is as follows: consider the id178 of p    with respect to p . it will
+be convenient to measure id178 in nats instead of bits     that is, using e for
+the logarithm, instead of 2. (1 nat = 1
+
+ln 2 bits). the id178 in nats is
+
+   p (y, z) ln p   (z|y)
+
+xy,z
+
+consider the derivative of the id178 with respect to   .
+
+   p (y, z) ln p   (z|y)
+
+d
+
+d  xy,z
+
+=
+
+d
+
+d  xy,z
+
+   p (y, z) ln(
+ln(
+
+d
+d  
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+if z 6= z   
+if z = z   
+
+p (y, z)    
+
+= xy,z
+= xy,z
+
+= xy,z
+
+   p (y, z)
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+   p (y, z)
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+(
+
+(
+
+      
+   
+
+d
+
+d  (
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+d   (1+(     1)p(z   |y))
+
+    p(z|y) d
+(1+(     1)p(z   |y)) d
+
+(1+(     1)p(z   |y))2
+
+d     p(z   |y)     p(z   |y) d
+
+d   (1+(     1)p(z   |y))
+
+(1+(     1)p(z   |y))2
+
+if z 6= z   
+if z = z   
+
+15in fact, in practice, we smooth the unigram distribution with the uniform distribution
+
+because of its divergence from the true distribution.
+
+16this is the very small amount of hand waving. whether or not one agrees with this
+   proof   , it is certainly an improvement over the previous argument which was simply    pre-
+serving the marginal distribution is good.   
+
+61
+
+= xy,z
+
+= xy,z
+
+= xy,z
+
+   p (y, z)
+
+(
+
+p(z|y)
+
+1+(     1)p(z   |y)
+
+  p(z   |y)
+
+1+(     1)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+   p (y, z)
+
+if z 6= z   
+if z = z   
+
+1+(     1)p(z   |y)
+
+1+(     1)p(z   |y)
+
+p(z|y)
+
+  p(z   |y)
+
+(
+   p (y, z)(    
+
+p(z   |y)
+
+1+(     1)p(z   |y)
+
+1   p(z   |y)
+
+  (1+(     1)p(z   |y))
+
+now, if    = 1, this reduces to
+
+   p (y, z)(cid:26)    p(z   |y)
+
+1     p(z   |y)
+
+if z 6= z   
+if z = z   
+
+xy,z
+
+(     p(z|y)p(z   |y)
+
+(1+(     1)p(z   |y))2
+
+(1+(     1)p(z   |y))2
+
+(1+(     1)p(z   |y))p(z   |y)     p(z   |y)p(z   |y)
+
+if z 6= z   
+if z = z   
+
+(     p(z|y)p(z   |y)
+
+(1   p(z   |y))p(z   |y)
+(1+(     1)p(z   |y))2
+
+(1+(     1)p(z   |y))2
+
+if z 6= z   
+if z = z   
+
+if z 6= z   
+if z = z   
+
+=    p (z   ) +xy
+=    p (z   ) +xy
+=    p (z   ) +xy
+=    p (z   ) +xy
+
+p (z|y)p(z   |y)
+
+p (z|y)
+
+p (y)xz
+p (y)p(z   |y)xz
+
+p (y)p(z   |y)
+
+p (y)p(z   |y)
+
+which will be zero only when the true marginal, p (z   ) is equal to the marginal
+
+then the derivative will be < 0, meaning that we can decrease the id178 by
+
+of p. if py p (y)p(z   |y) > p (z   ), then the derivative will be > 0, meaning that
+we can decrease the id178 by decreasing   , and if py p (y)p(z   |y) < p (z   ),
+increasing   . thus, whenever py p (y)p(z   |y) 6= p (z   ), there will be some value
+
+of    other than 1 that leads to lower id178.
+
+this means that if we have some smoothing algorithm that does not preserve
+the known marginal distributions, we can modify the resulting distribution by
+multiplying it in such a way that the marginal is preserved. thus, any smoothing
+algorithm that does not preserve the known marginals is suboptimal.
+
+(notice that our argument was not really about smoothing, but just about
+preserving known marginal distributions in general. this argument is the same
+one used to justify maximum id178 models: the best model will be the one
+that preserves all the known marginals. thus, this proof is not really new; the
+only novel part is noticing that this fact applies to smoothing algorithms, as
+well as to other distributions.)
+
+a.2 implementing kneser-ney smoothing
+
+the formula for kneser-ney smoothing is a bit complex looking. however,
+the algorithm for actually    nding the counts for kneser-ney smoothing is ac-
+tually quite simple, requiring only trivial changes from interpolated absolute
+
+62
+
+discounting. in figure 16 we give the code for training an interpolated abso-
+lute discounting model, and in figure 17 we give the corresponding code for
+an interpolated kneser-ney model. the lines that change are marked with an
+asterisk (*)     notice that the only change is in the placement of two right curly
+braces (}). for completeness, figure 18 gives the code for testing either inter-
+polated absolute discounting or interpolated kneser-ney smoothing     the code
+is identical.
+
+b implementation notes
+
+while this paper makes a number of contributions, they are much less in the
+originality of the ideas, and much more in the completeness of the research: its
+thoroughness, size, combination, and optimality. this research was in many
+areas more thorough, than any other previous research: trying more variations
+on ideas; able to exceed previous size boundaries, such as examining 20-grams;
+able to combine more ideas; and more believable, because nearly all parameters
+were optimized jointly on heldout data. these contributions were made possible
+by a well designed tool, with many interesting implementation details.
+it is
+perhaps these implementation details that were the truly novel part of the work.
+in this section, we sketch some of the most useful implementation tricks
+
+needed to perform this work.
+
+b.1 store only what you need
+
+the single most important trick used here, part of which was previously used
+by chen and goodman (1999), was to store only those parameters that are
+actually needed for the models. in particular, the very    rst action the program
+takes is to read through the heldout and test data, and determine which counts
+will be needed to calculate the heldout and test probabilities. then, during
+the training phase, only the needed counts are recorded. note that the number
+of necessary counts may be much smaller than the total number of counts in
+the test data. for instance, for a test instance p (z|xy), we typically need to
+store all training counts c(xy   ). however, even this depends on the particular
+model type. for instance, for our baseline smoothing, simple interpolation, it is
+only necessary to know c(xy) and c(xyz) (as well as the lower order counts).
+this fact was useful in our implementation of caching, which used the baseline
+smoothing for e   ciency.
+
+for kneser-ney smoothing, things become more complex: for the trigram,
+we need to temporarily store c(xy   ) so that we can compute |{v|c(xyv) > 0}|.
+actually, we only need to store for each xyv whether we have seen it or not. since
+we do not need to store the actual count, we can save a fair amount of space.
+furthermore, once we know |{v|c(xyv) > 0}|, we can discard the table of which
+ones occurred. partially for this reason, when we calculate the parameters of our
+models, we do it in steps. for instance, for a skipping model that interpolates
+two di   erent kinds of trigrams, we    rst    nd the needed parameters for the    rst
+
+63
+
+# code for implementing interpolated absolute discounting
+# usage: discount training test
+# training data and test data are one word per line
+
+$discount = shift; # must be between 0 and 1
+$train = shift;
+$test = shift;
+
+$w2 = $w1 = "";
+
+open train, $train;
+while (<train>) {
+
+# for each line in the training data
+
+$w0 = $_;
+$td{$w2.$w1}++;
+if ($tn{$w2.$w1.$w0}++ == 0) { # increment trigram numerator
+
+# increment trigram denominator
+
+*
+
+}
+
+$tz{$w2.$w1}++;
+
+# if needed, increment trigram non-zero counts
+# this curly brace will move for kneser-ney
+
+$bd{$w1}++;
+# increment bigram denominator
+if ($bn{$w1.$w0}++==0){ # increment bigram numerator
+
+$bz{$w1}++;
+
+*
+
+}
+
+# if needed, increment bigram non-zero counts
+# this curly brace will move for kneser-ney
+
+$ud++;
+$un{$w0}++;
+
+# increment unigram denominator
+# increment unigram numerator
+
+$w2 = $w1;
+$w1 = $w0;
+
+}
+close train;
+
+figure 16: interpolated absolute discounting perl code
+
+64
+
+# code for implementing interpolated kneser-ney
+# usage: discount training test
+# training data and test data are one word per line
+
+$discount = shift; # must be between 0 and 1
+$train = shift;
+$test = shift;
+
+$w2 = $w1 = "";
+
+open train, $train;
+while (<train>) {
+
+# for each line in the training data
+
+$w0 = $_;
+$td{$w2.$w1}++;
+if ($tn{$w2.$w1.$w0}++ == 0) { # increment trigram numerator
+
+# increment trigram denominator
+
+$tz{$w2.$w1}++;
+
+# if needed, increment trigram non-zero counts
+
+$bd{$w1}++;
+if ($bn{$w1.$w0}++==0){ # increment bigram numerator
+
+# increment bigram denominator
+
+$bz{$w1}++;
+
+# if needed, increment bigram non-zero counts
+
+# increment unigram denominator
+# increment unigram numerator
+# this curly brace moved for kneser-ney
+# this curly brace moved for kneser-ney
+
+$ud++;
+$un{$w0}++;
+
+*
+*
+
+}
+
+}
+
+$w2 = $w1;
+$w1 = $w0;
+
+}
+close train;
+
+figure 17: interpolated kneser-ney perl code
+
+65
+
+$w2 = $w1 = "";
+
+open test, $test;
+while (<test>) {
+
+# for each line in the test data
+
+$w0 = $_;
+$unigram = $un{$w0} / $ud;
+if (defined($bd{$w1})) { # non-zero bigram denominator
+
+# compute unigram id203
+
+if (defined($bn{$w1.$w0})) { # non-zero bigram numerator
+
+$bigram = ($bn{$w1.$w0} - $discount) /
+
+$bd{$w1};
+
+} else {
+
+$bigram = 0;
+
+}
+$bigram = $bigram +
+
+$bz{$w1}* $discount / $bd{$w1} * $unigram;
+
+# now, add in the trigram id203 if it exists
+if (defined($td{$w2.$w1})) { # non-zero trigram denominator
+
+if (defined($tn{$w2.$w1.$w0})) { # non-zero trigram numerator
+
+$trigram = ($tn{$w2.$w1.$w0} - $discount) /
+
+$td{$w2.$w1};
+
+} else {
+
+$trigram = 0;
+
+}
+$trigram = $trigram +
+
+$tz{$w2.$w1} * $discount / $td{$w2.$w1} * $bigram;
+
+$id203 = $trigram;
+
+} else {
+
+$id203 = $bigram;
+
+}
+
+} else {
+
+$id203 = $unigram;
+
+}
+
+print "id203:\n $w0
+
+$w2
+
+$w1
+
+= $id203\n";
+
+$w2 = $w1;
+$w1 = $_;
+
+}
+close test;
+
+figure 18: testing code for interpolated absolute discounting or kneser-ney
+
+66
+
+model, then discard any parts of the model we no longer need, then    nd the
+parameters for the second model. this results in a very signi   cant savings in
+storage.
+
+one problem with this    store only what you need    technique is that it inter-
+acts poorly with katz smoothing. in particular, katz smoothing needs to know
+the discount parameters. recall that nr represents the number of id165s that
+occur r times, i.e.
+
+nr = |{wi   n+1...wi|c(wi   n+1...wi) = r}|
+
+and that the good-turing formula states that for any id165 that occurs r
+times, we should pretend that it occurs disc(r) times where
+
+disc(r) = (r + 1)
+
+nr+1
+nr
+
+on its face, computing the nr requires knowing all of the counts. however,
+typically, discounting is only done for counts that occur 5 or fewer times. in
+that case, we only need to know n1, n2, ..., n6. in fact, however, we do not need
+to know nr and nr+1 but only their ratio. this means that we can sample the
+counts and estimate their relative frequencies. by sampling the counts, we do
+not mean sampling the data: we mean sampling the counts. in particular, we
+de   ne a random function of a sequence of words (a simple hash function); we
+store the count for a sequence w1w2...wn if and only if hash(w1w2...wn) mod s =
+0, where s is picked in such a way that we get 25,000 to 50,000 counts. this
+does not save any time, since we still need to consider ever count c(w1w2...wn)
+but it saves a huge amount of space. in pilot experiments, the e   ect of this
+sampling on accuracy was negligible.
+
+one problem with the    store only what you need    technique is that it re-
+quires reading the test data. if there were a bug, then excellent (even perfect)
+performance could be achieved. it was therefore important to check that no
+such bugs were introduced. this can be done in various ways. for instance,
+we added an option to the program that would compute the id203 of all
+words, not just the words in the test data. we then veri   ed that the sum of
+the probabilities of all words was within roundo    error (10   9) of 1. we also
+veri   ed that the id203 of the correct word in the special score-everything
+mode was the same as the id203 in the normal mode. also, none of the
+individual results we report are extraordinarily good; all are in the same range
+as typically reported for these techniques. the only extraordinarily good result
+comes from combining all technique, and even here, the total improvement is
+less than the total of the individual improvements, implying it is well within the
+reasonable range. furthermore, when our code is used to rescore n-best lists, it
+reads through the lists and    gures out which counts are needed to score them.
+however, the n-best lists have no indication of which is the correct output. (a
+separate, standard program scores the output of our program against the cor-
+rect transcription.) since we get good improvement on n-best rescoring, and
+the improvement is consistent with the perplexity reductions, there is further
+
+67
+
+model
+
+distribution
+
+model
+
+list
+
+model
+
+backoff
+
+distribution
+
+interpolated
+distribution
+
+backoff
+absolute
+
+discounting
+
+katz
+
+interpolated
+
+absolute
+
+discounting
+
+interpolated
+
+kneser
+
+ney
+
+interpolated
+
+list
+
+multiplied
+
+list
+
+sentence
+
+list
+
+figure 19: class structure
+
+evidence that our implementation of    store only what you need    did not lead
+to any cheating.
+
+b.2 system architecture
+
+it turns out that id38 is an ideal place to use object oriented
+methods, and inheritance. in particular, our id38 tool was based
+on a virtual base class called model. the single most important member function
+of a model provides the id203 of a word or a cluster given a context. models
+have all sorts of other useful functions; for instance, they can return the set of
+parameters that can be optimized. they can go through the test data and
+determine which counts they will need. they can go through the training data
+and accumulate those counts.
+
+from this base class, we can construct all sorts of other subclasses. in par-
+ticular, we can construct models that store probabilities     distributionmodels
+    and models that contain other models     listmodels.
+
+the distributionmodels are, for instance, kneser-ney smoothed models,
+
+68
+
+katz smoothed models, simple interpolated models, and absolute discounting
+models. even within these models, there is some substructure; for instance, ab-
+solute discounting backo    models, kneser-ney backo    models, and katz models
+can share most of their code, while interpolated kneser-ney models and inter-
+polated absolute discounting models can also share code.
+
+the other type of model is a model containing other models. for instance,
+an interpolatemodel contains a list of other models, whose id203 it inter-
+polates. for clustered models of the form p (z|xy )    p (z|z), there is a model
+that contains a list of other models, and multiplies their probabilities. there
+is also a sentenceinterpolatemodel that contains a list of other models, and
+interpolates them at the sentence level, instead of the word level. all of these
+container type models have similar behavior in many ways, and much of their
+code can be shared as well.
+
+it was in part this architecture, providing a set of basic building blocks and
+tools for combining them, that allowed so many di   erent experiments to be
+performed.
+
+b.3 parameter search
+
+another key tool was our parameter search engine. in many cases, it is possible
+to    nd em algorithms to estimate the various parameters of models. in other
+cases it is possible to    nd good theoretical approximate closed form solutions,
+using leaving-one-out, such as for discounting parameters. but for the large
+number of di   erent models used here, this approach would have lead to endless
+coding, and, for some of the more complex model types, perhaps to suboptimal
+parameter settings. instead, we used powell   s method (press et al., 1988) to
+search all parameters of our models. this had many advantages. first, there
+are some parameters, such as    in katz smoothing, that are hard to    nd except
+through a general search procedure. second, it meant that we could optimize
+all parameters jointly, rather than separately. for instance, consider a skipping
+model that interpolates two models together. we could, traditionally, optimize
+the smoothing parameters for one model, optimize the smoothing parameters
+for the other model, and then    nd the optimal interpolation interpolation of
+the two models, without reestimating the smoothing parameters. instead, we
+   nd jointly optimal settings. of course, like all id119 techniques,
+the parameters we    nd are probably only locally optimal, but that is still an
+improvement over traditional techniques.
+
+we used certain tricks to speed up and improve the parameter search. while
+in theory powell search should always    nd local minima, it can run into certain
+problems. consider interpolating two distributions,   p1(w) + (1       )p2(w).
+imagine that the parameters for p2 have not yet been optimized. now, the
+powell search routine optimizes   . since p2 is awful,    is set at 1 or nearly 1.
+eventually, the routine searches the parameters of p2, but,    nding essentially
+no e   ect from changing these parameters, quickly gives up searching them.
+instead, we search interpolation parameters last, and start with all distributions
+interpolated evenly. this ensures that each distribution has its parameters
+
+69
+
+optimized.
+
+furthermore, searching the parameters of p2 interpolated with p1 is slow,
+since both distributions must be evaluated. we typically search the parameters
+of each one separately    rst, potentially halving the computation. only once
+each one is optimized do we optimize them jointly, but since they are often
+already nearly optimal this search goes faster. in the case of two distributions,
+the savings may be small, but in the case of 10, it may be almost an order of
+magnitude. this technique must however be used with care, since sometimes
+the optimal settings of one distribution di   er wildly from their settings when
+combined. in particular, with sentence mixture models, we found that an indi-
+vidual mixture component might signi   cantly oversmooth, unless it was trained
+jointly.
+
+b.4 id91
+
+there is no shortage of techniques for generating clusters, and there appears
+to be little evidence that di   erent techniques that optimize the same criterion
+result in a signi   cantly di   erent quality of clusters. we note, however, that
+di   erent algorithms may require signi   cantly di   erent amounts of run time. we
+used several techniques to speed up our id91 signi   cantly.
+the basic criterion we followed was to minimize id178.
+
+in particular,
+assume that the model we are using is of the form p (z|y ); we want to    nd the
+placement of words y into clusters y that minimizes the id178 of this model.
+this is typically done by swapping words between clusters whenever such a swap
+reduces the id178.
+
+the    rst important approach we took for speeding up id91 was to use
+a top-down approach. we note that agglomerative id91 algorithms     those
+which merge words bottom up     may require signi   cantly more time than top-
+down, splitting algorithms. thus, our basic algorithm is top-down. however, at
+the end, we perform four iterations of swapping all words between all clusters.
+this    nal swapping is typically the most time consuming part of the algorithm.
+another technique we use is buckshot (cutting et al., 1992). the basic
+idea is that even with a small number of words, we are likely to have a good
+estimate of the parameters of a cluster. so, we proceed top down, splitting
+clusters. when we are ready to split a cluster, we randomly pick a few words,
+and put them into two random clusters, and then swap them in such a way
+that id178 is decreased, until convergence (no more decrease can be found).
+
+then we add a few more words, typicallyp(2) more, and put each into the best
+
+bucket, then swap again until convergence. this is repeated until all words in the
+current cluster have been added and split. we haven   t tested this particularly
+thoroughly, but our intuition is that it should lead to large speedups.
+
+we use one more important technique that speeds computations, adapted
+from earlier work of brown et al. (1992). we attempt to minimize the id178
+of our clusters. let v represent words in the vocabulary, and w represent a
+
+70
+
+potential cluster. we minimize
+
+c(w v) log p (v|w )
+
+xv
+
+the inner loop of this minimization considers adding (or removing) a word x to
+cluster w . what will the new id178 be? on it   s face, this would appear to
+require computation proportional to the vocabulary size to recompute the sum.
+however, letting the new cluster, w + x be called x,
+
+xv
+
+c(xv) log p (v|x) =xv|c(xv)6=0
+
+c(xv) log p (v|x) +xv|c(xv)=0
+
+c(xv) log p (v|x) (10)
+
+the    rst summation in equation 10 can be computed relatively e   ciently, in
+time proportional to the number of di   erent words that follow x; it is the second
+summation that needs to be transformed:
+
+c(xv) log p (v|x)
+
+xv|c(xv)=0
+= xv|c(xv)=0
+= xv|c(xv)=0
+
+c(w )
+
+c(x)(cid:19)
+c(w v) log(cid:18)p (v|w )
+c(w v) log p (v|w ) +(cid:18)log
+
+c(w )
+
+c(x)(cid:19) xv|c(xv)=0
+
+c(w v)
+
+(11)
+
+now, notice that
+
+xv|c(xv)=0
+
+c(w v) log p (v|w ) =xv
+
+c(w v) log p (v|w )    xv|c(xv)6=0
+
+c(w v) log p (v|w )
+
+(12)
+
+(13)
+
+and that
+
+xv|c(xv)=0
+
+c(w v) =   
+
+   c(w )     xv|c(xv)6=0
+
+c(w v)   
+   
+
+substituting equations 12 and 13 into equation 11, we get
+
+c(xv) log p (v|x)
+
+xv|c(xv)=0
+= xv
+
+c(w v) log p (v|w )
+
+c(w v) log p (v|w )     xv|c(xv)6=0
+c(x)(cid:19)   
+   c(w )     xv|c(xv)6=0
+
+c(w )
+
++(cid:18)log
+
+c(w v)   
+   
+
+now, notice that pv c(w v) log p (v|w ) is just the old id178, before adding
+
+x. assuming that we have precomputed/recorded this value, all the other sum-
+mations only sum over words v for which c(xv) > 0, which, in many cases, is
+much smaller than the vocabulary size.
+
+71
+
+py , zp (y z) log p (y |z)
+
+many other id91 techniques (brown et al., 1992) attempt to maximize
+(z), where the same clusters are used for both. the
+original speedup formula uses this version, and is much more complex to mini-
+mize. using di   erent clusters for di   erent positions not only leads to marginally
+lower id178, but also leads to simpler id91.
+
+p
+
+b.5 smoothing
+
+although all smoothing algorithms were reimplemented for this research, the
+details closely follow chen and goodman (1999). this includes our use of
+additive smoothing of the unigram distribution for both katz smoothing and
+kneser-ney smoothing. that is, we found a constant b which was added to
+all unigram counts; this leads to better performance in small training-data sit-
+uations, and allowed us to compare perplexities across di   erent training sizes,
+since no unigram received 0 counts, meaning 0 probabilities were never returned.
+for katz smoothing, we found a maximum count to discount, based on when
+data sparsity prevented good estimates of the discount. as is typically done,
+we corrected the lower discounts so that the total id203 mass for 0 counts
+was unchanged by the cuto   , and we also included a parameter   , which was
+added to a distribution whenever no counts were discounted.
+
+we used a novel technique for getting the counts for katz smoothing. as
+described in appendix b.1, we do not record all counts, but only those needed
+for our experiments. this is problematic for katz smoothing, where we need
+counts of counts (n1, n2, etc.) in order to compute the discounts. actually, all
+we really need is the ratio between these counts. we use a statistical sampling
+technique, in which we randomly sample 25,000 to 50,000 counts (not word
+histories, but actual counts); this allows us to accurately estimate the needed
+ratios, with much less storage.
+
+72
+
+

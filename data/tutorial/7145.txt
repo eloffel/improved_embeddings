@@ -1,0 +1,336 @@
+   #[1]apple machine learning journal
+
+[2]machine learning journal[3]     machine learning journal
+
+an on-device deep neural network for face detection
+
+   vol. 1, issue 7     november 2017 november two thousand seventeen by
+   id161 machine learning team
+     __________________________________________________________________
+
+   apple started using deep learning for face detection in ios 10. with
+   the release of the vision framework, developers can now use this
+   technology and many other id161 algorithms in their apps. we
+   faced significant challenges in developing the framework so that we
+   could preserve user privacy and run efficiently on-device. this article
+   discusses these challenges and describes the face detection algorithm.
+
+introduction
+
+   apple first released face detection in a public api in the core image
+   framework through the cidetector class. this api was also used
+   internally by apple apps, such as photos. the earliest release of
+   cidetector used a method based on the viola-jones detection algorithm
+   [4][1]. we based subsequent improvements to cidetector on advances in
+   traditional id161.
+
+   with the advent of deep learning, and its application to computer
+   vision problems, the state-of-the-art in face detection accuracy took
+   an enormous leap forward. we had to completely rethink our approach so
+   that we could take advantage of this paradigm shift. compared to
+   traditional id161, the learned models in deep learning
+   require orders of magnitude more memory, much more disk storage, and
+   more computational resources.
+
+   as capable as today   s mobile phones are, the typical high-end mobile
+   phone was not a viable platform for deep-learning vision models. most
+   of the industry got around this problem by providing deep-learning
+   solutions through a cloud-based api. in a cloud-based solution, images
+   are sent to a server for analysis using deep learning id136 to
+   detect faces. cloud-based services typically use powerful desktop-class
+   gpus with large amounts of memory available. very large network models,
+   and potentially ensembles of large models, can run on the server side,
+   allowing clients (which could be mobile phones) to take advantage of
+   large deep learning architectures that would be impractical to run
+   locally.
+
+   apple   s icloud photo library is a cloud-based solution for photo and
+   video storage. however, due to apple   s strong commitment to user
+   privacy, we couldn   t use icloud servers for id161
+   computations. every photo and video sent to icloud photo library is
+   encrypted on the device before it is sent to cloud storage, and can
+   only be decrypted by devices that are registered with the icloud
+   account. therefore, to bring deep learning based id161
+   solutions to our customers, we had to address directly the challenges
+   of getting deep learning algorithms running on iphone.
+
+   we faced several challenges. the deep-learning models need to be
+   shipped as part of the operating system, taking up valuable nand
+   storage space. they also need to be loaded into ram and require
+   significant computational time on the gpu and/or cpu. unlike
+   cloud-based services, whose resources can be dedicated solely to a
+   vision problem, on-device computation must take place while sharing
+   these system resources with other running applications. finally, the
+   computation must be efficient enough to process a large photos library
+   in a reasonably short amount of time, but without significant power
+   usage or thermal increase.
+
+   the rest of this article discusses our algorithmic approach to
+   deep-learning-based face detection, and how we successfully met the
+   challenges to achieve state-of-the-art accuracy. we discuss:
+     * how we fully leverage our gpu and cpu (using bnns and metal)
+     * memory optimizations for network id136, and image loading and
+       caching
+     * how we implemented the network in a way that did not interfere with
+       the multitude of other simultaneous tasks expected of iphone.
+
+moving from viola-jones to deep learning
+
+   in 2014, when we began working on a deep learning approach to detecting
+   faces in images, deep convolutional networks (dcn) were just beginning
+   to yield promising results on id164 tasks. most prominent
+   among these was an approach called    overfeat    [5][2] which popularized
+   some simple ideas that showed dcns to be quite efficient at scanning an
+   image for an object.
+
+   overfeat drew the equivalence between fully connected layers of a
+   neural network and convolutional layers with valid convolutions of
+   filters of the same spatial dimensions as the input. this work made
+   clear that a binary classification network of a fixed receptive field
+   (for example 32x32, with a natural stride of 16 pixels) could be
+   efficiently applied to an arbitrary sized image (for example, 320x320)
+   to produce an appropriately sized output map (20x20 in this example).
+   the overfeat paper also provided clever recipes to produce denser
+   output maps by effectively reducing the network stride.
+
+   we built our initial architecture based on some of the insights from
+   the overfeat paper, resulting in a fully convolutional network (see
+   figure 1) with a multitask objective comprising of:
+     * a binary classification to predict the presence or absence of a
+       face in the input, and
+     * a regression to predict the bounding box parameters that best
+       localized the face in the input.
+
+   we experimented with several ways of training such a network. for
+   example, a simple procedure for training is to create a large dataset
+   of image tiles of a fixed size corresponding to the smallest valid
+   input to the network such that each tile produces a single output from
+   the network. the training dataset is ideally balanced, so that half of
+   the tiles contain a face (positive class) and the other half do not
+   contain a face (negative class). for each positive tile, we provide the
+   true location (x, y, w, h) of the face. we train the network to
+   optimize the multitask objective described previously. once trained,
+   the network is able to predict whether a tile contains a face, and if
+   so, it also provides the coordinates and scale of the face in the tile.
+   figure 1. a revised dcn architecture for face detection [6]a revised
+   dcn architecture for face detection.
+
+   since the network is fully convolutional, it can efficiently process an
+   arbitrary sized image and produce a 2d output map. each point on the
+   map corresponds to a tile in the input image and contains the
+   prediction from the network regarding the presence of or absence of a
+   face in that title and its location/scale within the input tile (see
+   inputs and outputs of dcn in figure 1).
+
+   given such a network, we could then build a fairly standard processing
+   pipeline to perform face detection, consisting of a multi-scale image
+   pyramid, the face detector network, and a post-processing module. we
+   needed a multi-scale pyramid to handle faces across a wide range of
+   sizes. we apply the network to each level of the pyramid and candidate
+   detections are collected from each layer. (see figure 2.) the post
+   processing module then combines these candidate detections across
+   scales to produce a list of bounding boxes that correspond to the
+   network   s final prediction of the faces in the image.
+   figure 2. face detection workflow. [7]face detection workflow.
+
+   this strategy brought us closer to running a deep convolutional network
+   on device to exhaustively scan an image. but network complexity and
+   size remained key bottlenecks to performance. overcoming this challenge
+   meant not only limiting the network to a simple topology, but also
+   restricting the number of layers of the network, the number of channels
+   per layer, and the kernel size of the convolutional filters. these
+   restrictions raised a crucial problem: our networks that were producing
+   acceptable accuracy were anything but simple, most going over 20 layers
+   and consisting of several network-in-network [8][3] modules. using such
+   networks in the image scanning framework described previously would be
+   completely infeasible. they led to unacceptable performance and power
+   usage. in fact, we would not even be able to load the network into
+   memory. the challenge then was how to train a simple and compact
+   network that could mimic the behavior of the accurate but highly
+   complex networks.
+
+   we decided to leverage an approach, informally called    teacher-student   
+   training[9][4]. this approach provided us a mechanism to train a second
+   thin-and-deep network (the    student   ), in such a way that it matched
+   very closely the outputs of the big complex network (the    teacher   )
+   that we had trained as described previously. the student network was
+   composed of a simple repeating structure of 3x3 convolutions and
+   pooling layers and its architecture was heavily tailored to best
+   leverage our neural network id136 engine. (see figure 1.)
+
+   now, finally, we had an algorithm for a deep neural network for face
+   detection that was feasible for on-device execution. we iterated
+   through several rounds of training to obtain a network model that was
+   accurate enough to enable the desired applications. while this network
+   was accurate and feasible, a tremendous amount of work still remained
+   to make it practical for deploying on millions of user devices.
+
+optimizing the image pipeline
+
+   practical considerations around deep learning factored heavily into our
+   design choices for an easy-to-use framework for developers, which we
+   call vision. it became quickly apparent that great algorithms are not
+   enough for creating a great framework. we had to have a highly
+   optimized imaging pipeline.
+
+   we did not want developers to think about scaling, color conversions,
+   or image sources. face detection should work well whether used in live
+   camera capture streams, video processing, or processing of images from
+   disc or the web. it should work regardless of image representation and
+   format.
+
+   we were concerned with power consumption and memory usage, especially
+   for streaming and image capture. we worried about memory footprint,
+   such as the large one needed for a 64 megapixel panorama. we addressed
+   these concerns by using techniques of partial subsampled decoding and
+   automatic tiling to perform id161 tasks on large images even
+   with non-typical aspect ratios.
+
+   another challenge was colorspace matching. apple has a broad set of
+   colorspace apis but we did not want to burden developers with the task
+   of color matching. the vision framework handles color matching, thus
+   lowering the threshold for a successful adoption of id161
+   into any app.
+
+   vision also optimizes by efficient handling and reuse of intermediates.
+   face detection, face landmark detection, and a few other computer
+   vision tasks work from the same scaled intermediate image. by
+   abstracting the interface to the algorithms and finding a place of
+   ownership for the image or buffer to be processed, vision can create
+   and cache intermediate images to improve performance for multiple
+   id161 tasks without the need for the developer to do any
+   work.
+
+   the flip side was also true. from the central interface perspective, we
+   could drive the algorithm development into directions that allow for
+   better reusing or sharing of intermediates. vision hosts several
+   different, and independent, id161 algorithms. for the various
+   algorithms to work well together, implementations use input resolutions
+   and color spaces that are shared across as many algorithms as possible
+
+optimizing for on-device performance
+
+   the joy of ease-of-use would quickly dissipate if our face detection
+   api were not able to be used both in real time apps and in background
+   system processes. users want face detection to run smoothly when
+   processing their photo libraries for face recognition, or analyzing a
+   picture immediately after a shot. they don   t want the battery to drain
+   or the performance of the system to slow to a crawl. apple   s mobile
+   devices are multitasking devices. background id161 processing
+   therefore shouldn   t significantly impact the rest of the system   s
+   features.
+
+   we implement several strategies to minimize memory footprint and gpu
+   usage. to reduce memory footprint, we allocate the intermediate layers
+   of our neural networks by analyzing the compute graph. this allows us
+   to alias multiple layers to the same buffer. while being fully
+   deterministic, this technique reduces memory footprint without
+   impacting the performance or allocations fragmentation, and can be used
+   on either the cpu or gpu.
+
+   for vision, the detector runs 5 networks (one for each image pyramid
+   scale as shown in figure 2). these 5 networks share the same weights
+   and parameters, but have different shapes for their input, output, and
+   intermediate layers. to reduce footprint even further, we run the
+   liveness-based memory optimization algorithm on the joint graph
+   composed by those 5 networks, significantly reducing the footprint.
+   also, the multiple networks reuse the same weight and parameter
+   buffers, thus reducing memory needs.
+
+   to achieve better performance, we exploit the fully convolutional
+   nature of the network: all the scales are dynamically resized to match
+   the resolution of the input image. compared to fitting the image in
+   square network retinas (padded by void bands), fitting the network to
+   the size of the image allows us to reduce drastically the number of
+   total operations. because the topology of the operation is not changed
+   by the reshape and the high performance of the rest of the allocator,
+   dynamic reshaping does not introduce performance overhead related to
+   allocation.
+
+   to ensure ui responsiveness and fluidity while deep neural networks run
+   in background, we split gpu work items for each layer of the network
+   until each individual time is less than a millisecond. this allows the
+   driver to switch contexts to higher priority tasks in a timely manner,
+   such as ui animations, thus reducing and sometimes eliminating frame
+   drop.
+
+   combined, all these strategies ensure that our users can enjoy local,
+   low-latency, private deep learning id136 without being aware that
+   their phone is running neural networks at several hundreds of gigaflops
+   per second.
+
+using vision framework
+
+   did we accomplish what we set as our goal of developing a performant,
+   easy-to-use, face detection api? you can try the vision framework and
+   judge for yourself. here   s how to get started:
+     * watch the wwdc presentation: [10]vision framework: building on core
+       ml.
+     * read the [11]vision framework reference.
+     * try out the core ml and vision: machine learning in ios 11
+       tutorial. [12][5]
+
+references
+
+   [1] viola, p. and jones, m.j. robust real-time id164 using a
+   boosted cascade of simple features. in proceedings of the computer
+   vision and pattern recognition conference, 2001.
+
+   [2] sermanet, pierre, david eigen, xiang zhang, michael mathieu, rob
+   fergus, and yann lecun. [13]overfeat: integrated recognition,
+   localization and detection using convolutional networks.
+   arxiv:1312.6229 [cs], december, 2013.
+
+   [3] lin, min, qiang chen, and shuicheng yan. [14]network in network.
+   arxiv:1312.4400 [cs], december, 2013.
+
+   [4] romero, adriana, nicolas ballas, samira ebrahimi kahou, antoine
+   chassang, carlo gatta, and yoshua bengio. [15]fitnets: hints for thin
+   deep nets. arxiv:1412.6550 [cs], december, 2014.
+
+   [5] tam, a. [16]core ml and vision: machine learning in ios tutorial.
+   retrieved from [17]https://www.raywenderlich.com, september, 2017.
+
+contact us
+
+   [18]send questions or feedback via email
+
+jobs at apple
+
+   [19]apply now for a career at apple
+
+tools for innovation
+
+   [20]apple developer program
+
+   [21]    copyright    2018 apple inc. all rights reserved. copyright two
+   thousand seventeen apple inc. all rights reserved.
+   [22]subscribe [23]privacy policy [24]terms of use [25]legal
+
+references
+
+   1. https://machinelearning.apple.com/feed.xml
+   2. https://machinelearning.apple.com/
+   3. https://machinelearning.apple.com/
+   4. https://machinelearning.apple.com/2017/11/16/face-detection.html#1
+   5. https://machinelearning.apple.com/2017/11/16/face-detection.html#2
+   6. https://machinelearning.apple.com/images/journals/face-detection/face-detection-dcn.png
+   7. https://machinelearning.apple.com/images/journals/face-detection/face-detection-workflow.png
+   8. https://machinelearning.apple.com/2017/11/16/face-detection.html#3
+   9. https://machinelearning.apple.com/2017/11/16/face-detection.html#4
+  10. https://developer.apple.com/videos/play/wwdc2017/506/
+  11. https://developer.apple.com/documentation/vision
+  12. https://machinelearning.apple.com/2017/11/16/face-detection.html#5
+  13. http://arxiv.org/abs/1312.6229
+  14. http://arxiv.org/abs/1312.4400
+  15. http://arxiv.org/abs/1412.6550
+  16. https://www.raywenderlich.com/164213/coreml-and-vision-machine-learning-in-ios-11-tutorial
+  17. https://www.raywenderlich.com/
+  18. mailto:machine-learning@apple.com
+  19. https://www.apple.com/jobs/
+  20. https://developer.apple.com/
+  21. https://www.apple.com/
+  22. https://machinelearning.apple.com/feed.xml
+  23. https://www.apple.com/privacy/privacy-policy/
+  24. https://www.apple.com/legal/internet-services/terms/site.html
+  25. https://www.apple.com/legal/

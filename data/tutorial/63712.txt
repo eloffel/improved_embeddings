@@ -1,0 +1,222 @@
+   #[1]gist [2]atom
+
+   [3]skip to content
+   ____________________
+
+     * [4]all gists
+     * [5]back to github
+
+   [6]sign up for a github account [7]sign in
+
+   instantly share code, notes, and snippets.
+
+[8]@neubig [9]neubig/[10]dynet-tagger.py
+
+   last active may 21, 2018
+     * [11]star [12]11
+     * [13]fork [14]6
+
+   [15]code [16]revisions 2 [17]stars 11 [18]forks 6
+   embed
+   what would you like to do?
+   (<script src="https://gist.github.com/neubig/7d874d327e7d700bb609479f6c
+   f359bb.js"></script>)
+   embed embed this gist in your website.
+   (https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb)
+   share copy sharable link for this gist.
+   (https://gist.github.com/7d874d327e7d700bb609479f6cf359bb.git)
+   clone via https clone with git or checkout with svn using the
+   repository   s web address.
+   learn more about clone urls
+   <script src="https:/
+   [19]download zip
+   a small sequence labeler in dynet
+   [20]raw
+   [21]dynet-tagger.py
+   """
+   dynet implementation of a sequence labeler (pos taggger).
+   this is a translation of this tagger in pytorch:
+   https://gist.github.com/hal3/8c170c4400576eb8d0a8bd94ab231232
+   basic architecture:
+   - take words
+   - run though bidirectional gru
+   - predict labels one word at a time (left to right), using a recurrent
+   neural network "decoder"
+   the decoder updates hidden state based on:
+   - most recent word
+   - the previous action (aka predicted label).
+   - the previous hidden state
+   wall-clock time for pytorch: 14.309s
+   wall-clock time for dynet: 1.749s
+   """
+   from __future__ import division
+   import random
+   import pickle
+   import dynet as dy
+   import numpy as np
+   def reseed(seed=90210):
+   random.seed(seed)
+   # torch.manual_seed(seed)
+   reseed()
+   class example(object):
+   def __init__(self, tokens, labels, n_labels):
+   self.tokens = tokens
+   self.labels = labels
+   self.n_labels = n_labels
+   def minibatch(data, minibatch_size, reshuffle):
+   if reshuffle:
+   random.shuffle(data)
+   for n in xrange(0, len(data), minibatch_size):
+   yield data[n:n+minibatch_size]
+   def bi_gru(f_gru, b_gru, embed):
+   f_emb = f_gru.initial_state().transduce(embed)
+   b_emb = reversed(b_gru.initial_state().transduce(reversed(embed)))
+   return [dy.concatenate([f,b]) for f,b in zip(f_emb,b_emb)]
+   def test_wsj():
+   print
+   print '# test on wsj subset'
+   data, n_types, n_labels = pickle.load(open('wsj.pkl', 'r'))
+   d_emb = 50
+   d_id56 = 51
+   d_hid = 52
+   d_actemb = 5
+   minibatch_size = 5
+   n_epochs = 10
+   preprocess_minibatch = true
+   model = dy.parametercollection()
+   embed_word = model.add_lookup_parameters((n_types, d_emb))
+   f_gru = dy.grubuilder(1, d_emb, d_id56, model)
+   b_gru = dy.grubuilder(1, d_emb, d_id56, model)
+   embed_action = model.add_lookup_parameters((n_labels, d_actemb))
+   combine_arh_w = model.add_parameters((d_hid, d_actemb + d_id56 * 2 +
+   d_hid))
+   combine_arh_b = model.add_parameters(d_hid)
+   initial_h = model.add_parameters(d_hid, dy.constinitializer(0))
+   initial_actemb = model.add_parameters(d_actemb, dy.constinitializer(0))
+   policy_w = model.add_parameters((n_labels, d_hid))
+   policy_b = model.add_parameters(n_labels)
+   optimizer = dy.adamtrainer(model, alpha=0.01)
+   for _ in xrange(n_epochs):
+   total_loss = 0
+   for batch in minibatch(data, minibatch_size, true):
+   dy.renew_cg()
+   combine_arh_we = dy.parameter(combine_arh_w)
+   combine_arh_be = dy.parameter(combine_arh_b)
+   policy_we = dy.parameter(policy_w)
+   policy_be = dy.parameter(policy_b)
+   loss = 0
+   if preprocess_minibatch:
+   # for efficiency, combine id56 outputs on entire
+   # minibatch in one go (requires padding with zeros,
+   # should be masked but isn't right now)
+   all_tokens = [ex.tokens for ex in batch]
+   max_length = max(map(len, all_tokens))
+   all_tokens = [[x[i] if len(x) > i else 0 for x in all_tokens] for i in
+   range(max_length)]
+   all_e = [dy.lookup_batch(embed_word, x) for x in all_tokens]
+   all_id56_out = bi_gru(f_gru, b_gru, all_e)
+   losses = []
+   for batch_id, ex in enumerate(batch):
+   n = len(ex.tokens)
+   if preprocess_minibatch:
+   id56_out = [dy.pick_batch_elem(x, batch_id) for x in all_id56_out[:n]]
+   else:
+   e = [embed_word[x] for x in ex.tokens]
+   id56_out = bi_gru(f_gru, b_gru, e)
+   prev_h = dy.parameter(initial_h) # previous hidden state
+   actemb = dy.parameter(initial_actemb) # embedding of previous action
+   output = []
+   for t in xrange(n):
+   # update hidden state based on most recent
+   # *predicted* action (not ground truth)
+   inputs = [actemb, prev_h, id56_out[t]]
+   h = dy.rectify(dy.affine_transform([combine_arh_be, combine_arh_we,
+   dy.concatenate(inputs)]))
+   # make prediction
+   pred_vec = dy.affine_transform([policy_be, policy_we, h])
+   pred = pred_vec.npvalue().argmin()
+   output.append(pred)
+   # accumulate loss (squared error against costs)
+   truth = np.ones(n_labels)
+   truth[ex.labels[t]] = 0
+   losses.append(dy.squared_distance(pred_vec, dy.inputtensor(truth)))
+   # cache hidden state, previous action embedding
+   prev_h = h
+   actemb = embed_action[pred]
+   # print 'output=%s, truth=%s' % (output, ex.labels)
+   loss = dy.esum(losses)
+   loss.backward()
+   total_loss += loss.value()
+   optimizer.update()
+   print total_loss
+   if __name__ == '__main__':
+   test_wsj()
+   [22]sign up for free to join this conversation on github. already have
+   an account? [23]sign in to comment
+
+     *    2019 github, inc.
+     * [24]terms
+     * [25]privacy
+     * [26]security
+     * [27]status
+     * [28]help
+
+     * [29]contact github
+     * [30]pricing
+     * [31]api
+     * [32]training
+     * [33]blog
+     * [34]about
+
+   (button) you can   t perform that action at this time.
+
+   you signed in with another tab or window. [35]reload to refresh your
+   session. you signed out in another tab or window. [36]reload to refresh
+   your session.
+
+   (button)
+
+references
+
+   visible links
+   1. https://gist.github.com/opensearch-gist.xml
+   2. https://gist.github.com/neubig.atom
+   3. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb#start-of-content
+   4. https://gist.github.com/discover
+   5. https://github.com/
+   6. https://gist.github.com/join?source=header-gist
+   7. https://gist.github.com/auth/github?return_to=https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+   8. https://gist.github.com/neubig
+   9. https://gist.github.com/neubig
+  10. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+  11. https://gist.github.com/login?return_to=https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+  12. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/stargazers
+  13. https://gist.github.com/login?return_to=https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+  14. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/forks
+  15. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+  16. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/revisions
+  17. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/stargazers
+  18. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/forks
+  19. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/archive/f71f4e23278bfc48789da0f39224c7b442f6a0a1.zip
+  20. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb/raw/f71f4e23278bfc48789da0f39224c7b442f6a0a1/dynet-tagger.py
+  21. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb#file-dynet-tagger-py
+  22. https://gist.github.com/join?source=comment-gist
+  23. https://gist.github.com/login?return_to=https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+  24. https://github.com/site/terms
+  25. https://github.com/site/privacy
+  26. https://github.com/security
+  27. https://githubstatus.com/
+  28. https://help.github.com/
+  29. https://github.com/contact
+  30. https://github.com/pricing
+  31. https://developer.github.com/
+  32. https://training.github.com/
+  33. https://github.blog/
+  34. https://github.com/about
+  35. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+  36. https://gist.github.com/neubig/7d874d327e7d700bb609479f6cf359bb
+
+   hidden links:
+  38. https://gist.github.com/
+  39. https://help.github.com/articles/which-remote-url-should-i-use
+  40. https://github.com/

@@ -1,0 +1,1249 @@
+6
+1
+0
+2
+
+ 
+
+n
+a
+j
+ 
+
+1
+2
+
+ 
+ 
+]
+i
+
+a
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+5
+6
+9
+0
+0
+
+.
+
+2
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+neural enquirer: learning to query tables with natural
+
+language
+
+pengcheng yin       zhengdong lu    hang li    ben kao   
+
+   dept. of computer science
+the university of hong kong
+{pcyin, kao}@cs.hku.hk
+
+   noah   s ark lab, huawei technologies
+
+{lu.zhengdong, hangli.hl}@huawei.com
+
+abstract
+
+we proposed neural enquirer as a neural network architecture to execute a natu-
+ral language (nl) query on a knowledge-base (kb) for answers. basically, neural en-
+quirer    nds the distributed representation of a query and then executes it on knowledge-
+base tables to obtain the answer as one of the values in the tables. unlike similar e   orts in
+end-to-end training of semantic parsers [11, 9], neural enquirer is fully    neuralized   :
+it not only gives distributional representation of the query and the knowledge-base, but
+also realizes the execution of compositional queries as a series of di   erentiable operations,
+with intermediate results (consisting of annotations of the tables at di   erent levels) saved
+on multiple layers of memory. neural enquirer can be trained with id119,
+with which not only the parameters of the controlling components and id29
+component, but also the embeddings of the tables and query words can be learned from
+scratch. the training can be done in an end-to-end fashion, but it can take stronger
+guidance, e.g., the step-by-step supervision for complicated queries, and bene   t from it.
+neural enquirer is one step towards building neural network systems which seek to
+understand language by executing it on real-world. our experiments show that neu-
+ral enquirer can learn to execute fairly complicated nl queries on tables with rich
+structures.
+
+1 introduction
+
+in models for natural language dialogue and id53, there is ubiquitous need for
+querying a knowledge-base [13, 11]. the traditional pipeline is to put the query through a
+semantic parser to obtain some    executable    representations, typically logical forms, and then
+apply this representation to a knowledge-base for the answer. both the id29 and
+the query execution part can get quite messy for complicated queries like   q:    which city
+hosted the longest game before the game in beijing?     in figure 1, and need carefully devised
+systems with hand-crafted features or rules to derive the correct logical form   f (written in
+sql-like style). partially to overcome this di   culty, there has been e   ort [11] to    backprop-
+agate    the result of query execution to revise the semantic representation of the query, which
+actually falls into the thread of work on learning from grounding [5]. one drawback of these
+
+   work done when the    rst author worked as an intern at noah   s ark lab, huawei technologies.
+
+1
+
+figure 1: an overview of neural enquirer with    ve executors
+
+id29 models is rather symbolic with rule-based features, leaving only a handful
+of tunable parameters to cater to the supervision signal from the execution result.
+
+on the other hand, neural network-based models are previously successful mostly on tasks
+with direct and strong supervision in natural language processing or related domain, with
+examples including machine translation and syntactic parsing. the recent work on learning
+to execute simple python code with lstm [15] pioneers in the direction on learning to parse
+structured objects through executing it in a purely neural way, while the later work on neural
+turing machine (ntm) [6] introduces more modeling    exibility by equipping the lstm with
+external memory and various means of interacting with it.
+
+our work, inspired by above-mentioned threads of research, aims to design a neural net-
+work system that can learn to understand the query and execute it on a knowledge-base table
+from examples of queries and answers. our proposed neural enquirer encodes queries
+and kbs into distributed representations, and executes compositional queries against the kb
+through a series of di   erentiable operations.
+it can be trained using query-answer pairs,
+where the distributed representations of queries and the kb are optimized together with
+the query execution logic in an end-to-end fashion. we then demonstrates using a synthetic
+question-answering task that our proposed neural enquirer is capable of learning to exe-
+cute compositional natural language queries with complex structures.
+
+2 overview of neural enquirer
+given an nl query q and a kb table t , neural enquirer executes the query against
+the table and outputs a ranked list of query answers. the execution is done by    rst using
+encoders to encode the query and table into distributed representations, which are then sent
+to a cascaded pipeline of executors to derive the answer. figure 1 gives an illustrative example
+(with    ve executors) of various types of components involved:
+
+2
+
+which city hosted the longest olympic game before the game in beijing?query      query encoderexecutor-1memory layer-1executor-2memory layer-2executor-3memory layer-3executor-4memory layer-4executor-5athens(id203 distribution over entries)yearhost_city#_duration #_medals2000sydney202,0002004athens351,5002008beijing302,5002012london402,300query embeddingtable embeddingtable encoderwhere year<(select year, where host_city=beijing),argmax(host_city, #_duration)find row r1where host_city=beijingselect year of r1as afind row sets rwhere year < afind r2 in rwith max(#_duration)select host_cityof r2logical form      query encoder (section 3.1), which encodes the query into a distributed representation
+that carries the semantic information of the original query. the encoded query embedding
+will be sent to various executors to compute its execution result.
+
+table encoder (section 3.2), which encodes entries in the table into distributed vectors.
+table encoder outputs an embedding vector for each table entry, which retains the two-
+dimensional structure of the table.
+
+executor (section 3.3), which executes the query against the table and outputs annotations
+that encode intermediate execution results, which are stored in the memory of each layer to be
+accessed by subsequent executor. our basic assumption is that complex, compositional queries
+can be answered through multiple steps of computation, where each executor models a speci   c
+type of operation conditioned on the query. figure 1 illustrates the operation each executor
+is supposed to perform in answering   q. di   erent from classical id29 approaches
+which require a prede   ned set of all possible logical operations, neural enquirer is capable
+of learning the logic of executors via end-to-end training using query-answer pairs. by
+stacking several executors, neural enquirer is able to answer complex queries involving
+multiple steps of computation.
+
+3 model
+
+in this section we give a more detailed exposition of di   erent types of components in the
+neural enquirer model.
+
+3.1 query encoder
+given an nl query q composed of a sequence of words {w1, w2, . . . , wt}, query encoder
+parses q into a dq-dimensional vectorial representation q: q encode                q     rdq. in our imple-
+mentation of neural enquirer, we employ a bidirectional id56 for this mission1. more
+speci   cally, the id56 summarizes the sequence of id27s of q, {x1, x2, . . . , xt},
+into a vector q as the representation of q, where xt = l[wt], xt     rdw and l is the embedding
+matrix. see appendix a for details.
+
+it is worth noting that our query encoder can    nd the representation of rather general
+class of symbol sequences, agnostic to the actual representation of queries (e.g., natural lan-
+guage, sql-like, etc). neural enquirer is capable of learning the execution logic expressed
+in the input query through end-to-end training, making it a generic model for query execution.
+
+3.2 table encoder
+table encoder converts a knowledge-base table t into its distribu-
+tional representation as input to neural enquirer. suppose the
+table has m rows and n columns, where each column comes with
+a    eld name (e.g., host city), and the value of each table entry is
+a word (e.g., beijing) in our vocabulary, table encoder    rst    nds
+
+1other choices of sentence encoder such as lstm or even convolutional neural networks are possible too
+
+3
+
+dnn0field embeddingvalue embeddingcomposite  embeddingfigure 2: overview of an executor-(cid:96)
+
+the embedding for    eld names and values of table, and then it computes the (   eld, value)
+composite embedding for each of the m    n entries in the table. more speci   cally, for the
+entry in the m-th row and n-th column with a value of wmn, table encoder computes a
+de -dimensional embedding vector emn by fusing the embedding of the entry value with the
+embedding of its corresponding    eld name as follows:
+
+emn = dnn0([l[wmn]; fn]) = tanh(w    [l[wmn]; fn] + b)
+
+where fn is the embedding of the    eld name (of the n-th column). w and b denote the weight
+matrices, and [  ;  ] the concatenation of vectors. the output of table encoder is a tensor of
+shape m    n    de , consisting of m    n embeddings of length de for all entries.
+
+our table encoder functions di   erently from classical knowledge embedding models (e.g.,
+transe [4]), where embeddings of entities (entry values) and relations (   eld names) are learned
+in a unsupervised fashion via minimizing certain reconstruction errors. embeddings in neu-
+ral enquirer are optimized via supervised learning towards end-to-end qa tasks. addi-
+tionally, as will shown in the experiments, those embeddings function in a way as indices,
+which not necessarily encode the exact semantic meaning of their corresponding words.
+
+3.3 executor
+
+neural enquirer executes an input query on a kb table through layers of execution. each
+layer of executor captures a certain type of operation (e.g., select, where, max, etc.) relevant
+to the input query2, and returns intermediate execution results, referred to as annotations,
+saved in an external memory of the same layer. a query is executed step-by-step through
+a sequence of stacked executors. such a cascaded architecture enables neural enquirer
+to answer complex, compositional queries. an illustrative example is given in figure 1, with
+each executor annotated with the operation it is assumed to perform. we will demonstrate in
+section 5 that neural enquirer is capable of learning the operation logic of each executor
+via end-to-end training.
+
+as illustrated in figure 2, an executor at layer-(cid:96) (denoted as executor-(cid:96)) has two major
+neural network components: reader and annotator. an executor processes a table row-by-
+row. for the m-th row, with n (   eld, value) composite embeddings rm = {em1, em2, . . . , emn},
+m from rm, which is sent to the annotator to compute a
+the reader fetches a read vector r(cid:96)
+
+2depending on the query, an executor may perform di   erent operations.
+
+4
+
+readertable embeddingrow readingpoolingannotatorrow annotationstable annotationmemory layer-(  -1)query embeddingmemory layer-figure 3: illustration of the reader for executor-(cid:96).
+
+row annotation a(cid:96)
+
+m     rda:
+
+read vector:
+
+r(cid:96)
+m = f (cid:96)
+a(cid:96)
+m = f (cid:96)
+
+r(rm,ft , q,m(cid:96)   1)
+a(r(cid:96)
+
+m, q,m(cid:96)   1)
+
+(1)
+
+row annotation:
+
+(2)
+where m(cid:96)   1 denotes the content in memory layer-((cid:96)   1), and ft = {f1, f2, . . . , fn} is the set
+of    eld name embeddings. once all row annotations are obtained, executor-(cid:96) then generates
+the table annotation through the following pooling process:
+
+table annotation: g(cid:96) = fpool(a(cid:96)
+
+1, a(cid:96)
+
+2, . . . , a(cid:96)
+
+m ).
+
+a row annotation captures the local execution result on each row, while a table annotation,
+derived from all row annotations, summarizes the global computational result on the whole
+m} and table annotation g(cid:96) are saved in memory
+table. both row annotations {a(cid:96)
+layer-(cid:96): m(cid:96) = {a(cid:96)
+
+2, . . . , a(cid:96)
+
+1, a(cid:96)
+m , g(cid:96)}.
+
+1, a(cid:96)
+
+2, . . . , a(cid:96)
+
+our design of executor is inspired by id63s [6], where data is fetched
+from an external memory using a read head, and subsequently processed by a controller, whose
+outputs are    ushed back in to memories. an executor functions similarly by reading data
+from each row of the table, using a reader, and then calling an annotator to calculate inter-
+mediate computational results as annotations, which are stored in the executor   s memory. we
+assume that row annotations are able to handle operations which require only row-wise, local
+information (e.g., select, where), while table annotations can model superlative operations
+(e.g., max, min) by aggregating table-wise, global execution results. therefore, a combination
+of row and table annotations enables neural enquirer to capture a variety of real-world
+query operations.
+
+3.3.1 reader
+
+as illustrated in figure 3, an executor at layer-(cid:96) reads in a vector r(cid:96)
+as the weighted sum of composite embeddings for entries in this row:
+
+m for each row m, de   ned
+
+r(cid:96)
+m = f (cid:96)
+
+r(rm,ft , q,m(cid:96)   1) =
+
+    (fn, q, g(cid:96)   1)emn
+
+n(cid:88)
+
+n=1
+
+5
+
+row kyear               host city     # participants      # models                       dnn1+dnn0dnn0dnn0dnn0year                         host city                  # participants               # models             query embeddingtable annotationread vector()where     (  ) is the normalized attention weights given by:
+
+    (fn, q, g(cid:96)   1) =
+
+(cid:80)n
+
+exp(  (fn, q, g(cid:96)   1))
+n(cid:48)=1 exp(  (fn(cid:48), q, g(cid:96)   1))
+
+(3)
+
+and   (  ) is modeled as a dnn (denoted as dnn((cid:96))
+1 ).
+note that the     (  ) is agnostic to the values of entries in the row, i.e., in an executor all rows
+share the same set of weights     (  ). since each executor models a speci   c type of computation,
+it should only attend to a subset of entries pertain to its execution, which is modeled by the
+reader. this is related to the content-based addressing of id63s [6] and
+the attention mechanism in id4 models [2].
+
+3.3.2 annotator
+
+in executor-(cid:96), the annotator computes row and table annotations based on the fetched read
+m of the reader, which are then stored in the (cid:96)-th memory layer m(cid:96) accessible to
+vector r(cid:96)
+executor-((cid:96)+1). this process is repeated in intermediate layers, until the executor in the last
+layer to    nally generate the answer.
+
+row annotations a row annotation encodes the local computational result on a speci   c
+row. as illustrated in figure 4, a row annotation for row m in executor-(cid:96), given by
+
+a(cid:96)
+m = f (cid:96)
+
+a(r(cid:96)
+
+m, q,m(cid:96)   1) = dnn((cid:96))
+
+2 ([r(cid:96)
+
+m; q; a(cid:96)   1
+
+m ; g(cid:96)   1]).
+
+(4)
+
+fuses the corresponding read vector r(cid:96)
+table annotations a(cid:96)   1
+
+m , g(cid:96)   1), and the query embedding q. basically,
+
+m, the results saved in previous memory layer (row and
+
+m represents the local status of the execution before layer-(cid:96);
+
+    row annotation a(cid:96)   1
+    table annotation g(cid:96)   1 summarizes the global status of the execution before layer-(cid:96);
+    read vector r(cid:96)
+    query embedding q encodes the overall execution agenda,
+
+m stores the value of current attention;
+
+all of which are combined through dnn((cid:96))
+2
+layer.
+
+to form the annotation of row m in the current
+
+figure 4: illustration of annotator for executor-(cid:96).
+
+6
+
+dnn2query embeddingtable annotation (layer  -1)row annotation (layer  -1)read vector (layer  )row annotation (layer )()thmthmtable annotations capturing the global execution state, a table annotation is summarized
+from all row annotations via a global pooling operation. in our implementation of neural
+enquirer we employ max pooling:
+
+g(cid:96) = fpool(a(cid:96)
+
+1, a(cid:96)
+(5)
+where gk = max({a(cid:96)
+m (k)}) is the maximum value among the k-th elements
+of all row annotations. it is possible to use other pooling operations (e.g., gated pooling), but
+we    nd max pooling yields the best results.
+
+2(k), . . . , a(cid:96)
+
+2, . . . , a(cid:96)
+
+1(k), a(cid:96)
+
+m ) = [g1, g2, . . . , gdg ](cid:62)
+
+3.3.3 last layer of executor
+
+instead of computing annotations based on read vectors, the last executor in neural en-
+quirer directly outputs the id203 of the value of each entry in t being the answer:
+
+p(wmn|q,t ) =
+
+(cid:80)m
+
+m(cid:48)=1
+
+(cid:80)n
+
+exp(f (cid:96)
+
+ans(emn, q, a(cid:96)   1
+
+m , g(cid:96)   1))
+ans(em(cid:48)n(cid:48), q, a(cid:96)   1
+
+n(cid:48)=1 exp(f (cid:96)
+
+m(cid:48) , g(cid:96)   1))
+
+(6)
+
+ans(  ) is modeled as a dnn. note that the last executor, which is devoted to returning
+ans(  ) based on the entry value, the
+
+where f (cid:96)
+answers, carries out a speci   c kind of execution using f (cid:96)
+query, and annotations from previous layer.
+
+3.4 handling multiple tables
+
+real-world kbs are often modeled by a schema involving various tables, where each table
+stores a speci   c type of factual information. we present neural enquirer-m, adapted
+for simultaneously operating on multiple kb tables. a key challenge in this scenario is
+that the multiplicity of tables requires modeling interaction between them. for example,
+neural enquirer-m needs to serve join queries, whose answer is derived by joining    elds
+in di   erent tables. details of the modeling and experiments of neural enquirer-m are
+given in appendix c.
+
+4 learning
+
+neural enquirer can be trained in an end-to-end (n2n) fashion in id53
+tasks. during training, both the representations of queries and table entries, as well as the
+execution logic captured by weights of executors are learned. more speci   cally, given a set of
+nd query-table-answer triples d = {(q(k),t (i), y(i))}, we optimize the model parameters by
+maximizing the log-likelihood of gold-standard answers:
+
+ln2n(d) =
+
+log p(y(i) = wmn|q(i),t (i))
+
+(7)
+
+i=1
+
+in end-to-end training, each executor discovers its operation logic from training data in a
+purely data-driven manner, which could be di   cult for complicated queries requiring four or
+   ve sequential operations.
+this can be alleviated by softly guiding the learning process via controlling the attention
+weights   w(  ) in eq. (3). by enforcing   w(  ) to bias towards a    eld pertain to a speci   c operation,
+
+7
+
+nd(cid:88)
+
+we can    coerce    the executor to    gure out the logic of this particular operation relative to
+the    eld. as an example, for executor-1 in figure 1, by biasing the weight of the host city
+   eld towards 1.0, only the value of host city    eld will be fetched and sent for computing
+annotations, in this way we can force the executor to learn to    nd the row whose host city
+is beijing. this setting will be referred to as step-by-step (sbs) training. formally, this is
+done by introducing additional supervision signal to eq. (7):
+
+nd(cid:88)
+
+l(cid:88)
+
+lsbs(d) =
+
+[log p(y(i) = wmn|q(i),t (i)) +   
+
+log   w(f (cid:63)
+
+k,(cid:96),  ,  )]
+
+(8)
+
+i=1
+
+(cid:96)=1
+
+where    is a scalar and f (cid:63)
+to the executor at layer-(cid:96) in the k-th example.
+
+k,(cid:96) is the embedding of the    eld name known a priori to be relevant
+
+5 experiments
+
+in this section we evaluate neural enquirer on synthetic qa tasks with queries with vary-
+ing compositional depth. we will    rst brie   y describe our synthetic qa task for benchmark
+and experimental setup, and then discuss the results under di   erent settings.
+
+5.1 synthetic qa task
+
+we present a synthetic qa task to evaluate the performance of neural enquirer, where
+a large amount of qa examples at various levels of complexity are generated to evaluate the
+single table and multiple tables cases of the model. starting with    arti   cial    tasks eases the
+process of developing novel deep models [14], and has gained increasing popularity in recent
+advances of the research on modeling symbolic computation using dnns [6, 15].
+our synthetic dataset consists of query-table-answer triples {(q(i),t (i), y(i))}. to generate
+such a triple, we    rst randomly sample a table t (i) of size 10    10 from a synthetic schema
+of olympic games, which has 10    elds, whose values are drawn from a vocabulary of size
+240, with 120 country and city names, and 120 numbers. figure 5 gives an example table
+with one row. next, we generate a query q(i) using prede   ned templates associated with its
+gold-standard answer y(i) on t (i). our task consists of four types of natural language queries
+as summarized in table 1, with annotated sql-like logical forms for easy interpretation. we
+generate nl queries at various levels of compositionality to mimic the real world scenario. the
+complexity of those queries ranges from simple select where queries to more complicated
+nest ones involving multiple steps of computation. those queries are    exible enough to
+involve complex matching between nl phrases and logical constituents, which makes query
+understanding and execution nontrivial: (1) the same    eld is described by di   erent nl phrases
+(e.g.,    how big is the country ...    and    what is the size of the country ...    for country size
+   eld); (2) di   erent    elds may be referred to by the same nl pattern (e.g,    in china    for
+country and    in beijing    for host city); (3) simple nl constituents may be grounded to
+complex logical operations (e.g.,    after the game in beijing    implies comparing between year
+   elds).
+in our experiments we use the above procedure to generate benchmark datasets
+consisting of di   erent types of queries. to make the arti   cial task harder, we enforce that all
+queries in the testing set do not appear in the training set.
+
+to simulate the read-world scenario where queries of various types are issued to the model,
+we constructed two mixtured datasets for our main experiments, with 25k and 100k
+
+8
+
+year host city # participants # medals # duration # audience host country gdp country size population
+2008 beijing
+
+67,000
+
+china
+
+4,200
+
+2,500
+
+2,300
+
+960
+
+130
+
+30
+
+figure 5: an example table in the synthetic qa task (only show one row)
+
+query type
+
+select where
+
+superlative
+
+example queries with annotated sql-like logical forms
+(cid:46) q1: how many people participated in the game in beijing?
+
+f1: select # participants, where host city = beijing
+
+(cid:46) q2: in which country was the game hosted in 2012?
+
+f2: select host country, where year = 2012
+
+(cid:46) q3: when was the lastest game hosted?
+
+f3: argmax(host city, year)
+
+(cid:46) q4: how big is the country which hosted the shortest game?
+
+f4: argmin(country size, # duration)
+
+where superlative
+
+nest
+
+(cid:46) q5: how long is the game with the most medals that has fewer than 3,000 participants?
+
+f5: where # participants < 3,000, argmax(# duration, # medals)
+
+(cid:46) q6: how many medals are in the    rst game after 2008?
+
+f6: where # year > 2008, argmin(# medals, # year)
+
+(cid:46) q7: which country hosted the longest game before the game in athens?
+
+f7: where year<(select year,where host city=athens),argmax(host country,# duration)
+
+(cid:46) q8: how many people watched the earliest game that lasts for more days than the game in 1956?
+
+f8: where # duration<(select # duration,where year=1956),argmin(# audience,# year)
+
+table 1: example queries in our synthetic qa task
+
+training examples respectively, where four types of quires are sampled with the ratio 1 :
+1 : 1 : 2. both datasets share the same testing set of 20k examples, 5k for each type of
+query.
+
+5.2 setup
+
+[tuning] we use a neural enquirer with    ve executors. the number of layers for dnn((cid:96))
+1
+and dnn((cid:96))
+2 are set to 2 and 3, respectively. we set the dimensionality of word/entity em-
+beddings and row/table annotations to 20, hidden layers to 50, and the hidden states of the
+gru in query encoder to 150.    in eq. (8) is set to 0.2. we pad the beginning of all input
+queries to a    xed size.
+
+neural enquirer is trained via standard back-propagation. objective functions are op-
+timized using sgd in a mini-batch of size 100 with adaptive learning rates (adadelta [16]).
+the model converges fast within 100 epochs.
+[baseline] we compare our model with sempre [11], a state-of-the-art semantic parser.
+[metric] we evaluate the performance of neural enquirer and sempre (baseline) in
+terms of accuracy, de   ned as the fraction of correctly answered queries.
+
+5.3 main results
+
+table 2 summarizes the results of sempre (baseline) and our neural enquirer under end-
+to-end (n2n) and step-by-step (sbs) settings. we show both the individual performance for
+each type of query and the overall accuracy. we evaluate sempre only on mixtured-25k
+because of its long training time even on the smaller mixtured-25k (> 3 days). we give
+discussion of e   ciency issues in appendix b.
+
+we    rst discuss neural enquirer   s performance under end-to-end (n2n) training set-
+ting (the 3rd and 6th column in table 2), and defer the discussion for sbs setting to sec-
+
+9
+
+select where
+superlative
+where superlative
+nest
+overall acc.
+
+mixtured-25k
+
+mixtured-100k
+
+sempre
+93.8%
+97.8%
+34.8%
+34.4%
+65.2%
+
+n2n
+96.2%
+98.9%
+80.4%
+60.5%
+84.0%
+
+sbs
+
+99.7%
+99.5%
+94.3%
+92.1%
+96.4%
+
+n2n - oov
+
+90.3%
+98.2%
+79.1%
+57.7%
+81.3%
+
+n2n
+99.3%
+99.9%
+98.5%
+64.7%
+90.6%
+
+sbs
+
+100.0%
+100.0%
+99.8%
+99.7%
+99.9%
+
+n2n - oov
+
+97.6%
+99.7%
+98.0%
+63.9%
+89.8%
+
+table 2: accuracies on mixtured datasets
+
+q5: how long is the game with the most medals that has fewer than 3,000 participants?
+
+figure 6: weights visualization of query q5
+
+tion 5.4. on mixtured-25k, our model outperforms sempre on all types of queries, with a
+marginal gain on simple queries (select where, superlative), and signi   cant improve-
+ment on complex ones (where superlative, nest). when the size of training set grows
+(mixtured-100k), neural enquirer achieves near 100% accuracy for the    rst three types
+of queries, while registering a decent overall accuracy of 90.6%. these results suggest that our
+model is very e   ective in answering compositional natural language queries, especially those
+with complex semantic structures compared with the state-of-the-art system.
+to further understand why our model is capable of handling compositional queries, we
+study the attention weights   w(  ) of readers (eq. 3) for executors in intermediate layers, and
+the answer id203 (eq. 6) the last executor outputs for each entry in the table. those
+statistics are obtained from the model trained on mixtured-100k. we sampled two queries
+(q5 and q7 in table 1) in the dataset that our model answers correctly and visualized their
+corresponding values, as illustrated in figure 6 and 7, respectively. we    nd that each executor
+actually learns its execution logic from just the correct answers in end-to-end training, which
+corresponds with our assumption. for q5, the model executes the query in three steps,
+with each of the last three executors performs a speci   c type of operation. for each row,
+executor-3 takes the value of the # participants    eld as input and computes intermediate
+annotations, while executor-4 focuses on the # medals    eld. finally, the last executor outputs
+high id203 for the # duration    eld (the 5-th column) in the 3-rd row. the attention
+weights for executor-1 and executor-2 appear to be meaningless because q5 requires only three
+steps of execution, and the model learns to defer the meaningful execution to the last three
+executors. we can guess con   dently that in executing q5, executor-3 performs the conditional
+   ltering operation (where clause in f5), and executor-4 performs the    rst part of argmax
+(   nding the maximum value of # medals), while the last executor    nishes the execution by
+assigning high id203 for the # duration    eld of the row with the maximum value of
+# medals.
+
+compared with the relatively simple q5, q7 is more complicated, whose logical form f7
+involves a nest sub-query, and requires    ve steps of execution. from the weights visualized in
+   gure 7, we can    nd that the last three executors function similarly as the case in answering
+
+10
+
+yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-1yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-2yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-3yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-4yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulationexecutor-5q7: which country hosted the longest game before the game in athens?
+
+figure 7: weights visualization of query q7
+
+q8: how many people watched the earliest game that lasts for more days than the game in 1956?
+
+figure 8: weights visualization of query q8 (an incorrectly answered query)
+
+q5, yet the execution logic for the    rst two executors is a bit obscure. we posit that this is
+because during end-to-end training, the supervision signal propagated from the top layer has
+decayed along the long path down to the    rst two executors, which causes vanishing gradient
+problem.
+
+we also investigate the case where our model fails to deliver the correct answer for compli-
+cated queries. figure 8 gives such a query q8 in table 1 together with its visualized weights.
+similar as q7, q8 requires    ve steps of execution. besides messing up the weights in the
+   rst two executors, the last executor, executor-5, predicts a wrong entry as the query answer,
+instead of the highlighted (in red rectangle) correct entry.
+
+5.4 with additional step-by-step supervision
+
+to alleviate the vanishing gradient problem when training on complex queries as described
+in section 5.3, in our next set of experiments we trained our neural enquirer model
+using step-by-step (sbs) training (eq. 8), where we encourage each executor to attend to
+a speci   c    eld that is known a priori to be relevant to its execution logic. the results are
+shown in the 4-rd and 7-th columns of table 2. with stronger supervision signal, the model
+signi   cantly outperforms the results in end-to-end setting, and achieves near 100% accuracy on
+all types of queries, which shows that our proposed neural enquirer is capable of leveraging
+the additional supervision signal given to intermediate layers in sbs training setting, and
+answering complex and compositional queries with perfect accuracy.
+
+let us revisit the query q7 in sbs setting with the weights visualization in figure 9. in
+contrast to the result in n2n setting (figure 7) where the attention weights for the    rst two
+executors are obscure, the weights in every executor are perfectly skewed towards the actual
+   eld pertain to each layer of execution (with a weight 1.0). quite interestingly, the attention
+weights for executor-3 and executor-4 are exactly the same with the result in n2n setting,
+while the weights for executor-1 and executor-2 are signi   cantly di   erent, suggesting neural
+enquirer learned a di   erent execution logic in the sbs setting.
+
+11
+
+yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-1yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-2yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-3yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-4yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulationexecutor-5yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-1yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-2yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-3yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-4yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulationexecutor-5q7: which country hosted the longest game before the game in athens?
+
+figure 9: weights visualization of query q7 in step-by-step training setting
+
+5.5 dealing with out-of-vocabulary words
+
+q9: how many people watched the game in macau?
+
+figure 10: weights visualization of query q9
+
+one of the major challenges for applying neural network models to nlp applications is to
+deal with out-of-vocabulary (oov) words, which is particularly severe for qa. it is hard to
+cover existing tail entities, while at the same time new entities appear in user-issued queries
+and back-end kbs everyday. quite interestingly, we    nd that a simple variation of neural
+enquirer is able to handle unseen entities almost without any loss of accuracy.
+
+basically, we divide words in the vocabulary into entity words and operation words. em-
+beddings of entity words (e.g., beijing, china) function in a way as index to facilitate the
+matching between entities in queries and tables during the layer-by-layer execution, and do
+not need to be updated once initialized; while those of operation words, i.e., all non-entity
+words (e.g., numbers, longest, before, etc) carry semantic meanings relevant to execution and
+should be optimized during training. therefore, after randomly initializing the embedding
+matrix l, we only update the embeddings of operation words in training, while keeping those
+of entity words unchanged.
+
+to test the model   s performance with oov words, we modify queries in the testing portion
+of the mixtured dataset to replace all entity words (i.e., all country and city names) with
+oov ones3 unseen in the training set. results obtained using n2n training are summarized
+in the 5th and 8th columns of table 2. as it shows neural enquirer training in this
+oov setting yields performance comparable to that in the non-oov setting, indicating that
+operation words and entity words play di   erent roles in query execution.
+
+an interesting question to investigate in this oov setting is how neural enquirer
+distinguishes between di   erent types of entity words (i.e., cities and countries) in queries,
+since their embeddings are randomly initialized and    xed thereafter. an example query is
+q9 :    how many people watched the game in macau?   , where macau is an oov entity. to
+
+3they also have embeddings in l.
+
+12
+
+yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-1yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-2yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-3yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-4yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulationexecutor-5yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-1yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-2yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-3yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulation0.00.20.40.60.81.0executor-4yearhost_city#_participants#_medals#_duration#_audiencehost_countrygdpcountry_sizepopulationexecutor-5query type select where superlative where superlative overall
+77.7%
+accuracy
+
+80.2%
+
+68.2%
+
+84.8%
+
+table 3: accuracies for large knowledge source simulation
+
+figure 11: large knowledge source simulation
+
+help understand how the model knows macau is a city, we give its weights visualization in
+figure 10. interestingly, the model    rst checks the host city    eld in executor-3, and then
+host country in executor-4, which suggests that the model learns to scan all possible    elds
+where the oov entity may belong to.
+
+5.6 simulating large knowledge source
+
+an important direction in id29 research is to scale to large knowledge source [3,
+in this set of experiments we simulate a test case to evaluate neural enquirer   s
+11].
+ability to generalize to large knowledge source. we train a model on tables whose    eld sets
+are either f1,f2, . . . ,f5, where fi (with |fi| = 5) is a subset of the entire set ft . we then
+test the model on tables with all    elds ft and queries whose    elds span multiple subsets
+fi. figure 11 illustrates the setting. note that all testing queries exhibit    eld combinations
+unseen in the training data, to mimic the di   culty the system often encounter when scaling to
+large knowledge source, which usually poses great challenge on model   s generalization ability.
+we then train and test the model only on a new dataset of the    rst three types of relatively
+simple queries (namely select where, superlative and where superlative). the
+sizes of training/testing splits are 75,000 and 30,000, with equal numbers for di   erent query
+types. table 3 lists the results. neural enquirer still maintains a reasonable performance
+even when the compositionality of testing queries is previously unseen, showing the model   s
+generalization ability in tackling unseen query patterns through composition of familiar ones,
+and hence the potential to scale to larger and unseen knowledge sources.
+
+6 related work
+
+our work falls into the research area of id29, where the key problem is to parse
+natural language queries into logical forms executable on kbs. classical approaches for
+id29 can be broadly divided into two categories. the    rst line of research resorts
+to the power of grammatical formalisms (e.g., id35) to parse
+nl queries and generate corresponding logical forms, which requires curated/learned lexicons
+de   ning the correspondence between nl phrases and symbolic constituents [17, 7, 1, 18]. the
+
+13
+
+#_audiencehost_city75,000beijingyear#_participants20082,500how many audience members are in beijing?when was the game with 2,500 participants?#_audiencehost_cityyear#_participants65,000beijing20082,000   when was the game in beijing?trainingtesting#_audiencehost_cityyear#_participants50,000london20123,000how many people watched the game with 3,000 participants?   model is tuned with annotated logical forms, and is capable of recovering complex semantics
+from data, but often constrained on a speci   c domain due to scalability issues brought by
+the crisp grammars and the lack of annotated training data. another line of research takes a
+semi-supervised learning approach, and adopts the results of query execution (i.e., answers)
+as supervision signal [5, 3, 10, 11, 12]. the parsers, designed towards this new learning
+paradigm, take di   erent types of forms, ranging from generic chart parsers [3, 11] to more
+speci   cally engineered, task-oriented ones [12, 8]. semantic parsers in this category often scale
+to open domain knowledge sources, but lack the ability of understanding compositional queries
+because of the intractable search space incurred by the    exibility of parsing algorithms. our
+work follows this line of research in using query answers as indirect supervision to facilitate
+end-to-end training using qa tasks, but performs id29 in distributional spaces,
+where logical forms are    neuralized    to an executable distributed representation.
+
+our work is also related to the recent advances of modeling symbolic computation using
+deep neural networks. pioneered by the development of id63s (ntms) [6],
+this line of research studies the problem of using di   erentiable neural networks to perform
+   hard    symbolic execution. as an independent line of research with similar    avor, zaremba
+et al. [15] designed a lstm-id56 to execute simple python programs, where the parameters
+are learned by comparing the neural network output and the correct answer. our work is
+related to both lines of work, in that like ntm, we heavily use external memory and    exible
+way of processing (e.g., the attention-based reading in the operations in reader) and like [15],
+neural enquirer learns to execute a sequence with complicated structure, and the model
+is tuned from the executing them. as a highlight and di   erence from the previous work, we
+have a deep architecture with multiple layer of external memory, with the neural network
+operations highly customized to querying kb tables.
+
+perhaps the most related work to date is the recently published neural programmer
+proposed by neelakantan et al. [9], which studies the same task of executing queries on tables
+with deep neural networks. neural programmer uses a neural network model to select
+operations during query processing. while the query planning (i.e., which operation to execute
+at each time step) phase is modeled softly using neural networks, the symbolic operations are
+prede   ned by users. in contrast neural enquirer is fully distributional: it models both the
+query planning and the operations with neural networks, which are jointly optimized via end-
+to-end training. our neural enquirer model learns symbolic operations using data-driven
+approach, and demonstrates that a fully neural, end-to-end di   erentiable system is capable
+of modeling and executing compositional arithmetic and logic operations upto certain level of
+complexity.
+
+7 conclusion and future work
+
+in this paper we propose neural enquirer, a fully neural, end-to-end di   erentiable network
+that learns to execute queries on tables. we present results on a set of synthetic qa tasks
+to demonstrate the ability of neural enquirer to answer fairly complicated compositional
+queries across multiple tables. in the future we plan to advance this work in the following
+directions. first we will apply neural enquirer to natural language questions and natural
+language answers, where both the input query and the output supervision are noisier and
+less informative. second, we are going to scale to real world qa task as in [11], for which
+we have to deal with a large vocabulary and novel predicates. third, we are going to work
+
+14
+
+on the computational e   ciency issue in query execution by heavily borrowing the symbolic
+operation.
+
+references
+
+[1] y. artzi, k. lee, and l. zettlemoyer. broad-coverage id35 id29 with amr. in emnlp,
+
+pages 1699   1710, 2015.
+
+[2] d. bahdanau, k. cho, and y. bengio. id4 by jointly learning to align
+
+and translate. iclr, 2015.
+
+[3] j. berant, a. chou, r. frostig, and p. liang. id29 on freebase from question-answer
+
+pairs. in emnlp, pages 1533   1544, 2013.
+
+[4] a. bordes, n. usunier, a. garca-durn, j. weston, and o. yakhnenko. translating embeddings
+
+for modeling multi-relational data. in nips, pages 2787   2795, 2013.
+
+[5] d. l. chen and r. j. mooney. learning to sportscast: a test of grounded id146.
+
+in icml, pages 128   135, 2008.
+
+[6] a. graves, g. wayne, and i. danihelka. id63s. corr, abs/1410.5401, 2014.
+
+[7] t. kwiatkowski, e. choi, y. artzi, and l. s. zettlemoyer. scaling semantic parsers with on-the-   y
+
+ontology matching. in emnlp, pages 1545   1556, 2013.
+
+[8] d. k. misra, k. tao, p. liang, and a. saxena. environment-driven lexicon induction for high-level
+
+instructions. in acl (1), pages 992   1002, 2015.
+
+[9] a. neelakantan, q. v. le, and i. sutskever. neural programmer: inducing latent programs with
+
+id119. arxiv e-prints, nov. 2015.
+
+[10] p. pasupat and p. liang. zero-shot entity extraction from web pages. in acl (1), pages 391   401,
+
+2014.
+
+[11] p. pasupat and p. liang. compositional id29 on semi-structured tables. in acl (1),
+
+pages 1470   1480, 2015.
+
+[12] w. tau yih, m.-w. chang, x. he, and j. gao. id29 via staged query graph generation:
+
+id53 with knowledge base. in acl (1), pages 1321   1331, 2015.
+
+[13] t.-h. wen, m. gasic, n. mrksic, p. hao su, d. vandyke, and s. j. young. semantically conditioned
+lstm-based id86 for spoken dialogue systems. in emnlp, pages 1711   1721,
+2015.
+
+[14] j. weston, a. bordes, s. chopra, and t. mikolov. towards ai-complete id53: a
+
+set of prerequisite toy tasks. corr, abs/1502.05698, 2015.
+
+[15] w. zaremba and i. sutskever. learning to execute. corr, abs/1410.4615, 2014.
+
+[16] m. d. zeiler. adadelta: an adaptive learning rate method. corr, abs/1212.5701, 2012.
+
+[17] l. s. zettlemoyer and m. collins. learning to map sentences to logical form: structured classi   -
+
+cation with probabilistic categorial grammars. in uai, pages 658   666, 2005.
+
+[18] l. s. zettlemoyer and m. collins. online learning of relaxed id35 grammars for parsing to logical
+
+form. in emnlp-conll, pages 678   687, 2007.
+
+15
+
+a computation of query encoder
+
+we use a bidirectional id56 as the query encoder, which consists of a forward gru and a backward
+gru. given the sequence of id27s of q: {x1, x2, . . . , xt}, at each time step t, the forward
+gru computes the hidden state ht as follows:
+
+ht = ztht   1 + (1     zt)  ht
+  ht = tanh(wxt + u(rt     ht   1))
+zt =   (wzxt + uzht   1)
+rt =   (wrxt + urht   1)
+
+where w, wz, wr, u, uz, ur are parametric matrices, 1 the column vector of all ones, and    
+element-wise multiplication. the backward gru reads the sequence in reverse order. we concatenate
+the last hidden states given by the two grus as the vectorial representation q of the query.
+
+b e   ciency of model learning
+
+we compared the e   ciency of neural enquirer and sempre (baseline) in training by plotting
+the accuracy on testing data by training time. figure 12 illustrates the results. we train neural
+enquirer-cpu and sempre on a machine with intel core i7-3770@3.40ghz and 16gb memory,
+while neural enquirer-gpu is tuned on nvidia tesla k40. neural enquirer-cpu is 10 times
+faster than sempre, and neural enquirer-gpu is 100 times faster.
+
+figure 12: accuracy on testing by training time
+
+c handling multiple tables
+
+c.1 neural enquirer-m model
+basically, neural enquirer-m assigns an executor to each table tk in every execution layer (cid:96),
+denoted as executor-((cid:96), k). figure 13 pictorially illustrates executor-((cid:96), 1) and executor-((cid:96), k) working
+on table-1 and table-k respectively. within each executor, the reader is designed the same way as
+single table case, while we modify the annotator to let in the information from other tables. more
+speci   cally, for executor-((cid:96), k), we modify its annotator by extending eq. (4) to leverage computational
+
+16
+
+101102103104105106training time (s)0.00.10.20.30.40.50.60.70.80.9accuracy on testing dataneural enquirer-cpuneural enquirer-gpusempre-cpufigure 13: executor-((cid:96), 1) and executor-((cid:96), k) in multiple tables case
+
+results from other tables when computing the annotation for the m-th row:
+
+a(cid:96)
+k,m = f (cid:96)
+
+a(r(cid:96)
+
+k,m, q, a(cid:96)   1
+2 ([r(cid:96)
+
+k,m, g(cid:96)   1
+k,m; q; a(cid:96)   1
+
+,   a(cid:96)   1
+k,m; g(cid:96)   1
+
+k,m,   g(cid:96)   1
+;   a(cid:96)   1
+
+k
+
+k
+
+k
+
+)
+
+k,m;   g(cid:96)   1
+
+k
+
+])
+
+= dnn((cid:96))
+
+this process is illustrated in figure 14. note that we add subscripts k     [1, k] to the notations to
+index tables. to model the interaction between tables, the annotator incorporates the    relevant   
+row annotation,   a(cid:96)   1
+derived from the previous execution
+results of other tables when computing the current row annotation.
+
+k,m, and the    relevant    table annotation,   g(cid:96)   1
+
+k
+
+a relevant row annotation stores the data fetched from row annotations of other tables, while
+a relevant table annotation summarizes the table-wise execution results from other tables. we now
+describe how to compute those annotations. first, for each table tk(cid:48), k(cid:48) (cid:54)= k, we fetch a relevant row
+annotation   a(cid:96)   1
+
+k,k(cid:48),m from all row annotations {a(cid:96)   1
+
+k(cid:48),m(cid:48)} of tk(cid:48) via attentive reading:
+
+mk(cid:48)(cid:88)
+
+(cid:80)mk(cid:48)
+
+  a(cid:96)   1
+k,k(cid:48),m =
+
+exp(  (r(cid:96)
+
+k,m, q, a(cid:96)   1
+
+k,m, a(cid:96)   1
+k,m, q, a(cid:96)   1
+
+k(cid:48),m(cid:48), g(cid:96)   1
+k,m, a(cid:96)   1
+
+, g(cid:96)   1
+k(cid:48) ))
+k(cid:48),m(cid:48)(cid:48) , g(cid:96)   1
+, g(cid:96)   1
+k(cid:48) ))
+
+k
+
+k
+
+a(cid:96)   1
+k(cid:48),m(cid:48).
+
+m(cid:48)=1
+
+m(cid:48)(cid:48)=1 exp(  (r(cid:96)
+
+intuitively, the attention weight   (  ) (modeled by a dnn) captures how important the m(cid:48)-th row
+annotation from table tk(cid:48), a(cid:96)   1
+k(cid:48),m(cid:48) is with respect to the current step of execution. after getting the set
+of row annotations fetched from all other tables, {  a(cid:96)   1
+k,m and   g(cid:96)   1
+k(cid:48)=1,k(cid:48)(cid:54)=k and {g(cid:96)   1
+via a pooling operation4 on {  a(cid:96)   1
+k,1,m,   a(cid:96)   1
+
+k(cid:48)=1,k(cid:48)(cid:54)=k, we then compute   a(cid:96)   1
+k(cid:48)=1,k(cid:48)(cid:54)=k:
+k,k,m};{g(cid:96)   1
+
+k,k(cid:48),m}k
+k(cid:48) }k
+k,2,m, . . . ,   a(cid:96)   1
+
+k,k(cid:48),m}k
+(cid:105) =   fpool({  a(cid:96)   1
+
+(cid:104)  a(cid:96)   1
+k,m,   g(cid:96)   1
+
+, . . . , g(cid:96)   1
+
+k }).
+
+, g(cid:96)   1
+
+k
+
+k
+
+1
+
+2
+
+in summary, relevant row and table annotations encode the local and global computational results
+from other tables. by incorporating them into calculating row annotations, neural enquirer-m is
+capable of answering queries that involve interaction between multiple tables.
+value of g(  ) in eq. (6) over each entry for very table.
+
+finally, neural enquirer-m outputs the ranked list of answer probabilities by normalizing the
+
+4this operation is trivial in our experiments on two tables.
+
+17
+
+readerembedding of table-1read vectorspoolingannotatorrow annotationsmemory layer-(  -1)memory layer-query embeddingreaderread vectorsannotatorembedding of table-kpooling         figure 14: illustration of annotator for multiple tables case
+
+country year host city # participants # medals # duration # audience
+
+china
+
+2008
+
+beijing
+
+3,500
+
+4,200
+
+30
+
+67,000
+
+table-1
+
+table-2
+
+country continent population country size
+
+china
+
+asia
+
+130
+
+960
+
+figure 15: multiple tables example in the synthetic qa task (only show one row)
+
+c.2 experimental results
+
+we present preliminarily results for neural enquirer-m, which we evaluated on sql-like se-
+lect where logical forms (like f1, f2 in table 1). we sampled a dataset of 100k examples, with
+each example having two tables as in figure 15. out of all select where queries, roughly half of the
+queries (denoted as    join   ) require joining the two tables to derive answers. we tested on a model with
+three executors. table 4 lists the results. the accuracy of join queries is lower than that of non-join
+queries, which is caused by additional interaction between the two tables involved in answering join
+queries.
+
+query type non-join
+
+join overall
+
+accuracy
+
+99.7%
+
+81.5% 91.3%
+
+table 4: accuracies of select where queries on two tables
+
+we    nd that neural enquirer-m is capable of identifying that the country    eld is the foreign
+key linking the two tables. figure 16 illustrates the attention weights for a correctly answered join
+
+18
+
+dnn2query embeddingrow annotation (layer )table annotation (layer  -1)read vector (layer  )()row annotation (layer  -1)thmthm   attentive readingmemory layer-(  -1) for table-1   attentive reading memory layer-(  -1) for table-k   relevant    table annotation from other tables   relevant    row annotation from other tablespooling      q9: select country size, where year = 2012
+
+executor-(1, 1)
+
+executor-(1, 2)
+
+executor-(2, 1)
+
+executor-(2, 2) executor-(3, 1) executor-(3, 2)
+
+figure 16: weights visualization of query q9
+
+query q9. although the query does not contain any hints for the foreign key (country    eld), executor-
+(1, 1) (the executor at layer-1 on table-1) operates on an ensemble of embeddings of the country and
+year    elds, whose outputting row annotations (contain information of both the key country and the
+value year) are sent to executor-(2, 2) to compare with the country    eld in table-2. we posit that the
+result of comparison is stored in the row annotations of executor-(2, 2) and subsequently sent to the
+executors at layer-3 for computing the answer id203 for each entry in the two tables.
+
+19
+
+countryyearhost_city#_participants#_medals#_duration#_audience0.00.20.40.60.81.0countrycontinentpopulationcountry_size0.00.20.40.60.81.0countryyearhost_city#_participants#_medals#_duration#_audience0.00.20.40.60.81.0countrycontinentpopulationcountry_size0.00.20.40.60.81.0012345670123456789012340123456789

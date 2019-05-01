@@ -1,0 +1,1272 @@
+learning to map sentences to logical form:
+
+structured classi   cation with probabilistic categorial grammars
+
+luke s. zettlemoyer and michael collins
+
+mit csail
+
+lsz@csail.mit.edu, mcollins@csail.mit.edu
+
+abstract
+
+this paper addresses the problem of mapping
+natural language sentences to lambda   calculus
+encodings of their meaning. we describe a learn-
+ing algorithm that takes as input a training set of
+sentences labeled with expressions in the lambda
+calculus. the algorithm induces a grammar for
+the problem, along with a log-linear model that
+represents a distribution over syntactic and se-
+mantic analyses conditioned on the input sen-
+tence. we apply the method to the task of learn-
+ing id139 to databases and
+show that the learned parsers outperform pre-
+vious methods in two benchmark database do-
+mains.
+
+1 introduction
+
+recently, a number of learning algorithms have been pro-
+posed for structured classi   cation problems. structured
+classi   cation tasks involve the prediction of output labels
+y from inputs x in cases where the output labels have rich
+internal structure. previous work in this area has focused
+on problems such as sequence learning, where y is a se-
+quence of state labels (e.g., see (lafferty, mccallum, &
+pereira, 2001; taskar, guestrin, & koller, 2003)), or nat-
+ural language parsing, where y is a context-free parse tree
+for a sentence x (e.g., see taskar et al. (2004)).
+
+in this paper we investigate a new type of structured classi-
+   cation problem, where the goal is to learn to map natural
+language sentences to a id198 encoding of their
+semantics. as one example, consider the following sen-
+tence paired with a logical form representing its meaning:
+
+sentence:
+logical form:   x.state(x)     borders(x, texas)
+
+what states border texas
+
+the logical form in this case is an expression representing
+the set of entities that are states, and that also border texas.
+
+the training data in our approach consists of a set of sen-
+tences paired with logical forms, as in this example.
+
+this is a particularly challenging problem because the
+derivation from each sentence to its logical form is not an-
+notated in the training data. for example, there is no di-
+rect evidence that the word states in the sentence corre-
+sponds to the predicate state in the logical form; in gen-
+eral there is no direct evidence of the syntactic analysis of
+the sentence. annotating entire derivations underlying the
+mapping from sentences to their semantics is highly labor-
+intensive. rather than relying on full syntactic annotations,
+we have deliberately formulated the problem in a way that
+requires a relatively minimal level of annotation.
+
+our algorithm automatically induces a grammar that maps
+sentences to logical form, along with a probabilistic model
+that assigns a distribution over parses under the grammar.
+the grammar formalism we use is combinatory categorial
+grammar (id35) (steedman, 1996, 2000). id35 is a con-
+venient formalism because it has an elegant treatment of a
+wide range of linguistic phenomena; in particular, id35 has
+an integrated treatment of semantics and syntax that makes
+use of a id152 based on the lambda
+calculus. we use a log-linear model   similar to models
+used in conditional random    elds (crfs) (lafferty et al.,
+2001)   for the probabilistic part of the model. log-linear
+models have previously been applied to id35s by clark and
+curran (2003), but our work represents a major departure
+from previous work on id35s and crfs, in that structure
+learning (inducing an underlying discrete structure, i.e., the
+grammar or id35 lexicon) forms a substantial part of our
+approach.
+
+mapping sentences to logical form is a central problem in
+designing id139. we describe exper-
+imental results on two database domains: geo880, a set
+of 880 queries to a database of united states geography;
+and jobs640, a set of 640 queries to a database of job list-
+ings. tang and mooney (2001) described previous work on
+these data sets. previous work by thompson and mooney
+(2002) and zelle and mooney (1996) used a subset of the
+geo880 corpus. we evaluated the algorithm   s accuracy in
+
+returning entirely correct logical forms for each test sen-
+tence. our method achieves over 95% precision on both of
+these domains, with recall of 79% on each domain. these
+are highly competitive results when compared to the previ-
+ous work.
+
+a) what states border texas
+
+  x.state(x)     borders(x, texas)
+
+b) what is the largest state
+
+arg max(  x.state(x),   x.size(x))
+
+2 background
+
+this section gives background material underlying our
+learning approach. we    rst describe the lambda   calculus
+expressions used to represent logical forms. we then de-
+scribe id35 (id35), and the ex-
+tension of id35 to probabilistic id35s (pid35s) through
+id148.
+
+2.1 semantics
+
+the sentences in our training data are annotated with ex-
+pressions in a typed lambda   calculus language similar to
+the one presented by carpenter (1997). the system has
+three basic types: e, the type of entities; t, the type of truth
+values; and r, the type of real numbers. it also allows func-
+tional types, for example he, ti, which is the type assigned
+to functions that map from entities to truth values. in spe-
+ci   c domains, we will specify subtype hierarchies for e.
+for example, in a geography domain we might distinguish
+different entity subtypes such as cities, states, and rivers.
+
+figure 1 shows several sentences from the geography
+(geo880) domain, together with their associated logical
+form. each logical form is an expression from the lambda
+calculus. the lambda   calculus expressions we use are
+formed from the following items:
+
+    constants: constants can either be entities, numbers
+or functions. for example, texas is an entity (i.e., it
+is of type e). state is a function that maps entities to
+truth values, and is of type he, ti. size is a function
+that maps entities to real numbers, and is therefore of
+type he, ri (in the geography domain, size(x) returns
+the land-area of x).
+
+    logical connectors: the lambda   calculus expres-
+sions include conjunction (   ), disjunction (   ), nega-
+tion (  ), and implication (   ).
+
+    quanti   cation: the expressions include universal
+quanti   cation (   ) and existential quanti   cation (   ).
+for example,    x.state(x)    borders(x, texas) is true
+if and only if there is at least one state that borders
+texas. expressions involving     take a similar form.
+
+    lambda expressions: lambda expressions represent
+functions. for example,   x.borders(x, texas) is a
+function from entities to truth values, which is true of
+those states that border texas.
+
+c) what states border the state that borders the most states
+
+  x.state(x)     borders(x, arg max(  y.state(y),
+
+  y.count(  z.state(z)     borders(y, z))))
+
+figure 1: examples of sentences with their logical forms.
+
+    additional quanti   ers:
+
+arg max expressions are of
+
+the expressions involve
+the additional quantifying terms count, arg max,
+arg min, and the de   nite operator   . an example
+of a count expression is count(  x.state(x)), which
+returns the number of entities for which state(x)
+is true.
+the form
+arg max(  x.state(x),   x.size(x)). the    rst argu-
+ment is a lambda expression denoting some set of en-
+tities; the second argument is a function of type he, ri.
+in this case the arg max operator would return the set
+of items for which state(x) is true, and for which
+size(x) takes its maximum value. arg min expres-
+sions are de   ned analogously. finally, the de   nite op-
+erator creates expressions such as   (  x.state(x)). in
+this case the argument is a lambda expression denot-
+ing some set of entities.   (  x.state(x)) would return
+the unique item for which state(x) is true, if a unique
+item exists. if no unique item exists, it causes a pre-
+supposition error.
+
+2.2 id35s
+
+the parsing formalism underlying our approach is that of
+id35 (id35) (steedman, 1996,
+2000). a id35 speci   es one or more logical forms   of the
+type described in the previous section   for each sentence
+that can be parsed by the grammar.
+the core of any id35 is a lexicon,   . in a purely syntactic
+version of id35, the entries in    consist of a word (lexical
+item) paired with a syntactic type. a simple example of a
+id35 lexicon is as follows:
+
+utah
+idaho
+borders
+
+:= n p
+:= n p
+:= (s\n p )/n p
+
+in this lexicon utah and idaho have the syntactic type n p ,
+and borders has the more complex type (s\n p )/n p . a
+syntactic type can be either one of a number of primitive
+categories (in the example, n p or s), or it can be a com-
+plex type of the form a/b or a\b where both a and b
+can themselves be a primitive or complex type. the prim-
+itive categories n p and s stand for the linguistic notions
+
+a) utah
+n p
+utah
+
+borders
+
+(s\n p )/n p
+
+b)
+
+idaho
+n p
+idaho
+>
+
+  x.  y.borders(y, x)
+(s\n p )
+
+  y.borders(y, idaho)
+
+s
+
+borders(utah, idaho)
+
+<
+
+what
+
+(s/(s\n p ))/n
+
+states
+
+n
+
+border
+
+(s\n p )/n p
+
+  f.  g.  x.f (x)     g(x)   x.state(x)   x.  y.borders(y, x)
+(s\n p )
+
+s/(s\n p )
+
+>
+
+  g.  x.state(x)     g(x)
+
+  y.borders(y, texas)
+
+texas
+n p
+texas
+>
+
+>
+
+  x.state(x)     borders(x, texas)
+
+s
+
+figure 2: two examples of id35 parses.
+
+of noun-phrase and sentence respectively. note that a sin-
+gle word can have more than one syntactic type, and hence
+more than one entry in the lexicon.
+
+in addition to the lexicon, a id35 has a set of combinatory
+rules which describe how adjacent syntactic categories in
+a string can be recursively combined. the simplest such
+rules are rules of functional application, de   ned as follows:
+
+(1) the functional application rules:
+a. a/b b     a
+b. b a\b     a
+
+intuitively, a category of the form a/b denotes a string that
+is of type a but is missing a string of type b to its right;
+similarly, a\b denotes a string of type a that is missing a
+string of type b to its left.
+
+the    rst rule says that a string with type a/b can be com-
+bined with a right-adjacent string of type b to form a new
+string of type a. as one example, in our lexicon, borders,
+(which has the type (s\n p )/n p ) can be combined with
+idaho (which has the type n p ) to form the string borders
+idaho with type s\n p . the second rule is a symmetric
+rule applying to categories of the form a\b. we can use
+this to combine utah (type n p ) with borders idaho (type
+s\n p ) to form the string utah borders idaho with the type
+s. we can draw a parse tree (or derivation) of utah borders
+idaho as follows:
+
+utah
+n p
+
+borders
+
+idaho
+(s\n p )/n p n p
+
+(s\n p )
+s
+
+>
+
+<
+
+note that we use the notation    > and    < to denote appli-
+cation of rules 1(a) and 1(b) respectively.
+
+id35s typically include a semantic type, as well as a syn-
+tactic type, for each lexical entry. for example, our lexicon
+would be extended as follows:
+:= n p : utah
+:= n p : idaho
+:= (s\n p )/n p :   x.  y.borders(y, x)
+
+utah
+idaho
+borders
+we use the notation a : f to describe a category with syn-
+tactic type a and semantic type f. thus utah now has syn-
+tactic type n p , and semantic type utah. the functional
+
+application rules are then extended as follows:
+
+(2) the functional application rules (with semantics):
+
+a. a/b : f b : g     a : f(g)
+b. b : g a\b : f     a : f(g)
+
+rule 2(a) now speci   es how the semantics of the category
+a is compositionally built out of the semantics for a/b
+and b. our derivations are then extended to include a com-
+positional semantics. see figure 2(a) for an example parse.
+this parse shows that utah borders idaho has the syntactic
+type s and the semantics borders(utah, idaho).
+
+in spite of their relative simplicity, id35s can capture a
+wide range of syntactic and semantic phenomena. as one
+example, see figure 2(b) for a more complex parse. note
+that in this case we have an additional primitive category, n
+(for nouns), and the    nal semantics is a lambda expression
+denoting the set of entities that are states and that border
+texas. in this case, the lexical item what has a relatively
+complex category, which leads to the correct analysis of
+the underlying string.
+
+a full description of id35 goes beyond the scope of this
+paper. there are several extensions to the formalism: see
+(steedman, 1996, 2000) for more details.
+in particular,
+id35 includes rules of combination that go beyond the sim-
+ple function application rules in 1(a) and 1(b).1 additional
+combinatory rules allow id35s to give an elegant treatment
+of linguistic phenomena such as coordination and relative
+clauses.
+in our work we make use of standard rules of
+application, forward and backward composition, and type-
+raising. in addition, we allow lexical entries consisting of
+strings of length greater than one, for example
+
+the mississippi
+
+:= n p : mississippi river
+
+this leads to a relatively minor change to the formalism,
+which in practice can be very useful. for example, it is eas-
+ier to directly represent the fact that the mississippi refers
+
+1one example of a more complex combinatory rule is that of
+
+forward composition:
+
+a/b : f b/c : g     a/c :   x.f (g(x))
+
+another rule which is frequently used is that of type-raising:
+
+n p : f     s/(s\n p ) :   g.g(f )
+
+this would allow n p : u tah to be type-raised to a category
+s/(s\n p ) :   g.g(u tah).
+
+to the mississippi river with the lexical entry above than it
+is to try to construct this meaning compositionally from the
+meanings of the determiner the and the word mississippi,
+which refers to the state of mississippi when used without
+the determiner.
+
+2.3 probabilistic id35s
+
+we now describe how to generalize id35s to probabilis-
+tic id35s (pid35s). a id35, as described in the previous
+section, will generate one or more derivations for each sen-
+tence s that can be parsed by the grammar. we will de-
+scribe a derivation as a pair (l, t ), where l is the    nal
+logical form for the sentence (e.g., borders(utah, idaho)
+in    gure 2(a)), and t is the sequence of steps taken in de-
+riving l. we will frequently refer to t as a parse tree.
+a pid35 de   nes a conditional distribution p (l, t|s) over
+possible (l, t ) pairs for a given sentence s.
+
+in general, various sources of ambiguity can lead to a sen-
+tence s having more than one valid (l, t ) pair. this is
+the primary motivation for extending id35s to pid35s:
+pid35s deal with ambiguity by ranking alternative parses
+for a sentence in order of id203. one source of am-
+biguity is lexical items having more than one entry in
+the lexicon. for example, new york might have entries
+n p : new york city and n p : new york state. an-
+other source of ambiguity is where a single logical form l
+may be derived by multiple derivations t . this latter form
+of ambiguity can occur in id35, and is often referred to as
+spurious ambiguity; the term spurious is used because the
+different syntactic parses lead to identical semantics.
+
+in de   ning pid35s, we make use of a conditional log-
+linear model that is similar to the model form in condi-
+tional random    elds (crfs) (lafferty et al., 2001) or log-
+linear models applied to parsing (ratnaparkhi, roukos,
+& ward, 1994; johnson, geman, canon, chi, & rie-
+zler, 1999). id148 for id35s are described in
+(clark & curran, 2003). we assume a function   f mapping
+(l, t, s) triples to feature vectors in rd. this function
+is de   ned by d individual features, so that   f(l, t, s) =
+hf1(l, t, s), . . . , fd(l, t, s)i. each feature fj is typi-
+cally the count of some sub-structure within (l, t, s). the
+model is parameterized by a vector          rd. the probabil-
+ity of a particular (syntax, semantics) pair is de   ned as
+
+p (l, t|s;     ) =
+
+p
+
+e   f (l,t,s)      
+(l,t ) e   f (l,t,s)      
+
+(1)
+
+tures of this type. while these features are quite simple, we
+have found them to be quite successful when applied to the
+geo880 and jobs640 data sets. more complex features are
+certainly possible (e.g., see (clark & curran, 2003)). in the
+future, we would like to explore more general features that
+have been shown to be useful in other parsing settings.
+
+2.4 parsing and parameter estimation
+
+we now turn to issues of parsing and parameter estimation.
+parsing under a pid35 involves computing the most prob-
+able logical form l for a sentence s,
+p (l|s;     ) = arg max
+
+p (l, t|s;     )
+
+x
+
+arg max
+
+l
+
+l
+
+t
+
+where the arg max is taken over all logical forms l and the
+hidden syntax t is marginalized out by summing over all
+parses that produce l. we use id145 al-
+gorithms for this step, which are very similar to cky   style
+algorithms for parsing id140
+(pid18s).2 id145 is feasible within our
+approach because the feature-vector de   nitions   f(l, t, s)
+involve local features that keep track of counts of lexical
+items in the derivation t .3
+
+in parameter estimation, we assume that we have n training
+examples, {(si, li) : i = 1 . . . n}. si is the i   th sentence
+in training data, and li is the lambda expression associ-
+ated with that sentence. the task is to estimate the param-
+eter values      from these examples. note that the training
+set does not include derivations ti, and we therefore view
+derivations as hidden variables within the approach. the
+log-likelihood of the training set is given by:
+
+o(    ) =
+
+=
+
+log p (li|si;     )
+
+ x
+
+log
+
+p (li, t|si;     )
+
+!
+
+i=1
+
+t
+
+differentiating with respect to   j yields:
+
+   o
+     j
+
+=
+
+fj(li, t, si)p (t|si, li;     )
+
+fj(l, t, si)p (l, t|si;     )
+
+nx
+nx
+
+i=1
+
+nx
+x
+x
+    nx
+
+i=1
+
+t
+
+i=1
+
+l,t
+
+the sum in the denominator is over all valid parses for s
+under the id35 grammar.
+
+in this paper we make use of lexical features alone. for
+each lexical entry in the grammar, we have a feature fj
+that counts the number of times that the lexical entry is
+used in t . for example, in the simple grammar with en-
+tries for utah, idaho and borders, there would be three fea-
+
+the two terms in the derivative involve the calculation
+of expected values of a feature under the distributions
+
+2cky   style algorithms for pid18s (manning & schutze,
+1999) are related to the viterbi algorithm for hidden markov mod-
+els, or id145 methods for markov random    elds.
+3we use beam   search during parsing, where low-id203
+sub-parses are discarded at some points during parsing, in order
+to improve ef   ciency.
+
+p (t|si, li;     ) or p (t, l|si;     ). expectations of this type
+can again be calculated using id145, us-
+ing a variant of the inside-outside algorithm (baker, 1979),
+which was originally formulated for probabilistic context-
+free grammars.
+
+given this derivative, we can use it directly to maximize
+the likelihood using a stochastic gradient ascent algorithm
+(lecun, bottou, bengio, & haffner, 1998),4 which takes
+the following form:
+
+set      to some initial value
+for k = 0 . . . n     1
+
+for i = 1 . . . n
+     =      +   0
+
+(1+ct)
+
+    log p (li|si;    )
+
+        
+
+where t = i+k  n is the total number of previous updates,
+n is a parameter that controls the number of passes over the
+training data, and   0 and c are learning   rate parameters.
+
+3 learning
+
+in the previous section we saw that a probabilistic com-
+binatory categorial grammar (pid35) is de   ned by a lex-
+icon   , together with a parameter vector     .
+in this sec-
+tion, we present an algorithm that learns a pid35. one
+input to the algorithm is a training set of n examples,
+{(si, li) : i = 1 . . . n}, where each training example is
+a string si paired with a logical form li. another input to
+the algorithm is an initial lexicon,   0.5
+note that the training data includes neither direct evidence
+about the parse trees mapping each si to li, nor the set
+of lexical entries which are required for this mapping. we
+treat the parse trees as a hidden variable within our model.
+the set of possible parse trees for a sentence depends on the
+lexicon, which is itself learned from the training examples.
+thus, at a high level, learning will involve the following
+two sub-problems:
+
+    induction of a lexicon,   , which de   nes a set of parse
+
+trees for each training sentence si.
+
+    estimation of parameter values, which de   ne a distri-
+
+bution over parse trees for any sentence.
+
+4the em algorithm could also be used, but would require
+some form of gradient ascent for the m   step. because of this, we
+found it simpler to use gradient ascent for the entire optimization.
+5in our experiments the initial lexicon includes lexical items
+that are derived directly from the database in the domain; for ex-
+ample, we have a list of entries {u tah := n p : utah, idaho :=
+n p : idaho, n evada := n p : nevada, . . .} including every
+u.s. state in the geography domain. it also includes lexical items
+that are domain independent, and easily speci   ed by hand: for ex-
+ample, the de   nition for    what    in figure 2(b) would be included,
+as it would be useful across many domains.
+
+the    rst problem can be thought of as a form of structure
+learning, and is a major focus of the current section. the
+second problem is a more conventional parameter estima-
+tion problem, which roughly speaking can be solved using
+the id119 methods described in section 2.4.
+
+the remainder of this section describes an overall strat-
+egy for these two problems. we show how to interleave
+a structure-building step, genlex, with a parameter esti-
+mation step, in a way that results in a pid35 with a compact
+lexicon and effective parameter estimates for the weights of
+the log-linear model. section 3.1 describes the main struc-
+tural step, genlex(s, l), which generates a set of candi-
+date lexical items that may be useful in deriving l from s.
+in section 3.2 we describe the overall learning algorithm,
+which prunes the lexical entries suggested by genlex
+and estimates the parameters of a log-linear model.
+
+3.1 lexical learning
+
+we now describe the function genlex, which takes a sen-
+tence s and a logical form l and generates a set of lexical
+items. our aim is to de   ne genlex(s, l) in such a way
+that the set of lexical items that it generates allows at least
+one parse of s that results in l.
+
+as an example, consider the parse in figure 2(a). when
+presented with the input sentence utah borders idaho
+and logical form borders(utah, idaho), we would like
+genlex to produce a lexicon that includes the three
+lexical
+items that were used in this parse, namely
+
+utah
+idaho
+borders
+
+:= n p : utah
+:= n p : idaho
+:= (s\n p )/n p :   x.  y.borders(y, x)
+
+our de   nition of genlex will also produce spurious
+lexical items, such as borders := n p :
+idaho and
+borders utah := (s\n p )/n p :   x.  y.borders(y, x).
+later, we will see how these items can be pruned from the
+lexicon in a later stage of processing.
+to compute genlex, we make use of a function, c(l),
+that maps a logical form to a set of categories (such as n p :
+utah, or n p : idaho). genlex is then de   ned as
+
+genlex(s, l) = {x := y | x     w (s), y     c(l)}
+
+where w (s) is the set of all subsequences of words in s.
+the function c(l) is de   ned through a set of rules that
+examine l and produce categories based on its structure.
+figure 3 shows the rules that we use. each rule consists
+of a trigger that identi   es some sub-structure within the
+logical form l. for each sub-structure in l that matches
+the trigger, a category is created and added to c(l). as
+one example, the second row in the table de   nes a rule that
+identi   es all arity-one predicates p within the logical form
+
+input trigger
+
+constant c
+
+arity one predicate p1
+arity one predicate p1
+arity two predicate p2
+arity two predicate p2
+arity one predicate p1
+
+literal with arity two predicate p2
+and constant second argument c
+
+arity two predicate p2
+
+an arg max / min with second
+argument arity one function f
+
+an arity one
+
+numeric-ranged function f
+
+rules
+
+output category
+
+n p : c
+
+arg max(  x.state(x)     borders(x, texas),   x.size(x))
+
+categories produced from logical form
+
+n p : texas
+
+n :   x.p1(x)
+
+s\n p :   x.p1(x)
+
+(s\n p )/n p :   x.  y.p2(y, x)
+(s\n p )/n p :   x.  y.p2(x, y)
+
+n/n :   g.  x.p1(x)     g(x)
+n/n :   g.  x.p2(x, c)     g(x)
+
+(n\n )/n p :   x.  g.  y.p2(x, y)     g(x)
+n p/n :   g. arg max / min(g,   x.f (x))
+
+n :   x.state(x)
+
+s\n p :   x.state(x)
+
+(s\n p )/n p :   x.  y.borders(y, x)
+(s\n p )/n p :   x.  y.borders(x, y)
+
+n/n :   g.  x.state(x)     g(x)
+
+n/n :   g.  x.borders(x, texas)     g(x)
+
+(n\n )/n p :   g.  x.  y.borders(x, y)     g(x)
+
+n p/n :   g. arg max(g,   x.size(x))
+
+s/n p :   x.f (x)
+
+s/n p :   x.size(x)
+
+figure 3: the rules that de   ne genlex. we use the term predicate to refer to a function that returns a truth value; function to refer
+to all other functions; and constant to refer to constants of type e. each row represents a rule. the    rst column lists the triggers that
+identify some sub-structure within a logical form l, and then generate a category. the second column lists the category that is created.
+the third column lists example categories that are created when the rule is applied to the logical form at the top of this column.
+
+as triggers for creating a category n :   x.p(x). given the
+logical form   x.major(x)     city(x), which has the arity-
+one predicates major and city, this rule would create the
+categories n :   x.major(x) and n :   x.city(x).
+
+intuitively, each of the rules in figure 3 corresponds to a
+different linguistic sub-category such as noun, transitive
+verb, adjective, and so on. for example, the rule in the    rst
+row generates categories that are noun phrases, and the sec-
+ond rule generates nouns. the end result is an ef   cient way
+to generate a large set of linguistically plausible categories
+c(l) that could be used to construct a logical form l.
+
+3.2 the learning algorithm
+
+figure 4 shows the learning algorithm used within our ap-
+proach. the output of the algorithm is a pid35, de   ned by
+a lexicon    and a parameter vector     . as input, the algo-
+rithm takes a training set of sentences paired with logical
+forms, together with an initial lexicon,   0.
+at all stages, the algorithm maintains a parameter vector
+     which stores a real value associated with every possible
+lexical item. the set of possible lexical items is
+
+      =   0     n[
+
+genlex(si, li)
+
+i=1
+
+in our experiments, the parameters were initialized to be
+0.1 for all lexical items in   0, and 0.01 for all other lexical
+items. these values were chosen through experiments on
+the development data; they give a small initial bias towards
+using lexical items from   0 and favor parses that include
+more lexical items.
+
+the goal of the algorithm is to provide a relatively com-
+pact lexicon, which is a small subset of the entire set of
+possible lexical items. the algorithm achieves this by al-
+ternating between two steps. the goal of step 1 is to search
+for a relatively small number of lexical entries, which are
+nevertheless suf   cient to successfully parse all training ex-
+
+amples. step 2 is then used to re-estimate the parameters
+of the lexical items that are selected in step 1.
+
+in the t   th application of step 1, each sentence in turn
+is parsed with the current parameters     t   1 and a spe-
+cial, sentence   speci   c lexicon which is de   ned as   0    
+genlex(si, li). this will result in one or more highest-
+scoring parses that have the logical form li.6 lexical
+items are extracted from these highest-scoring parses alone.
+the result of this stage is to generate a small subset   i
+of genlex(si, li) for each training example. the out-
+put of step 1, at iteration t, is a subset of      , de   ned as
+
+  t =   0    sn
+
+i=1   i.
+
+step 2 re-estimates the parameters of the members of   t,
+using stochastic id119. the starting point for
+id119 when estimating     t is     t   1, i.e., the pa-
+rameter values at the previous iteration. for any lexical
+item that is not a member of   t, the associated parameter
+in     t is set to be the same as the corresponding parameter in
+    t   1 (i.e., parameter values are simply copied across from
+the previous iteration).
+
+the motivation for cycling between steps 1 and 2 is as fol-
+lows. in step 1, keeping only those lexical items that occur
+in the highest scoring parse(s) leading to li results in a
+compact lexicon. this step is also guaranteed to produce
+a lexicon   t           such that the accuracy on the training
+data when running the pid35 (  t,     t   1) is at least as ac-
+curate as applying the pid35 (     ,     t   1). in other words,
+pruning the lexicon in this way cannot hurt parsing perfor-
+mance on training data in comparison to using all possible
+lexical entries.7
+
+6note that this set of highest-scoring parses is identical to the
+set produced by parsing with      , rather than the sentence-speci   c
+lexicon. this is because   0     genlex(si, li) contains all lex-
+ical items that can possibly be used to derive li.
+
+7to see this, note that restricting the lexicon in this way cannot
+exclude any of the highest-scoring parses for si that lead to li. in
+practice, it may exclude some parses that lead to logical forms for
+si that are incorrect. because the highest-scoring correct parses
+
+step 2 also has a guarantee, in that the log-likelihood on the
+training data will improve (assuming that stochastic gradi-
+ent descent is successful in improving its objective). step 2
+is needed because after each application of step 1, the pa-
+rameters     t   1 are optimized for   t   1 rather than   t, the
+current lexicon. step 2 derives new parameter values     t
+which are optimized for   t.
+in summary, steps 1 and 2 together form a greedy, itera-
+tive method for simultaneously    nding a compact lexicon
+and also optimizing the log-likelihood of the model on the
+training data.
+
+4 related work
+
+this section discusses related work on natural language in-
+terfaces to databases (nlidbs), in particular focusing on
+learning approaches, and related work on learning id35s.
+
+there has been a signi   cant amount of work on hand engi-
+neering nlidbs. androutsopoulos, ritchie, and thanisch
+(1995) provide a comprehensive summary of this work.
+recent work in this area has focused on improved pars-
+ing techniques and designing grammars that can be ported
+easily to new domains (popescu, armanasu, etzioni, ko, &
+yates, 2004).
+
+zelle and mooney (1996) developed one of the earliest ex-
+amples of a learning system for nlidbs. this work made
+use of a deterministic shift   reduce parser and developed
+a learning algorithm, called chill, based on techniques
+from inductive logic programming, to learn control rules
+for parsing. the major limitation of this approach is that
+it does not learn the lexicon, instead assuming that a lex-
+icon that pairs words with their semantic content (but not
+syntax) has been created in advance. later, thompson and
+mooney (2002) developed a system that learns a lexicon
+for chill that performed almost as well as the original
+system. most recently, tang and mooney (2001) devel-
+oped a statistical shift   reduce parser that signi   cantly out-
+performed these original systems. however, this system,
+again, does not learn a lexicon.
+
+a number of previous learning methods (papineni, roukos,
+& ward, 1997; ramaswamy & kleindienst, 2000; miller,
+stallard, bobrow, & schwartz, 1996; he & young, 2004)
+have been applied to the atis domain, which involves a
+natural language interface to a travel database of    ight in-
+formation. in the future we plan to test our method on this
+domain. miller et al. (1996) describe an approach that as-
+sumes full annotation of parse trees. papineni et al. (1997)
+and ramaswamy and kleindienst (2000) use approaches
+based on methods originally developed for machine trans-
+lation. he and young (2004) describe an approach using an
+extension of id48, resulting in a model
+with some of the power of context-free models.
+
+are still allowed, parsing performance cannot deteriorate.
+
+inputs:
+
+    training examples e = {(si, li) : i = 1 . . . n} where
+each si is a sentence, each li is a logical form.
+    an initial lexicon   0
+
+procedures:
+
+    parse(s, l,   ,     ): takes as input a sentence s, a logical
+form l, a lexicon   , and a parameter vector     . returns the
+highest id203 parse for s with logical form l, when s
+is parsed by a pid35 with lexicon    and parameters     . if
+there is more than one parse with the same highest proba-
+bility, the entire set of highest id203 parses is returned.
+id145 methods are used when implement-
+ing parse, see section 2.4 of this paper.
+    estimate(  , e,     ): takes as input a lexicon   , a train-
+ing set e, and a parameter vector     . returns parameter val-
+ues      that are the output of stochastic id119 on the
+training set e under the grammar de   ned by   . the input     
+is the initial setting for the parameters in the stochastic gra-
+dient descent algorithm. id145 methods
+are used when implementing estimate, see section 2.4.
+    genlex(s, l): takes as input a sentence s and a logical
+form l. returns a set of lexical items. see section 3.1 for a
+description of genlex.
+
+where       =   0    sn
+
+initialization: de   ne      to be a real-valued vector of arity |     |,
+i=1 genlex(si, li).      stores a pa-
+rameter value for each potential lexical item. the initial pa-
+rameters     0 are taken to be 0.1 for any member of   0, and
+0.01 for all other lexical items.
+
+algorithm:
+
+    for t = 1 . . . t
+step 1: (lexical generation)
+
+    for i = 1 . . . n:
+
+    set    =   0     genlex(si, li).
+    calculate    = parse(si, li,   ,     t   1).
+    de   ne   i to be the set of lexical entries in   .
+
+    set   t =   0    sn
+
+i=1   i
+
+step 2: (parameter estimation)
+
+    set     t = estimate(  t, e,     t   1)
+output: lexicon   t together with parameters     t .
+
+figure 4: the overall learning algorithm.
+
+there have been several pieces of previous work on learn-
+ing id35s. clark and curran (2003) developed a method
+for leaning the parameters of a log-linear model for syntac-
+tic id35 parsing given fully annotated normal   form parse
+trees. watkinson and manandhar (1999) presented an un-
+supervised approach for learning id35s that, again, does
+not perform any semantic analysis. we know of only one
+previous system (bos, clark, steedman, curran, & hock-
+enmaier, 2004) that learns id35s with semantics. however,
+this approach requires fully   annotated id35 derivations as
+supervised training data. as such, the techniques they em-
+ployed are not applicable to learning in our framework.
+
+geo880
+r
+p
+
+jobs640
+r
+p
+
+our method
+cocktail
+
+96.25
+89.92
+
+79.29
+79.40
+
+97.36
+93.25
+
+79.29
+79.84
+
+figure 5: the results for our method, and the previous work of
+cocktail, when applied to the two database query domains. p
+is precision in recovering entire logical forms, r is recall.
+
+5 experiments
+
+we evaluated the learning algorithm on two domains:
+geo880, a set of 880 queries to a database of u.s. geogra-
+phy; and jobs640, a set of 640 queries to a database of job
+listings. the data were originally annotated with prolog
+style semantics which we manually converted to equivalent
+statements in the id198.
+
+we compare the structured classi   er results to the cock-
+tail system (tang & mooney, 2001). the cocktail
+experiments were conducted by performing ten   fold cross
+validation of the entire data set. we used a slightly differ-
+ent experimental set-up, where we made an explicit split
+between training and test data sets.8 the geo880 data set
+was divided into 600 training examples and 280 test ex-
+amples; the jobs640 set was divided into 500 training and
+140 test examples. the parameters of the training algo-
+rithm were tuned by cross   validation on the training set.
+we did two passes of the overall learning loop in figure 4.
+each time we used id119 to estimate parame-
+ters, we performed three passes over the training set with
+the learning-rate parameters   0 = 0.1 and c = 0.001.
+we give precision and recall for the different algorithms,
+de   ned as p recision = # correct/total # parsed,
+recall = # correct/total # examples. sentences are
+correct if the parser gives a completely correct semantics.
+
+figure 5 shows the results of the experiments. our ap-
+proach has higher precision than cocktail on both do-
+mains, with a very small reduction in recall. when eval-
+uating these results, it is important to realize that cock-
+tail is provided with a fairly extensive lexicon that pairs
+words with semantic predicates. for example, the word
+borders would be paired with the predicate borders(x, y).
+this prior information goes substantially beyond the initial
+lexicon used in our own experiments.9
+
+8this allowed us to use cross-validation experiments on the
+training set to optimize parameters, and more importantly to de-
+velop our algorithms while ensuring that we had not implicitly
+tuned our approach to the    nal test set.
+
+9note that the work of (thompson & mooney, 2002) does de-
+scribe a method which automatically learns a lexicon. however,
+results for this approach were worse than results for chill (zelle
+& mooney, 1996), which in turn were considerably worse than
+results for cocktail on the geo250 domain, a subset of the ex-
+amples in geo880.
+
+states
+major
+population
+cities
+rivers
+run through
+the largest
+river
+the highest
+the longest
+
+:= n :   x.state(x)
+:= n/n :   f.  x.major(x)     f (x)
+:= n :   x.population(x)
+:= n :   x.city(x)
+:= n :   x.river(x)
+:= (s\n p )/n p :   x.  y.traverse(y, x)
+:= n p/n :   f. arg max(f,   x.size(x))
+:= n :   x.river(x)
+:= n p/n :   f. arg max(f,   x.elev(x))
+:= n p/n :   f. arg max(f,   x.len(x))
+
+figure 6: ten learned lexical items that had highest associated
+parameter values from a randomly chosen development run in the
+geo880 domain.
+
+to better understand these results, we examined perfor-
+mance of our method through cross-validation on the train-
+ing set. we found that the approach creates a compact
+lexicon for the training examples that it parses. on the
+geo880 domain, the initial number of lexical items created
+by genlex was on average 393.8 per training example
+after pruning, on average only 5.1 lexical items per train-
+ing example remained. the jobs640 domain showed a re-
+duction from an average of 697.1 lexical items per training
+example, to 6.6 items.
+
+to investigate the disparity between precision and recall,
+we examined the behavior of the algorithm when trained in
+the cross-validation (development) regime. we found that
+on average, the learner failed to parse 9.3% of the training
+examples in the geo880 domain, and 8.7% of training ex-
+amples in the jobs640 domain. (note that sentences which
+cannot be parsed in step 1 of the training algorithm are ex-
+cluded from the training set during step 2.) these parse
+failures were caused by sentences whose semantics could
+not be built from the lexical items that genlex created.
+for example, the learner failed to parse complex sentences
+such as through which states does the mississippi run be-
+cause genlex does not create lexical entries that allow
+the verb run to    nd its argument, the preposition through,
+when it has moved to the front of the sentence. this prob-
+lem is almost certainly a major cause of the lower recall
+on test examples. exploring the addition of more rules to
+genlex is an important area for future work.
+
+figure 6 gives a sample of lexical entries that are learned
+by the approach. these entries are linguistically plausible
+and should generalize well to unseen data.
+
+6 discussion and future work
+
+in this paper, we presented a learning algorithm that cre-
+ates accurate structured classi   ers for natural language in-
+terfaces. a major focus for future work is to apply the algo-
+rithm to a range of larger data sets. larger data sets should
+improve the recall performance and allow us to develop a
+more comprehensive set of rules for genlex, ultimately
+creating a robust system that can quickly learn interfaces
+
+for new, unseen domains with little human assistance.
+
+although the experiments in this paper only learned natural
+language interfaces to databases, there are many other nat-
+ural language interfaces that the techniques can be gener-
+alized to handle. in particular, we will explore building in-
+terfaces to dialogue systems. these interfaces must handle
+a much wider range of semantic phenomena (for example,
+anaphora and ellipses). extending the current algorithm to
+address these challenges will greatly increase the range of
+possible interfaces that are successfully learned.
+
+acknowledgements
+
+we would like to thank rohit kate and raymond mooney
+for their help with obtaining the geo880 and jobs640 data
+sets. we also gratefully acknowledge the support of a nd-
+seg graduate research fellowship and the national science
+foundation under grants 0347631 and 0434222.
+
+references
+
+androutsopoulos, i., ritchie, g., & thanisch, p. (1995).
+id139 to databases   an intro-
+duction. journal of language engineering, 1(1), 29   
+81.
+
+baker, j. (1979). trainable grammars for speech recogni-
+tion. in speech communication papers for the 97th
+meeting of the acoustical society of america.
+
+bos, j., clark, s., steedman, m., curran, j. r., & hock-
+enmaier, j. (2004). wide-coverage semantic repre-
+sentations from a id35 parser.
+in proceedings of
+the 20th international conference on computational
+linguistics, pp. 1240   1246.
+
+carpenter, b. (1997). type-logical semantics. the mit
+
+press.
+
+clark, s., & curran, j. r. (2003). id148 for
+wide-coverage id35 parsing. in proceedings of the
+sigdat conference on empirical methods in natu-
+ral language processing.
+
+he, y., & young, s. (2004). semantic processing using
+the hidden vector state model. computer speech and
+language.
+
+johnson, m., geman, s., canon, s., chi, z., & riezler, s.
+(1999). estimators for stochastic    uni   cation-based   
+grammars.
+in proceedings of the association for
+computational linguistics, pp. 535   541.
+
+lafferty, j., mccallum, a., & pereira, f. (2001). condi-
+tional random    elds: probabilistic models for seg-
+menting and labeling sequence data.
+in proceed-
+ings of the 18th international conference on ma-
+chine learning.
+
+lecun, y., bottou, l., bengio, y., & haffner, p. (1998).
+gradient-based learning applied to document recog-
+nition. proceedings of the ieee, 86(11), 2278   2324.
+manning, c. d., & schutze, h. (1999). foundations of sta-
+tistical natural language processing. the mit press.
+miller, s., stallard, d., bobrow, r. j., & schwartz, r. l.
+(1996). a fully statistical approach to natural lan-
+guage interfaces. in proceedings of the association
+for computational linguistics, pp. 55   61.
+
+papineni, k. a., roukos, s., & ward, t. r. (1997). feature-
+based language understanding.
+in proceedings of
+european conference on speech communication
+and technology.
+
+popescu, a.-m., armanasu, a., etzioni, o., ko, d., &
+yates, a. (2004). modern id139
+to databases: composing statistical parsing with se-
+mantic tractability. in proceedings of the 20th inter-
+national conference on computational linguistics.
+ramaswamy, g., & kleindienst, j. (2000). hierarchi-
+cal feature-based translation for scalable natural lan-
+guage understanding. in proceedings of 6th interna-
+tional conference on spoken language processing.
+ratnaparkhi, a., roukos, s., & ward, r. t. (1994). a max-
+imum id178 model for parsing. in proceedings of
+the international conference on spoken language
+processing.
+
+steedman, m. (1996). surface structure and interpreta-
+
+tion. the mit press.
+
+steedman, m. (2000). the syntactic process. the mit
+
+press.
+
+tang, l. r., & mooney, r. j. (2001). using multiple clause
+constructors in inductive logic programming for se-
+mantic parsing. in proceedings of the 12th european
+conference on machine learning, pp. 466   477.
+
+taskar, b., guestrin, c., & koller, d. (2003). max-margin
+markov networks. in neural information processing
+systems.
+
+taskar, b., klein, d., collins, m., koller, d., & manning,
+c. (2004). max-margin parsing.
+in proceedings
+of the sigdat conference on empirical methods in
+natural language processing.
+
+thompson, c. a., & mooney, r. j. (2002). acquiring
+word-meaning mappings for natural language inter-
+faces. journal of arti   cial intelligence research, 18.
+watkinson, s., & manandhar, s. (1999). unsupervised
+lexical learning with categorial grammars using the
+lll corpus. in proceedings of the 1st workshop on
+learning language in logic, pp. 16   27.
+
+zelle, j. m., & mooney, r. j. (1996). learning to parse
+database queries using inductive logic programming.
+in proceedings of the 14th national conference on
+arti   cial intelligence.
+
+

@@ -1,0 +1,668 @@
+   [1]cs231n convolutional neural networks for visual recognition
+
+   table of contents:
+     * [2]setting up the data and the model
+          + [3]id174
+          + [4]weight initialization
+          + [5]batch id172
+          + [6]id173 (l2/l1/maxnorm/dropout)
+     * [7]id168s
+     * [8]summary
+
+setting up the data and the model
+
+   in the previous section we introduced a model of a neuron, which
+   computes a dot product following a non-linearity, and neural networks
+   that arrange neurons into layers. together, these choices define the
+   new form of the score function, which we have extended from the simple
+   linear mapping that we have seen in the linear classification section.
+   in particular, a neural network performs a sequence of linear mappings
+   with interwoven non-linearities. in this section we will discuss
+   additional design choices regarding id174, weight
+   initialization, and id168s.
+
+id174
+
+   there are three common forms of id174 a data matrix x,
+   where we will assume that x is of size [n x d] (n is the number of
+   data, d is their dimensionality).
+
+   mean subtraction is the most common form of preprocessing. it involves
+   subtracting the mean across every individual feature in the data, and
+   has the geometric interpretation of centering the cloud of data around
+   the origin along every dimension. in numpy, this operation would be
+   implemented as: x -= np.mean(x, axis = 0). with images specifically,
+   for convenience it can be common to subtract a single value from all
+   pixels (e.g. x -= np.mean(x)), or to do so separately across the three
+   color channels.
+
+   id172 refers to normalizing the data dimensions so that they
+   are of approximately the same scale. there are two common ways of
+   achieving this id172. one is to divide each dimension by its
+   standard deviation, once it has been zero-centered: (x /= np.std(x,
+   axis = 0)). another form of this preprocessing normalizes each
+   dimension so that the min and max along the dimension is -1 and 1
+   respectively. it only makes sense to apply this preprocessing if you
+   have a reason to believe that different input features have different
+   scales (or units), but they should be of approximately equal importance
+   to the learning algorithm. in case of images, the relative scales of
+   pixels are already approximately equal (and in range from 0 to 255), so
+   it is not strictly necessary to perform this additional preprocessing
+   step.
+   [prepro1.jpeg]
+   common id174 pipeline. left: original toy, 2-dimensional
+   input data. middle: the data is zero-centered by subtracting the mean
+   in each dimension. the data cloud is now centered around the origin.
+   right: each dimension is additionally scaled by its standard deviation.
+   the red lines indicate the extent of the data - they are of unequal
+   length in the middle, but of equal length on the right.
+
+   pca and whitening is another form of preprocessing. in this process,
+   the data is first centered as described above. then, we can compute the
+   covariance matrix that tells us about the correlation structure in the
+   data:
+# assume input data matrix x of size [n x d]
+x -= np.mean(x, axis = 0) # zero-center the data (important)
+cov = np.dot(x.t, x) / x.shape[0] # get the data covariance matrix
+
+   the (i,j) element of the data covariance matrix contains the covariance
+   between i-th and j-th dimension of the data. in particular, the
+   diagonal of this matrix contains the variances. furthermore, the
+   covariance matrix is symmetric and [9]positive semi-definite. we can
+   compute the svd factorization of the data covariance matrix:
+u,s,v = np.linalg.svd(cov)
+
+   where the columns of u are the eigenvectors and s is a 1-d array of the
+   singular values. to decorrelate the data, we project the original (but
+   zero-centered) data into the eigenbasis:
+xrot = np.dot(x, u) # decorrelate the data
+
+   notice that the columns of u are a set of orthonormal vectors (norm of
+   1, and orthogonal to each other), so they can be regarded as basis
+   vectors. the projection therefore corresponds to a rotation of the data
+   in x so that the new axes are the eigenvectors. if we were to compute
+   the covariance matrix of xrot, we would see that it is now diagonal. a
+   nice property of np.linalg.svd is that in its returned value u, the
+   eigenvector columns are sorted by their eigenvalues. we can use this to
+   reduce the dimensionality of the data by only using the top few
+   eigenvectors, and discarding the dimensions along which the data has no
+   variance. this is also sometimes refereed to as [10]principal component
+   analysis (pca) id84:
+xrot_reduced = np.dot(x, u[:,:100]) # xrot_reduced becomes [n x 100]
+
+   after this operation, we would have reduced the original dataset of
+   size [n x d] to one of size [n x 100], keeping the 100 dimensions of
+   the data that contain the most variance. it is very often the case that
+   you can get very good performance by training linear classifiers or
+   neural networks on the pca-reduced datasets, obtaining savings in both
+   space and time.
+
+   the last transformation you may see in practice is whitening. the
+   whitening operation takes the data in the eigenbasis and divides every
+   dimension by the eigenvalue to normalize the scale. the geometric
+   interpretation of this transformation is that if the input data is a
+   multivariable gaussian, then the whitened data will be a gaussian with
+   zero mean and identity covariance matrix. this step would take the
+   form:
+# whiten the data:
+# divide by the eigenvalues (which are square roots of the singular values)
+xwhite = xrot / np.sqrt(s + 1e-5)
+
+   warning: exaggerating noise. note that we   re adding 1e-5 (or a small
+   constant) to prevent division by zero. one weakness of this
+   transformation is that it can greatly exaggerate the noise in the data,
+   since it stretches all dimensions (including the irrelevant dimensions
+   of tiny variance that are mostly noise) to be of equal size in the
+   input. this can in practice be mitigated by stronger smoothing (i.e.
+   increasing 1e-5 to be a larger number).
+   [prepro2.jpeg]
+   pca / whitening. left: original toy, 2-dimensional input data. middle:
+   after performing pca. the data is centered at zero and then rotated
+   into the eigenbasis of the data covariance matrix. this decorrelates
+   the data (the covariance matrix becomes diagonal). right: each
+   dimension is additionally scaled by the eigenvalues, transforming the
+   data covariance matrix into the identity matrix. geometrically, this
+   corresponds to stretching and squeezing the data into an isotropic
+   gaussian blob.
+
+   we can also try to visualize these transformations with cifar-10
+   images. the training set of cifar-10 is of size 50,000 x 3072, where
+   every image is stretched out into a 3072-dimensional row vector. we can
+   then compute the [3072 x 3072] covariance matrix and compute its svd
+   decomposition (which can be relatively expensive). what do the computed
+   eigenvectors look like visually? an image might help:
+   [cifar10pca.jpeg]
+   left:an example set of 49 images. 2nd from left: the top 144 out of
+   3072 eigenvectors. the top eigenvectors account for most of the
+   variance in the data, and we can see that they correspond to lower
+   frequencies in the images. 2nd from right: the 49 images reduced with
+   pca, using the 144 eigenvectors shown here. that is, instead of
+   expressing every image as a 3072-dimensional vector where each element
+   is the brightness of a particular pixel at some location and channel,
+   every image above is only represented with a 144-dimensional vector,
+   where each element measures how much of each eigenvector adds up to
+   make up the image. in order to visualize what image information has
+   been retained in the 144 numbers, we must rotate back into the "pixel"
+   basis of 3072 numbers. since u is a rotation, this can be achieved by
+   multiplying by u.transpose()[:144,:], and then visualizing the
+   resulting 3072 numbers as the image. you can see that the images are
+   slightly blurrier, reflecting the fact that the top eigenvectors
+   capture lower frequencies. however, most of the information is still
+   preserved. right: visualization of the "white" representation, where
+   the variance along every one of the 144 dimensions is squashed to equal
+   length. here, the whitened 144 numbers are rotated back to image pixel
+   basis by multiplying by u.transpose()[:144,:]. the lower frequencies
+   (which accounted for most variance) are now negligible, while the
+   higher frequencies (which account for relatively little variance
+   originally) become exaggerated.
+
+   in practice. we mention pca/whitening in these notes for completeness,
+   but these transformations are not used with convolutional networks.
+   however, it is very important to zero-center the data, and it is common
+   to see id172 of every pixel as well.
+
+   common pitfall. an important point to make about the preprocessing is
+   that any preprocessing statistics (e.g. the data mean) must only be
+   computed on the training data, and then applied to the validation /
+   test data. e.g. computing the mean and subtracting it from every image
+   across the entire dataset and then splitting the data into
+   train/val/test splits would be a mistake. instead, the mean must be
+   computed only over the training data and then subtracted equally from
+   all splits (train/val/test).
+
+weight initialization
+
+   we have seen how to construct a neural network architecture, and how to
+   preprocess the data. before we can begin to train the network we have
+   to initialize its parameters.
+
+   pitfall: all zero initialization. lets start with what we should not
+   do. note that we do not know what the final value of every weight
+   should be in the trained network, but with proper data id172 it
+   is reasonable to assume that approximately half of the weights will be
+   positive and half of them will be negative. a reasonable-sounding idea
+   then might be to set all the initial weights to zero, which we expect
+   to be the    best guess    in expectation. this turns out to be a mistake,
+   because if every neuron in the network computes the same output, then
+   they will also all compute the same gradients during id26
+   and undergo the exact same parameter updates. in other words, there is
+   no source of asymmetry between neurons if their weights are initialized
+   to be the same.
+
+   small random numbers. therefore, we still want the weights to be very
+   close to zero, but as we have argued above, not identically zero. as a
+   solution, it is common to initialize the weights of the neurons to
+   small numbers and refer to doing so as symmetry breaking. the idea is
+   that the neurons are all random and unique in the beginning, so they
+   will compute distinct updates and integrate themselves as diverse parts
+   of the full network. the implementation for one weight matrix might
+   look like w = 0.01* np.random.randn(d,h), where randn samples from a
+   zero mean, unit standard deviation gaussian. with this formulation,
+   every neuron   s weight vector is initialized as a random vector sampled
+   from a multi-dimensional gaussian, so the neurons point in random
+   direction in the input space. it is also possible to use small numbers
+   drawn from a uniform distribution, but this seems to have relatively
+   little impact on the final performance in practice.
+
+   warning: it   s not necessarily the case that smaller numbers will work
+   strictly better. for example, a neural network layer that has very
+   small weights will during id26 compute very small gradients
+   on its data (since this gradient is proportional to the value of the
+   weights). this could greatly diminish the    gradient signal    flowing
+   backward through a network, and could become a concern for deep
+   networks.
+
+   calibrating the variances with 1/sqrt(n). one problem with the above
+   suggestion is that the distribution of the outputs from a randomly
+   initialized neuron has a variance that grows with the number of inputs.
+   it turns out that we can normalize the variance of each neuron   s output
+   to 1 by scaling its weight vector by the square root of its fan-in
+   (i.e. its number of inputs). that is, the recommended heuristic is to
+   initialize each neuron   s weight vector as: w = np.random.randn(n) /
+   sqrt(n), where n is the number of its inputs. this ensures that all
+   neurons in the network initially have approximately the same output
+   distribution and empirically improves the rate of convergence.
+
+   the sketch of the derivation is as follows: consider the inner product
+   \(s = \sum_i^n w_i x_i\) between the weights \(w\) and input \(x\),
+   which gives the raw activation of a neuron before the non-linearity. we
+   can examine the variance of \(s\):
+
+   where in the first 2 steps we have used [11]properties of variance. in
+   third step we assumed zero mean inputs and weights, so \(e[x_i] =
+   e[w_i] = 0\). note that this is not generally the case: for example
+   relu units will have a positive mean. in the last step we assumed that
+   all \(w_i, x_i\) are identically distributed. from this derivation we
+   can see that if we want \(s\) to have the same variance as all of its
+   inputs \(x\), then during initialization we should make sure that the
+   variance of every weight \(w\) is \(1/n\). and since \(\text{var}(ax) =
+   a^2\text{var}(x)\) for a random variable \(x\) and a scalar \(a\), this
+   implies that we should draw from unit gaussian and then scale it by \(a
+   = \sqrt{1/n}\), to make its variance \(1/n\). this gives the
+   initialization w = np.random.randn(n) / sqrt(n).
+
+   a similar analysis is carried out in [12]understanding the difficulty
+   of training deep feedforward neural networks by glorot et al. in this
+   paper, the authors end up recommending an initialization of the form \(
+   \text{var}(w) = 2/(n_{in} + n_{out}) \) where \(n_{in}, n_{out}\) are
+   the number of units in the previous layer and the next layer. this is
+   based on a compromise and an equivalent analysis of the backpropagated
+   gradients. a more recent paper on this topic, [13]delving deep into
+   rectifiers: surpassing human-level performance on id163
+   classification by he et al., derives an initialization specifically for
+   relu neurons, reaching the conclusion that the variance of neurons in
+   the network should be \(2.0/n\). this gives the initialization w =
+   np.random.randn(n) * sqrt(2.0/n), and is the current recommendation for
+   use in practice in the specific case of neural networks with relu
+   neurons.
+
+   sparse initialization. another way to address the uncalibrated
+   variances problem is to set all weight matrices to zero, but to break
+   symmetry every neuron is randomly connected (with weights sampled from
+   a small gaussian as above) to a fixed number of neurons below it. a
+   typical number of neurons to connect to may be as small as 10.
+
+   initializing the biases. it is possible and common to initialize the
+   biases to be zero, since the asymmetry breaking is provided by the
+   small random numbers in the weights. for relu non-linearities, some
+   people like to use small constant value such as 0.01 for all biases
+   because this ensures that all relu units fire in the beginning and
+   therefore obtain and propagate some gradient. however, it is not clear
+   if this provides a consistent improvement (in fact some results seem to
+   indicate that this performs worse) and it is more common to simply use
+   0 bias initialization.
+
+   in practice, the current recommendation is to use relu units and use
+   the w = np.random.randn(n) * sqrt(2.0/n), as discussed in [14]he et
+   al..
+
+   batch id172. a recently developed technique by ioffe and
+   szegedy called [15]batch id172 alleviates a lot of headaches
+   with properly initializing neural networks by explicitly forcing the
+   activations throughout a network to take on a unit gaussian
+   distribution at the beginning of the training. the core observation is
+   that this is possible because id172 is a simple differentiable
+   operation. in the implementation, applying this technique usually
+   amounts to insert the batchnorm layer immediately after fully connected
+   layers (or convolutional layers, as we   ll soon see), and before
+   non-linearities. we do not expand on this technique here because it is
+   well described in the linked paper, but note that it has become a very
+   common practice to use batch id172 in neural networks. in
+   practice networks that use batch id172 are significantly more
+   robust to bad initialization. additionally, batch id172 can be
+   interpreted as doing preprocessing at every layer of the network, but
+   integrated into the network itself in a differentiable manner. neat!
+
+id173
+
+   there are several ways of controlling the capacity of neural networks
+   to prevent overfitting:
+
+   l2 id173 is perhaps the most common form of id173. it
+   can be implemented by penalizing the squared magnitude of all
+   parameters directly in the objective. that is, for every weight \(w\)
+   in the network, we add the term \(\frac{1}{2} \lambda w^2\) to the
+   objective, where \(\lambda\) is the id173 strength. it is
+   common to see the factor of \(\frac{1}{2}\) in front because then the
+   gradient of this term with respect to the parameter \(w\) is simply
+   \(\lambda w\) instead of \(2 \lambda w\). the l2 id173 has the
+   intuitive interpretation of heavily penalizing peaky weight vectors and
+   preferring diffuse weight vectors. as we discussed in the linear
+   classification section, due to multiplicative interactions between
+   weights and inputs this has the appealing property of encouraging the
+   network to use all of its inputs a little rather than some of its
+   inputs a lot. lastly, notice that during id119 parameter
+   update, using the l2 id173 ultimately means that every weight
+   is decayed linearly: w += -lambda * w towards zero.
+
+   l1 id173 is another relatively common form of id173,
+   where for each weight \(w\) we add the term \(\lambda \mid w \mid\) to
+   the objective. it is possible to combine the l1 id173 with the
+   l2 id173: \(\lambda_1 \mid w \mid + \lambda_2 w^2\) (this is
+   called [16]elastic net id173). the l1 id173 has the
+   intriguing property that it leads the weight vectors to become sparse
+   during optimization (i.e. very close to exactly zero). in other words,
+   neurons with l1 id173 end up using only a sparse subset of
+   their most important inputs and become nearly invariant to the    noisy   
+   inputs. in comparison, final weight vectors from l2 id173 are
+   usually diffuse, small numbers. in practice, if you are not concerned
+   with explicit feature selection, l2 id173 can be expected to
+   give superior performance over l1.
+
+   max norm constraints. another form of id173 is to enforce an
+   absolute upper bound on the magnitude of the weight vector for every
+   neuron and use projected id119 to enforce the constraint. in
+   practice, this corresponds to performing the parameter update as
+   normal, and then enforcing the constraint by clamping the weight vector
+   \(\vec{w}\) of every neuron to satisfy \(\vert \vec{w} \vert_2 < c\).
+   typical values of \(c\) are on orders of 3 or 4. some people report
+   improvements when using this form of id173. one of its
+   appealing properties is that network cannot    explode    even when the
+   learning rates are set too high because the updates are always bounded.
+
+   dropout is an extremely effective, simple and recently introduced
+   id173 technique by srivastava et al. in [17]dropout: a simple
+   way to prevent neural networks from overfitting (pdf) that complements
+   the other methods (l1, l2, maxnorm). while training, dropout is
+   implemented by only keeping a neuron active with some id203 \(p\)
+   (a hyperparameter), or setting it to zero otherwise.
+   [dropout.jpeg]
+   figure taken from the [18]dropout paper that illustrates the idea.
+   during training, dropout can be interpreted as sampling a neural
+   network within the full neural network, and only updating the
+   parameters of the sampled network based on the input data. (however,
+   the exponential number of possible sampled networks are not independent
+   because they share the parameters.) during testing there is no dropout
+   applied, with the interpretation of evaluating an averaged prediction
+   across the exponentially-sized ensemble of all sub-networks (more about
+   ensembles in the next section).
+
+   vanilla dropout in an example 3-layer neural network would be
+   implemented as follows:
+""" vanilla dropout: not recommended implementation (see notes below) """
+
+p = 0.5 # id203 of keeping a unit active. higher = less dropout
+
+def train_step(x):
+  """ x contains the data """
+
+  # forward pass for example 3-layer neural network
+  h1 = np.maximum(0, np.dot(w1, x) + b1)
+  u1 = np.random.rand(*h1.shape) < p # first dropout mask
+  h1 *= u1 # drop!
+  h2 = np.maximum(0, np.dot(w2, h1) + b2)
+  u2 = np.random.rand(*h2.shape) < p # second dropout mask
+  h2 *= u2 # drop!
+  out = np.dot(w3, h2) + b3
+
+  # backward pass: compute gradients... (not shown)
+  # perform parameter update... (not shown)
+
+def predict(x):
+  # ensembled forward pass
+  h1 = np.maximum(0, np.dot(w1, x) + b1) * p # note: scale the activations
+  h2 = np.maximum(0, np.dot(w2, h1) + b2) * p # note: scale the activations
+  out = np.dot(w3, h2) + b3
+
+   in the code above, inside the train_step function we have performed
+   dropout twice: on the first hidden layer and on the second hidden
+   layer. it is also possible to perform dropout right on the input layer,
+   in which case we would also create a binary mask for the input x. the
+   backward pass remains unchanged, but of course has to take into account
+   the generated masks u1,u2.
+
+   crucially, note that in the predict function we are not dropping
+   anymore, but we are performing a scaling of both hidden layer outputs
+   by \(p\). this is important because at test time all neurons see all
+   their inputs, so we want the outputs of neurons at test time to be
+   identical to their expected outputs at training time. for example, in
+   case of \(p = 0.5\), the neurons must halve their outputs at test time
+   to have the same output as they had during training time (in
+   expectation). to see this, consider an output of a neuron \(x\) (before
+   dropout). with dropout, the expected output from this neuron will
+   become \(px + (1-p)0\), because the neuron   s output will be set to zero
+   with id203 \(1-p\). at test time, when we keep the neuron always
+   active, we must adjust \(x \rightarrow px\) to keep the same expected
+   output. it can also be shown that performing this attenuation at test
+   time can be related to the process of iterating over all the possible
+   binary masks (and therefore all the exponentially many sub-networks)
+   and computing their ensemble prediction.
+
+   the undesirable property of the scheme presented above is that we must
+   scale the activations by \(p\) at test time. since test-time
+   performance is so critical, it is always preferable to use inverted
+   dropout, which performs the scaling at train time, leaving the forward
+   pass at test time untouched. additionally, this has the appealing
+   property that the prediction code can remain untouched when you decide
+   to tweak where you apply dropout, or if at all. inverted dropout looks
+   as follows:
+"""
+inverted dropout: recommended implementation example.
+we drop and scale at train time and don't do anything at test time.
+"""
+
+p = 0.5 # id203 of keeping a unit active. higher = less dropout
+
+def train_step(x):
+  # forward pass for example 3-layer neural network
+  h1 = np.maximum(0, np.dot(w1, x) + b1)
+  u1 = (np.random.rand(*h1.shape) < p) / p # first dropout mask. notice /p!
+  h1 *= u1 # drop!
+  h2 = np.maximum(0, np.dot(w2, h1) + b2)
+  u2 = (np.random.rand(*h2.shape) < p) / p # second dropout mask. notice /p!
+  h2 *= u2 # drop!
+  out = np.dot(w3, h2) + b3
+
+  # backward pass: compute gradients... (not shown)
+  # perform parameter update... (not shown)
+
+def predict(x):
+  # ensembled forward pass
+  h1 = np.maximum(0, np.dot(w1, x) + b1) # no scaling necessary
+  h2 = np.maximum(0, np.dot(w2, h1) + b2)
+  out = np.dot(w3, h2) + b3
+
+   there has a been a large amount of research after the first
+   introduction of dropout that tries to understand the source of its
+   power in practice, and its relation to the other id173
+   techniques. recommended further reading for an interested reader
+   includes:
+     * [19]dropout paper by srivastava et al. 2014.
+     * [20]dropout training as adaptive id173:    we show that the
+       dropout regularizer is first-order equivalent to an l2 regularizer
+       applied after scaling the features by an estimate of the inverse
+       diagonal fisher information matrix   .
+
+   theme of noise in forward pass. dropout falls into a more general
+   category of methods that introduce stochastic behavior in the forward
+   pass of the network. during testing, the noise is marginalized over
+   analytically (as is the case with dropout when multiplying by \(p\)),
+   or numerically (e.g. via sampling, by performing several forward passes
+   with different random decisions and then averaging over them). an
+   example of other research in this direction includes [21]dropconnect,
+   where a random set of weights is instead set to zero during forward
+   pass. as foreshadowing, convolutional neural networks also take
+   advantage of this theme with methods such as stochastic pooling,
+   fractional pooling, and data augmentation. we will go into details of
+   these methods later.
+
+   bias id173. as we already mentioned in the linear
+   classification section, it is not common to regularize the bias
+   parameters because they do not interact with the data through
+   multiplicative interactions, and therefore do not have the
+   interpretation of controlling the influence of a data dimension on the
+   final objective. however, in practical applications (and with proper
+   id174) regularizing the bias rarely leads to significantly
+   worse performance. this is likely because there are very few bias terms
+   compared to all the weights, so the classifier can    afford to    use the
+   biases if it needs them to obtain a better data loss.
+
+   per-layer id173. it is not very common to regularize different
+   layers to different amounts (except perhaps the output layer).
+   relatively few results regarding this idea have been published in the
+   literature.
+
+   in practice: it is most common to use a single, global l2
+   id173 strength that is cross-validated. it is also common to
+   combine this with dropout applied after all layers. the value of \(p =
+   0.5\) is a reasonable default, but this can be tuned on validation
+   data.
+
+id168s
+
+   we have discussed the id173 loss part of the objective, which
+   can be seen as penalizing some measure of complexity of the model. the
+   second part of an objective is the data loss, which in a supervised
+   learning problem measures the compatibility between a prediction (e.g.
+   the class scores in classification) and the ground truth label. the
+   data loss takes the form of an average over the data losses for every
+   individual example. that is, \(l = \frac{1}{n} \sum_i l_i\) where \(n\)
+   is the number of training data. lets abbreviate \(f = f(x_i; w)\) to be
+   the activations of the output layer in a neural network. there are
+   several types of problems you might want to solve in practice:
+
+   classification is the case that we have so far discussed at length.
+   here, we assume a dataset of examples and a single correct label (out
+   of a fixed set) for each example. one of two most commonly seen cost
+   functions in this setting is the id166 (e.g. the weston watkins
+   formulation):
+
+   as we briefly alluded to, some people report better performance with
+   the squared hinge loss (i.e. instead using \(\max(0, f_j - f_{y_i} +
+   1)^2\)). the second common choice is the softmax classifier that uses
+   the cross-id178 loss:
+
+   problem: large number of classes. when the set of labels is very large
+   (e.g. words in english dictionary, or id163 which contains 22,000
+   categories), it may be helpful to use hierarchical softmax (see one
+   explanation [22]here (pdf)). the hierarchical softmax decomposes labels
+   into a tree. each label is then represented as a path along the tree,
+   and a softmax classifier is trained at every node of the tree to
+   disambiguate between the left and right branch. the structure of the
+   tree strongly impacts the performance and is generally
+   problem-dependent.
+
+   attribute classification. both losses above assume that there is a
+   single correct answer \(y_i\). but what if \(y_i\) is a binary vector
+   where every example may or may not have a certain attribute, and where
+   the attributes are not exclusive? for example, images on instagram can
+   be thought of as labeled with a certain subset of hashtags from a large
+   set of all hashtags, and an image may contain multiple. a sensible
+   approach in this case is to build a binary classifier for every single
+   attribute independently. for example, a binary classifier for each
+   category independently would take the form:
+
+   where the sum is over all categories \(j\), and \(y_{ij}\) is either +1
+   or -1 depending on whether the i-th example is labeled with the j-th
+   attribute, and the score vector \(f_j\) will be positive when the class
+   is predicted to be present and negative otherwise. notice that loss is
+   accumulated if a positive example has score less than +1, or when a
+   negative example has score greater than -1.
+
+   an alternative to this loss would be to train a id28
+   classifier for every attribute independently. a binary logistic
+   regression classifier has only two classes (0,1), and calculates the
+   id203 of class 1 as:
+
+   since the probabilities of class 1 and 0 sum to one, the id203
+   for class 0 is \(p(y = 0 \mid x; w, b) = 1 - p(y = 1 \mid x; w,b)\).
+   hence, an example is classified as a positive example (y = 1) if
+   \(\sigma (w^tx + b) > 0.5\), or equivalently if the score \(w^tx +b >
+   0\). the id168 then maximizes the log likelihood of this
+   id203. you can convince yourself that this simplifies to:
+
+   where the labels \(y_{ij}\) are assumed to be either 1 (positive) or 0
+   (negative), and \(\sigma(\cdot)\) is the sigmoid function. the
+   expression above can look scary but the gradient on \(f\) is in fact
+   extremely simple and intuitive: \(\partial{l_i} / \partial{f_j} =
+   y_{ij} - \sigma(f_j)\) (as you can double check yourself by taking the
+   derivatives).
+
+   regression is the task of predicting real-valued quantities, such as
+   the price of houses or the length of something in an image. for this
+   task, it is common to compute the loss between the predicted quantity
+   and the true answer and then measure the l2 squared norm, or l1 norm of
+   the difference. the l2 norm squared would compute the loss for a single
+   example of the form:
+
+   the reason the l2 norm is squared in the objective is that the gradient
+   becomes much simpler, without changing the optimal parameters since
+   squaring is a monotonic operation. the l1 norm would be formulated by
+   summing the absolute value along each dimension:
+
+   where the sum \(\sum_j\) is a sum over all dimensions of the desired
+   prediction, if there is more than one quantity being predicted. looking
+   at only the j-th dimension of the i-th example and denoting the
+   difference between the true and the predicted value by \(\delta_{ij}\),
+   the gradient for this dimension (i.e. \(\partial{l_i} /
+   \partial{f_j}\)) is easily derived to be either \(\delta_{ij}\) with
+   the l2 norm, or \(sign(\delta_{ij})\). that is, the gradient on the
+   score will either be directly proportional to the difference in the
+   error, or it will be fixed and only inherit the sign of the difference.
+
+   word of caution: it is important to note that the l2 loss is much
+   harder to optimize than a more stable loss such as softmax.
+   intuitively, it requires a very fragile and specific property from the
+   network to output exactly one correct value for each input (and its
+   augmentations). notice that this is not the case with softmax, where
+   the precise value of each score is less important: it only matters that
+   their magnitudes are appropriate. additionally, the l2 loss is less
+   robust because outliers can introduce huge gradients. when faced with a
+   regression problem, first consider if it is absolutely inadequate to
+   quantize the output into bins. for example, if you are predicting star
+   rating for a product, it might work much better to use 5 independent
+   classifiers for ratings of 1-5 stars instead of a regression loss.
+   classification has the additional benefit that it can give you a
+   distribution over the regression outputs, not just a single output with
+   no indication of its confidence. if you   re certain that classification
+   is not appropriate, use the l2 but be careful: for example, the l2 is
+   more fragile and applying dropout in the network (especially in the
+   layer right before the l2 loss) is not a great idea.
+
+     when faced with a regression task, first consider if it is
+     absolutely necessary. instead, have a strong preference to
+     discretizing your outputs to bins and perform classification over
+     them whenever possible.
+
+   id170. the structured loss refers to a case where the
+   labels can be arbitrary structures such as graphs, trees, or other
+   complex objects. usually it is also assumed that the space of
+   structures is very large and not easily enumerable. the basic idea
+   behind the structured id166 loss is to demand a margin between the
+   correct structure \(y_i\) and the highest-scoring incorrect structure.
+   it is not common to solve this problem as a simple unconstrained
+   optimization problem with id119. instead, special solvers
+   are usually devised so that the specific simplifying assumptions of the
+   structure space can be taken advantage of. we mention the problem
+   briefly but consider the specifics to be outside of the scope of the
+   class.
+
+summary
+
+   in summary:
+     * the recommended preprocessing is to center the data to have mean of
+       zero, and normalize its scale to [-1, 1] along each feature
+     * initialize the weights by drawing them from a gaussian distribution
+       with standard deviation of \(\sqrt{2/n}\), where \(n\) is the
+       number of inputs to the neuron. e.g. in numpy: w =
+       np.random.randn(n) * sqrt(2.0/n).
+     * use l2 id173 and dropout (the inverted version)
+     * use batch id172
+     * we discussed different tasks you might want to perform in practice,
+       and the most common id168s for each task
+
+   we   ve now preprocessed the data and set up and initialized the model.
+   in the next section we will look at the learning process and its
+   dynamics.
+
+     * [23]cs231n
+     * [24]cs231n
+     * [25]karpathy@cs.stanford.edu
+
+references
+
+   1. http://cs231n.github.io/
+   2. http://cs231n.github.io/neural-networks-2/#intro
+   3. http://cs231n.github.io/neural-networks-2/#datapre
+   4. http://cs231n.github.io/neural-networks-2/#init
+   5. http://cs231n.github.io/neural-networks-2/#batchnorm
+   6. http://cs231n.github.io/neural-networks-2/#reg
+   7. http://cs231n.github.io/neural-networks-2/#losses
+   8. http://cs231n.github.io/neural-networks-2/#summary
+   9. http://en.wikipedia.org/wiki/positive-definite_matrix#negative-definite.2c_semidefinite_and_indefinite_matrices
+  10. http://en.wikipedia.org/wiki/principal_component_analysis
+  11. http://en.wikipedia.org/wiki/variance
+  12. http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+  13. http://arxiv-web3.library.cornell.edu/abs/1502.01852
+  14. http://arxiv-web3.library.cornell.edu/abs/1502.01852
+  15. http://arxiv.org/abs/1502.03167
+  16. http://web.stanford.edu/~hastie/papers/b67.2 (2005) 301-320 zou & hastie.pdf
+  17. http://www.cs.toronto.edu/~rsalakhu/papers/srivastava14a.pdf
+  18. http://www.cs.toronto.edu/~rsalakhu/papers/srivastava14a.pdf
+  19. http://www.cs.toronto.edu/~rsalakhu/papers/srivastava14a.pdf
+  20. http://papers.nips.cc/paper/4882-dropout-training-as-adaptive-id173.pdf
+  21. http://cs.nyu.edu/~wanli/dropc/
+  22. http://arxiv.org/pdf/1310.4546.pdf
+  23. https://github.com/cs231n
+  24. https://twitter.com/cs231n
+  25. mailto:karpathy@cs.stanford.edu

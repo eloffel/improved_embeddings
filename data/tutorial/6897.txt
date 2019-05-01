@@ -1,0 +1,1114 @@
+   #[1]studywolf    feed [2]studywolf    comments feed [3]studywolf   
+   id23 part 1: id24 and exploration comments feed
+   [4]nengo scripting: absolute value [5]nengo model     low pass derivative
+   filter [6]alternate [7]alternate [8]studywolf [9]wordpress.com
+
+[10]studywolf
+
+a blog for things i encounter while coding and researching neuroscience,
+motor control, and learning
+
+     * [11]home
+     * [12]about
+     * [13]site index
+
+   [14]nov 25 2012
+   [15]61 comments
+   [16]by travisdewolf [17]learning, [18]programming, [19]python,
+   [20]id23
+
+id23 part 1: id24 and exploration
+
+   we   ve been running a reading group on id23 (rl) in my
+   lab the last couple of months, and recently we   ve been looking at a
+   very entertaining simulation for testing rl strategies, ye    old cat vs
+   mouse paradigm. there are a number of different rl methods you can use
+   / play with in that tutorial, but for this i   m only going to talk about
+   id24. the code implementation i   ll be using is all in python, and
+   the original code comes from one of our resident post-docs, terry
+   stewart, and can be garnered from his [21]online rl tutorial. the code
+   i modify here is based off of terry   s code and modified by eric
+   hunsberger, another phd student in my lab. i   ll talk more about how
+   it   s been modified in another post.
+
+   id24 review
+   for those unfamiliar, the basic gist of id24 is that you have a
+   representation of the environmental states s, and possible actions in
+   those states a, and you learn the value of each of those actions in
+   each of those states. intuitively, this value, q, is referred to as the
+   state-action value. so in id24 you start by setting all your
+   state-action values to 0 (this isn   t always the case, but in this
+   simple implementation it will be), and you go around and explore the
+   state-action space. after you try an action in a state, you evaluate
+   the state that it has lead to. if it has lead to an undesirable outcome
+   you reduce the q value (or weight) of that action from that state so
+   that other actions will have a greater value and be chosen instead the
+   next time you   re in that state. similarly, if you   re rewarded for
+   taking a particular action, the weight of that action for that state is
+   increased, so you   re more likely to choose it again the next time
+   you   re in that state. importantly, when you update q, you   re updating
+   it for the previous state-action combination. you can only update q
+   after you   ve seen what results.
+
+   let   s look at an example in the cat vs mouse case, where you are the
+   mouse. you were in the state where the cat was in front of you, and you
+   chose to go forward into the cat. this caused you to get eaten, so now
+   reduce the weight of that action for that state, so that the next time
+   the cat is in front of you you won   t choose to go forward you might
+   choose to go to the side or away from the cat instead (you are a mouse
+   with respawning powers). note that this doesn   t reduce the value of
+   moving forward when there is no cat in front of you, the value for
+      move forward    is only reduced in the situation that there   s a cat in
+   front of you. in the opposite case, if there   s cheese in front of you
+   and you choose    move forward    you get rewarded. so now the next time
+   you   re in the situation (state) that there   s cheese in front of you,
+   the action    move forward    is more likely to be chosen, because last
+   time you chose it you were rewarded.
+
+   now this system, as is, gives you no foresight further than one time
+   step. not incredibly useful and clearly too limited to be a real
+   strategy employed in biological systems. something that we can do to
+   make this more useful is include a look-ahead value. the look-ahead
+   works as follows. when we   re updating a given q value for the
+   state-action combination we just experienced, we do a search over all
+   the q values for the state the we ended up in. we find the maximum
+   state-action value in this state, and incorporate that into our update
+   of the q value representing the state-action combination we just
+   experienced.
+
+   for example, we   re a mouse again. our state is that cheese is one step
+   ahead, and we haven   t learned anything yet (blank value in the action
+   box represents 0). so we randomly choose an action and we happen to
+   choose    move forward   .
+   now, in this state (we are on top of cheese) we are rewarded, and so we
+   go back and update the q value for the state    cheese is one step ahead   
+   and the action    move forward    and increase the value of    move forward   
+   for that state.
+   now let   s say the cheese is moved and we   re moving around again, now
+   we   re in the state    cheese is two steps ahead   , and we make a move and
+   end up in the state    cheese is one step ahead   .
+   now when we are updating the q value for the previous state-action
+   combination we look at all the q values for the state    cheese is one
+   step ahead   . we see that one of these values is high (this being for
+   the action    move forward   ) and this value is incorporated in the update
+   of the previous state-action combination.
+   specifically we   re updating the previous state-action value using the
+   equation: q(s, a) += alpha * (reward(s,a) + max(q(s') - q(s,a)) where s
+   is the previous state, a is the previous action, s' is the current
+   state, and alpha is the discount factor (set to .5 here).
+
+   intuitively, the change in the q-value for performing action a in state
+   s is the difference between the actual reward (reward(s,a) +
+   max(q(s'))) and the expected reward (q(s,a)) multiplied by a learning
+   rate, alpha. you can think of this as a kind of pd control, driving
+   your system to the target, which is in this case the correct q-value.
+
+   here, we evaluate the reward of moving ahead when the cheese is two
+   steps ahead as the reward for moving into that state (0), plus the
+   reward of the best action from that state (moving into the cheese +50),
+   minus the expected value of that state (0), multiplied by our learning
+   rate (.5) = +25.
+
+   exploration
+   in the most straightforward implementation of id24, state-action
+   values are stored in a look-up table. so we have a giant table, which
+   is size n x m, where n is the number of different possible states, and
+   m is the number of different possible actions. so then at decision time
+   we simply go to that table, look up the corresponding action values for
+   that state, and choose the maximum, in equation form:
+def choose_action(self, state):
+    q = [self.getq(state, a) for a in self.actions]
+    maxq = max(q)
+    action = self.actions[maxq]
+    return action
+
+   almost. there are a couple of additional things we need to add. first,
+   we need to cover the case where there are several actions that all have
+   the same value. so to do that, if there are several with the same
+   value, randomly choose one of them.
+def choose_action(self, state):
+    q = [self.getq(state, a) for a in self.actions]
+    maxq = max(q)
+    count = q.count(maxq)
+    if count > 1:
+        best = [i for i in range(len(self.actions)) if q[i] == maxq]
+        i = random.choice(best)
+    else:
+        i = q.index(maxq)
+
+    action = self.actions[i]
+    return action
+
+   this helps us out of that situation, but now if we ever happen upon a
+   decent option, we   ll always choose that one in the future, even if
+   there is a way better option available. to overcome this, we   re going
+   to need to introduce exploration. the standard way to get exploration
+   is to introduce an additional term, epsilon. we then randomly generate
+   a value, and if that value is less than epsilon, a random action is
+   chosen, instead of following our normal tactic of choosing the max q
+   value.
+def choose_action(self, state):
+    if random.random() < self.epsilon: # exploration action = random.choice(self
+.actions) else: q = [self.getq(state, a) for a in self.actions] maxq = max(q) co
+unt = q.count(maxq) if count > 1:
+            best = [i for i in range(len(self.actions)) if q[i] == maxq]
+            i = random.choice(best)
+        else:
+            i = q.index(maxq)
+
+       action = self.actions[i]
+    return action
+
+   the problem now is that we even after we   ve explored all the options
+   and we know for sure the best option, we still sometimes choose a
+   random action; the exploration doesn   t turn off. there are a number of
+   ways to overcome this, most involving manually adjusting epsilon as the
+   mouse learns, so that it explores less and less as time passes and it
+   has presumably learned the best actions for the majority of situations.
+   i   m not a big fan of this, so instead i   ve implemented exploration the
+   following way: if the randomly generated value is less than epsilon,
+   then randomly add values to the q values for this state, scaled by the
+   maximum q value of this state. in this way, exploration is added, but
+   you   re still using your learned q values as a basis for choosing your
+   action, rather than just randomly choosing an action completely at
+   random.
+    def choose_action(self, state):
+        q = [self.getq(state, a) for a in self.actions]
+        maxq = max(q)
+
+        if random.random()  1:
+            best = [i for i in range(len(self.actions)) if q[i] == maxq]
+            i = random.choice(best)
+        else:
+            i = q.index(maxq)
+
+        action = self.actions[i]
+
+        return action
+
+   very pleasingly, you get results comparable to the case where you
+   perform lots of learning and then set epsilon = 0 to turn off random
+   movements. let   s look at them!
+
+   simulation results
+   so here, the simulation is set up such that there is a mouse, cheese,
+   and a cat all inside a room. the mouse then learns over a number of
+   trials to avoid the cat and get the cheese. printing out the results
+   after every 1,000 time steps, for the standard learning case where you
+   reduce epsilon as you learn the results are:
+10000, e: 0.09, w: 44, l: 778
+20000, e: 0.08, w: 39, l: 617
+30000, e: 0.07, w: 47, l: 437
+40000, e: 0.06, w: 33, l: 376
+50000, e: 0.05, w: 35, l: 316
+60000, e: 0.04, w: 36, l: 285
+70000, e: 0.03, w: 33, l: 255
+80000, e: 0.02, w: 31, l: 179
+90000, e: 0.01, w: 35, l: 152
+100000, e: 0.00, w: 44, l: 130
+110000, e: 0.00, w: 28, l: 90
+120000, e: 0.00, w: 17, l: 65
+130000, e: 0.00, w: 40, l: 117
+140000, e: 0.00, w: 56, l: 86
+150000, e: 0.00, w: 37, l: 77
+
+   for comparison now, here are the results when epsilon is not reduced in
+   the standard exploration case:
+10000, e: 0.10, w: 53, l: 836
+20000, e: 0.10, w: 69, l: 623
+30000, e: 0.10, w: 33, l: 452
+40000, e: 0.10, w: 32, l: 408
+50000, e: 0.10, w: 57, l: 397
+60000, e: 0.10, w: 41, l: 326
+70000, e: 0.10, w: 40, l: 317
+80000, e: 0.10, w: 47, l: 341
+90000, e: 0.10, w: 47, l: 309
+100000, e: 0.10, w: 54, l: 251
+110000, e: 0.10, w: 35, l: 278
+120000, e: 0.10, w: 61, l: 278
+130000, e: 0.10, w: 45, l: 295
+140000, e: 0.10, w: 67, l: 283
+150000, e: 0.10, w: 50, l: 304
+
+   as you can see, the performance now converges around 300, instead of
+   100. not great.
+   now here are the results from the alternative implementation of
+   exploration, where epsilon is held constant:
+10000, e: 0.10, w: 65, l: 805
+20000, e: 0.10, w: 36, l: 516
+30000, e: 0.10, w: 50, l: 417
+40000, e: 0.10, w: 38, l: 310
+50000, e: 0.10, w: 39, l: 247
+60000, e: 0.10, w: 31, l: 225
+70000, e: 0.10, w: 23, l: 181
+80000, e: 0.10, w: 34, l: 159
+90000, e: 0.10, w: 36, l: 137
+100000, e: 0.10, w: 35, l: 138
+110000, e: 0.10, w: 42, l: 136
+120000, e: 0.10, w: 24, l: 99
+130000, e: 0.10, w: 52, l: 106
+140000, e: 0.10, w: 22, l: 88
+150000, e: 0.10, w: 29, l: 101
+
+   and again we get that nice convergence to 100, but this time without
+   having to manually modify epsilon. which is pretty baller.
+
+   code
+   and that   s it! there is of course lots and lots of other facets of
+   exploration to discuss, but this is just a brief discussion. if you   d
+   like the code for the cat vs mouse and the alternative exploration you
+   can access them at my github: [22]cat vs mouse     exploration.
+   to alternate between the different types of exploration, change the
+   import statement at the top of the egomouselook.py to be either import
+   qlearn for the standard exploration method, or import qlearn_mod_random
+   as qlearn to test the alternative method. to have epsilon reduce in
+   value as time goes, you can uncomment the lines 142-145.
+   advertisements
+
+share this:
+
+     * [23]twitter
+     * [24]facebook
+     *
+
+like this:
+
+   like loading...
+
+related
+
+   tagged [25]exploration, [26]python, [27]reinfocement learning
+
+61 thoughts on    id23 part 1: id24 and exploration   
+
+    1. [28]id23: sarsa vs id24 | studywolf says:
+       [29]july 1, 2013 at 9:50 pm
+       [   ] my previous post about id23 i talked about
+       id24, and how that works in the context of a cat vs mouse
+       game. i mentioned in [   ]
+       [30]reply
+    2. [31]myasir68 says:
+       [32]september 9, 2013 at 2:46 am
+       hi,
+       i am phd student and i am looking to understand the concept of
+       qlearning in non-deterministic environment. do you know any website
+       or tutorial that could help in understanding by the putting
+       id23 on an example. so that it would clear my
+       understanding, waiting for your positive and prompt reply
+       [33]reply
+          + [34]travisdewolf says:
+            [35]september 11, 2013 at 12:13 pm
+            hello,
+            i think i might have a matlab tutorial that would be of
+            interest to you, if you email me i can forward the file to
+            you!
+            [36]reply
+               o p says:
+                 [37]september 16, 2013 at 10:11 am
+                 hi travisdewolf,
+                 i would be interested in the matlab tutorial for
+                 non-deterministic qlearning as well!. i would be grateful
+                 if you could send it at my email.
+                 best wishes!
+               o [38]travisdewolf says:
+                 [39]september 16, 2013 at 10:21 am
+                 sent!
+               o nead says:
+                 [40]december 5, 2013 at 6:02 pm
+                 hi travisdewolf,
+                 could you send the tutorial to me, please?
+                 thanks
+               o [41]travisdewolf says:
+                 [42]december 6, 2013 at 2:48 pm
+                 sent!
+               o dave says:
+                 [43]january 14, 2014 at 12:59 am
+                 can i have it too? this is a great tutorial btw!
+               o [44]linkid says:
+                 [45]april 23, 2015 at 1:44 pm
+                 hi, could you send to my email too?
+                 [46]nklinh91@gmail.com (matlabcode)
+               o [47]yashi21 says:
+                 [48]july 1, 2015 at 5:36 am
+                 hey can u plz send the tutorial in my id too?asap
+    3. jewa says:
+       [49]december 16, 2013 at 12:43 pm
+       i have just stared to explore id24, may this tutorial helpful
+       to me, thanks!
+       [50]reply
+    4. [51]yan king yin says:
+       [52]january 13, 2014 at 4:47 am
+       thanks, this is nice for beginning to explore rl, without dealing
+       with its full complexity at once. the gui is neat. i   d like to fork
+       a branch of it on github, add some comments to the code, etc. but
+       your repo contains other directories which makes forking a bit
+       inconvenient. anyway i have copied the code manually. thanks again!
+       [53]reply
+          + [54]travisdewolf says:
+            [55]january 13, 2014 at 11:25 am
+            ah yeah, sorry about that! but glad you   re finding the
+            tutorial / code useful. please keep me updated on your work
+            with it! i   d be interested to see any extensions.
+            thanks!
+            [56]reply
+               o anand raghuraman says:
+                 [57]november 28, 2016 at 10:47 pm
+                 hey travis,
+                 if you have a python code for id24, can you send it
+                 to me as well??
+                 my email id is: [58]anandrcsc@gmail.com
+               o [59]travisdewolf says:
+                 [60]march 10, 2017 at 2:12 pm
+                 hello, i just have the code that i link above up on my
+                 github!
+    5. raju says:
+       [61]february 2, 2014 at 11:10 pm
+       could you send me the tutorial .i am doing my research using rl
+       [62]reply
+    6. [63]fatemeh jahedpari says:
+       [64]february 10, 2014 at 5:08 pm
+       many thanks, it was great.
+       [65]reply
+    7. [66]fatemeh jahedpari says:
+       [67]february 10, 2014 at 5:12 pm
+       can i have that matlab tutorial, as well?
+       cheers
+       [68]reply
+    8. [69]fatemeh jahedpari says:
+       [70]february 11, 2014 at 8:04 am
+       btw, it seems that the right side of figure labeled    q moves near
+       cheese    is not correct. i think both cheese and mouse should be
+       placed one place upper than their current places.
+       [71]reply
+          + [72]travisdewolf says:
+            [73]february 11, 2014 at 12:29 pm
+            ah! that would be the case if the map was representing things
+            in an allocentric (world or absolute coordinates) way, but
+            here everything is displayed relative to the mouse
+            (egocentricly). when the mouse moves up the cheese is now only
+            one square away from him, and the figure reflects this. i   m
+            actually working on another post about the difference between
+            allocentric and egocentric, i   ll let you know when it   s up!
+            [74]reply
+               o [75]fatemeh jahedpari says:
+                 [76]february 12, 2014 at 4:31 am
+                 thank you
+    9. bandanashop says:
+       [77]march 28, 2014 at 4:48 am
+       excellent tutorial and introduction to a potentially complicated
+       subject     well done!
+       [78]reply
+   10. suparna says:
+       [79]july 3, 2014 at 9:42 am
+       could you please send me the matlab tutorial, i am doing my thesis
+       using rl. thanks
+       [80]reply
+   11. [81]andypark says:
+       [82]july 9, 2014 at 8:25 am
+       hi, it is excellent material! if it is not too late, can you also
+       send me the matlab tutorial? thanks!
+       [83]reply
+          + [84]travisdewolf says:
+            [85]july 9, 2014 at 12:45 pm
+            sure can, just send me your email address!
+            [86]reply
+               o stromaea says:
+                 [87]october 21, 2014 at 4:12 pm
+                 hi, i would be interested in the matlab tutorial as well!
+                 i would be grateful if you could send it to my email. i
+                 sent you my request to your e-mail. thanks!
+   12. migel tissera says:
+       [88]august 13, 2014 at 11:19 pm
+       hi travis,
+       great work! i   m a phd student at university of south australia, and
+       have looked at spaun and your python implementation of it too.
+       is it possible to get your matlab code for this?
+       thanks,
+       [89]reply
+   13. maigha says:
+       [90]december 10, 2014 at 12:09 pm
+       hello!
+       could i please get for the matlab tutorial on non-deterministic
+       id24?
+       thanks!
+       [91]reply
+   14. dz says:
+       [92]march 17, 2015 at 12:27 pm
+       hi travisdewolf,
+       your explanation is really good. i am really novice in id24
+       and was confused about how to set the exploration value (epsilon).
+       if it does not inconvenience you, could you send me the matlab
+       tutorial as well, please?
+       thank you.
+       [93]reply
+   15. [94]1p     id23     id24 and exploration |
+       exploding ads says:
+       [95]may 14, 2015 at 12:34 am
+       [   ]
+       [96]https://studywolf.wordpress.com/2012/11/25/reinforcement-learni
+       ng-id24-and-exploration/ [   ]
+       [97]reply
+   16. zeeshan says:
+       [98]july 1, 2015 at 10:23 am
+       please send me the matlab tutorial for qlearning in
+       non-deterministic environment. thanks
+       [99]reply
+   17. [100]taeyoung says:
+       [101]july 8, 2015 at 6:29 pm
+       reblogged this on [102]taeyoung kim and commented:
+       thing to learn more
+       [103]reply
+   18. [104]ria candrawati says:
+       [105]october 4, 2015 at 12:14 am
+       sir, i am phd student and i am also looking for the concept of
+       qlearning in non-deterministic environment. can you please sent the
+       tutorial to me.. thanks
+       [106]reply
+   19. erin says:
+       [107]october 12, 2015 at 11:14 am
+       first of all, great tutorial, super useful explanations! thank you
+       very much for sharing.
+       secondly, in q-move-into-cheese.jpeg, the mouse actually moves
+       upward, so he lands where the cheese was    i think you moved the
+       cheese into the mouse   s tile. or i am missing something?
+       please continue posting, your skills are helping us a lot!
+       erin
+       [108]reply
+          + erin says:
+            [109]october 12, 2015 at 11:16 am
+            nevermind! i guess that diamond shows the current position of
+            the mouse and its surrounding tiles.
+            [110]reply
+               o [111]travisdewolf says:
+                 [112]october 12, 2015 at 9:08 pm
+                 hi erin,
+                 yup you   re right! that   s the world from the mouse   s point
+                 of view     
+                 glad you found the tutorial useful!
+   20. yucheng says:
+       [113]november 19, 2015 at 9:40 pm
+       hi!
+       could you please send me the matlab tutorial please?
+       thanks a lot!
+       [114]reply
+   21. haz says:
+       [115]november 22, 2015 at 12:37 am
+       is that possible to give dynamic rewards in id24?
+       [116]reply
+          + [117]travisdewolf says:
+            [118]november 22, 2015 at 11:51 am
+            hi haz,
+            yup. one of the most basic tasks you can do with rl is the
+            bandit task
+            ([119]https://en.wikipedia.org/wiki/multi-armed_bandit) and
+            the reward changes over time. the speed of convergence depends
+            on your learning rate. if you have a deterministic reward
+            (i.e. not probabilistic) then the amount of noise in the
+            system will determine how high you can crank this. the more
+            noise in your reward the lower you need to keep the learning
+            rate because you don   t want to fully change your q-value based
+            on noise. hope that helps!
+            [120]reply
+               o haz says:
+                 [121]november 22, 2015 at 6:41 pm
+                 thank you very much
+   22. haz says:
+       [122]november 22, 2015 at 7:21 pm
+       hi travis,
+       thank you very much for your explanation on my earlier question.
+       i got another concern regarding id24.
+       for an example,i have to navigate a robot to reach a specific
+       point. but i have time constraints, where robot needs to reach the
+       point within specific time period(e.g.10sec).
+       how and at which point that i need incorporate this constrain in my
+       id24 algorithm?
+       thanks in advance !
+       [123]reply
+          + [124]travisdewolf says:
+            [125]november 24, 2015 at 12:06 pm
+            hi haz,
+            if you want to address this kind of problem with id24,
+            then you can do things like just restart the simulation after
+            10 seconds have gone by, or move the agent back to the start
+            (but that can introduce some undesired artifacts). id24
+            normall assumes an infinite-horizon, but there are variations
+            like average reward rl that remove time dependency
+            ([126]http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1
+            .28.3423&rep=rep1&type=pdf).
+            if you   re not tied to id24, then in general for a finite
+            horizon control problem i would use something like iterative
+            linear quadratic gaussian control (ilqg;
+            [127]http://maeresearch.ucsd.edu/skelton/publications/weiwei_i
+            lqg_cdc43.pdf) or policy improvement with path integrals (pi2;
+            [128]http://www.jmlr.org/papers/volume11/theodorou10a/theodoro
+            u10a.pdf).
+            hope that helps!
+            [129]reply
+   23. szerzp says:
+       [130]december 12, 2015 at 10:56 am
+       hi travis,
+       great tutorial here. i have a little confusion about the code tho:
+       for printv function in qlearn.py, a single state can be split in
+       form of x, y, a two element tuple. whereas i looked into
+       egomouselook.py, the state is encoded as a tuple of cellvalues,
+       which is in turn dependent on cells in lookcells. number of
+       elements in lookcells is definitely more than 2 according to your
+       implementation, so the state should be encoded as a tuple of more
+       than 2 elements. so why is the split x,y in qlearn.py possible?
+       wouldn   t that lead to an error in unpacking of tuple?
+       thanks
+       [131]reply
+          + [132]travisdewolf says:
+            [133]december 14, 2015 at 1:07 pm
+            hello!
+            oh my that is a holdover print function from an allocentric
+            based version of id24, sorry about that! you   re the
+            first to catch that one. those functions aren   t actually used
+            anywhere, which is why no errors threw. i   ve taken them out
+            now, thanks for the catch!
+            [134]reply
+   24. haz says:
+       [135]february 8, 2016 at 5:56 pm
+       hi travis,
+       i got a very basic question about training and implementation of
+       the id24 agent.
+       initially, we need to train the agent in a simulation environment.
+       so, what are the factors we need to consider at the training phase?
+       do we normally train agents in single simulation with varying the
+       environmental conditions (e.g. changing the arrival time of the
+       agent to the system during single simulation using few agents )
+       or
+       do we need to run separate simulations for a single agent, varying
+       the arrival time to the system?
+       thanks in advance !
+       [136]reply
+          + [137]travisdewolf says:
+            [138]march 1, 2016 at 9:07 pm
+            hi haz,
+            sorry about the delay in replying! this got buried. there   s
+            definitely no hard and fast rules about best practices, it can
+            vary greatly depending on the specific problem.
+            i   m not sure i understand what your context is for    varying
+            the arrival time to the system   , could you elaborate on your
+            set up? and how you would change the time an agent arrives in
+            the system inside a single simulation? in general, depending
+            on the problem, and what you want to train specifically,
+            either running a single long simulation to train or a bunch of
+            shorter ones can be appropriate.
+            [139]reply
+   25. shivaji says:
+       [140]march 27, 2016 at 2:55 pm
+       hi ,iam working on rehab robotics using machine learning
+       techniques   can u please share matlab id23
+       example/tutorial
+       [141]reply
+   26. [142]muhammad awais jadoon says:
+       [143]april 6, 2016 at 1:22 am
+       hi, i   ve recently started exploring machine learning and then rl. i
+       would much appreciate if you can help me with matlab code/tutorial
+       for id24. i   m actually trying to use it in wireless
+       communication area but right now i   ve no idea how to use it in
+       practice.
+       thank you
+       [144]reply
+          + [145]travisdewolf says:
+            [146]april 22, 2016 at 7:51 am
+            hello!
+            i   m sorry looks like i somehow missed this comment, if you
+            send me an email [147]tdewolf@uwaterloo.ca with some more
+            details i can try to help you out.
+            [148]reply
+   27. pogo says:
+       [149]april 22, 2016 at 7:43 am
+       hello! it seems like there   s some code missing from the last code
+       box (after random.random()). can you update if possible?
+       [150]reply
+          + [151]travisdewolf says:
+            [152]april 22, 2016 at 7:48 am
+            id48, the last code box looks like this for me:
+def choose_action(self, state):
+    q = [self.getq(state, a) for a in self.actions]
+    maxq = max(q)
+
+    if random.random()  1:
+        best = [i for i in range(len(self.actions)) if q[i] == maxq]
+        i = random.choice(best)
+    else:
+        i = q.index(maxq)
+
+    action = self.actions[i]
+
+    return action
+
+            i   m not sure why it wouldn   t appear in full for you! but you
+            could also check out the [153]code on my github if it   s not
+            displaying for you here!
+            [154]reply
+               o pogo says:
+                 [155]april 22, 2016 at 7:59 am
+                 sorry! i wasn   t clear. yes, that   s what i see, but there
+                 are several lines missing between random.random() and the
+                 next character 1:
+                 found it on github, thank you!
+   28. haz says:
+       [156]august 17, 2016 at 12:04 am
+       hi guys,
+       does id23(id24) using lookup table (instead
+       of function approximation) is equal to id145 ?
+       thanks in advance!
+       [157]reply
+          + [158]travisdewolf says:
+            [159]august 26, 2016 at 3:13 pm
+            hey haz,
+            id145 is really more of an implementation
+            detail, where you store the solution to sub-problems in a
+            lookup table. so rl can be implemented using dynamic
+            programming, but you wouldn   t say rl with a lookup table is
+            the same as id145, does that help?
+            [160]reply
+   29. googi says:
+       [161]october 12, 2016 at 3:47 pm
+       specifically we   re updating the previous state-action value using
+       the equation: q(s, a) += alpha * (reward(s,a) + max(q(s   )     q(s,a))
+       where s is the previous state, a is the previous action, s    is the
+       current state, and alpha is the discount factor (set to .5 here).
+       should be
+       specifically we   re updating the previous state-action value using
+       the equation: q(s, a) += alpha * (reward(s,a) +
+       max(q(s   )******)*****     q(s,a)) where s is the previous state, a is
+       the previous action, s    is the current state, and alpha is the
+       discount factor (set to .5 here).
+       [162]reply
+          + [163]travisdewolf says:
+            [164]october 13, 2016 at 2:58 pm
+            hi googi,
+            thanks for the comment! the grouping you   ve suggested is
+            definitely useful intuitively! but since it   s just addition
+            and subtraction inside the multiplication by the learning
+            rate, switching around the brackets doesn   t affect the
+            calculations     
+            [165]reply
+   30. [166]sam says:
+       [167]october 18, 2016 at 3:33 am
+       reblogged this on [168]fordatascientists.
+       [169]reply
+   31. helen says:
+       [170]august 17, 2017 at 7:53 am
+       hi travisdewolf,
+       the article is very good, let me preliminary understanding the
+       concept of id24, to further deepen the understanding.
+       could you send the tutorial to me, please?
+       thanks
+       [171]reply
+   32. [172]                                       says:
+       [173]august 31, 2017 at 9:14 am
+       [   ]
+       [174]https://studywolf.wordpress.com/2012/11/25/reinforcement-learn
+       ing-id24-and-exploration/ [   ]
+       [175]reply
+   33. [176]deep moody man     bk lim says:
+       [177]october 11, 2017 at 5:21 am
+       [   ] id23 part 1: id24 and exploration [   ]
+       [178]reply
+   34. [179]2     beginner   s guide to deep id23 |
+       traffic.ventures social says:
+       [180]december 14, 2018 at 8:29 am
+       [   ] blog posts on id23, parts 1-4 by travis
+       dewolf [   ]
+       [181]reply
+
+leave a reply [182]cancel reply
+
+   enter your comment here...
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+
+   fill in your details below or click an icon to log in:
+     *
+     *
+     *
+
+       iframe: [183]googleplus-sign-in
+
+     *
+     *
+
+   [184]gravatar
+   email (required) (address never made public)
+   ____________________
+   name (required)
+   ____________________
+   website
+   ____________________
+   wordpress.com logo
+
+   you are commenting using your wordpress.com account. ( [185]log out /
+   [186]change )
+   google photo
+
+   you are commenting using your google account. ( [187]log out /
+   [188]change )
+   twitter picture
+
+   you are commenting using your twitter account. ( [189]log out /
+   [190]change )
+   facebook photo
+
+   you are commenting using your facebook account. ( [191]log out /
+   [192]change )
+   [193]cancel
+
+   connecting to %s
+
+   [ ] notify me of new comments via email.
+
+   [ ] notify me of new posts via email.
+
+   post comment
+
+   [194]    previous post
+   [195]next post    
+
+   search for: ____________________ search
+
+recent posts
+
+     * [196]force control of task-space orientation
+     * [197]natural policy gradient in tensorflow
+     * [198]building a spiking neural model of adaptive arm control
+     * [199]matplotlib legends for mean and confidence interval plots
+     * [200]abr jaco repo public release!
+
+archives
+
+   archives [select month_______]
+
+categories
+
+     * [201]cython (2)
+     * [202]learning (9)
+          + [203]deep learning (2)
+          + [204]id23 (5)
+     * [205]linux (2)
+     * [206]math (16)
+          + [207]id202 (8)
+          + [208]id203 (1)
+     * [209]motor control (33)
+     * [210]neuroscience (9)
+          + [211]basal ganglia (2)
+     * [212]id203 (2)
+     * [213]programming (41)
+          + [214]c++ (10)
+               o [215]eigen (1)
+          + [216]cython (7)
+          + [217]nengo (7)
+          + [218]python (33)
+          + [219]vrep (5)
+     * [220]robotics (29)
+          + [221]dynamic movement primitive (4)
+          + [222]operational space control (16)
+          + [223]pid control (7)
+
+meta
+
+     * [224]register
+     * [225]log in
+     * [226]entries rss
+     * [227]comments rss
+     * [228]wordpress.com
+
+   [229]basal ganglia [230]c++ [231]cython [232]deep learning [233]dynamic
+   movement primitive [234]eigen [235]learning [236]id202
+   [237]linux [238]math [239]motor control [240]nengo [241]neuroscience
+   [242]operational space control [243]pid control [244]id203
+   [245]programming [246]python [247]id23 [248]robotics
+   [249]vrep
+   advertisements
+   [250]create a free website or blog at wordpress.com.
+
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   post to
+   [251]cancel reblog post
+
+   close and accept privacy & cookies: this site uses cookies. by
+   continuing to use this website, you agree to their use.
+   to find out more, including how to control cookies, see here:
+   [252]cookie policy
+
+   iframe: [253]likes-master
+
+   %d bloggers like this:
+
+references
+
+   visible links
+   1. https://studywolf.wordpress.com/feed/
+   2. https://studywolf.wordpress.com/comments/feed/
+   3. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/feed/
+   4. https://studywolf.wordpress.com/2012/11/19/nengo-scripting-absolute-value/
+   5. https://studywolf.wordpress.com/2012/12/09/nengo-model-low-pass-derivative-filter/
+   6. https://public-api.wordpress.com/oembed/?format=json&url=https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/&for=wpcom-auto-discovery
+   7. https://public-api.wordpress.com/oembed/?format=xml&url=https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/&for=wpcom-auto-discovery
+   8. https://studywolf.wordpress.com/osd.xml
+   9. https://s1.wp.com/opensearch.xml
+  10. https://studywolf.wordpress.com/
+  11. https://studywolf.wordpress.com/
+  12. https://studywolf.wordpress.com/about/
+  13. https://studywolf.wordpress.com/site-index/
+  14. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+  15. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comments
+  16. https://studywolf.wordpress.com/author/travisdewolf/
+  17. https://studywolf.wordpress.com/category/learning/
+  18. https://studywolf.wordpress.com/category/programming/
+  19. https://studywolf.wordpress.com/category/programming/python/
+  20. https://studywolf.wordpress.com/category/learning/reinforcement-learning/
+  21. https://github.com/tcstewar/ccmsuite
+  22. https://github.com/studywolf/blog/tree/master/rl/cat vs mouse exploration
+  23. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?share=twitter
+  24. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?share=facebook
+  25. https://studywolf.wordpress.com/tag/exploration/
+  26. https://studywolf.wordpress.com/tag/python/
+  27. https://studywolf.wordpress.com/tag/reinfocement-learning/
+  28. https://studywolf.wordpress.com/2013/07/01/reinforcement-learning-sarsa-vs-id24/
+  29. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-631
+  30. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=631#respond
+  31. http://gravatar.com/myasir68
+  32. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-642
+  33. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=642#respond
+  34. https://studywolf.wordpress.com/
+  35. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-643
+  36. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=643#respond
+  37. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-646
+  38. https://studywolf.wordpress.com/
+  39. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-647
+  40. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-831
+  41. https://studywolf.wordpress.com/
+  42. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-832
+  43. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-851
+  44. http://linkid.wordpress.com/
+  45. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1358
+  46. mailto:nklinh91@gmail.com
+  47. http://gravatar.com/yashi21
+  48. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1407
+  49. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-837
+  50. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=837#respond
+  51. https://www.facebook.com/yky.yan.king.yin
+  52. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-848
+  53. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=848#respond
+  54. https://studywolf.wordpress.com/
+  55. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-849
+  56. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=849#respond
+  57. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-2036
+  58. mailto:anandrcsc@gmail.com
+  59. https://studywolf.wordpress.com/
+  60. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-2178
+  61. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-864
+  62. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=864#respond
+  63. https://www.facebook.com/jahedpari
+  64. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-869
+  65. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=869#respond
+  66. https://www.facebook.com/jahedpari
+  67. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-870
+  68. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=870#respond
+  69. https://www.facebook.com/jahedpari
+  70. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-872
+  71. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=872#respond
+  72. https://studywolf.wordpress.com/
+  73. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-873
+  74. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=873#respond
+  75. https://www.facebook.com/jahedpari
+  76. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-874
+  77. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-933
+  78. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=933#respond
+  79. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1059
+  80. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1059#respond
+  81. http://gravatar.com/jijon8810
+  82. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1064
+  83. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1064#respond
+  84. https://studywolf.wordpress.com/
+  85. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1065
+  86. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1065#respond
+  87. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1173
+  88. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1084
+  89. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1084#respond
+  90. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1226
+  91. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1226#respond
+  92. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1328
+  93. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1328#respond
+  94. http://blog.explodingads.com/?p=16841
+  95. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1372
+  96. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+  97. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1372#respond
+  98. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1409
+  99. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1409#respond
+ 100. http://www.tykim.me/
+ 101. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1414
+ 102. http://tykim.me/2015/07/08/reinforcement-learning-part-1-id24-and-exploration/
+ 103. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1414#respond
+ 104. https://www.facebook.com/app_scoped_user_id/10207699156060004/
+ 105. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1504
+ 106. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1504#respond
+ 107. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1516
+ 108. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1516#respond
+ 109. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1517
+ 110. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1517#respond
+ 111. https://studywolf.wordpress.com/
+ 112. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1518
+ 113. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1581
+ 114. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1581#respond
+ 115. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1585
+ 116. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1585#respond
+ 117. https://studywolf.wordpress.com/
+ 118. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1588
+ 119. https://en.wikipedia.org/wiki/multi-armed_bandit
+ 120. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1588#respond
+ 121. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1592
+ 122. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1593
+ 123. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1593#respond
+ 124. https://studywolf.wordpress.com/
+ 125. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1599
+ 126. http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.28.3423&rep=rep1&type=pdf
+ 127. http://maeresearch.ucsd.edu/skelton/publications/weiwei_ilqg_cdc43.pdf
+ 128. http://www.jmlr.org/papers/volume11/theodorou10a/theodorou10a.pdf
+ 129. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1599#respond
+ 130. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1637
+ 131. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1637#respond
+ 132. https://studywolf.wordpress.com/
+ 133. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1644
+ 134. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1644#respond
+ 135. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1713
+ 136. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1713#respond
+ 137. https://studywolf.wordpress.com/
+ 138. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1726
+ 139. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1726#respond
+ 140. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1744
+ 141. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1744#respond
+ 142. https://plus.google.com/+majadoon
+ 143. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1762
+ 144. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1762#respond
+ 145. https://studywolf.wordpress.com/
+ 146. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1780
+ 147. mailto:tdewolf@uwaterloo.ca
+ 148. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1780#respond
+ 149. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1778
+ 150. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1778#respond
+ 151. https://studywolf.wordpress.com/
+ 152. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1779
+ 153. https://github.com/studywolf/blog/tree/master/rl/cat vs mouse exploration
+ 154. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1779#respond
+ 155. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1781
+ 156. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1894
+ 157. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1894#respond
+ 158. https://studywolf.wordpress.com/
+ 159. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1919
+ 160. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1919#respond
+ 161. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1990
+ 162. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1990#respond
+ 163. https://studywolf.wordpress.com/
+ 164. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1993
+ 165. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1993#respond
+ 166. http://itssampath.wordpress.com/
+ 167. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-1996
+ 168. https://fordatascientists.wordpress.com/2016/10/18/reinforcement-learning-part-1-id24-and-exploration/
+ 169. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=1996#respond
+ 170. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-2412
+ 171. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=2412#respond
+ 172. http://www.treeney.com/2017/08/31/                        /
+ 173. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-2470
+ 174. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+ 175. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=2470#respond
+ 176. https://blog.bkbklim.com/2017/10/11/deep-moody-man/
+ 177. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-2720
+ 178. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=2720#respond
+ 179. http://blog.traffic.ventures/?p=176192
+ 180. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-3706
+ 181. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/?replytocom=3706#respond
+ 182. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#respond
+ 183. https://public-api.wordpress.com/connect/?googleplus-sign-in=https://studywolf.wordpress.com&color_scheme=light
+ 184. https://gravatar.com/site/signup/
+ 185. javascript:highlandercomments.doexternallogout( 'wordpress' );
+ 186. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+ 187. javascript:highlandercomments.doexternallogout( 'googleplus' );
+ 188. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+ 189. javascript:highlandercomments.doexternallogout( 'twitter' );
+ 190. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+ 191. javascript:highlandercomments.doexternallogout( 'facebook' );
+ 192. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+ 193. javascript:highlandercomments.cancelexternalwindow();
+ 194. https://studywolf.wordpress.com/2012/11/19/nengo-scripting-absolute-value/
+ 195. https://studywolf.wordpress.com/2012/12/09/nengo-model-low-pass-derivative-filter/
+ 196. https://studywolf.wordpress.com/2018/12/03/force-control-of-task-space-orientation/
+ 197. https://studywolf.wordpress.com/2018/06/20/natural-policy-gradient-in-tensorflow/
+ 198. https://studywolf.wordpress.com/2018/01/19/building-a-spiking-neural-model-of-adaptive-arm-control/
+ 199. https://studywolf.wordpress.com/2017/11/21/matplotlib-legends-for-mean-and-confidence-interval-plots/
+ 200. https://studywolf.wordpress.com/2017/09/07/abr-jaco-repo-public-release/
+ 201. https://studywolf.wordpress.com/category/cython/
+ 202. https://studywolf.wordpress.com/category/learning/
+ 203. https://studywolf.wordpress.com/category/learning/deep-learning/
+ 204. https://studywolf.wordpress.com/category/learning/reinforcement-learning/
+ 205. https://studywolf.wordpress.com/category/linux/
+ 206. https://studywolf.wordpress.com/category/math/
+ 207. https://studywolf.wordpress.com/category/math/linear-algebra/
+ 208. https://studywolf.wordpress.com/category/math/id203-math/
+ 209. https://studywolf.wordpress.com/category/motor-control/
+ 210. https://studywolf.wordpress.com/category/neuroscience/
+ 211. https://studywolf.wordpress.com/category/neuroscience/basal-ganglia/
+ 212. https://studywolf.wordpress.com/category/id203/
+ 213. https://studywolf.wordpress.com/category/programming/
+ 214. https://studywolf.wordpress.com/category/programming/c/
+ 215. https://studywolf.wordpress.com/category/programming/c/eigen/
+ 216. https://studywolf.wordpress.com/category/programming/cython-programming/
+ 217. https://studywolf.wordpress.com/category/programming/nengo/
+ 218. https://studywolf.wordpress.com/category/programming/python/
+ 219. https://studywolf.wordpress.com/category/programming/vrep/
+ 220. https://studywolf.wordpress.com/category/robotics/
+ 221. https://studywolf.wordpress.com/category/robotics/dynamic-movement-primitive/
+ 222. https://studywolf.wordpress.com/category/robotics/operational-space-control/
+ 223. https://studywolf.wordpress.com/category/robotics/pid-control/
+ 224. https://wordpress.com/start?ref=wplogin
+ 225. https://studywolf.wordpress.com/wp-login.php
+ 226. https://studywolf.wordpress.com/feed/
+ 227. https://studywolf.wordpress.com/comments/feed/
+ 228. https://wordpress.com/
+ 229. https://studywolf.wordpress.com/category/neuroscience/basal-ganglia/
+ 230. https://studywolf.wordpress.com/category/programming/c/
+ 231. https://studywolf.wordpress.com/category/cython/
+ 232. https://studywolf.wordpress.com/category/learning/deep-learning/
+ 233. https://studywolf.wordpress.com/category/robotics/dynamic-movement-primitive/
+ 234. https://studywolf.wordpress.com/tag/eigen/
+ 235. https://studywolf.wordpress.com/category/learning/
+ 236. https://studywolf.wordpress.com/category/math/linear-algebra/
+ 237. https://studywolf.wordpress.com/category/linux/
+ 238. https://studywolf.wordpress.com/category/math/
+ 239. https://studywolf.wordpress.com/category/motor-control/
+ 240. https://studywolf.wordpress.com/category/programming/nengo/
+ 241. https://studywolf.wordpress.com/category/neuroscience/
+ 242. https://studywolf.wordpress.com/category/robotics/operational-space-control/
+ 243. https://studywolf.wordpress.com/category/robotics/pid-control/
+ 244. https://studywolf.wordpress.com/category/math/id203-math/
+ 245. https://studywolf.wordpress.com/category/programming/
+ 246. https://studywolf.wordpress.com/category/programming/python/
+ 247. https://studywolf.wordpress.com/category/learning/reinforcement-learning/
+ 248. https://studywolf.wordpress.com/category/robotics/
+ 249. https://studywolf.wordpress.com/category/programming/vrep/
+ 250. https://wordpress.com/?ref=footer_website
+ 251. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/
+ 252. https://automattic.com/cookies
+ 253. https://widgets.wp.com/likes/master.html?ver=20190321#ver=20190321
+
+   hidden links:
+ 255. https://studywolf.files.wordpress.com/2012/11/q-move-into-cheese.jpeg
+ 256. https://studywolf.files.wordpress.com/2012/11/q-cheese-ahead-updated.jpeg
+ 257. https://studywolf.files.wordpress.com/2012/11/q-move-near-cheese.jpeg
+ 258. https://studywolf.files.wordpress.com/2012/11/q-cheese-near-updated.jpeg
+ 259. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-form-guest
+ 260. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-form-load-service:wordpress.com
+ 261. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-form-load-service:twitter
+ 262. https://studywolf.wordpress.com/2012/11/25/reinforcement-learning-id24-and-exploration/#comment-form-load-service:facebook

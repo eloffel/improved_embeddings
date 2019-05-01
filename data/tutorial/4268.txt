@@ -1,0 +1,384 @@
+   #[1]cat /var/log/life
+
+cat /var/log/life
+
+   # anish athalye
+   [ ]
+     * [2]home
+     * [3]about
+     * [4]archive
+     * [5]projects
+
+      2019. all rights reserved.
+
+a step-by-step guide to synthesizing adversarial examples
+
+   25 jul 2017    6 min read     shared on [6]hacker news, [7]lobsters,
+   [8]reddit and [9]twitter
+
+   synthesizing [10]adversarial examples for neural networks is
+   surprisingly easy: small, carefully-crafted perturbations to inputs can
+   cause neural networks to misclassify inputs in arbitrarily chosen ways.
+   given that adversarial examples [11]transfer to the physical world and
+   [12]can be made extremely robust, this is a real security concern.
+
+   in this post, we give a brief introduction to algorithms for
+   synthesizing adversarial examples, and we walk through the process of
+   implementing attacks in [13]tensorflow, building up to synthesizing a
+   robust adversarial example following [14]this technique.
+
+   this post is an executable [15]jupyter notebook: you   re encouraged to
+   [16]download it and experiment with the examples yourself!
+
+setup
+
+   we choose to attack an [17]inception v3 network trained on
+   [18]id163. in this section, we load a pre-trained network from the
+   [19]tf-slim image classification library. this part isn   t particularly
+   interesting, so feel free to [20]skip this section.
+import tensorflow as tf
+import tensorflow.contrib.slim as slim
+import tensorflow.contrib.slim.nets as nets
+
+tf.logging.set_verbosity(tf.logging.error)
+sess = tf.interactivesession()
+
+   first, we set up the input image. we use a tf.variable instead of a
+   tf.placeholder because we will need it to be trainable. we can still
+   feed it when we want to.
+image = tf.variable(tf.zeros((299, 299, 3)))
+
+   next, we load the inception v3 model.
+def inception(image, reuse):
+    preprocessed = tf.multiply(tf.subtract(tf.expand_dims(image, 0), 0.5), 2.0)
+    arg_scope = nets.inception.inception_v3_arg_scope(weight_decay=0.0)
+    with slim.arg_scope(arg_scope):
+        logits, _ = nets.inception.inception_v3(
+            preprocessed, 1001, is_training=false, reuse=reuse)
+        logits = logits[:,1:] # ignore background class
+        probs = tf.nn.softmax(logits) # probabilities
+    return logits, probs
+
+logits, probs = inception(image, reuse=false)
+
+   next, we load pre-trained weights. this inception v3 has a top-5
+   accuracy of 93.9%.
+import tempfile
+from urllib.request import urlretrieve
+import tarfile
+import os
+
+data_dir = tempfile.mkdtemp()
+inception_tarball, _ = urlretrieve(
+    'http://download.tensorflow.org/models/inception_v3_2016_08_28.tar.gz')
+tarfile.open(inception_tarball, 'r:gz').extractall(data_dir)
+
+restore_vars = [
+    var for var in tf.global_variables()
+    if var.name.startswith('inceptionv3/')
+]
+saver = tf.train.saver(restore_vars)
+saver.restore(sess, os.path.join(data_dir, 'inception_v3.ckpt'))
+
+   next, we write some code to show an image, classify it, and show the
+   classification result.
+import json
+import matplotlib.pyplot as plt
+
+id163_json, _ = urlretrieve(
+    'http://www.anishathalye.com/media/2017/07/25/id163.json')
+with open(id163_json) as f:
+    id163_labels = json.load(f)
+
+def classify(img, correct_class=none, target_class=none):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 8))
+    fig.sca(ax1)
+    p = sess.run(probs, feed_dict={image: img})[0]
+    ax1.imshow(img)
+    fig.sca(ax1)
+
+    topk = list(p.argsort()[-10:][::-1])
+    topprobs = p[topk]
+    barlist = ax2.bar(range(10), topprobs)
+    if target_class in topk:
+        barlist[topk.index(target_class)].set_color('r')
+    if correct_class in topk:
+        barlist[topk.index(correct_class)].set_color('g')
+    plt.sca(ax2)
+    plt.ylim([0, 1.1])
+    plt.xticks(range(10),
+               [id163_labels[i][:15] for i in topk],
+               rotation='vertical')
+    fig.subplots_adjust(bottom=0.2)
+    plt.show()
+
+example image
+
+   we load our example image and make sure it   s classified correctly.
+import pil
+import numpy as np
+
+img_path, _ = urlretrieve('http://www.anishathalye.com/media/2017/07/25/cat.jpg'
+)
+img_class = 281
+img = pil.image.open(img_path)
+big_dim = max(img.width, img.height)
+wide = img.width > img.height
+new_w = 299 if not wide else int(img.width * 299 / img.height)
+new_h = 299 if wide else int(img.height * 299 / img.width)
+img = img.resize((new_w, new_h)).crop((0, 0, 299, 299))
+img = (np.asarray(img) / 255.0).astype(np.float32)
+
+classify(img, correct_class=img_class)
+
+   png
+
+adversarial examples
+
+   given an image , our neural network outputs a id203 distribution
+   over labels, . when we craft an adversarial input, we want to find an
+   where is maximized for a target label : that way, our input will be
+   misclassified as the target class. we can ensure that doesn   t look too
+   different from the original by constraining ourselves to some box with
+   radius , requiring that .
+
+   in this framework, an adversarial example is the solution to a
+   constrained optimization problem that we can solve using
+   [21]id26 and projected id119, basically the same
+   techniques that are used to train networks themselves. the algorithm is
+   simple:
+
+   we begin by initializing our adversarial example as . then, we repeat
+   the following until convergence:
+    1.
+    2.
+
+initialization
+
+   we start with the easiest part: writing a tensorflow op for
+   initialization.
+x = tf.placeholder(tf.float32, (299, 299, 3))
+
+x_hat = image # our trainable adversarial input
+assign_op = tf.assign(x_hat, x)
+
+id119 step
+
+   next, we write the id119 step to maximize the log
+   id203 of the target class (or equivalently, minimize the
+   [22]cross id178).
+learning_rate = tf.placeholder(tf.float32, ())
+y_hat = tf.placeholder(tf.int32, ())
+
+labels = tf.one_hot(y_hat, 1000)
+loss = tf.nn.softmax_cross_id178_with_logits(logits=logits, labels=[labels])
+optim_step = tf.train.gradientdescentoptimizer(
+    learning_rate).minimize(loss, var_list=[x_hat])
+
+projection step
+
+   finally, we write the projection step to keep our adversarial example
+   visually close to the original image. additionally, we clip to to keep
+   it a valid image.
+epsilon = tf.placeholder(tf.float32, ())
+
+below = x - epsilon
+above = x + epsilon
+projected = tf.clip_by_value(tf.clip_by_value(x_hat, below, above), 0, 1)
+with tf.control_dependencies([projected]):
+    project_step = tf.assign(x_hat, projected)
+
+execution
+
+   finally, we   re ready to synthesize an adversarial example. we
+   arbitrarily choose    guacamole    (id163 class 924) as our target
+   class.
+demo_epsilon = 2.0/255.0 # a really small perturbation
+demo_lr = 1e-1
+demo_steps = 100
+demo_target = 924 # "guacamole"
+
+# initialization step
+sess.run(assign_op, feed_dict={x: img})
+
+# projected id119
+for i in range(demo_steps):
+    # id119 step
+    _, loss_value = sess.run(
+        [optim_step, loss],
+        feed_dict={learning_rate: demo_lr, y_hat: demo_target})
+    # project step
+    sess.run(project_step, feed_dict={x: img, epsilon: demo_epsilon})
+    if (i+1) % 10 == 0:
+        print('step %d, loss=%g' % (i+1, loss_value))
+
+
+adv = x_hat.eval() # retrieve the adversarial example
+
+step 10, loss=4.18923
+step 20, loss=0.580237
+step 30, loss=0.0322334
+step 40, loss=0.0209522
+step 50, loss=0.0159688
+step 60, loss=0.0134457
+step 70, loss=0.0117799
+step 80, loss=0.0105757
+step 90, loss=0.00962179
+step 100, loss=0.00886694
+
+   this adversarial image is visually indistinguishable from the original,
+   with no visual artifacts. however, it   s classified as    guacamole    with
+   high id203!
+classify(adv, correct_class=img_class, target_class=demo_target)
+
+   png
+
+robust adversarial examples
+
+   now, we go through a more advanced example. we follow our approach for
+   [23]synthesizing robust adversarial examples to find a single
+   perturbation of our cat image that   s simultaneously adversarial under
+   some chosen distribution of transformations. we could choose any
+   distribution of differentiable transformations; in this post, we   ll
+   synthesize a single adversarial input that   s robust to rotation by .
+
+   before we proceed, let   s check if our previous example is still
+   adversarial if we rotate it, say by an angle of .
+ex_angle = np.pi/8
+
+angle = tf.placeholder(tf.float32, ())
+rotated_image = tf.contrib.image.rotate(image, angle)
+rotated_example = rotated_image.eval(feed_dict={image: adv, angle: ex_angle})
+classify(rotated_example, correct_class=img_class, target_class=demo_target)
+
+   png
+
+   looks like our original adversarial example is not rotation-invariant!
+
+   so, how do we make an adversarial example robust to a distribution of
+   transformations? given some distribution of transformations , we can
+   maximize , subject to . we can solve this optimization problem via
+   projected id119, noting that is and approximating with
+   samples at each id119 step.
+
+   rather than manually implementing the gradient sampling, we can use a
+   trick to get tensorflow to do it for us: we can model our
+   sampling-based id119 as doing id119 over an
+   ensemble of stochastic classifiers that randomly sample from the
+   distribution and transform their input before classifying it.
+num_samples = 10
+average_loss = 0
+for i in range(num_samples):
+    rotated = tf.contrib.image.rotate(
+        image, tf.random_uniform((), minval=-np.pi/4, maxval=np.pi/4))
+    rotated_logits, _ = inception(rotated, reuse=true)
+    average_loss += tf.nn.softmax_cross_id178_with_logits(
+        logits=rotated_logits, labels=labels) / num_samples
+
+   we can reuse our assign_op and project_step, though we   ll have to write
+   a new optim_step for this new objective.
+optim_step = tf.train.gradientdescentoptimizer(
+    learning_rate).minimize(average_loss, var_list=[x_hat])
+
+   finally, we   re ready to run pgd to generate our adversarial input. as
+   in the previous example, we   ll choose    guacamole    as our target class.
+demo_epsilon = 8.0/255.0 # still a pretty small perturbation
+demo_lr = 2e-1
+demo_steps = 300
+demo_target = 924 # "guacamole"
+
+# initialization step
+sess.run(assign_op, feed_dict={x: img})
+
+# projected id119
+for i in range(demo_steps):
+    # id119 step
+    _, loss_value = sess.run(
+        [optim_step, average_loss],
+        feed_dict={learning_rate: demo_lr, y_hat: demo_target})
+    # project step
+    sess.run(project_step, feed_dict={x: img, epsilon: demo_epsilon})
+    if (i+1) % 50 == 0:
+        print('step %d, loss=%g' % (i+1, loss_value))
+
+
+adv_robust = x_hat.eval() # retrieve the adversarial example
+
+step 50, loss=0.0804289
+step 100, loss=0.0270499
+step 150, loss=0.00771527
+step 200, loss=0.00350717
+step 250, loss=0.00656128
+step 300, loss=0.00226182
+
+   this adversarial image is classified as    guacamole    with high
+   confidence, even when it   s rotated!
+rotated_example = rotated_image.eval(feed_dict={image: adv_robust, angle: ex_ang
+le})
+classify(rotated_example, correct_class=img_class, target_class=demo_target)
+
+   png
+
+evaluation
+
+   let   s examine the rotation-invariance of the robust adversarial example
+   we produced over the entire range of angles, looking at over .
+thetas = np.linspace(-np.pi/4, np.pi/4, 301)
+
+p_naive = []
+p_robust = []
+for theta in thetas:
+    rotated = rotated_image.eval(feed_dict={image: adv_robust, angle: theta})
+    p_robust.append(probs.eval(feed_dict={image: rotated})[0][demo_target])
+
+    rotated = rotated_image.eval(feed_dict={image: adv, angle: theta})
+    p_naive.append(probs.eval(feed_dict={image: rotated})[0][demo_target])
+
+robust_line, = plt.plot(thetas, p_robust, color='b', linewidth=2, label='robust'
+)
+naive_line, = plt.plot(thetas, p_naive, color='r', linewidth=2, label='naive')
+plt.ylim([0, 1.05])
+plt.xlabel('rotation angle')
+plt.ylabel('target class id203')
+plt.legend(handles=[robust_line, naive_line], loc='lower right')
+plt.show()
+
+   png
+
+   it   s super effective!
+
+recent posts
+
+     * [24]gemini: a modern latex poster theme 19 jul 2018
+     * [25]turning a macbook into a touchscreen with $1 of hardware 03 apr
+       2018
+     * [26]seashells 10 jul 2017
+
+references
+
+   1. https://www.anishathalye.com/feed.xml
+   2. https://www.anishathalye.com/
+   3. https://www.anishathalye.com/about/
+   4. https://www.anishathalye.com/archive/
+   5. https://www.anishathalye.com/projects/
+   6. https://news.ycombinator.com/item?id=14848590
+   7. https://lobste.rs/s/o8rjuk/step_by_step_guide_synthesizing
+   8. https://www.reddit.com/r/machinelearning/comments/6pgze1/p_a_stepbystep_guide_to_synthesizing_adversarial/
+   9. https://twitter.com/anishathalye/status/889875350783614977
+  10. https://arxiv.org/abs/1312.6199
+  11. https://arxiv.org/abs/1607.02533
+  12. https://blog.openai.com/robust-adversarial-inputs/
+  13. https://www.tensorflow.org/
+  14. https://arxiv.org/abs/1707.07397
+  15. http://jupyter.org/
+  16. https://www.anishathalye.com/media/2017/07/25/adversarial.ipynb
+  17. https://arxiv.org/abs/1512.00567
+  18. http://www.image-net.org/
+  19. https://github.com/tensorflow/models/tree/master/slim
+  20. https://www.anishathalye.com/2017/07/25/synthesizing-adversarial-examples/#adversarial-examples
+  21. http://colah.github.io/posts/2015-08-backprop/
+  22. https://en.wikipedia.org/wiki/cross_id178
+  23. https://arxiv.org/abs/1707.07397
+  24. https://www.anishathalye.com/2018/07/19/gemini-a-modern-beamerposter-theme/
+  25. https://www.anishathalye.com/2018/04/03/macbook-touchscreen/
+  26. https://www.anishathalye.com/2017/07/10/seashells/

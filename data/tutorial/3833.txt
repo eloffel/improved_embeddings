@@ -1,0 +1,505 @@
+    #[1]index [2]search [3]advanced: making dynamic decisions and the
+   bi-lstm crf [4]id27s: encoding lexical semantics
+
+     * [5]get started
+     * [6]features
+     * [7]ecosystem
+     * [8]blog
+     * [9]tutorials
+     * [10]docs
+     * [11]resources
+     * [12]github
+
+   table of contents
+
+   1.0.0.dev20190327
+   ____________________
+
+   getting started
+     * [13]deep learning with pytorch: a 60 minute blitz
+     * [14]data loading and processing tutorial
+     * [15]learning pytorch with examples
+     * [16]id21 tutorial
+     * [17]deploying a id195 model with the hybrid frontend
+     * [18]saving and loading models
+     * [19]what is torch.nn really?
+
+   image
+     * [20]finetuning torchvision models
+     * [21]spatial transformer networks tutorial
+     * [22]neural transfer using pytorch
+     * [23]adversarial example generation
+     * [24]transfering a model from pytorch to caffe2 and mobile using
+       onnx
+
+   text
+     * [25]chatbot tutorial
+     * [26]generating names with a character-level id56
+     * [27]classifying names with a character-level id56
+     * [28]deep learning for nlp with pytorch
+     * [29]translation with a sequence to sequence network and attention
+
+   generative
+     * [30]dcgan tutorial
+
+   id23
+     * [31]id23 (id25) tutorial
+
+   extending pytorch
+     * [32]creating extensions using numpy and scipy
+     * [33]custom c++ and cuda extensions
+     * [34]extending torchscript with custom c++ operators
+
+   production usage
+     * [35]writing distributed applications with pytorch
+     * [36]pytorch 1.0 distributed trainer with amazon aws
+     * [37]onnx live tutorial
+     * [38]loading a pytorch model in c++
+
+   pytorch in other languages
+     * [39]using the pytorch c++ frontend
+
+     * [40]tutorials >
+     * [41]deep learning for nlp with pytorch >
+     * sequence models and long-short term memory networks
+     * [42][view-page-source-icon.svg]
+
+   shortcuts
+
+   beginner/nlp/sequence_models_tutorial
+   [pytorch-colab.svg]
+   run in google colab
+   colab
+   [pytorch-download.svg]
+   download notebook
+   notebook
+   [pytorch-github.svg]
+   view on github
+   github
+
+   note
+
+   click [43]here to download the full example code
+
+sequence models and long-short term memory networks[44]  
+
+   at this point, we have seen various feed-forward networks. that is,
+   there is no state maintained by the network at all. this might not be
+   the behavior we want. sequence models are central to nlp: they are
+   models where there is some sort of dependence through time between your
+   inputs. the classical example of a sequence model is the hidden markov
+   model for part-of-speech tagging. another example is the conditional
+   random field.
+
+   a recurrent neural network is a network that maintains some kind of
+   state. for example, its output could be used as part of the next input,
+   so that information can propogate along as the network passes over the
+   sequence. in the case of an lstm, for each element in the sequence,
+   there is a corresponding hidden state \(h_t\), which in principle can
+   contain information from arbitrary points earlier in the sequence. we
+   can use the hidden state to predict words in a language model,
+   part-of-speech tags, and a myriad of other things.
+
+lstm   s in pytorch[45]  
+
+   before getting to the example, note a few things. pytorch   s lstm
+   expects all of its inputs to be 3d tensors. the semantics of the axes
+   of these tensors is important. the first axis is the sequence itself,
+   the second indexes instances in the mini-batch, and the third indexes
+   elements of the input. we haven   t discussed mini-batching, so lets just
+   ignore that and assume we will always have just 1 dimension on the
+   second axis. if we want to run the sequence model over the sentence
+      the cow jumped   , our input should look like
+   \[\begin{split}\begin{bmatrix} \overbrace{q_\text{the}}^\text{row
+   vector} \\ q_\text{cow} \\ q_\text{jumped} \end{bmatrix}\end{split}\]
+
+   except remember there is an additional 2nd dimension with size 1.
+
+   in addition, you could go through the sequence one at a time, in which
+   case the 1st axis will have size 1 also.
+
+   let   s see a quick example.
+# author: robert guthrie
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as f
+import torch.optim as optim
+
+torch.manual_seed(1)
+
+lstm = nn.lstm(3, 3)  # input dim is 3, output dim is 3
+inputs = [torch.randn(1, 3) for _ in range(5)]  # make a sequence of length 5
+
+# initialize the hidden state.
+hidden = (torch.randn(1, 1, 3),
+          torch.randn(1, 1, 3))
+for i in inputs:
+    # step through the sequence one element at a time.
+    # after each step, hidden contains the hidden state.
+    out, hidden = lstm(i.view(1, 1, -1), hidden)
+
+# alternatively, we can do the entire sequence all at once.
+# the first value returned by lstm is all of the hidden states throughout
+# the sequence. the second is just the most recent hidden state
+# (compare the last slice of "out" with "hidden" below, they are the same)
+# the reason for this is that:
+# "out" will give you access to all hidden states in the sequence
+# "hidden" will allow you to continue the sequence and backpropagate,
+# by passing it as an argument  to the lstm at a later time
+# add the extra 2nd dimension
+inputs = torch.cat(inputs).view(len(inputs), 1, -1)
+hidden = (torch.randn(1, 1, 3), torch.randn(1, 1, 3))  # clean out hidden state
+out, hidden = lstm(inputs, hidden)
+print(out)
+print(hidden)
+
+   out:
+tensor([[[-0.0187,  0.1713, -0.2944]],
+
+        [[-0.3521,  0.1026, -0.2971]],
+
+        [[-0.3191,  0.0781, -0.1957]],
+
+        [[-0.1634,  0.0941, -0.1637]],
+
+        [[-0.3368,  0.0959, -0.0538]]], grad_fn=<stackbackward>)
+(tensor([[[-0.3368,  0.0959, -0.0538]]], grad_fn=<stackbackward>), tensor([[[-0.
+9825,  0.4715, -0.0633]]], grad_fn=<stackbackward>))
+
+example: an lstm for part-of-speech tagging[46]  
+
+   in this section, we will use an lstm to get part of speech tags. we
+   will not use viterbi or forward-backward or anything like that, but as
+   a (challenging) exercise to the reader, think about how viterbi could
+   be used after you have seen what is going on.
+
+   the model is as follows: let our input sentence be \(w_1, \dots, w_m\),
+   where \(w_i \in v\), our vocab. also, let \(t\) be our tag set, and
+   \(y_i\) the tag of word \(w_i\). denote our prediction of the tag of
+   word \(w_i\) by \(\hat{y}_i\).
+
+   this is a structure prediction, model, where our output is a sequence
+   \(\hat{y}_1, \dots, \hat{y}_m\), where \(\hat{y}_i \in t\).
+
+   to do the prediction, pass an lstm over the sentence. denote the hidden
+   state at timestep \(i\) as \(h_i\). also, assign each tag a unique
+   index (like how we had word_to_ix in the id27s section). then
+   our prediction rule for \(\hat{y}_i\) is
+   \[\hat{y}_i = \text{argmax}_j \ (\log \text{softmax}(ah_i + b))_j\]
+
+   that is, take the log softmax of the affine map of the hidden state,
+   and the predicted tag is the tag that has the maximum value in this
+   vector. note this implies immediately that the dimensionality of the
+   target space of \(a\) is \(|t|\).
+
+   prepare data:
+def prepare_sequence(seq, to_ix):
+    idxs = [to_ix[w] for w in seq]
+    return torch.tensor(idxs, dtype=torch.long)
+
+
+training_data = [
+    ("the dog ate the apple".split(), ["det", "nn", "v", "det", "nn"]),
+    ("everybody read that book".split(), ["nn", "v", "det", "nn"])
+]
+word_to_ix = {}
+for sent, tags in training_data:
+    for word in sent:
+        if word not in word_to_ix:
+            word_to_ix[word] = len(word_to_ix)
+print(word_to_ix)
+tag_to_ix = {"det": 0, "nn": 1, "v": 2}
+
+# these will usually be more like 32 or 64 dimensional.
+# we will keep them small, so we can see how the weights change as we train.
+embedding_dim = 6
+hidden_dim = 6
+
+   out:
+{'the': 0, 'dog': 1, 'ate': 2, 'the': 3, 'apple': 4, 'everybody': 5, 'read': 6,
+'that': 7, 'book': 8}
+
+   create the model:
+class lstmtagger(nn.module):
+
+    def __init__(self, embedding_dim, hidden_dim, vocab_size, tagset_size):
+        super(lstmtagger, self).__init__()
+        self.hidden_dim = hidden_dim
+
+        self.word_embeddings = nn.embedding(vocab_size, embedding_dim)
+
+        # the lstm takes id27s as inputs, and outputs hidden states
+        # with dimensionality hidden_dim.
+        self.lstm = nn.lstm(embedding_dim, hidden_dim)
+
+        # the linear layer that maps from hidden state space to tag space
+        self.hidden2tag = nn.linear(hidden_dim, tagset_size)
+
+    def forward(self, sentence):
+        embeds = self.word_embeddings(sentence)
+        lstm_out, _ = self.lstm(embeds.view(len(sentence), 1, -1))
+        tag_space = self.hidden2tag(lstm_out.view(len(sentence), -1))
+        tag_scores = f.log_softmax(tag_space, dim=1)
+        return tag_scores
+
+   train the model:
+model = lstmtagger(embedding_dim, hidden_dim, len(word_to_ix), len(tag_to_ix))
+loss_function = nn.nllloss()
+optimizer = optim.sgd(model.parameters(), lr=0.1)
+
+# see what the scores are before training
+# note that element i,j of the output is the score for tag j for word i.
+# here we don't need to train, so the code is wrapped in torch.no_grad()
+with torch.no_grad():
+    inputs = prepare_sequence(training_data[0][0], word_to_ix)
+    tag_scores = model(inputs)
+    print(tag_scores)
+
+for epoch in range(300):  # again, normally you would not do 300 epochs, it is t
+oy data
+    for sentence, tags in training_data:
+        # step 1. remember that pytorch accumulates gradients.
+        # we need to clear them out before each instance
+        model.zero_grad()
+
+        # step 2. get our inputs ready for the network, that is, turn them into
+        # tensors of word indices.
+        sentence_in = prepare_sequence(sentence, word_to_ix)
+        targets = prepare_sequence(tags, tag_to_ix)
+
+        # step 3. run our forward pass.
+        tag_scores = model(sentence_in)
+
+        # step 4. compute the loss, gradients, and update the parameters by
+        #  calling optimizer.step()
+        loss = loss_function(tag_scores, targets)
+        loss.backward()
+        optimizer.step()
+
+# see what the scores are after training
+with torch.no_grad():
+    inputs = prepare_sequence(training_data[0][0], word_to_ix)
+    tag_scores = model(inputs)
+
+    # the sentence is "the dog ate the apple".  i,j corresponds to score for tag
+ j
+    # for word i. the predicted tag is the maximum scoring tag.
+    # here, we can see the predicted sequence below is 0 1 2 0 1
+    # since 0 is index of the maximum value of row 1,
+    # 1 is the index of maximum value of row 2, etc.
+    # which is det noun verb det noun, the correct sequence!
+    print(tag_scores)
+
+   out:
+tensor([[-1.1389, -1.2024, -0.9693],
+        [-1.1065, -1.2200, -0.9834],
+        [-1.1286, -1.2093, -0.9726],
+        [-1.1190, -1.1960, -0.9916],
+        [-1.0137, -1.2642, -1.0366]])
+tensor([[-0.0462, -4.0106, -3.6096],
+        [-4.8205, -0.0286, -3.9045],
+        [-3.7876, -4.1355, -0.0394],
+        [-0.0185, -4.7874, -4.6013],
+        [-5.7881, -0.0186, -4.1778]])
+
+exercise: augmenting the lstm part-of-speech tagger with character-level
+features[47]  
+
+   in the example above, each word had an embedding, which served as the
+   inputs to our sequence model. let   s augment the id27s with a
+   representation derived from the characters of the word. we expect that
+   this should help significantly, since character-level information like
+   affixes have a large bearing on part-of-speech. for example, words with
+   the affix -ly are almost always tagged as adverbs in english.
+
+   to do this, let \(c_w\) be the character-level representation of word
+   \(w\). let \(x_w\) be the id27 as before. then the input to
+   our sequence model is the concatenation of \(x_w\) and \(c_w\). so if
+   \(x_w\) has dimension 5, and \(c_w\) dimension 3, then our lstm should
+   accept an input of dimension 8.
+
+   to get the character level representation, do an lstm over the
+   characters of a word, and let \(c_w\) be the final hidden state of this
+   lstm. hints:
+     * there are going to be two lstm   s in your new model. the original
+       one that outputs pos tag scores, and the new one that outputs a
+       character-level representation of each word.
+     * to do a sequence model over characters, you will have to embed
+       characters. the character embeddings will be the input to the
+       character lstm.
+
+   total running time of the script: ( 0 minutes 4.047 seconds)
+   [48]download python source code: sequence_models_tutorial.py
+   [49]download jupyter notebook: sequence_models_tutorial.ipynb
+
+   [50]gallery generated by sphinx-gallery
+
+   [51]next [chevron-right-orange.svg] [52][chevron-right-orange.svg]
+   previous
+     __________________________________________________________________
+
+   was this helpful?
+   yes
+   no
+   thank you
+     __________________________________________________________________
+
+      copyright 2017, pytorch.
+   built with [53]sphinx using a [54]theme provided by [55]read the docs.
+     * [56]sequence models and long-short term memory networks
+          + [57]lstm   s in pytorch
+          + [58]example: an lstm for part-of-speech tagging
+          + [59]exercise: augmenting the lstm part-of-speech tagger with
+            character-level features
+
+   [tr?id=243028289693773&amp;ev=pageview &amp;noscript=1]
+
+docs
+
+   access comprehensive developer documentation for pytorch
+   [60]view docs
+
+tutorials
+
+   get in-depth tutorials for beginners and advanced developers
+   [61]view tutorials
+
+resources
+
+   find development resources and get your questions answered
+   [62]view resources
+
+     * [63]pytorch
+     * [64]get started
+     * [65]features
+     * [66]ecosystem
+     * [67]blog
+     * [68]resources
+
+     * [69]support
+     * [70]tutorials
+     * [71]docs
+     * [72]discuss
+     * [73]github issues
+     * [74]slack
+     * [75]contributing
+
+     * follow us
+     * email address ____________________
+       ____________________
+       submit
+
+   to analyze traffic and optimize your experience, we serve cookies on
+   this site. by clicking or navigating, you agree to allow our usage of
+   cookies. as the current maintainers of this site, facebook   s cookies
+   policy applies. learn more, including about available controls:
+   [76]cookies policy.
+   [pytorch-x.svg]
+
+     * [77]get started
+     * [78]features
+     * [79]ecosystem
+     * [80]blog
+     * [81]tutorials
+     * [82]docs
+     * [83]resources
+     * [84]github
+
+references
+
+   visible links
+   1. https://pytorch.org/tutorials/genindex.html
+   2. https://pytorch.org/tutorials/search.html
+   3. https://pytorch.org/tutorials/beginner/nlp/advanced_tutorial.html
+   4. https://pytorch.org/tutorials/beginner/nlp/word_embeddings_tutorial.html
+   5. https://pytorch.org/get-started
+   6. https://pytorch.org/features
+   7. https://pytorch.org/ecosystem
+   8. https://pytorch.org/blog/
+   9. https://pytorch.org/tutorials
+  10. https://pytorch.org/docs/stable/index.html
+  11. https://pytorch.org/resources
+  12. https://github.com/pytorch/pytorch
+  13. https://pytorch.org/tutorials/beginner/deep_learning_60min_blitz.html
+  14. https://pytorch.org/tutorials/beginner/data_loading_tutorial.html
+  15. https://pytorch.org/tutorials/beginner/pytorch_with_examples.html
+  16. https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
+  17. https://pytorch.org/tutorials/beginner/deploy_id195_hybrid_frontend_tutorial.html
+  18. https://pytorch.org/tutorials/beginner/saving_loading_models.html
+  19. https://pytorch.org/tutorials/beginner/nn_tutorial.html
+  20. https://pytorch.org/tutorials/beginner/finetuning_torchvision_models_tutorial.html
+  21. https://pytorch.org/tutorials/intermediate/spatial_transformer_tutorial.html
+  22. https://pytorch.org/tutorials/advanced/neural_style_tutorial.html
+  23. https://pytorch.org/tutorials/beginner/fgsm_tutorial.html
+  24. https://pytorch.org/tutorials/advanced/super_resolution_with_caffe2.html
+  25. https://pytorch.org/tutorials/beginner/chatbot_tutorial.html
+  26. https://pytorch.org/tutorials/intermediate/char_id56_generation_tutorial.html
+  27. https://pytorch.org/tutorials/intermediate/char_id56_classification_tutorial.html
+  28. https://pytorch.org/tutorials/beginner/deep_learning_nlp_tutorial.html
+  29. https://pytorch.org/tutorials/intermediate/id195_translation_tutorial.html
+  30. https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html
+  31. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  32. https://pytorch.org/tutorials/advanced/numpy_extensions_tutorial.html
+  33. https://pytorch.org/tutorials/advanced/cpp_extension.html
+  34. https://pytorch.org/tutorials/advanced/torch_script_custom_ops.html
+  35. https://pytorch.org/tutorials/intermediate/dist_tuto.html
+  36. https://pytorch.org/tutorials/beginner/aws_distributed_training_tutorial.html
+  37. https://pytorch.org/tutorials/advanced/onnxlive.html
+  38. https://pytorch.org/tutorials/advanced/cpp_export.html
+  39. https://pytorch.org/tutorials/advanced/cpp_frontend.html
+  40. https://pytorch.org/tutorials/index.html
+  41. https://pytorch.org/tutorials/beginner/deep_learning_nlp_tutorial.html
+  42. https://pytorch.org/tutorials/_sources/beginner/nlp/sequence_models_tutorial.rst.txt
+  43. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#sphx-glr-download-beginner-nlp-sequence-models-tutorial-py
+  44. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#sequence-models-and-long-short-term-memory-networks
+  45. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#lstm-s-in-pytorch
+  46. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#example-an-lstm-for-part-of-speech-tagging
+  47. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#exercise-augmenting-the-lstm-part-of-speech-tagger-with-character-level-features
+  48. https://pytorch.org/tutorials/_downloads/2541b9734d50383920a32879ba460d3d/sequence_models_tutorial.py
+  49. https://pytorch.org/tutorials/_downloads/d59e2f90fcd8d4aff31637dad011146e/sequence_models_tutorial.ipynb
+  50. https://sphinx-gallery.readthedocs.io/
+  51. https://pytorch.org/tutorials/beginner/nlp/advanced_tutorial.html
+  52. https://pytorch.org/tutorials/beginner/nlp/word_embeddings_tutorial.html
+  53. http://sphinx-doc.org/
+  54. https://github.com/rtfd/sphinx_rtd_theme
+  55. https://readthedocs.org/
+  56. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+  57. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#lstm-s-in-pytorch
+  58. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#example-an-lstm-for-part-of-speech-tagging
+  59. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html#exercise-augmenting-the-lstm-part-of-speech-tagger-with-character-level-features
+  60. https://pytorch.org/docs/stable/index.html
+  61. https://pytorch.org/tutorials
+  62. https://pytorch.org/resources
+  63. https://pytorch.org/
+  64. https://pytorch.org/get-started
+  65. https://pytorch.org/features
+  66. https://pytorch.org/ecosystem
+  67. https://pytorch.org/blog/
+  68. https://pytorch.org/resources
+  69. https://pytorch.org/support
+  70. https://pytorch.org/tutorials
+  71. https://pytorch.org/docs/stable/index.html
+  72. https://discuss.pytorch.org/
+  73. https://github.com/pytorch/pytorch/issues
+  74. https://pytorch.slack.com/
+  75. https://github.com/pytorch/pytorch/blob/master/contributing.md
+  76. https://www.facebook.com/policies/cookies/
+  77. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+  78. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+  79. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+  80. https://pytorch.org/blog/
+  81. https://pytorch.org/tutorials
+  82. https://pytorch.org/docs/stable/index.html
+  83. https://pytorch.org/resources
+  84. https://github.com/pytorch/pytorch
+
+   hidden links:
+  86. https://pytorch.org/
+  87. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+  88. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+  89. https://pytorch.org/
+  90. https://www.facebook.com/pytorch
+  91. https://twitter.com/pytorch
+  92. https://pytorch.org/
+  93. https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html

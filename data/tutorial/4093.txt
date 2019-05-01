@@ -1,0 +1,608 @@
+    #[1]r2rt full atom feed [2]r2rt categories atom feed
+
+   (button) toggle navigation [3]r2rt
+
+recurrent neural networks in tensorflow i
+
+   mon 11 july 2016
+
+   this is the first in a series of posts about recurrent neural networks
+   in tensorflow. in this post, we will build a vanilla recurrent neural
+   network (id56) from the ground up in tensorflow, and then translate the
+   model into tensorflow   s id56 api.
+
+   edit 2017/03/07: updated to work with tensorflow 1.0.
+
+introduction to id56s
+
+   id56s are neural networks that accept their own outputs as inputs. so as
+   to not reinvent the wheel, here are a few blog posts to introduce you
+   to id56s:
+    1. [4]written memories: understanding, deriving and extending the
+       lstm, on this blog
+    2. [5]recurrent neural networks tutorial, by denny britz
+    3. [6]the unreasonable effectiveness of recurrent neural networks, by
+       andrej karpathy
+    4. [7]understanding id137, by christopher olah
+
+outline of the data
+
+   in this post, we   ll be building a no frills id56 that accepts a binary
+   sequence x and uses it to predict a binary sequence y. the sequences
+   are constructed as follows:
+     * input sequence (x): at time step t, \(x_t\) has a 50% chance of
+       being 1 (and a 50% chance of being 0). e.g., x might be [1, 0, 0,
+       1, 1, 1     ].
+     * output sequence (y): at time step t, \(y_t\) has a base 50% chance
+       of being 1 (and a 50% base chance to be 0). the chance of \(y_t\)
+       being 1 is increased by 50% (i.e., to 100%) if \(x_{t-3}\) is 1,
+       and decreased by 25% (i.e., to 25%) if \(x_{t-8}\) is 1. if both
+       \(x_{t-3}\) and \(x_{t-8}\) are 1, the chance of \(y_{t}\) being 1
+       is 50% + 50% - 25% = 75%.
+
+   thus, there are two dependencies in the data: one at t-3 (3 steps back)
+   and one at t-8 (8 steps back).
+
+   this data is simple enough that we can calculate the expected
+   cross-id178 loss for a trained id56 depending on whether or not it
+   learns the dependencies:
+     * if the network learns no dependencies, it will correctly assign a
+       id203 of 62.5% to 1, for an expected cross-id178 loss of
+       about 0.66.
+     * if the network learns only the first dependency (3 steps back) but
+       not the second dependency, it will correctly assign a id203
+       of 87.5%, 50% of the time, and correctly assign a id203 of
+       62.5% the other 50% of the time, for an expected cross id178 loss
+       of about 0.52.
+     * if the network learns both dependencies, it will be 100% accurate
+       25% of the time, correctly assign a id203 of 50%, 25% of the
+       time, and correctly assign a id203 of 75%, 50% of the time,
+       for an expected cross extropy loss of about 0.45.
+
+   here are the calculations:
+import numpy as np
+
+print("expected cross id178 loss if the model:")
+print("- learns neither dependency:", -(0.625 * np.log(0.625) +
+                                      0.375 * np.log(0.375)))
+# learns first dependency only ==> 0.51916669970720941
+print("- learns first dependency:  ",
+      -0.5 * (0.875 * np.log(0.875) + 0.125 * np.log(0.125))
+      -0.5 * (0.625 * np.log(0.625) + 0.375 * np.log(0.375)))
+print("- learns both dependencies: ", -0.50 * (0.75 * np.log(0.75) + 0.25 * np.l
+og(0.25))
+      - 0.25 * (2 * 0.50 * np.log (0.50)) - 0.25 * (0))
+
+expected cross id178 loss if the model:
+- learns neither dependency: 0.661563238158
+- learns first dependency:   0.519166699707
+- learns both dependencies:  0.454454367449
+
+model architecture
+
+   the model will be as simple as possible: at time step t, for \(t \in
+   \{0, 1, \dots n\}\) the model accepts a (one-hot) binary \(x_t\) vector
+   and a previous state vector, \(s_{t-1}\), as inputs and produces a
+   state vector, \(s_t\), and a predicted id203 distribution vector,
+   \(p_t\), for the (one-hot) binary vector \(y_t\).
+
+   formally, the model is:
+
+   \(s_t = \text{tanh}(w(x_t \ @ \ s_{t-1}) + b_s)\)
+
+   \(p_t = \text{softmax}(us_t + b_p)\)
+
+   where \(@\) represents vector concatenation, \(x_t \in r^2\) is a
+   one-hot binary vector, \(w \in r^{d \times (2 + d)}, \ b_s \in r^d, \ u
+   \in r^{2 \times d}\), \(b_p \in r^2\) and d is the size of the state
+   vector (i use \(d = 4\) below). at time step 0, \(s_{-1}\) (the initial
+   state) is initialized as a vector of zeros.
+
+   here is a diagram of the model:
+   diagram of basic id56 diagram of basic id56
+
+how wide should our tensorflow graph be?
+
+   to build models in tensorflow generally, you first represent the model
+   as a graph, and then execute the graph. a critical question we must
+   answer when deciding how to represent our model is: how wide should our
+   graph be? how many time steps of input should our graph accept at once?
+
+   each time step is a duplicate, so it might make sense to have our
+   graph, g, represent a single time step: \(g(x_t, s_{t-1}) \mapsto (p_t,
+   s_t)\). we can then execute our graph for each time step, feeding in
+   the state returned from the previous execution into the current
+   execution. this would work for a model that was already trained, but
+   there   s a problem with using this approach for training: the gradients
+   computed during id26 are graph-bound. we would only be able
+   to backpropagate errors to the current timestep; we could not
+   backpropagate the error to time step t-1. this means our network will
+   not be able to learn how to store long-term dependencies (such as the
+   two in our data) in its state.
+
+   alternatively, we might make our graph as wide as our data sequence.
+   this often works, except that in this case, we have an arbitrarily long
+   input sequence, so we have to stop somewhere. let   s say we make our
+   graph accept sequences of length 10,000. this solves the problem of
+   graph-bound gradients, and the errors from time step 9999 are
+   propagated all the way back to time step 0. unfortunately, such
+   id26 is not only (often prohibitively) expensive, but also
+   ineffective, due to the vanishing / exploding gradient problem: it
+   turns out that backpropagating errors over too many time steps often
+   causes them to vanish (become insignificantly small) or explode (become
+   overwhelmingly large). to understand why this is the case, we apply the
+   chain rule repeatedly to \(\frac{\partial e_t}{\partial s_{t-k}}\) and
+   observe that there is a product of \(k\) factors (jacobian matrices)
+   linking the gradient at \(s_t\) and the gradient as \(s_{t-k}\):
+
+   \[\frac{\partial e_t}{\partial s_{t-k}} = \frac{\partial e_t}{\partial
+   s_t} \frac{\partial s_t}{\partial s_{t-k}} = \frac{\partial
+   e_t}{\partial s_t} \left(\frac{\partial s_t}{\partial s_{t-1}}
+   \frac{\partial s_{t-1}}{\partial s_{t-2}} \dots \frac{\partial
+   s_{t-k+1}}{\partial s_{t-k}}\right) = \frac{\partial e_t}{\partial s_t}
+   \prod_{i=1}^{k}\frac{\partial s_{t-i+1}}{\partial s_{t-i}}\]
+
+   in the words of pascanu et al.,    in the same way a product of [k] real
+   numbers can shrink to zero or explode to infinity, so does this product
+   of matrices        see [8]on the difficulty of training id56s, by pascanu et
+   al. or my post [9]written memories: understanding, deriving and
+   extending the lstm for more detailed explanations and references.
+
+   the usual pattern for dealing with very long sequences is therefore to
+      truncate    our id26 by backpropagating errors a maximum of
+   \(n\) steps. we choose \(n\) as a hyperparameter to our model, keeping
+   in mind the trade-off: higher \(n\) lets us capture longer term
+   dependencies, but is more expensive computationally and memory-wise.
+
+   a natural interpretation of backpropagating errors a maximum of \(n\)
+   steps means that we backpropagate every possible error \(n\) steps.
+   that is, if we have a sequence of length 49, and choose \(n = 7\), we
+   would backpropagate 42 of the errors the full 7 steps. this is not the
+   approach we take in tensorflow. tensorflow   s approach is to limit the
+   graph to being \(n\) units wide. see [10]tensorflow   s writeup on
+   truncated id26 (   [truncated id26] is easy to
+   implement by feeding inputs of length [\(n\)] at a time and doing
+   backward pass after each iteration.   ). this means that we would take
+   our sequence of length 49, break it up into 7 sub-sequences of length 7
+   that we feed into the graph in 7 separate computations, and that only
+   the errors from the 7th input in each graph are backpropagated the full
+   7 steps. therefore, even if you think there are no dependencies longer
+   than 7 steps in your data, it may still be worthwhile to use \(n > 7\)
+   so as to increase the proportion of errors that are backpropagated by 7
+   steps. for an empirical investigation of the difference between
+   backpropagating every error \(n\) steps and tensorflow-style
+   id26, see my post on [11]styles of truncated
+   id26.
+
+using lists of tensors to represent the width
+
+   our graph will be \(n\) units (time steps) wide where each unit is a
+   perfect duplicate, sharing the same variables. the easiest way to build
+   a graph containing these duplicate units is to build each duplicate
+   part in parallel. this is a key point, so i   m bolding it: the easiest
+   way to represent each type of duplicate tensor (the id56 inputs, the id56
+   outputs (hidden state), the predictions, and the loss) is as a list of
+   tensors. here is a diagram with references to the variables used in the
+   code below:
+   diagram of basic id56 - labeled diagram of basic id56 - labeled
+
+   we will run a training step after each execution of the graph,
+   simultaneously grabbing the final state produced by that execution to
+   pass on to the next execution.
+
+   without further ado, here is the code:
+
+imports, config variables, and data generators
+
+import numpy as np
+import tensorflow as tf
+%matplotlib inline
+import matplotlib.pyplot as plt
+
+# global config variables
+num_steps = 5 # number of truncated backprop steps ('n' in the discussion above)
+batch_size = 200
+num_classes = 2
+state_size = 4
+learning_rate = 0.1
+
+def gen_data(size=1000000):
+    x = np.array(np.random.choice(2, size=(size,)))
+    y = []
+    for i in range(size):
+        threshold = 0.5
+        if x[i-3] == 1:
+            threshold += 0.5
+        if x[i-8] == 1:
+            threshold -= 0.25
+        if np.random.rand() > threshold:
+            y.append(0)
+        else:
+            y.append(1)
+    return x, np.array(y)
+
+# adapted from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/m
+odels/id56/ptb/reader.py
+def gen_batch(raw_data, batch_size, num_steps):
+    raw_x, raw_y = raw_data
+    data_length = len(raw_x)
+
+    # partition raw data into batches and stack them vertically in a data matrix
+    batch_partition_length = data_length // batch_size
+    data_x = np.zeros([batch_size, batch_partition_length], dtype=np.int32)
+    data_y = np.zeros([batch_size, batch_partition_length], dtype=np.int32)
+    for i in range(batch_size):
+        data_x[i] = raw_x[batch_partition_length * i:batch_partition_length * (i
+ + 1)]
+        data_y[i] = raw_y[batch_partition_length * i:batch_partition_length * (i
+ + 1)]
+    # further divide batch partitions into num_steps for truncated backprop
+    epoch_size = batch_partition_length // num_steps
+
+    for i in range(epoch_size):
+        x = data_x[:, i * num_steps:(i + 1) * num_steps]
+        y = data_y[:, i * num_steps:(i + 1) * num_steps]
+        yield (x, y)
+
+def gen_epochs(n, num_steps):
+    for i in range(n):
+        yield gen_batch(gen_data(), batch_size, num_steps)
+
+model
+
+"""
+placeholders
+"""
+
+x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholder')
+y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placeholder')
+init_state = tf.zeros([batch_size, state_size])
+
+"""
+id56 inputs
+"""
+
+# turn our x placeholder into a list of one-hot tensors:
+# id56_inputs is a list of num_steps tensors with shape [batch_size, num_classes]
+x_one_hot = tf.one_hot(x, num_classes)
+id56_inputs = tf.unstack(x_one_hot, axis=1)
+
+"""
+definition of id56_cell
+
+this is very similar to the __call__ method on tensorflow's basicid56cell. see:
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id56/pyth
+on/ops/core_id56_cell_impl.py#l95
+"""
+with tf.variable_scope('id56_cell'):
+    w = tf.get_variable('w', [num_classes + state_size, state_size])
+    b = tf.get_variable('b', [state_size], initializer=tf.constant_initializer(0
+.0))
+
+def id56_cell(id56_input, state):
+    with tf.variable_scope('id56_cell', reuse=true):
+        w = tf.get_variable('w', [num_classes + state_size, state_size])
+        b = tf.get_variable('b', [state_size], initializer=tf.constant_initializ
+er(0.0))
+    return tf.tanh(tf.matmul(tf.concat([id56_input, state], 1), w) + b)
+
+"""
+adding id56_cells to graph
+
+this is a simplified version of the "static_id56" function from tensorflow's api.
+ see:
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id56/pyth
+on/ops/core_id56.py#l41
+note: in practice, using "dynamic_id56" is a better choice that the "static_id56":
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56.p
+y#l390
+"""
+state = init_state
+id56_outputs = []
+for id56_input in id56_inputs:
+    state = id56_cell(id56_input, state)
+    id56_outputs.append(state)
+final_state = id56_outputs[-1]
+
+"""
+predictions, loss, training step
+
+losses is similar to the "sequence_loss"
+function from tensorflow's api, except that here we are using a list of 2d tenso
+rs, instead of a 3d tensor. see:
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id195/
+python/ops/loss.py#l30
+"""
+
+#logits and predictions
+with tf.variable_scope('softmax'):
+    w = tf.get_variable('w', [state_size, num_classes])
+    b = tf.get_variable('b', [num_classes], initializer=tf.constant_initializer(
+0.0))
+logits = [tf.matmul(id56_output, w) + b for id56_output in id56_outputs]
+predictions = [tf.nn.softmax(logit) for logit in logits]
+
+# turn our y placeholder into a list of labels
+y_as_list = tf.unstack(y, num=num_steps, axis=1)
+
+#losses and train_step
+losses = [tf.nn.sparse_softmax_cross_id178_with_logits(labels=label, logits=lo
+git) for \
+          logit, label in zip(logits, y_as_list)]
+total_loss = tf.reduce_mean(losses)
+train_step = tf.train.adagradoptimizer(learning_rate).minimize(total_loss)
+
+"""
+train the network
+"""
+
+def train_network(num_epochs, num_steps, state_size=4, verbose=true):
+    with tf.session() as sess:
+        sess.run(tf.global_variables_initializer())
+        training_losses = []
+        for idx, epoch in enumerate(gen_epochs(num_epochs, num_steps)):
+            training_loss = 0
+            training_state = np.zeros((batch_size, state_size))
+            if verbose:
+                print("\nepoch", idx)
+            for step, (x, y) in enumerate(epoch):
+                tr_losses, training_loss_, training_state, _ = \
+                    sess.run([losses,
+                              total_loss,
+                              final_state,
+                              train_step],
+                                  feed_dict={x:x, y:y, init_state:training_state
+})
+                training_loss += training_loss_
+                if step % 100 == 0 and step > 0:
+                    if verbose:
+                        print("average loss at step", step,
+                              "for last 250 steps:", training_loss/100)
+                    training_losses.append(training_loss/100)
+                    training_loss = 0
+
+    return training_losses
+
+training_losses = train_network(1,num_steps)
+plt.plot(training_losses)
+
+epoch 0
+average loss at step 100 for last 250 steps: 0.6559883219
+average loss at step 200 for last 250 steps: 0.617185292244
+average loss at step 300 for last 250 steps: 0.595771013498
+average loss at step 400 for last 250 steps: 0.568864737153
+average loss at step 500 for last 250 steps: 0.524139249921
+average loss at step 600 for last 250 steps: 0.522666031122
+average loss at step 700 for last 250 steps: 0.522012578249
+average loss at step 800 for last 250 steps: 0.519179680347
+average loss at step 900 for last 250 steps: 0.519965928495
+
+   id56 output, num_steps = 5 id56 output, num_steps = 5
+
+   as you can see, the network very quickly learns to capture the first
+   dependency (but not the second), and converges to the expected
+   cross-id178 loss of 0.52.
+
+   exporting our model to a separate file in order to play with
+   hyperparameters, we can see what happens when we use num_steps = 1 and
+   num_steps = 10 (for this latter case, we also increase the state_size
+   so as to maintain the the information about the second dependency for
+   the required 8 steps):
+import basic_id56
+def plot_learning_curve(num_steps, state_size=4, epochs=1):
+    global losses, total_loss, final_state, train_step, x, y, init_state
+    tf.reset_default_graph()
+    g = tf.get_default_graph()
+    losses, total_loss, final_state, train_step, x, y, init_state = \
+        basic_id56.setup_graph(g,
+            basic_id56.id56_config(num_steps=num_steps, state_size=state_size))
+    res = train_network(epochs, num_steps, state_size=state_size, verbose=false)
+    plt.plot(res)
+
+"""
+num_steps = 1
+"""
+plot_learning_curve(num_steps=1, state_size=4, epochs=2)
+
+   id56 output, num_steps = 1 id56 output, num_steps = 1
+"""
+num_steps = 10
+"""
+plot_learning_curve(num_steps=10, state_size=16, epochs=10)
+
+   id56 output, num_steps = 10 id56 output, num_steps = 10
+
+   as expected, using num_steps = 10 comes close to our expected
+   cross-id178 for knowing both dependencies (0.454). however, using
+   num_steps = 1 hovers around something slightly better than the expected
+   cross-id178 for knowing neither dependency (0.66), and doesn   t seem
+   to converge. what   s going on?
+
+   the answer is that some information about the first dependency is
+   making its way into the incoming state by pure chance. although the
+   model can   t learn weights that will maintain information about the
+   first dependency (due to the id26 being graph-bound), it can
+   learn to take advantage of whatever information about \(x_{t-3}\) is
+   left over in \(s_{t-1}\). in doing so, the model changes the way
+   information about \(x_{t-3}\) is stored in \(s_{t-1}\), which explains
+   why the loss goes up and down, rather than settling at a local minima.
+
+translating our model to tensorflow
+
+   translating our model to tensorflow   s api is easy. we simply replace
+   these two sections:
+"""
+definition of id56_cell
+
+this is very similar to the __call__ method on tensorflow's basicid56cell. see:
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id56/pyth
+on/ops/core_id56_cell_impl.py#l95
+"""
+with tf.variable_scope('id56_cell'):
+    w = tf.get_variable('w', [num_classes + state_size, state_size])
+    b = tf.get_variable('b', [state_size], initializer=tf.constant_initializer(0
+.0))
+
+def id56_cell(id56_input, state):
+    with tf.variable_scope('id56_cell', reuse=true):
+        w = tf.get_variable('w', [num_classes + state_size, state_size])
+        b = tf.get_variable('b', [state_size], initializer=tf.constant_initializ
+er(0.0))
+    return tf.tanh(tf.matmul(tf.concat([id56_input, state], 1), w) + b)
+
+"""
+adding id56_cells to graph
+
+this is a simplified version of the "static_id56" function from tensorflow's api.
+ see:
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id56/pyth
+on/ops/core_id56.py#l41
+note: in practice, using "dynamic_id56" is a better choice that the "static_id56":
+https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56.p
+y#l390
+"""
+state = init_state
+id56_outputs = []
+for id56_input in id56_inputs:
+    state = id56_cell(id56_input, state)
+    id56_outputs.append(state)
+final_state = id56_outputs[-1]
+
+   with these two lines:
+cell = tf.contrib.id56.basicid56cell(state_size)
+id56_outputs, final_state = tf.contrib.id56.static_id56(cell, id56_inputs, initial_s
+tate=init_state)
+
+using a dynamic id56
+
+   above, we added every node for every timestep to the graph before
+   execution. this is called    static    construction. we could also let
+   tensorflow dynamically create the graph at execution time, which can be
+   more efficient. to do this, instead of using a list of tensors (of
+   length num_steps and shape [batch_size, features]), we keep everything
+   in a single 3-dimnesional tensor of shape [batch_size, num_steps,
+   features], and use tensorflow   s dynamic_id56 function. this is shown
+   below.
+
+final model     static
+
+   to recap, here   s the entire static model, as modified to use
+   tensorflow   s api:
+"""
+placeholders
+"""
+
+x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholder')
+y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placeholder')
+init_state = tf.zeros([batch_size, state_size])
+
+"""
+inputs
+"""
+
+x_one_hot = tf.one_hot(x, num_classes)
+id56_inputs = tf.unstack(x_one_hot, axis=1)
+
+"""
+id56
+"""
+
+cell = tf.contrib.id56.basicid56cell(state_size)
+id56_outputs, final_state = tf.contrib.id56.static_id56(cell, id56_inputs, initial_s
+tate=init_state)
+
+"""
+predictions, loss, training step
+"""
+
+with tf.variable_scope('softmax'):
+    w = tf.get_variable('w', [state_size, num_classes])
+    b = tf.get_variable('b', [num_classes], initializer=tf.constant_initializer(
+0.0))
+logits = [tf.matmul(id56_output, w) + b for id56_output in id56_outputs]
+predictions = [tf.nn.softmax(logit) for logit in logits]
+
+y_as_list = tf.unstack(y, num=num_steps, axis=1)
+
+losses = [tf.nn.sparse_softmax_cross_id178_with_logits(labels=label, logits=lo
+git) for \
+          logit, label in zip(logits, y_as_list)]
+total_loss = tf.reduce_mean(losses)
+train_step = tf.train.adagradoptimizer(learning_rate).minimize(total_loss)
+
+final model     dynamic
+
+   and here it is with the dynamic_id56 api, which should be preferred over
+   the static api:
+"""
+placeholders
+"""
+
+x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholder')
+y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placeholder')
+init_state = tf.zeros([batch_size, state_size])
+
+"""
+inputs
+"""
+
+id56_inputs = tf.one_hot(x, num_classes)
+
+"""
+id56
+"""
+
+cell = tf.contrib.id56.basicid56cell(state_size)
+id56_outputs, final_state = tf.nn.dynamic_id56(cell, id56_inputs, initial_state=ini
+t_state)
+
+"""
+predictions, loss, training step
+"""
+
+with tf.variable_scope('softmax'):
+    w = tf.get_variable('w', [state_size, num_classes])
+    b = tf.get_variable('b', [num_classes], initializer=tf.constant_initializer(
+0.0))
+logits = tf.reshape(
+            tf.matmul(tf.reshape(id56_outputs, [-1, state_size]), w) + b,
+            [batch_size, num_steps, num_classes])
+predictions = tf.nn.softmax(logits)
+
+losses = tf.nn.sparse_softmax_cross_id178_with_logits(labels=y, logits=logits)
+total_loss = tf.reduce_mean(losses)
+train_step = tf.train.adagradoptimizer(learning_rate).minimize(total_loss)
+
+conclusion
+
+   and there you have it, a basic id56 in tensorflow. in the [12]next post
+   of this series, we   ll look at how to improve our base implementation,
+   how to upgrade to a gru/lstm or other custom id56 cell and use multiple
+   layers, how to add features like dropout and layer id172, and
+   how to use our id56 to generate sequences.
+
+   (button)
+
+   implementations
+
+   please enable javascript to view the [13]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://r2rt.com/feeds/all.atom.xml
+   2. https://r2rt.com/feeds/implementations.atom.xml
+   3. https://r2rt.com/
+   4. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html
+   5. http://www.wildml.com/2015/09/recurrent-neural-networks-tutorial-part-1-introduction-to-id56s/
+   6. http://karpathy.github.io/2015/05/21/id56-effectiveness/
+   7. http://colah.github.io/posts/2015-08-understanding-lstms/
+   8. http://arxiv.org/pdf/1211.5063v2.pdf
+   9. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html
+  10. https://www.tensorflow.org/versions/r0.9/tutorials/recurrent/index.html#truncated-id26
+  11. https://r2rt.com/styles-of-truncated-id26.html
+  12. https://r2rt.com/recurrent-neural-networks-in-tensorflow-ii.html
+  13. https://disqus.com/?ref_noscript
+
+   hidden links:
+  15. https://r2rt.com/category/implementations.html

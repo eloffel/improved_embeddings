@@ -1,0 +1,871 @@
+4
+1
+0
+2
+ 
+c
+e
+d
+4
+1
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+5
+1
+2
+3
+
+.
+
+9
+0
+4
+1
+:
+v
+i
+x
+r
+a
+
+sequence to sequence learning
+
+with neural networks
+
+ilya sutskever
+
+google
+
+oriol vinyals
+
+google
+
+quoc v. le
+
+google
+
+ilyasu@google.com
+
+vinyals@google.com
+
+qvl@google.com
+
+abstract
+
+deep neural networks (dnns) are powerful models that have achieved excel-
+lent performance on dif   cult learning tasks. although dnns work well whenever
+large labeled training sets are available, they cannot be used to map sequences to
+sequences. in this paper, we present a general end-to-end approach to sequence
+learning that makes minimal assumptions on the sequence structure. our method
+uses a multilayered long short-term memory (lstm) to map the input sequence
+to a vector of a    xed dimensionality, and then another deep lstm to decode the
+target sequence from the vector. our main result is that on an english to french
+translation task from the wmt   14 dataset, the translations produced by the lstm
+achieve a id7 score of 34.8 on the entire test set, where the lstm   s id7
+score was penalized on out-of-vocabulary words. additionally, the lstm did not
+have dif   culty on long sentences. for comparison, a phrase-based smt system
+achieves a id7 score of 33.3 on the same dataset. when we used the lstm
+to rerank the 1000 hypotheses produced by the aforementioned smt system, its
+id7 score increases to 36.5, which is close to the previous best result on this
+task. the lstm also learned sensible phrase and sentence representations that
+are sensitive to word order and are relatively invariant to the active and the pas-
+sive voice. finally, we found that reversing the order of the words in all source
+sentences (but not target sentences) improved the lstm   s performance markedly,
+because doing so introduced many short term dependencies between the source
+and the target sentence which made the optimization problem easier.
+
+1 introduction
+
+deep neural networks (dnns) are extremely powerful machine learning models that achieve ex-
+cellent performance on dif   cult problems such as id103 [13, 7] and visual object recog-
+nition [19, 6, 21, 20]. dnns are powerful because they can perform arbitrary parallel computation
+for a modest number of steps. a surprising example of the power of dnns is their ability to sort
+n n -bit numbers using only 2 hidden layers of quadratic size [27]. so, while neural networks are
+related to conventional statistical models, they learn an intricate computation. furthermore, large
+dnns can be trained with supervised id26 whenever the labeled training set has enough
+information to specify the network   s parameters. thus, if there exists a parameter setting of a large
+dnn that achieves good results (for example, because humans can solve the task very rapidly),
+supervised id26 will    nd these parameters and solve the problem.
+
+despite their    exibility and power, dnns can only be applied to problems whose inputs and targets
+can be sensibly encoded with vectors of    xed dimensionality. it is a signi   cant limitation, since
+many important problems are best expressed with sequences whose lengths are not known a-priori.
+for example, id103 and machine translation are sequential problems. likewise, ques-
+tion answering can also be seen as mapping a sequence of words representing the question to a
+
+1
+
+sequence of words representing the answer. it is therefore clear that a domain-independent method
+that learns to map sequences to sequences would be useful.
+
+sequences pose a challenge for dnns because they require that the dimensionality of the inputs and
+outputs is known and    xed. in this paper, we show that a straightforward application of the long
+short-term memory (lstm) architecture [16] can solve general sequence to sequence problems.
+the idea is to use one lstm to read the input sequence, one timestep at a time, to obtain large    xed-
+dimensional vector representation, and then to use another lstm to extract the output sequence
+from that vector (   g. 1). the second lstm is essentially a recurrent neural network language model
+[28, 23, 30] except that it is conditioned on the input sequence. the lstm   s ability to successfully
+learn on data with long range temporal dependencies makes it a natural choice for this application
+due to the considerable time lag between the inputs and their corresponding outputs (   g. 1).
+
+there have been a number of related attempts to address the general sequence to sequence learning
+problem with neural networks. our approach is closely related to kalchbrenner and blunsom [18]
+who were the    rst to map the entire input sentence to vector, and is related to cho et al. [5] although
+the latter was used only for rescoring hypotheses produced by a phrase-based system. graves [10]
+introduced a novel differentiable attention mechanism that allows neural networks to focus on dif-
+ferent parts of their input, and an elegant variant of this idea was successfully applied to machine
+translation by bahdanau et al. [2]. the connectionist sequence classi   cation is another popular
+technique for mapping sequences to sequences with neural networks, but it assumes a monotonic
+alignment between the inputs and the outputs [11].
+
+figure 1: our model reads an input sentence    abc    and produces    wxyz    as the output sentence. the
+model stops making predictions after outputting the end-of-sentence token. note that the lstm reads the
+input sentence in reverse, because doing so introduces many short term dependencies in the data that make the
+optimization problem much easier.
+
+the main result of this work is the following. on the wmt   14 english to french translation task,
+we obtained a id7 score of 34.81 by directly extracting translations from an ensemble of 5 deep
+lstms (with 384m parameters and 8,000 dimensional state each) using a simple left-to-right beam-
+search decoder. this is by far the best result achieved by direct translation with large neural net-
+works. for comparison, the id7 score of an smt baseline on this dataset is 33.30 [29]. the 34.81
+id7 score was achieved by an lstm with a vocabulary of 80k words, so the score was penalized
+whenever the reference translation contained a word not covered by these 80k. this result shows
+that a relatively unoptimized small-vocabulary neural network architecture which has much room
+for improvement outperforms a phrase-based smt system.
+
+finally, we used the lstm to rescore the publicly available 1000-best lists of the smt baseline on
+the same task [29]. by doing so, we obtained a id7 score of 36.5, which improves the baseline by
+3.2 id7 points and is close to the previous best published result on this task (which is 37.0 [9]).
+
+surprisingly, the lstm did not suffer on very long sentences, despite the recent experience of other
+researchers with related architectures [26]. we were able to do well on long sentences because we
+reversed the order of words in the source sentence but not the target sentences in the training and test
+set. by doing so, we introduced many short term dependencies that made the optimization problem
+much simpler (see sec. 2 and 3.3). as a result, sgd could learn lstms that had no trouble with
+long sentences. the simple trick of reversing the words in the source sentence is one of the key
+technical contributions of this work.
+
+a useful property of the lstm is that it learns to map an input sentence of variable length into
+a    xed-dimensional vector representation. given that translations tend to be paraphrases of the
+source sentences, the translation objective encourages the lstm to    nd sentence representations
+that capture their meaning, as sentences with similar meanings are close to each other while different
+
+2
+
+sentences meanings will be far. a qualitative evaluation supports this claim, showing that our model
+is aware of word order and is fairly invariant to the active and passive voice.
+
+2 the model
+
+the recurrent neural network (id56) [31, 28] is a natural generalization of feedforward neural
+networks to sequences. given a sequence of inputs (x1, . . . , xt ), a standard id56 computes a
+sequence of outputs (y1, . . . , yt ) by iterating the following equation:
+ht = sigm (cid:0)w hxxt + w hhht   1(cid:1)
+yt = w yhht
+
+the id56 can easily map sequences to sequences whenever the alignment between the inputs the
+outputs is known ahead of time. however, it is not clear how to apply an id56 to problems whose
+input and the output sequences have different lengths with complicated and non-monotonic relation-
+ships.
+
+the simplest strategy for general sequence learning is to map the input sequence to a    xed-sized
+vector using one id56, and then to map the vector to the target sequence with another id56 (this
+approach has also been taken by cho et al. [5]). while it could work in principle since the id56 is
+provided with all the relevant information, it would be dif   cult to train the id56s due to the resulting
+long term dependencies (   gure 1) [14, 4, 16, 15]. however, the long short-term memory (lstm)
+[16] is known to learn problems with long range temporal dependencies, so an lstm may succeed
+in this setting.
+the goal of the lstm is to estimate the id155 p(y1, . . . , yt    |x1, . . . , xt ) where
+(x1, . . . , xt ) is an input sequence and y1, . . . , yt     is its corresponding output sequence whose length
+t     may differ from t . the lstm computes this id155 by    rst obtaining the    xed-
+dimensional representation v of the input sequence (x1, . . . , xt ) given by the last hidden state of the
+lstm, and then computing the id203 of y1, . . . , yt     with a standard lstm-lm formulation
+whose initial hidden state is set to the representation v of x1, . . . , xt :
+
+p(y1, . . . , yt     |x1, . . . , xt ) =
+
+t    
+y
+
+t=1
+
+p(yt|v, y1, . . . , yt   1)
+
+(1)
+
+in this equation, each p(yt|v, y1, . . . , yt   1) distribution is represented with a softmax over all the
+words in the vocabulary. we use the lstm formulation from graves [10]. note that we require that
+each sentence ends with a special end-of-sentence symbol    <eos>   , which enables the model to
+de   ne a distribution over sequences of all possible lengths. the overall scheme is outlined in    gure
+1, where the shown lstm computes the representation of    a   ,    b   ,    c   ,    <eos>    and then uses
+this representation to compute the id203 of    w   ,    x   ,    y   ,    z   ,    <eos>   .
+our actual models differ from the above description in three important ways. first, we used two
+different lstms: one for the input sequence and another for the output sequence, because doing
+so increases the number model parameters at negligible computational cost and makes it natural to
+train the lstm on multiple language pairs simultaneously [18]. second, we found that deep lstms
+signi   cantly outperformed shallow lstms, so we chose an lstm with four layers. third, we found
+it extremely valuable to reverse the order of the words of the input sentence. so for example, instead
+of mapping the sentence a, b, c to the sentence   ,   ,   , the lstm is asked to map c, b, a to   ,   ,   ,
+where   ,   ,    is the translation of a, b, c. this way, a is in close proximity to   , b is fairly close to   ,
+and so on, a fact that makes it easy for sgd to    establish communication    between the input and the
+output. we found this simple data transformation to greatly improve the performance of the lstm.
+
+3 experiments
+
+we applied our method to the wmt   14 english to french mt task in two ways. we used it to
+directly translate the input sentence without using a reference smt system and we it to rescore the
+n-best lists of an smt baseline. we report the accuracy of these translation methods, present sample
+translations, and visualize the resulting sentence representation.
+
+3
+
+3.1 dataset details
+
+we used the wmt   14 english to french dataset. we trained our models on a subset of 12m sen-
+tences consisting of 348m french words and 304m english words, which is a clean    selected   
+subset from [29]. we chose this translation task and this speci   c training set subset because of the
+public availability of a tokenized training and test set together with 1000-best lists from the baseline
+smt [29].
+
+as typical neural language models rely on a vector representation for each word, we used a    xed
+vocabulary for both languages. we used 160,000 of the most frequent words for the source language
+and 80,000 of the most frequent words for the target language. every out-of-vocabulary word was
+replaced with a special    unk    token.
+
+3.2 decoding and rescoring
+
+the core of our experiments involved training a large deep lstm on many sentence pairs. we
+trained it by maximizing the log id203 of a correct translation t given the source sentence s,
+so the training objective is
+
+1/|s| x
+
+log p(t |s)
+
+(t,s)   s
+
+where s is the training set. once training is complete, we produce translations by    nding the most
+likely translation according to the lstm:
+
+  t = arg max
+
+t
+
+p(t |s)
+
+(2)
+
+we search for the most likely translation using a simple left-to-right id125 decoder which
+maintains a small number b of partial hypotheses, where a partial hypothesis is a pre   x of some
+translation. at each timestep we extend each partial hypothesis in the beam with every possible
+word in the vocabulary. this greatly increases the number of the hypotheses so we discard all but
+the b most likely hypotheses according to the model   s log id203. as soon as the    <eos>   
+symbol is appended to a hypothesis, it is removed from the beam and is added to the set of complete
+hypotheses. while this decoder is approximate, it is simple to implement. interestingly, our system
+performs well even with a beam size of 1, and a beam of size 2 provides most of the bene   ts of beam
+search (table 1).
+
+we also used the lstm to rescore the 1000-best lists produced by the baseline system [29]. to
+rescore an n-best list, we computed the log id203 of every hypothesis with our lstm and took
+an even average with their score and the lstm   s score.
+
+3.3 reversing the source sentences
+
+while the lstm is capable of solving problems with long term dependencies, we discovered that
+the lstm learns much better when the source sentences are reversed (the target sentences are not
+reversed). by doing so, the lstm   s test perplexity dropped from 5.8 to 4.7, and the test id7
+scores of its decoded translations increased from 25.9 to 30.6.
+
+while we do not have a complete explanation to this phenomenon, we believe that it is caused by
+the introduction of many short term dependencies to the dataset. normally, when we concatenate a
+source sentence with a target sentence, each word in the source sentence is far from its corresponding
+word in the target sentence. as a result, the problem has a large    minimal time lag    [17]. by
+reversing the words in the source sentence, the average distance between corresponding words in
+the source and target language is unchanged. however, the    rst few words in the source language
+are now very close to the    rst few words in the target language, so the problem   s minimal time lag is
+greatly reduced. thus, id26 has an easier time    establishing communication    between
+the source sentence and the target sentence, which in turn results in substantially improved overall
+performance.
+
+initially, we believed that reversing the input sentences would only lead to more con   dent predic-
+tions in the early parts of the target sentence and to less con   dent predictions in the later parts. how-
+ever, lstms trained on reversed source sentences did much better on long sentences than lstms
+
+4
+
+trained on the raw source sentences (see sec. 3.7), which suggests that reversing the input sentences
+results in lstms with better memory utilization.
+
+3.4 training details
+
+we found that the lstm models are fairly easy to train. we used deep lstms with 4 layers,
+with 1000 cells at each layer and 1000 dimensional id27s, with an input vocabulary
+of 160,000 and an output vocabulary of 80,000. thus the deep lstm uses 8000 real numbers to
+represent a sentence. we found deep lstms to signi   cantly outperform shallow lstms, where
+each additional layer reduced perplexity by nearly 10%, possibly due to their much larger hidden
+state. we used a naive softmax over 80,000 words at each output. the resulting lstm has 384m
+parameters of which 64m are pure recurrent connections (32m for the    encoder    lstm and 32m
+for the    decoder    lstm). the complete training details are given below:
+
+    we initialized all of the lstm   s parameters with the uniform distribution between -0.08
+
+and 0.08
+
+    we used stochastic id119 without momentum, with a    xed learning rate of 0.7.
+after 5 epochs, we begun halving the learning rate every half epoch. we trained our models
+for a total of 7.5 epochs.
+
+    we used batches of 128 sequences for the gradient and divided it the size of the batch
+
+(namely, 128).
+
+    although lstms tend to not suffer from the vanishing gradient problem, they can have
+exploding gradients. thus we enforced a hard constraint on the norm of the gradient [10,
+25] by scaling it when its norm exceeded a threshold. for each training batch, we compute
+s = kgk2, where g is the gradient divided by 128. if s > 5, we set g = 5g
+s .
+
+    different sentences have different lengths. most sentences are short (e.g., length 20-30)
+but some sentences are long (e.g., length > 100), so a minibatch of 128 randomly chosen
+training sentences will have many short sentences and few long sentences, and as a result,
+much of the computation in the minibatch is wasted. to address this problem, we made sure
+that all sentences in a minibatch are roughly of the same length, yielding a 2x speedup.
+
+3.5 parallelization
+
+a c++ implementation of deep lstm with the con   guration from the previous section on a sin-
+gle gpu processes a speed of approximately 1,700 words per second. this was too slow for our
+purposes, so we parallelized our model using an 8-gpu machine. each layer of the lstm was
+executed on a different gpu and communicated its activations to the next gpu / layer as soon as
+they were computed. our models have 4 layers of lstms, each of which resides on a separate
+gpu. the remaining 4 gpus were used to parallelize the softmax, so each gpu was responsible
+for multiplying by a 1000    20000 matrix. the resulting implementation achieved a speed of 6,300
+(both english and french) words per second with a minibatch size of 128. training took about a ten
+days with this implementation.
+
+3.6 experimental results
+
+we used the cased id7 score [24] to evaluate the quality of our translations. we computed our
+id7 scores using multi-id7.pl1 on the tokenized predictions and ground truth. this way
+of evaluating the belu score is consistent with [5] and [2], and reproduces the 33.3 score of [29].
+however, if we evaluate the best wmt   14 system [9] (whose predictions can be downloaded from
+statmt.org\matrix) in this manner, we get 37.0, which is greater than the 35.8 reported by
+statmt.org\matrix.
+
+the results are presented in tables 1 and 2. our best results are obtained with an ensemble of lstms
+that differ in their random initializations and in the random order of minibatches. while the decoded
+translations of the lstm ensemble do not outperform the best wmt   14 system, it is the    rst time
+that a pure neural translation system outperforms a phrase-based smt baseline on a large scale mt
+
+1there several variants of the id7 score, and each variant is de   ned with a perl script.
+
+5
+
+method
+
+bahdanau et al. [2]
+baseline system [29]
+
+single forward lstm, beam size 12
+single reversed lstm, beam size 12
+
+ensemble of 5 reversed lstms, beam size 1
+ensemble of 2 reversed lstms, beam size 12
+ensemble of 5 reversed lstms, beam size 2
+ensemble of 5 reversed lstms, beam size 12
+
+test id7 score (ntst14)
+
+28.45
+33.30
+26.17
+30.59
+33.00
+33.27
+34.50
+34.81
+
+table 1: the performance of the lstm on wmt   14 english to french test set (ntst14). note that
+an ensemble of 5 lstms with a beam of size 2 is cheaper than of a single lstm with a beam of
+size 12.
+
+method
+
+baseline system [29]
+
+cho et al. [5]
+
+best wmt   14 result [9]
+
+rescoring the baseline 1000-best with a single forward lstm
+rescoring the baseline 1000-best with a single reversed lstm
+
+rescoring the baseline 1000-best with an ensemble of 5 reversed lstms
+
+oracle rescoring of the baseline 1000-best lists
+
+test id7 score (ntst14)
+
+33.30
+34.54
+37.0
+35.61
+35.85
+36.5
+   45
+
+table 2: methods that use neural networks together with an smt system on the wmt   14 english
+to french test set (ntst14).
+
+task by a sizeable margin, despite its inability to handle out-of-vocabulary words. the lstm is
+within 0.5 id7 points of the best wmt   14 result if it is used to rescore the 1000-best list of the
+baseline system.
+
+3.7 performance on long sentences
+
+we were surprised to discover that the lstm did well on long sentences, which is shown quantita-
+tively in    gure 3. table 3 presents several examples of long sentences and their translations.
+
+3.8 model analysis
+
+4
+
+3
+
+2
+
+1
+
+0
+
+   1
+
+   2
+
+   3
+
+   4
+
+   5
+
+   6
+   8
+
+mary admires john
+
+mary is in love with john
+
+mary respects john
+
+john admires mary
+
+john is in love with mary
+
+john respects mary
+
+   6
+
+   4
+
+   2
+
+0
+
+2
+
+4
+
+6
+
+8
+
+10
+
+15
+
+10
+
+5
+
+0
+
+   5
+
+   10
+
+   15
+
+   20
+
+   15
+
+i was given a card by her in the garden
+
+in the garden , she gave me a card
+
+she gave me a card in the garden
+
+she was given a card by me in the garden
+
+in the garden , i gave her a card
+
+i gave her a card in the garden
+
+   10
+
+   5
+
+0
+
+5
+
+10
+
+15
+
+20
+
+figure 2: the    gure shows a 2-dimensional pca projection of the lstm hidden states that are obtained
+after processing the phrases in the    gures. the phrases are clustered by meaning, which in these examples is
+primarily a function of word order, which would be dif   cult to capture with a bag-of-words model. notice that
+both clusters have similar internal structure.
+
+one of the attractive features of our model is its ability to turn a sequence of words into a vector
+of    xed dimensionality. figure 2 visualizes some of the learned representations. the    gure clearly
+shows that the representations are sensitive to the order of words, while being fairly insensitive to the
+
+6
+
+type
+our model ulrich unk , membre du conseil d    administration du constructeur automobile audi ,
+
+sentence
+
+truth
+
+our model
+
+truth
+
+af   rme qu    il s    agit d    une pratique courante depuis des ann  ees pour que les t  el  ephones
+portables puissent   etre collect  es avant les r  eunions du conseil d    administration a   n qu    ils
+ne soient pas utilis  es comme appareils d      ecoute `a distance .
+ulrich hackenberg , membre du conseil d    administration du constructeur automobile audi ,
+d  eclare que la collecte des t  el  ephones portables avant les r  eunions du conseil , a   n qu    ils
+ne puissent pas   etre utilis  es comme appareils d      ecoute `a distance , est une pratique courante
+depuis des ann  ees .
+    les t  el  ephones cellulaires , qui sont vraiment une question , non seulement parce qu    ils
+pourraient potentiellement causer des interf  erences avec les appareils de navigation , mais
+nous savons , selon la fcc , qu    ils pourraient interf  erer avec les tours de t  el  ephone cellulaire
+lorsqu    ils sont dans l    air     , dit unk .
+    les t  el  ephones portables sont v  eritablement un probl`eme , non seulement parce qu    ils
+pourraient   eventuellement cr  eer des interf  erences avec les instruments de navigation , mais
+parce que nous savons , d    apr`es la fcc , qu    ils pourraient perturber les antennes-relais de
+t  el  ephonie mobile s    ils sont utilis  es `a bord     , a d  eclar  e rosenker .
+
+our model avec la cr  emation , il y a un     sentiment de violence contre le corps d    un   etre cher     ,
+qui sera     r  eduit `a une pile de cendres     en tr`es peu de temps au lieu d    un processus de
+d  ecomposition     qui accompagnera les   etapes du deuil     .
+il y a , avec la cr  emation ,     une violence faite au corps aim  e     ,
+qui va   etre     r  eduit `a un tas de cendres     en tr`es peu de temps , et non apr`es un processus de
+d  ecomposition , qui     accompagnerait les phases du deuil     .
+
+truth
+
+table 3: a few examples of long translations produced by the lstm alongside the ground truth
+translations. the reader can verify that the translations are sensible using google translate.
+
+lstm  (34.8)
+baseline (33.3)
+
+40
+
+35
+
+e
+r
+o
+c
+s
+ 
+u
+e
+l
+b
+
+30
+
+25
+
+20
+
+4 7 8
+
+12
+
+17
+
+22
+
+28
+
+35
+
+79
+
+40
+
+35
+
+e
+r
+o
+c
+s
+ 
+u
+e
+l
+b
+
+30
+
+25
+
+20
+
+0
+
+lstm  (34.8)
+baseline (33.3)
+
+500
+
+1000
+
+1500
+
+2000
+
+2500
+
+3000
+
+3500
+
+test sentences sorted by their length
+
+test sentences sorted by average word frequency rank
+
+figure 3: the left plot shows the performance of our system as a function of sentence length, where the
+x-axis corresponds to the test sentences sorted by their length and is marked by the actual sequence lengths.
+there is no degradation on sentences with less than 35 words, there is only a minor degradation on the longest
+sentences. the right plot shows the lstm   s performance on sentences with progressively more rare words,
+where the x-axis corresponds to the test sentences sorted by their    average word frequency rank   .
+
+replacement of an active voice with a passive voice. the two-dimensional projections are obtained
+using pca.
+
+4 related work
+
+there is a large body of work on applications of neural networks to machine translation. so far,
+the simplest and most effective way of applying an id56-language model (id56lm) [23] or a
+
+7
+
+feedforward neural network language model (nnlm) [3] to an mt task is by rescoring the n-
+best lists of a strong mt baseline [22], which reliably improves translation quality.
+
+more recently, researchers have begun to look into ways of including information about the source
+language into the nnlm. examples of this work include auli et al. [1], who combine an nnlm
+with a topic model of the input sentence, which improves rescoring performance. devlin et al. [8]
+followed a similar approach, but they incorporated their nnlm into the decoder of an mt system
+and used the decoder   s alignment information to provide the nnlm with the most useful words in
+the input sentence. their approach was highly successful and it achieved large improvements over
+their baseline.
+
+our work is closely related to kalchbrenner and blunsom [18], who were the    rst to map the input
+sentence into a vector and then back to a sentence, although they map sentences to vectors using
+convolutional neural networks, which lose the ordering of the words. similarly to this work, cho et
+al. [5] used an lstm-like id56 architecture to map sentences into vectors and back, although their
+primary focus was on integrating their neural network into an smt system. bahdanau et al. [2] also
+attempted direct translations with a neural network that used an attention mechanism to overcome
+the poor performance on long sentences experienced by cho et al. [5] and achieved encouraging
+results. likewise, pouget-abadie et al. [26] attempted to address the memory problem of cho et
+al. [5] by translating pieces of the source sentence in way that produces smooth translations, which
+is similar to a phrase-based approach. we suspect that they could achieve similar improvements by
+simply training their networks on reversed source sentences.
+
+end-to-end training is also the focus of hermann et al. [12], whose model represents the inputs and
+outputs by feedforward networks, and map them to similar points in space. however, their approach
+cannot generate translations directly: to get a translation, they need to do a look up for closest vector
+in the pre-computed database of sentences, or to rescore a sentence.
+
+5 conclusion
+
+in this work, we showed that a large deep lstm, that has a limited vocabulary and that makes
+almost no assumption about problem structure can outperform a standard smt-based system whose
+vocabulary is unlimited on a large-scale mt task. the success of our simple lstm-based approach
+on mt suggests that it should do well on many other sequence learning problems, provided they
+have enough training data.
+
+we were surprised by the extent of the improvement obtained by reversing the words in the source
+sentences. we conclude that it is important to    nd a problem encoding that has the greatest number
+of short term dependencies, as they make the learning problem much simpler. in particular, while
+we were unable to train a standard id56 on the non-reversed translation problem (shown in    g. 1),
+we believe that a standard id56 should be easily trainable when the source sentences are reversed
+(although we did not verify it experimentally).
+
+we were also surprised by the ability of the lstm to correctly translate very long sentences. we
+were initially convinced that the lstm would fail on long sentences due to its limited memory,
+and other researchers reported poor performance on long sentences with a model similar to ours
+[5, 2, 26]. and yet, lstms trained on the reversed dataset had little dif   culty translating long
+sentences.
+
+most importantly, we demonstrated that a simple, straightforward and a relatively unoptimized ap-
+proach can outperform an smt system, so further work will likely lead to even greater translation
+accuracies. these results suggest that our approach will likely do well on other challenging sequence
+to sequence problems.
+
+6 acknowledgments
+
+we thank samy bengio, jeff dean, matthieu devin, geoffrey hinton, nal kalchbrenner, thang luong, wolf-
+gang macherey, rajat monga, vincent vanhoucke, peng xu, wojciech zaremba, and the google brain team
+for useful comments and discussions.
+
+8
+
+references
+[1] m. auli, m. galley, c. quirk, and g. zweig. joint language and translation modeling with recurrent
+
+neural networks. in emnlp, 2013.
+
+[2] d. bahdanau, k. cho, and y. bengio. id4 by jointly learning to align and translate.
+
+arxiv preprint arxiv:1409.0473, 2014.
+
+[3] y. bengio, r. ducharme, p. vincent, and c. jauvin. a neural probabilistic language model. in journal of
+
+machine learning research, pages 1137   1155, 2003.
+
+[4] y. bengio, p. simard, and p. frasconi. learning long-term dependencies with id119 is dif   cult.
+
+ieee transactions on neural networks, 5(2):157   166, 1994.
+
+[5] k. cho, b. merrienboer, c. gulcehre, f. bougares, h. schwenk, and y. bengio. learning phrase represen-
+tations using id56 encoder-decoder for id151. in arxiv preprint arxiv:1406.1078,
+2014.
+
+[6] d. ciresan, u. meier, and j. schmidhuber. multi-column deep neural networks for image classi   cation.
+
+in cvpr, 2012.
+
+[7] g. e. dahl, d. yu, l. deng, and a. acero. context-dependent pre-trained deep neural networks for large
+vocabulary id103. ieee transactions on audio, speech, and language processing - special
+issue on deep learning for speech and language processing, 2012.
+
+[8] j. devlin, r. zbib, z. huang, t. lamar, r. schwartz, and j. makhoul. fast and robust neural network
+
+joint models for id151. in acl, 2014.
+
+[9] nadir durrani, barry haddow, philipp koehn, and kenneth hea   eld. edinburgh   s phrase-based machine
+
+translation systems for wmt-14. in wmt, 2014.
+
+[10] a. graves. generating sequences with recurrent neural networks. in arxiv preprint arxiv:1308.0850,
+
+2013.
+
+[11] a. graves, s. fern  andez, f. gomez, and j. schmidhuber. connectionist temporal classi   cation: labelling
+
+unsegmented sequence data with recurrent neural networks. in icml, 2006.
+
+[12] k. m. hermann and p. blunsom. multilingual distributed representations without word alignment. in
+
+iclr, 2014.
+
+[13] g. hinton, l. deng, d. yu, g. dahl, a. mohamed, n. jaitly, a. senior, v. vanhoucke, p. nguyen,
+t. sainath, and b. kingsbury. deep neural networks for acoustic modeling in id103. ieee
+signal processing magazine, 2012.
+
+[14] s. hochreiter. untersuchungen zu dynamischen neuronalen netzen. master   s thesis, institut fur infor-
+
+matik, technische universitat, munchen, 1991.
+
+[15] s. hochreiter, y. bengio, p. frasconi, and j. schmidhuber. gradient    ow in recurrent nets: the dif   culty
+
+of learning long-term dependencies, 2001.
+
+[16] s. hochreiter and j. schmidhuber. long short-term memory. neural computation, 1997.
+[17] s. hochreiter and j. schmidhuber. lstm can solve hard long time lag problems. 1997.
+[18] n. kalchbrenner and p. blunsom. recurrent continuous translation models. in emnlp, 2013.
+[19] a. krizhevsky, i. sutskever, and g. e. hinton. id163 classi   cation with deep convolutional neural
+
+networks. in nips, 2012.
+
+[20] q.v. le, m.a. ranzato, r. monga, m. devin, k. chen, g.s. corrado, j. dean, and a.y. ng. building
+
+high-level features using large scale unsupervised learning. in icml, 2012.
+
+[21] y. lecun, l. bottou, y. bengio, and p. haffner. gradient-based learning applied to document recognition.
+
+proceedings of the ieee, 1998.
+
+[22] t. mikolov. statistical language models based on neural networks. phd thesis, brno university of
+
+technology, 2012.
+
+[23] t. mikolov, m. kara     at, l. burget, j. cernock`y, and s. khudanpur. recurrent neural network based
+
+language model. in interspeech, pages 1045   1048, 2010.
+
+[24] k. papineni, s. roukos, t. ward, and w. j. zhu. id7: a method for automatic evaluation of machine
+
+translation. in acl, 2002.
+
+[25] r. pascanu, t. mikolov, and y. bengio. on the dif   culty of training recurrent neural networks. arxiv
+
+preprint arxiv:1211.5063, 2012.
+
+[26] j. pouget-abadie, d. bahdanau, b. van merrienboer, k. cho, and y. bengio. overcoming the
+curse of sentence length for id4 using automatic segmentation. arxiv preprint
+arxiv:1409.1257, 2014.
+
+[27] a. razborov. on small depth threshold circuits.
+
+theory, 1992.
+
+in proc. 3rd scandinavian workshop on algorithm
+
+[28] d. rumelhart, g. e. hinton, and r. j. williams. learning representations by back-propagating errors.
+
+nature, 323(6088):533   536, 1986.
+
+[29] h. schwenk. university le mans. http://www-lium.univ-lemans.fr/  schwenk/cslm_
+
+joint_paper/, 2014. [online; accessed 03-september-2014].
+
+[30] m. sundermeyer, r. schluter, and h. ney. lstm neural networks for id38. in inter-
+
+speech, 2010.
+
+[31] p. werbos. id26 through time: what it does and how to do it. proceedings of ieee, 1990.
+
+9
+
+

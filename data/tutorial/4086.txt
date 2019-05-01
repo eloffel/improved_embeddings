@@ -1,0 +1,355 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]emergent // future
+     * [9]machine learning trends
+     * [10]algorithm economy
+     * [11]why deep learning matters
+     * [12]algorithmia
+     __________________________________________________________________
+
+simple id23 with tensorflow part 8: asynchronous
+actor-critic agents (a3c)
+
+   [13]go to the profile of arthur juliani
+   [14]arthur juliani (button) blockedunblock (button) followfollowing
+   dec 16, 2016
+   [1*odzkjyxanwf6pofv9d17hw.jpeg]
+
+   in this article i want to provide a tutorial on implementing the
+   asynchronous advantage actor-critic (a3c) algorithm in tensorflow. we
+   will use it to solve a simple challenge in a 3d doom environment! with
+   the holidays right around the corner, this will be my final post for
+   the year, and i hope it will serve as a culmination of all the previous
+   topics in the series. if you haven   t yet, or are new to deep learning
+   and id23, i suggest checking out the [15]earlier
+   entries in the series before going through this post in order to
+   understand all the building blocks which will be utilized here. if you
+   have been following the series: thank you! i have learned so much about
+   rl in the past year, and am happy to have shared it with everyone
+   through this article series.
+
+   so what is a3c? the [16]a3c algorithm was released by google   s deepmind
+   group earlier this year, and it made a splash by    essentially
+   obsoleting id25. it was faster, simpler, more robust, and able to
+   achieve much better scores on the standard battery of deep rl tasks. on
+   top of all that it could work in continuous as well as discrete action
+   spaces. given this, it has become the go-to deep rl algorithm for new
+   challenging problems with complex state and action spaces. in fact,
+   openai [17]just released a version of a3c as their    universal starter
+   agent    for working with their new (and very diverse) set of universe
+   environments.
+
+the 3 as of a3c
+
+   [1*ytnghtsamnnhsl8pvs7t_w.png]
+   diagram of a3c high-level architecture.
+
+   asynchronous advantage actor-critic is quite a mouthful. let   s start by
+   unpacking the name, and from there, begin to unpack the mechanics of
+   the algorithm itself.
+
+   asynchronous: unlike [18]id25, where a single agent represented by a
+   single neural network interacts with a single environment, a3c utilizes
+   multiple incarnations of the above in order to learn more efficiently.
+   in a3c there is a global network, and multiple worker agents which each
+   have their own set of network parameters. each of these agents
+   interacts with it   s own copy of the environment at the same time as the
+   other agents are interacting with their environments. the reason this
+   works better than having a single agent (beyond the speedup of getting
+   more work done), is that the experience of each agent is independent of
+   the experience of the others. in this way the overall experience
+   available for training becomes more diverse.
+
+   actor-critic: so far this series has focused on value-iteration methods
+   such as id24, or policy-iteration methods such as policy
+   gradient. actor-critic combines the benefits of both approaches. in the
+   case of a3c, our network will estimate both a value function v(s) (how
+   good a certain state is to be in) and a policy   (s) (a set of action
+   id203 outputs). these will each be separate fully-connected
+   layers sitting at the top of the network. critically, the agent uses
+   the value estimate (the critic) to update the policy (the actor) more
+   intelligently than traditional id189.
+
+   advantage: if we think back to our [19]implementation of policy
+   gradient, the update rule used the discounted returns from a set of
+   experiences in order to tell the agent which of its actions were    good   
+   and which were    bad.    the network was then updated in order to
+   encourage and discourage actions appropriately.
+
+     discounted reward: r =   (r)
+
+   the insight of using advantage estimates rather than just discounted
+   returns is to allow the agent to determine not just how good its
+   actions were, but how much better they turned out to be than expected.
+   intuitively, this allows the algorithm to focus on where the network   s
+   predictions were lacking. if you recall from the [20]dueling q-network
+   architecture, the advantage function is as follow:
+
+     advantage: a = q(s,a) - v(s)
+
+   since we won   t be determining the q values directly in a3c, we can use
+   the discounted returns (r) as an estimate of q(s,a) to allow us to
+   generate an estimate of the advantage.
+
+     advantage estimate: a = r - v(s)
+
+   in this tutorial, we will go even further, and utilize a slightly
+   different version of advantage estimation with lower variance referred
+   to as [21]generalized advantage estimation.
+
+implementing the algorithm
+
+   [1*hzql_1t0-wwdxiz0c97acq.png]
+   training workflow of each worker agent in a3c.
+
+   in the process of building this implementation of the a3c algorithm, i
+   used as reference the quality implementations by [22]dennybritz and
+   [23]openai. both of which i highly recommend if you   d like to see
+   alternatives to my code here. each section embedded here is taken out
+   of context for instructional purposes, and won   t run on its own. to
+   view and run the full, functional a3c implementation, see my [24]github
+   repository.
+
+   the general outline of the code architecture is:
+     * ac_network         this class contains all the tensorflow ops to create
+       the networks themselves.
+     * worker         this class contains a copy of ac_network, an environment
+       class, as well as all the logic for interacting with the
+       environment, and updating the global network.
+     * high-level code for establishing the worker instances and running
+       them in parallel.
+
+   the a3c algorithm begins by constructing the global network. this
+   network will consist of convolutional layers to process spatial
+   dependencies, followed by an lstm layer to process temporal
+   dependencies, and finally, value and policy output layers. below is
+   example code for establishing the network graph itself.
+
+   iframe: [25]/media/1a5f68091ea4bd0853b6aaa7f508b056?postid=c88f72a5e9f2
+
+   next, a set of worker agents, each with their own network and
+   environment are created. each of these workers are run on a separate
+   processor thread, so there should be no more workers than there are
+   threads on your cpu.
+
+   iframe: [26]/media/28c80bc5d3c9808c1e8b87b5480f7d5b?postid=c88f72a5e9f2
+
+   ~ from here we go asynchronous ~
+
+   each worker begins by setting its network parameters to those of the
+   global network. we can do this by constructing a tensorflow op which
+   sets each variable in the local worker network to the equivalent
+   variable value in the global network.
+
+   iframe: [27]/media/27d14957538011cabd7a9a117365b863?postid=c88f72a5e9f2
+
+   each worker then interacts with its own copy of the environment and
+   collects experience. each keeps a list of experience tuples
+   (observation, action, reward, done, value) that is constantly added to
+   from interactions with the environment.
+
+   iframe: [28]/media/0ac37f6cb07055fa52505d65b5ae2482?postid=c88f72a5e9f2
+
+   once the worker   s experience history is large enough, we use it to
+   determine discounted return and advantage, and use those to calculate
+   value and policy losses. we also calculate an id178 (h) of the
+   policy. this corresponds to the spread of action probabilities. if the
+   policy outputs actions with relatively similar probabilities, then
+   id178 will be high, but if the policy suggests a single action with a
+   large id203 then id178 will be low. we use the id178 as a
+   means of improving exploration, by encouraging the model to be
+   conservative regarding its sureness of the correct action.
+
+     value loss: l =   (r - v(s))  
+
+     policy loss: l = -log(  (s)) * a(s) -   *h(  )
+
+   a worker then uses these losses to obtain gradients with respect to its
+   network parameters. each of these gradients are typically clipped in
+   order to prevent overly-large parameter updates which can destabilize
+   the policy.
+
+   a worker then uses the gradients to update the global network
+   parameters. in this way, the global network is constantly being updated
+   by each of the agents, as they interact with their environment.
+
+   iframe: [29]/media/920870ee2a4504c11b643835489ea22e?postid=c88f72a5e9f2
+
+   once a successful update is made to the global network, the whole
+   process repeats! the worker then resets its own network parameters to
+   those of the global network, and the process begins again.
+
+   to view the full and functional code, see the github repository
+   [30]here.
+
+playing doom
+
+   [1*yjpvxrywi8u9skfcmckr1a.png]
+
+   the robustness of a3c allows us to tackle a new generation of
+   id23 challenges, one of which is 3d environments! we
+   have come a long way from multi-armed bandits and grid-worlds, and in
+   this tutorial, i have set up the code to allow for playing through the
+   first [31]vizdoom challenge. vizdoom is a system to allow for rl
+   research using the classic doom game engine. the maintainers of vizdoom
+   recently created a pip package, so installing it is as simple as:
+
+   pip install vizdoom
+
+   once it is installed, we will be using the basic.wad environment, which
+   is provided in the [32]github repository, and needs to be placed in the
+   working directory.
+
+   the challenge consists of controlling an avatar from a first person
+   perspective in a single square room. there is a single enemy on the
+   opposite side of the room, which appears in a random location each
+   episode. the agent can only move to the left or right, and fire a gun.
+   the goal is to shoot the enemy as quickly as possible using as few
+   bullets as possible. the agent has 300 time steps per episode to shoot
+   the enemy. shooting the enemy yields a reward of 1, and each time step
+   as well as each shot yields a small penalty. after about 500 episodes
+   per worker agent, the network learns a policy to quickly solve the
+   challenge. feel free to adjust parameters such as learning rate,
+   clipping magnitude, update frequency, etc. to attempt to achieve ever
+   greater performance or utilize a3c in your own rl tasks.
+   [1*dvaqxq6avwysu3s3inkv_w.png]
+   average reward over time for three workers on doom task. 0.5 reward
+   corresponds to optimal performance. x-axis represents number of
+   training episodes per worker.
+
+   i hope this tutorial has been helpful to those new to a3c and
+   asynchronous id23! now go forth and build ais.
+
+   (there are a lot of moving parts in a3c, so if you discover a bug, or
+   find a better way to do something, please don   t hesitate to bring it up
+   here or in the github. i am more than happy to incorporate changes and
+   feedback to improve the algorithm.)
+
+   if you   d like to follow my writing on deep learning, ai, and cognitive
+   science, follow me on medium @[33]arthur juliani, or on twitter
+   [34]@awjuliani.
+
+   if this post has been valuable to you, please consider [35]donating to
+   help support future tutorials, articles, and implementations. any
+   contribution is greatly appreciated!
+     __________________________________________________________________
+
+   more from my simple id23 with tensorflow series:
+    1. [36]part 0         id24 agents
+    2. [37]part 1         two-armed bandit
+    3. [38]part 1.5         contextual bandits
+    4. [39]part 2         policy-based agents
+    5. [40]part 3         model-based rl
+    6. [41]part 4         deep q-networks and beyond
+    7. [42]part 5         visualizing an agent   s thoughts and actions
+    8. [43]part 6         partial observability and deep recurrent q-networks
+    9. [44]part 7         action-selection strategies for exploration
+   10. part 8         asynchronous actor-critic agents (a3c)
+
+     * [45]machine learning
+     * [46]artificial intelligence
+     * [47]deep learning
+     * [48]neural networks
+     * [49]robotics
+
+   (button)
+   (button)
+   (button) 4.7k claps
+   (button) (button) (button) 84 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [50]go to the profile of arthur juliani
+
+[51]arthur juliani
+
+   deep learning [52]@unity3d
+
+     (button) follow
+   [53]emergent // future
+
+[54]emergent // future
+
+   exploring frontier technology through the lens of artificial
+   intelligence, data science, and the shape of things to come
+
+     * (button)
+       (button) 4.7k
+     * (button)
+     *
+     *
+
+   [55]emergent // future
+   never miss a story from emergent // future, when you sign up for
+   medium. [56]learn more
+   never miss a story from emergent // future
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/c88f72a5e9f2
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-8-asynchronous-actor-critic-agents-a3c-c88f72a5e9f2&source=--------------------------nav_reg&operation=register
+   8. https://medium.com/emergent-future?source=logo-lo_uowmgibu7kuh---d7fff85024c6
+   9. https://medium.com/emergent-future/machine-learning-trends-and-the-future-of-artificial-intelligence-2016-15c15cd6c129
+  10. https://medium.com/emergent-future/how-the-algorithm-economy-and-containers-are-changing-the-way-we-build-and-deploy-apps-today-4ecdbb59318d
+  11. https://medium.com/emergent-future/why-deep-learning-matters-and-whats-next-for-artificial-intelligence-5c629993dc4
+  12. https://algorithmia.com/
+  13. https://medium.com/@awjuliani?source=post_header_lockup
+  14. https://medium.com/@awjuliani
+  15. https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-0-id24-with-tables-and-neural-networks-d195264329d0
+  16. https://arxiv.org/pdf/1602.01783.pdf
+  17. https://openai.com/blog/universe/
+  18. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-4-deep-q-networks-and-beyond-8438a3e2b8df#.ut59y2t80
+  19. https://medium.com/@awjuliani/super-simple-reinforcement-learning-tutorial-part-2-ded33892c724#.nac3dxoyy
+  20. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-4-deep-q-networks-and-beyond-8438a3e2b8df#.snohiu2y2
+  21. https://arxiv.org/pdf/1506.02438.pdf
+  22. https://github.com/dennybritz/reinforcement-learning
+  23. https://github.com/openai/universe-starter-agent
+  24. https://github.com/awjuliani/deeprl-agents/blob/master/a3c-doom.ipynb
+  25. https://medium.com/media/1a5f68091ea4bd0853b6aaa7f508b056?postid=c88f72a5e9f2
+  26. https://medium.com/media/28c80bc5d3c9808c1e8b87b5480f7d5b?postid=c88f72a5e9f2
+  27. https://medium.com/media/27d14957538011cabd7a9a117365b863?postid=c88f72a5e9f2
+  28. https://medium.com/media/0ac37f6cb07055fa52505d65b5ae2482?postid=c88f72a5e9f2
+  29. https://medium.com/media/920870ee2a4504c11b643835489ea22e?postid=c88f72a5e9f2
+  30. https://github.com/awjuliani/deeprl-agents/blob/master/a3c-doom.ipynb
+  31. http://vizdoom.cs.put.edu.pl/
+  32. https://github.com/awjuliani/deeprl-agents/blob/master/basic.wad
+  33. https://medium.com/@awjuliani
+  34. https://twitter.com/awjuliani
+  35. https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=v2r22dv4xsr5y&lc=us&item_name=arthur juliani's deep learning tutorials&currency_code=usd&bn=pp-donationsbf:btn_donatecc_lg.gif:nonhosted
+  36. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-0-id24-with-tables-and-neural-networks-d195264329d0
+  37. https://medium.com/@awjuliani/super-simple-reinforcement-learning-tutorial-part-1-fd544fab149
+  38. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-1-5-contextual-bandits-bff01d1aad9c#.uzs1axw0s
+  39. https://medium.com/@awjuliani/super-simple-reinforcement-learning-tutorial-part-2-ded33892c724
+  40. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-3-model-based-rl-9a6fe0cce99
+  41. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-4-deep-q-networks-and-beyond-8438a3e2b8df#.i2zpbmre8
+  42. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-5-visualizing-an-agents-thoughts-and-actions-4f27b134bb2a
+  43. https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-6-partial-observability-and-deep-recurrent-q-68463e9aeefc#.9djtshpqo
+  44. https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-7-action-selection-strategies-for-exploration-d3a97b7cceaf#.qfg7lqxpr
+  45. https://medium.com/tag/machine-learning?source=post
+  46. https://medium.com/tag/artificial-intelligence?source=post
+  47. https://medium.com/tag/deep-learning?source=post
+  48. https://medium.com/tag/neural-networks?source=post
+  49. https://medium.com/tag/robotics?source=post
+  50. https://medium.com/@awjuliani?source=footer_card
+  51. https://medium.com/@awjuliani
+  52. http://twitter.com/unity3d
+  53. https://medium.com/emergent-future?source=footer_card
+  54. https://medium.com/emergent-future?source=footer_card
+  55. https://medium.com/emergent-future
+  56. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  58. https://medium.com/p/c88f72a5e9f2/share/twitter
+  59. https://medium.com/p/c88f72a5e9f2/share/facebook
+  60. https://medium.com/p/c88f72a5e9f2/share/twitter
+  61. https://medium.com/p/c88f72a5e9f2/share/facebook

@@ -1,0 +1,942 @@
+   #[1]wildml    feed [2]wildml    comments feed [3]wildml    implementing a
+   id98 for text classification in tensorflow comments feed
+   [4]understanding convolutional neural networks for nlp [5]attention and
+   memory in deep learning and nlp [6]alternate [7]alternate
+
+   [8]skip to content
+
+   [9]wildml
+
+   artificial intelligence, deep learning, and nlp
+
+   (button) menu
+     * [10]home
+     * [11]ai newsletter
+     * [12]deep learning glossary
+     * [13]contact
+     * [14]about
+
+   posted on [15]december 11, 2015february 4, 2016 by [16]denny britz
+
+implementing a id98 for text classification in tensorflow
+
+   [17]the full code is available on github.
+
+   in this post we will implement a model similar to kim yoon   s
+   [18]convolutional neural networks for sentence classification. the
+   model presented in the paper achieves good classification performance
+   across a range of text classification tasks (like id31)
+   and has since become a standard baseline for new text classification
+   architectures.
+
+   i   m assuming that you are already familiar with the basics of
+   convolutional neural networks applied to nlp. if not, i recommend to
+   first read over [19]understanding convolutional neural networks for nlp
+   to get the necessary background.
+
+data and preprocessing
+
+   the dataset we   ll use in this post is the [20]movie review data from
+   rotten tomatoes     one of the data sets also used in the original paper.
+   the dataset contains 10,662 example review sentences, half positive and
+   half negative. the dataset has a vocabulary of size around 20k. note
+   that since this data set is pretty small we   re likely to overfit with a
+   powerful model. also, the dataset doesn   t come with an official
+   train/test split, so we simply use 10% of the data as a dev set. the
+   original paper reported results for 10-fold cross-validation on the
+   data.
+
+   i won   t go over the data pre-processing code in this post, but it is
+   [21]available on github and does the following:
+    1. load positive and negative sentences from the raw data files.
+    2. clean the text data using the [22]same code as the original paper.
+    3. pad each sentence to the maximum sentence length, which turns out
+       to be 59. we append special <pad> tokens to all other sentences to
+       make them 59 words. padding sentences to the same length is useful
+       because it allows us to efficiently batch our data since each
+       example in a batch must be of the same length.
+    4. build a vocabulary index and map each word to an integer between 0
+       and 18,765 (the vocabulary size). each sentence becomes a vector of
+       integers.
+
+the model
+
+   the network we will build in this post looks roughly as follows:
+
+   [23]kim, y. (2014). convolutional neural networks for sentence
+   classification
+
+   the first layers embeds words into low-dimensional vectors. the next
+   layer performs convolutions over the embedded word vectors using
+   multiple filter sizes. for example, sliding over 3, 4 or 5 words at a
+   time. next, we max-pool the result of the convolutional layer into a
+   long feature vector, add dropout id173, and classify the
+   result using a softmax layer.
+
+   because this is an educational post i decided to simplify the model
+   from the original paper a little:
+     * we will not used pre-trained [24]id97 vectors for our word
+       embeddings. instead, we learn embeddings from scratch.
+     * we will not enforce l2 norm constraints on the weight vectors.
+       [25]a sensitivity analysis of (and practitioners    guide to)
+       convolutional neural networks for sentence classification found
+       that the constraints had little effect on the end result.
+     * the original paper experiments with two input data channels    
+       static and non-static word vectors. we use only one channel.
+
+   it is relatively straightforward (a few dozen lines of code) to add the
+   above extensions to the code here. take a look at the exercises at the
+   end of the post.
+
+   let   s get started!
+
+implementation
+
+   to allow various hyperparameter configurations we put our code into a
+   textid98 class, generating the model graph in the init function.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   import tensorflow as tf
+   import numpy as np
+
+   class textid98(object):
+       &quot;&quot;&quot;
+       a id98 for text classification.
+       uses an embedding layer, followed by a convolutional, max-pooling
+   and softmax layer.
+       &quot;&quot;&quot;
+       def __init__(
+         self, sequence_length, num_classes, vocab_size,
+         embedding_size, filter_sizes, num_filters):
+           # implementation...
+
+   to instantiate the class we then pass the following arguments:
+     * sequence_length     the length of our sentences. remember that we
+       padded all our sentences to have the same length (59 for our data
+       set).
+     * num_classes     number of classes in the output layer, two in our
+       case (positive and negative).
+     * vocab_size     the size of our vocabulary. this is needed to define
+       the size of our embedding layer, which will have shape
+       [vocabulary_size, embedding_size].
+     * embedding_size     the dimensionality of our embeddings.
+     * filter_sizes     the number of words we want our convolutional
+       filters to cover. we will have num_filters for each size specified
+       here. for example, [3, 4, 5] means that we will have filters that
+       slide over 3, 4 and 5 words respectively, for a total of 3 *
+       num_filters filters.
+     * num_filters     the number of filters per filter size (see above).
+
+input placeholders
+
+   we start by defining the input data that we pass to our network:
+
+   1
+   2
+   3
+   4
+   # placeholders for input, output and dropout
+   self.input_x = tf.placeholder(tf.int32, [none, sequence_length],
+   name=&quot;input_x&quot;)
+   self.input_y = tf.placeholder(tf.float32, [none, num_classes],
+   name=&quot;input_y&quot;)
+   self.dropout_keep_prob = tf.placeholder(tf.float32,
+   name=&quot;dropout_keep_prob&quot;)
+
+   tf.placeholder creates a placeholder variable that we feed to the
+   network when we execute it at train or test time. the second argument
+   is the shape of the input tensor. none means that the length of that
+   dimension could be anything. in our case, the first dimension is the
+   batch size, and using none allows the network to handle arbitrarily
+   sized batches.
+
+   the id203 of keeping a neuron in the dropout layer is also an
+   input to the network because we enable dropout only during training. we
+   disable it when evaluating the model (more on that later).
+
+embedding layer
+
+   the first layer we define is the embedding layer, which maps vocabulary
+   word indices into low-dimensional vector representations. it   s
+   essentially a lookup table that we learn from data.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   with tf.device('/cpu:0'), tf.name_scope(&quot;embedding&quot;):
+       w = tf.variable(
+           tf.random_uniform([vocab_size, embedding_size], -1.0, 1.0),
+           name=&quot;w&quot;)
+       self.embedded_chars = tf.nn.embedding_lookup(w, self.input_x)
+       self.embedded_chars_expanded = tf.expand_dims(self.embedded_chars,
+   -1)
+
+   we   re using a couple of new features here so let   s go over them:
+     * tf.device("/cpu:0") forces an operation to be executed on the cpu.
+       by default tensorflow will try to put the operation on the gpu if
+       one is available, but the embedding implementation doesn   t
+       currently have gpu support and throws an error if placed on the
+       gpu.
+     * tf.name_scope creates a new [26]name scope with the name
+          embedding   . the scope adds all operations into a top-level node
+       called    embedding    so that you get a nice hierarchy when
+       visualizing your network in tensorboard.
+
+   w is our embedding matrix that we learn during training. we initialize
+   it using a random uniform distribution. [27]tf.nn.embedding_lookup
+   creates the actual embedding operation. the result of the embedding
+   operation is a 3-dimensional tensor of shape [none, sequence_length,
+   embedding_size].
+
+   tensorflow   s convolutional [28]conv2d operation expects a 4-dimensional
+   tensor with dimensions corresponding to batch, width, height and
+   channel. the result of our embedding doesn   t contain the channel
+   dimension, so we add it manually, leaving us with a layer of shape
+   [none, sequence_length, embedding_size, 1].
+
+convolution and max-pooling layers
+
+   now we   re ready to build our convolutional layers followed by
+   max-pooling. remember that we use filters of different sizes. because
+   each convolution produces tensors of different shapes we need to
+   iterate through them, create a layer for each of them, and then merge
+   the results into one big feature vector.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   25
+   26
+   27
+   28
+   pooled_outputs = []
+   for i, filter_size in enumerate(filter_sizes):
+       with tf.name_scope(&quot;conv-maxpool-%s&quot; % filter_size):
+           # convolution layer
+           filter_shape = [filter_size, embedding_size, 1, num_filters]
+           w = tf.variable(tf.truncated_normal(filter_shape, stddev=0.1),
+   name=&quot;w&quot;)
+           b = tf.variable(tf.constant(0.1, shape=[num_filters]),
+   name=&quot;b&quot;)
+           conv = tf.nn.conv2d(
+               self.embedded_chars_expanded,
+               w,
+               strides=[1, 1, 1, 1],
+               padding=&quot;valid&quot;,
+               name=&quot;conv&quot;)
+           # apply nonlinearity
+           h = tf.nn.relu(tf.nn.bias_add(conv, b), name=&quot;relu&quot;)
+           # max-pooling over the outputs
+           pooled = tf.nn.max_pool(
+               h,
+               ksize=[1, sequence_length - filter_size + 1, 1, 1],
+               strides=[1, 1, 1, 1],
+               padding='valid',
+               name=&quot;pool&quot;)
+           pooled_outputs.append(pooled)
+
+   # combine all the pooled features
+   num_filters_total = num_filters * len(filter_sizes)
+   self.h_pool = tf.concat(3, pooled_outputs)
+   self.h_pool_flat = tf.reshape(self.h_pool, [-1, num_filters_total])
+
+   here, w is our filter matrix and h is the result of applying the
+   nonlinearity to the convolution output. each filter slides over the
+   whole embedding, but varies in how many words it covers. "valid"
+   padding means that we slide the filter over our sentence without
+   padding the edges, performing a narrow convolution that gives us an
+   output of shape [1, sequence_length - filter_size + 1, 1, 1].
+   performing max-pooling over the output of a specific filter size leaves
+   us with a tensor of shape [batch_size, 1, 1, num_filters]. this is
+   essentially a feature vector, where the last dimension corresponds to
+   our features. once we have all the pooled output tensors from each
+   filter size we combine them into one long feature vector of shape
+   [batch_size, num_filters_total]. using -1 in tf.reshape tells
+   tensorflow to flatten the dimension when possible.
+
+   take some time and try to understand the output shapes for each of
+   these operations. you can also refer back to [29]understanding
+   convolutional neural networks for nlp to get some intuition.
+   visualizing the operations in tensorboard may help as well (for
+   specific filter sizes 3, 4 and 5 here):
+
+   [30]convolutional layer with multiple filter sizes
+
+   [31]convolution and max-pooling for a single filter size.
+
+dropout layer
+
+   [32]dropout is the perhaps most popular method to regularize
+   convolutional neural networks. the idea behind dropout is simple. a
+   dropout layer stochastically    disables    a fraction of its neurons. this
+   prevent neurons from co-adapting and forces them to learn individually
+   useful features. the fraction of neurons we keep enabled is defined by
+   the dropout_keep_prob input to our network. we set this to something
+   like 0.5 during training, and to 1 (disable dropout) during evaluation.
+
+   1
+   2
+   3
+   # add dropout
+   with tf.name_scope(&quot;dropout&quot;):
+       self.h_drop = tf.nn.dropout(self.h_pool_flat,
+   self.dropout_keep_prob)
+
+scores and predictions
+
+   using the feature vector from max-pooling (with dropout applied) we can
+   generate predictions by doing a id127 and picking the
+   class with the highest score. we could also apply a softmax function to
+   convert raw scores into normalized probabilities, but that wouldn   t
+   change our final predictions.
+
+   1
+   2
+   3
+   4
+   5
+   with tf.name_scope(&quot;output&quot;):
+       w = tf.variable(tf.truncated_normal([num_filters_total,
+   num_classes], stddev=0.1), name=&quot;w&quot;)
+       b = tf.variable(tf.constant(0.1, shape=[num_classes]),
+   name=&quot;b&quot;)
+       self.scores = tf.nn.xw_plus_b(self.h_drop, w, b,
+   name=&quot;scores&quot;)
+       self.predictions = tf.argmax(self.scores, 1,
+   name=&quot;predictions&quot;)
+
+   here, tf.nn.xw_plus_b is a convenience wrapper to perform the wx + b
+   id127.
+
+loss and accuracy
+
+   using our scores we can define the id168. the loss is a
+   measurement of the error our network makes, and our goal is to minimize
+   it. the standard id168 for categorization problems it the
+   [33]cross-id178 loss.
+
+   1
+   2
+   3
+   4
+   # calculate mean cross-id178 loss
+   with tf.name_scope(&quot;loss&quot;):
+       losses = tf.nn.softmax_cross_id178_with_logits(self.scores,
+   self.input_y)
+       self.loss = tf.reduce_mean(losses)
+
+   here, [34]tf.nn.softmax_cross_id178_with_logits is a convenience
+   function that calculates the cross-id178 loss for each class, given
+   our scores and the correct input labels. we then take the mean of the
+   losses. we could also use the sum, but that makes it harder to compare
+   the loss across different batch sizes and train/dev data.
+
+   we also define an expression for the accuracy, which is a useful
+   quantity to keep track of during training and testing.
+
+   1
+   2
+   3
+   4
+   # calculate accuracy
+   with tf.name_scope(&quot;accuracy&quot;):
+       correct_predictions = tf.equal(self.predictions,
+   tf.argmax(self.input_y, 1))
+       self.accuracy = tf.reduce_mean(tf.cast(correct_predictions,
+   &quot;float&quot;), name=&quot;accuracy&quot;)
+
+visualizing the network
+
+   that   s it, we   re done with our network definition. [35]the full code
+   network definition code is available here. to get the big picture we
+   can also visualize the network in [36]tensorboard:
+
+   [37]id98 for text classification
+
+training procedure
+
+   before we define the training procedure for our network we need to
+   understand some basics about how tensorflow uses sessions and graphs.
+   if you   re already familiar with these concepts feel free to skip this
+   section.
+
+   in tensorflow, a session is the environment you are executing graph
+   operations in, and it contains state about variables and queues. each
+   session operates on a single graph. if you don   t explicitly use a
+   session when creating variables and operations you are using the
+   current default session created by tensorflow. you can change the
+   default session by executing commands within a session.as_default()
+   block (see below).
+
+   a graph contains operations and tensors. you can use multiple graphs in
+   your program, but most programs only need a single graph. you can use
+   the same graph in multiple sessions, but not multiple graphs in one
+   session. tensorflow always creates a default graph, but you may also
+   create a graph manually and set it as the new default, like we do
+   below. explicitly creating sessions and graphs ensures that resources
+   are released properly when you no longer need them.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   with tf.graph().as_default():
+       session_conf = tf.configproto(
+         allow_soft_placement=flags.allow_soft_placement,
+         log_device_placement=flags.log_device_placement)
+       sess = tf.session(config=session_conf)
+       with sess.as_default():
+           # code that operates on the default graph and session comes
+   here...
+
+   the [38]allow_soft_placement setting allows tensorflow to fall back on
+   a device with a certain operation implemented when the preferred device
+   doesn   t exist. for example, if our code places an operation on a gpu
+   and we run the code on a machine without gpu, not using
+   allow_soft_placement would result in an error. if
+   [39]log_device_placement is set, tensorflow log on which devices (cpu
+   or gpu) it places operations. that   s useful for debugging. flags are
+   command-line arguments to our program.
+
+instantiating the id98 and minimizing the loss
+
+   when we instantiate our textid98 models all the variables and operations
+   defined will be placed into the default graph and session we   ve created
+   above.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   id98 = textid98(
+       sequence_length=x_train.shape[1],
+       num_classes=2,
+       vocab_size=len(vocabulary),
+       embedding_size=flags.embedding_dim,
+       filter_sizes=map(int, flags.filter_sizes.split(&quot;,&quot;)),
+       num_filters=flags.num_filters)
+
+   next, we define how to optimize our network   s id168. tensorflow
+   has several built-in optimizers. we   re using the [40]adam optimizer.
+
+   1
+   2
+   3
+   4
+   global_step = tf.variable(0, name=&quot;global_step&quot;,
+   trainable=false)
+   optimizer = tf.train.adamoptimizer(1e-4)
+   grads_and_vars = optimizer.compute_gradients(id98.loss)
+   train_op = optimizer.apply_gradients(grads_and_vars,
+   global_step=global_step)
+
+   here, train_op here is a newly created operation that we can run to
+   perform a gradient update on our parameters. each execution of train_op
+   is a training step. tensorflow automatically figures out which
+   variables are    trainable    and calculates their gradients. by defining a
+   global_step variable and passing it to the optimizer we allow
+   tensorflow handle the counting of training steps for us. the global
+   step will be automatically incremented by one every time you execute
+   train_op.
+
+summaries
+
+   tensorflow has a concept of a [41]summaries, which allow you to keep
+   track of and visualize various quantities during training and
+   evaluation. for example, you probably want to keep track of how your
+   loss and accuracy evolve over time. you can also keep track of more
+   complex quantities, such as histograms of layer activations. summaries
+   are serialized objects, and they are written to disk using a
+   [42]summarywriter.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   # output directory for models and summaries
+   timestamp = str(int(time.time()))
+   out_dir = os.path.abspath(os.path.join(os.path.curdir,
+   &quot;runs&quot;, timestamp))
+   print(&quot;writing to {}\n&quot;.format(out_dir))
+
+   # summaries for loss and accuracy
+   loss_summary = tf.scalar_summary(&quot;loss&quot;, id98.loss)
+   acc_summary = tf.scalar_summary(&quot;accuracy&quot;, id98.accuracy)
+
+   # train summaries
+   train_summary_op = tf.merge_summary([loss_summary, acc_summary])
+   train_summary_dir = os.path.join(out_dir, &quot;summaries&quot;,
+   &quot;train&quot;)
+   train_summary_writer = tf.train.summarywriter(train_summary_dir,
+   sess.graph_def)
+
+   # dev summaries
+   dev_summary_op = tf.merge_summary([loss_summary, acc_summary])
+   dev_summary_dir = os.path.join(out_dir, &quot;summaries&quot;,
+   &quot;dev&quot;)
+   dev_summary_writer = tf.train.summarywriter(dev_summary_dir,
+   sess.graph_def)
+
+   here, we are separately keeping track of summaries for training and
+   evaluation. in our case these are the same quantities, but you may have
+   quantities that you want to track during training only (like parameter
+   update values). [43]tf.merge_summary is a convenience function that
+   merges multiple summary operations into a single operation that we can
+   execute.
+
+checkpointing
+
+   another tensorflow feature you typically want to use is
+   [44]checkpointing     saving the parameters of your model to restore them
+   later on. checkpoints can be used to continue training at a later
+   point, or to pick the best parameters setting using early stopping.
+   checkpoints are created using a [45]saver object.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   # checkpointing
+   checkpoint_dir = os.path.abspath(os.path.join(out_dir,
+   &quot;checkpoints&quot;))
+   checkpoint_prefix = os.path.join(checkpoint_dir, &quot;model&quot;)
+   # tensorflow assumes this directory already exists so we need to create
+   it
+   if not os.path.exists(checkpoint_dir):
+       os.makedirs(checkpoint_dir)
+   saver = tf.train.saver(tf.all_variables())
+
+initializing the variables
+
+   before we can train our model we also need to initialize the variables
+   in our graph.
+
+   1
+   sess.run(tf.initialize_all_variables())
+
+   the [46]initialize_all_variables function is a convenience function run
+   all of the initializers we   ve defined for our variables. you can also
+   call the initializer of your variables manually. that   s useful if you
+   want to initialize your embeddings with pre-trained values for example.
+
+defining a single training step
+
+   let   s now define a function for a single training step, evaluating the
+   model on a batch of data and updating the model parameters.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   def train_step(x_batch, y_batch):
+       &quot;&quot;&quot;
+       a single training step
+       &quot;&quot;&quot;
+       feed_dict = {
+         id98.input_x: x_batch,
+         id98.input_y: y_batch,
+         id98.dropout_keep_prob: flags.dropout_keep_prob
+       }
+       _, step, summaries, loss, accuracy = sess.run(
+           [train_op, global_step, train_summary_op, id98.loss,
+   id98.accuracy],
+           feed_dict)
+       time_str = datetime.datetime.now().isoformat()
+       print(&quot;{}: step {}, loss {:g}, acc {:g}&quot;.format(time_str,
+   step, loss, accuracy))
+       train_summary_writer.add_summary(summaries, step)
+
+   feed_dict contains the data for the placeholder nodes we pass to our
+   network. you must feed values for all placeholder nodes, or tensorflow
+   will throw an error. another way to work with input data is using
+   [47]queues, but that   s beyond the scope of this post.
+
+   next, we execute our train_op using session.run, which returns values
+   for all the operations we ask it to evaluate. note that train_op
+   returns nothing, it just updates the parameters of our network.
+   finally, we print the loss and accuracy of the current training batch
+   and save the summaries to disk. note that the loss and accuracy for a
+   training batch may vary significantly across batches if your batch size
+   is small. and because we   re using dropout your training metrics may
+   start out being worse than your id74.
+
+   we write a similar function to evaluate the loss and accuracy on an
+   arbitrary data set, such as a validation set or the whole training set.
+   essentially this function does the same as the above, but without the
+   training operation. it also disables dropout.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   def dev_step(x_batch, y_batch, writer=none):
+       &quot;&quot;&quot;
+       evaluates model on a dev set
+       &quot;&quot;&quot;
+       feed_dict = {
+         id98.input_x: x_batch,
+         id98.input_y: y_batch,
+         id98.dropout_keep_prob: 1.0
+       }
+       step, summaries, loss, accuracy = sess.run(
+           [global_step, dev_summary_op, id98.loss, id98.accuracy],
+           feed_dict)
+       time_str = datetime.datetime.now().isoformat()
+       print(&quot;{}: step {}, loss {:g}, acc {:g}&quot;.format(time_str,
+   step, loss, accuracy))
+       if writer:
+           writer.add_summary(summaries, step)
+
+training loop
+
+   finally, we   re ready to write our training loop. we iterate over
+   batches of our data, call the train_step function for each batch, and
+   occasionally evaluate and checkpoint our model:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   # generate batches
+   batches = data_helpers.batch_iter(
+       zip(x_train, y_train), flags.batch_size, flags.num_epochs)
+   # training loop. for each batch...
+   for batch in batches:
+       x_batch, y_batch = zip(*batch)
+       train_step(x_batch, y_batch)
+       current_step = tf.train.global_step(sess, global_step)
+       if current_step % flags.evaluate_every == 0:
+           print(&quot;\nevaluation:&quot;)
+           dev_step(x_dev, y_dev, writer=dev_summary_writer)
+           print(&quot;&quot;)
+       if current_step % flags.checkpoint_every == 0:
+           path = saver.save(sess, checkpoint_prefix,
+   global_step=current_step)
+           print(&quot;saved model checkpoint to {}\n&quot;.format(path))
+
+   here, batch_iter is a helper function i wrote to batch the data, and
+   tf.train.global_step is convenience function that returns the value of
+   global_step. [48]the full code for training is also available here.
+
+visualizing results in tensorboard
+
+   our training script writes summaries to an output directory, and by
+   pointing [49]tensorboard to that directory we can visualize the graph
+   and the summaries we created.
+
+   1
+   tensorboard --logdir /path_to_code/runs/1449760558/summaries/
+
+   running the training procedure with default parameters (128-dimensional
+   embeddings, filter sizes of 3, 4 and 5, dropout of 0.5 and 128 filters
+   per filter size) results in the following loss and accuracy plots (blue
+   is training data, red is 10% dev data).
+
+   [50]loss plot for text classification id98
+
+   [51]accuracy plot for text classification id98
+
+   there are a couple of things that stand out:
+     * our training metrics are not smooth because we use small batch
+       sizes. if we used larger batches (or evaluated on the whole
+       training set) we would get a smoother blue line.
+     * because dev accuracy is significantly below training accuracy it
+       seems like our network is overfitting the training data, suggesting
+       that we need more data (the mr dataset is very small), stronger
+       id173, or fewer model parameters. for example, i
+       experimented with adding additional l2 penalties for the weights at
+       the last layer and was able to bump up the accuracy to 76%, close
+       to that reported in the original paper.
+     * the training loss and accuracy starts out significantly below the
+       dev metrics due to dropout applied to it.
+
+   you can play around with the code and try running the model with
+   various parameter configuration. [52]code and instructions are
+   available on github.
+
+extensions and exercises
+
+   here are a couple of useful exercises that may improve the performance
+   of the model:
+     * initialize the embeddings with pre-trained [53]id97 vectors. to
+       make this work you need to use 300-dimensional embeddings and
+       initialize them with the pre-trained values.
+     * constrain the l2 norm of the weight vectors in the last layer, just
+       like the [54]original paper. you can do this by defining a new
+       operation that updates the weight values after each training step.
+     * add l2 id173 to the network to combat overfitting, also
+       experiment with increasing the dropout rate. (the code on github
+       already includes l2 id173, but it is disabled by default)
+     * add histogram summaries for weight updates and layer actions and
+       visualize them in tensorboard.
+
+   please leave feedback and questions in the comments!
+
+
+   categories[55]convolutional neural networks, [56]deep learning,
+   [57]neural networks, [58]nlp
+
+post navigation
+
+   [59]previous postprevious understanding convolutional neural networks
+   for nlp
+   [60]next postnext attention and memory in deep learning and nlp
+
+subscribe to blog via email
+
+   enter your email address to subscribe to this blog and receive
+   notifications of new posts by email.
+
+   email address ____________________
+
+   (button) subscribe
+
+recent posts
+
+     * [61]introduction to learning to trade with id23
+     * [62]ai and deep learning in 2017     a year in review
+     * [63]hype or not? some perspective on openai   s dota 2 bot
+     * [64]learning id23 (with code, exercises and
+       solutions)
+     * [65]id56s in tensorflow, a practical guide and undocumented features
+     * [66]deep learning for chatbots, part 2     implementing a
+       retrieval-based model in tensorflow
+     * [67]deep learning for chatbots, part 1     introduction
+     * [68]attention and memory in deep learning and nlp
+
+archives
+
+     * [69]february 2018
+     * [70]december 2017
+     * [71]august 2017
+     * [72]october 2016
+     * [73]august 2016
+     * [74]july 2016
+     * [75]april 2016
+     * [76]january 2016
+     * [77]december 2015
+     * [78]november 2015
+     * [79]october 2015
+     * [80]september 2015
+
+categories
+
+     * [81]conversational agents
+     * [82]convolutional neural networks
+     * [83]deep learning
+     * [84]gpu
+     * [85]id38
+     * [86]memory
+     * [87]neural networks
+     * [88]news
+     * [89]nlp
+     * [90]recurrent neural networks
+     * [91]id23
+     * [92]id56s
+     * [93]tensorflow
+     * [94]trading
+     * [95]uncategorized
+
+meta
+
+     * [96]log in
+     * [97]entries rss
+     * [98]comments rss
+     * [99]wordpress.org
+
+   [100]proudly powered by wordpress
+
+references
+
+   1. http://www.wildml.com/feed/
+   2. http://www.wildml.com/comments/feed/
+   3. http://www.wildml.com/2015/12/implementing-a-id98-for-text-classification-in-tensorflow/feed/
+   4. http://www.wildml.com/2015/11/understanding-convolutional-neural-networks-for-nlp/
+   5. http://www.wildml.com/2016/01/attention-and-memory-in-deep-learning-and-nlp/
+   6. http://www.wildml.com/wp-json/oembed/1.0/embed?url=http://www.wildml.com/2015/12/implementing-a-id98-for-text-classification-in-tensorflow/
+   7. http://www.wildml.com/wp-json/oembed/1.0/embed?url=http://www.wildml.com/2015/12/implementing-a-id98-for-text-classification-in-tensorflow/&format=xml
+   8. http://www.wildml.com/2015/12/implementing-a-id98-for-text-classification-in-tensorflow/#content
+   9. http://www.wildml.com/
+  10. http://www.wildml.com/
+  11. https://www.getrevue.co/profile/wildml
+  12. http://www.wildml.com/deep-learning-glossary/
+  13. mailto:dennybritz@gmail.com
+  14. http://www.wildml.com/about/
+  15. http://www.wildml.com/2015/12/implementing-a-id98-for-text-classification-in-tensorflow/
+  16. http://www.wildml.com/author/dennybritz/
+  17. https://github.com/dennybritz/id98-text-classification-tf
+  18. http://arxiv.org/abs/1408.5882
+  19. http://www.wildml.com/2015/11/understanding-convolutional-neural-networks-for-nlp/
+  20. http://www.cs.cornell.edu/people/pabo/movie-review-data/
+  21. https://github.com/dennybritz/id98-text-classification-tf/blob/master/data_helpers.py
+  22. https://github.com/yoonkim/id98_sentence
+  23. http://www.wildml.com/wp-content/uploads/2015/11/screen-shot-2015-11-06-at-8.03.47-am.png
+  24. https://code.google.com/p/id97/
+  25. http://arxiv.org/abs/1510.03820
+  26. https://www.tensorflow.org/versions/master/how_tos/graph_viz/index.html#name-scoping-and-nodes
+  27. https://www.tensorflow.org/versions/master/api_docs/python/nn.html#embedding_lookup
+  28. http://www.tensorflow.org/api_docs/python/nn.html#conv2d
+  29. http://www.wildml.com/2015/11/understanding-convolutional-neural-networks-for-nlp/
+  30. http://www.wildml.com/wp-content/uploads/2015/12/screen-shot-2015-12-10-at-10.13.50-am1.png
+  31. http://www.wildml.com/wp-content/uploads/2015/12/screen-shot-2015-12-10-at-10.22.29-am.png
+  32. http://www.cs.toronto.edu/~rsalakhu/papers/srivastava14a.pdf
+  33. http://cs231n.github.io/linear-classify/#softmax
+  34. https://www.tensorflow.org/versions/master/api_docs/python/nn.html#softmax_cross_id178_with_logits
+  35. https://github.com/dennybritz/id98-text-classification-tf/blob/master/text_id98.py
+  36. https://www.tensorflow.org/versions/master/how_tos/graph_viz/index.html#tensorboard-graph-visualization
+  37. http://www.wildml.com/wp-content/uploads/2015/12/screen-shot-2015-12-10-at-10.25.46-am.png
+  38. http://www.tensorflow.org/how_tos/using_gpu/index.html
+  39. https://www.tensorflow.org/versions/master/how_tos/using_gpu/index.html
+  40. http://arxiv.org/abs/1412.6980
+  41. https://www.tensorflow.org/versions/master/how_tos/summaries_and_tensorboard/index.html#tensorboard-visualizing-learning
+  42. https://www.tensorflow.org/versions/master/api_docs/python/train.html#summarywriter
+  43. https://www.tensorflow.org/versions/master/api_docs/python/train.html#merge_summary
+  44. https://www.tensorflow.org/versions/master/how_tos/variables/index.html#saving-and-restoring
+  45. https://www.tensorflow.org/versions/master/api_docs/python/state_ops.html#saver
+  46. https://www.tensorflow.org/versions/master/api_docs/python/state_ops.html#initialize_all_variables
+  47. http://www.tensorflow.org/how_tos/reading_data/index.html#reading-data
+  48. https://github.com/dennybritz/id98-text-classification-tf/blob/master/train.py
+  49. https://www.tensorflow.org/versions/master/how_tos/summaries_and_tensorboard/index.html#tensorboard-visualizing-learning
+  50. http://www.wildml.com/wp-content/uploads/2015/12/screen-shot-2015-12-11-at-6.29.14-am.png
+  51. http://www.wildml.com/wp-content/uploads/2015/12/screen-shot-2015-12-11-at-6.27.48-am.png
+  52. https://github.com/dennybritz/id98-text-classification-tf
+  53. https://code.google.com/p/id97/
+  54. http://arxiv.org/abs/1408.5882
+  55. http://www.wildml.com/category/neural-networks/convolutional-neural-networks/
+  56. http://www.wildml.com/category/deep-learning/
+  57. http://www.wildml.com/category/neural-networks/
+  58. http://www.wildml.com/category/nlp/
+  59. http://www.wildml.com/2015/11/understanding-convolutional-neural-networks-for-nlp/
+  60. http://www.wildml.com/2016/01/attention-and-memory-in-deep-learning-and-nlp/
+  61. http://www.wildml.com/2018/02/introduction-to-learning-to-trade-with-reinforcement-learning/
+  62. http://www.wildml.com/2017/12/ai-and-deep-learning-in-2017-a-year-in-review/
+  63. http://www.wildml.com/2017/08/hype-or-not-some-perspective-on-openais-dota-2-bot/
+  64. http://www.wildml.com/2016/10/learning-reinforcement-learning/
+  65. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+  66. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+  67. http://www.wildml.com/2016/04/deep-learning-for-chatbots-part-1-introduction/
+  68. http://www.wildml.com/2016/01/attention-and-memory-in-deep-learning-and-nlp/
+  69. http://www.wildml.com/2018/02/
+  70. http://www.wildml.com/2017/12/
+  71. http://www.wildml.com/2017/08/
+  72. http://www.wildml.com/2016/10/
+  73. http://www.wildml.com/2016/08/
+  74. http://www.wildml.com/2016/07/
+  75. http://www.wildml.com/2016/04/
+  76. http://www.wildml.com/2016/01/
+  77. http://www.wildml.com/2015/12/
+  78. http://www.wildml.com/2015/11/
+  79. http://www.wildml.com/2015/10/
+  80. http://www.wildml.com/2015/09/
+  81. http://www.wildml.com/category/conversational-agents/
+  82. http://www.wildml.com/category/neural-networks/convolutional-neural-networks/
+  83. http://www.wildml.com/category/deep-learning/
+  84. http://www.wildml.com/category/gpu/
+  85. http://www.wildml.com/category/language-modeling/
+  86. http://www.wildml.com/category/memory/
+  87. http://www.wildml.com/category/neural-networks/
+  88. http://www.wildml.com/category/news/
+  89. http://www.wildml.com/category/nlp/
+  90. http://www.wildml.com/category/neural-networks/recurrent-neural-networks/
+  91. http://www.wildml.com/category/reinforcement-learning/
+  92. http://www.wildml.com/category/id56s/
+  93. http://www.wildml.com/category/tensorflow/
+  94. http://www.wildml.com/category/trading/
+  95. http://www.wildml.com/category/uncategorized/
+  96. http://www.wildml.com/wp-login.php
+  97. http://www.wildml.com/feed/
+  98. http://www.wildml.com/comments/feed/
+  99. https://wordpress.org/
+ 100. https://wordpress.org/

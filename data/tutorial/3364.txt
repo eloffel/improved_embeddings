@@ -1,0 +1,617 @@
+   #[1]sachin joglekar's blog    feed [2]sachin joglekar's blog    comments
+   feed [3]sachin joglekar's blog    understanding the new google translate
+   comments feed [4]on interpretable models [5]how neural networks
+   generate visual art from inspiration [6]alternate [7]alternate
+   [8]sachin joglekar's blog [9]wordpress.com
+
+   [10]skip to content
+
+[11]sachin joglekar's blog
+
+programming | python | ml
+
+primary menu
+
+   (button) menu
+     * [12]home
+     * [13]about
+
+understanding the new google translate
+
+   [14]18/01/201719/02/2017[15]srjoglekar246
+
+   [16]screen-shot-2017-01-17-at-4-18-07-pm
+
+   google launched a new version of the [17]translate in september 2016.
+   since then, there have been a few interesting developments in the
+   project, and this post attempts to explain it all in as simple terms as
+   possible.
+
+   the earlier version of the translate used [18]phrase-based machine
+   translation, or pbmt. what pbmt does is break up an input sentence into
+   a set of words/phrases and translate each one individually. this is
+   obviously not an optimal strategy, since it completely misses out on
+   the context of the overall sentence. the new translate uses what google
+   calls google id4 (gid4), an improvement over a
+   traditional version of [19]id4. lets see how gid4 works on a
+   high-level:
+
+the encoder
+
+   before you understand the encoder, you must understand what an
+   lstm (long-short-term-memory) cell is. it is basically a neural network
+   with some concept of memory. an lstm is generally used to    learn   
+   patterns in time-series/temporal data. at any given point, it accepts
+   the latest input vector and produces the intended output using a
+   combination of (the latest input + some    context    regarding what it saw
+   before):
+
+   [20]main-qimg-0c9574ceedad13aa45f68431c33c6db5
+
+   in the above picture, x_t is the input at time t . h_{t-1} represents
+   the context from t-1 . if x_t has a dimensionality of d , h_{t-1} of
+   dimensionality 2d is a concatenation of two vectors:
+    1. the intended output by the same lstm at the last time-step t-1 (the
+       short term memory), and
+    2. another d -dimensional vector encoding the long term memory     also
+       called the cell state.
+
+   the second part is usually not of use for the next component in the
+   architecture. it is instead used by the same lstm for the following
+   step. lstms are usually trained by providing them with a ton of example
+   input-series with the expected outputs. this enables them to learn
+   what parts of the input to retain/hold, and how to mathematically
+   process x_t and h_{t-1} to come up with h_t . if you wish to understand
+   lstms better, i recommend [21]this blog post by christopher olah.
+
+   an lstm can also be    unfolded   , as shown below:
+
+   [22]5655a235588a8
+
+   don   t worry, they are copies of the the same lstm cell (hence same
+   training), each feeding their output to the next one in line. what this
+   allows us to do is give in the entire set of input vectors (in essence,
+   the whole time-series) all at once, instead of going step-by-step with
+   a single copy of the lstm.
+
+   gid4   s encoder network is essentially a series of stacked lstms:
+
+   [23]screen-shot-2017-01-16-at-4-17-00-pm
+
+   each horizontal line of pink/green boxes is an    unfolded    lstm on its
+   own. the above figure therefore has 8 stacked lstms in a series. the
+   input to the whole architecture is the ordered set of tokens in the
+   sentence, each represented in the form of a vector. mind you, i said
+   tokens     not words. what gid4 does in pre-processing, is break up all
+   words into tokens/pieces, which are then fed as a series to the neural
+   network. this enables the framework to (atleast partially) understand
+   unseen complicated words. for example, suppose i say the word
+      pteromerhanophobia   . even though you may not know exactly what it is,
+   you can tell me that it is some sort of fear based on the token
+      phobia   . google calls this approach wordpiece modeling. the break-up
+   of words into tokens is done based on statistical learning (which group
+   of tokens make most sense?) from a huge vocabulary in the training
+   phase.
+
+   when you id200s, each layer learns a pattern in the time series
+   fed to it by the earlier (lower) layer. as you go higher up the ladder,
+   you see more and more abstract patterns from the data that was fed in
+   to the lowest layer. for example, the lowest layer might see a set of
+   points and deduce a line, the next layer will see a set of lines and
+   deduce a polygon, the next will see a set of polygons and learn an
+   object, and so on    ofcourse, there is a limit to how many and in what
+   way you should id200s together     more is not always better, since
+   you will ultimately end up with a model thats too slow and difficult to
+   train.
+
+   there are a few interesting things about this architecture shown above,
+   apart from the stacking of lstms.
+
+   [24]screen-shot-2017-01-17-at-3-59-22-pm
+
+   you will see that the second layer from the bottom is green in color.
+   this is because the arrows     the ordering of tokens in the sentence    
+   is reversed for this layer. which means that the second lstm sees the
+   entire sentence in reverse order. the reason to do this is simple: when
+   you look at a sentence as a whole, the    context    for any word is not
+   just contained in the words preceding it, but also in the words
+   following it. the two bottom-most layers both see the raw sentence as
+   input, but in opposite order. the third lstm gets this
+   bidirectional input from the first two layers     basically, a
+   combination of the forward and backward context for any given word.
+   each layer from this point on learns higher-level patterns in the
+   contextual meanings of words in the sentence.
+
+   you might also have noticed the    +    signs that appear before providing
+   inputs to the fifth layer and above. this is a form of residual
+   learning. this is what happens from layer 5 onwards: for every layer
+   n+1 , the input is an addition of the output of layers n and n-1 . take
+   a look at my post on [25]residual neural networks to get a better
+   understanding of what this does.
+
+   [26]screen-shot-2017-01-17-at-4-01-09-pm
+
+   lastly, you can see the extra <2es> and </s> characters at the end of
+   the input to the encoder. </s> represents    end of input   . <2es>, on the
+   other hand, represents the target language     in this case, spanish.
+   gid4 does this unique thing where they provide the target language as
+   input to the framework, to improve performance of translate. more on
+   this later.
+
+attention module and the decoder
+
+   [27]screen-shot-2017-01-17-at-4-07-07-pm
+
+   the encoder produces a set of ordered output-vectors (one for each
+   token in the input). these are then fed into the attention module
+   & decoder framework. to a large extent, the decoder is similar to the
+   encoder in design- stacked lstms and residual connections. lets discuss
+   the parts that are different.
+
+   i have already mentioned that gid4 considers the entire sentence as
+   input, in every sense. however, it is intuitive to think that for every
+   token that the decoder will produce, it should not give equal weightage
+   to all vectors(tokens) in the input sentence. as you write out one part
+   of the story, your focus should slowly drift to the rest of it. this
+   work is done by the attention module. what the attention module gets as
+   input, is the complete output of the encoder and the latest vector from
+   the decoder stack. this lets it    understand    how much/what has already
+   been translated, and it then directs the decoder to shift attention to
+   the other parts of the encoder output.
+
+   the decoder lstm-stack keeps outputting vectors based on the input from
+   the encoder and directions from the attention module. these vectors are
+   given to the [28]softmax layer. you can think of the softmax layer as a
+   id203 distribution-generator. based on the incoming vector from
+   the topmost lstm, the softmax layer assigns a id203 to every
+   possible output token (remember the target language was already
+   provided to the encoder, so that information has already been
+   propagated). the token that gets the maximum id203 is written
+   out.
+
+   the whole process stops once the decoder/softmax decides that the
+   current token is </s> (or end-of-sentence). note that the decoder does
+   not have to follow a number of steps equal to the output vectors from
+   the encoder, since it is paying weighted attention to all of those at
+   every step of computation.
+
+   overall, this is how you can visualize the  complete translation
+   process:
+
+   [29]id4-model-fast
+
+training & zero-shot translation
+
+   the complete framework (encoder+attention+decoder) is trained by
+   providing it a huge collection of (input, translated) pairs of
+   sentences. the architecture    knows    the input language in a sense when
+   it converts tokens from the incoming sentence to the appropriate vector
+   format. the target language is provided as a parameter as well. the
+   brilliance of deep-lstms lies in the fact that the neural network
+   learns all of the computational stuff by itself, using a class of
+   algorithms called [30]id26/id119.
+
+   [31]image01
+
+   heres another amazing discovery made by the gid4 team: simply by
+   providing the target language as an input to the framework, it is able
+   to perform zero-shot translation! what this basically means is: if
+   during training you provide it examples of english->japanese &
+   english->korean translations, gid4 automatically does japanese->korean
+   reasonably well! in fact, this is the biggest achievement of gid4 as a
+   project. the intuition: what the encoder essentially produces is a form
+   of [32]interlingua (or universal language). whenever i say    dog    in any
+   language, you end up thinking of a friendly canine     essentially, the
+   concept of    dog   . this    concept    is what is produced by the encoder,
+   and it is irrespective of any language. in fact, some [33]articles went
+   so far as to say that google   s ai had invented a language of its own
+   :-d.
+
+   providing the target language as input allows gid4 to easily use the
+   same neural network for training with any pair of languages, which in
+   turn allows zero-shot translations. as a result, the new translate gets
+   closer than ever before to the way humans perform translations in their
+   mind.
+
+   heres some references if you want to read further on this subject      :
+    1. [34]first blog post about gid4 on the google research
+       blog. ([35]corresponding research paper)
+    2. [36]second blog post about zero-shot translations. this one made
+       the biggest splash. ([37]corresponding research paper)
+    3. [38]a great nytimes article that tells the story behind this google
+       translate.
+
+   advertisements
+
+share this:
+
+     * [39]twitter
+     * [40]facebook
+     *
+
+like this:
+
+   like loading...
+
+   categories: [41]machine learning/ai tags: [42]google, [43]interlingua,
+   [44]lstm, [45]machine learning, [46]neural network, [47]translate
+
+post navigation
+
+   [48]    on interpretable models
+   [49]how neural networks generate visual art from inspiration    
+
+12 thoughts on    understanding the new google translate   
+
+    1. pingback: [50]understanding the new google translate
+    2.
+   tien ping tan says:
+       [51]20/01/2017 at 13:24
+       hi, thanks for the very informative explanation. based on your
+       stacked lstm figure, if a sentence has 10 words, the number of lstm
+       cells will be 10/level. but the number of cells can normally be set
+       to a number e.g. 256, 512     in this case, how   s the architecture
+       will look like? thanks.
+       [52]reply
+         1.
+        [53]srjoglekar246 says:
+            [54]20/01/2017 at 14:18
+            theoretically, it should not matter since its practically the
+            same processing unit. but i guess we could pad the input on
+            the right with some default tokens? the paper does not go into
+            these details afaik, but the diagram still pretty much remains
+            the same :-).
+            [55]reply
+    3.
+   [56]sergei ovchinnikov says:
+       [57]20/01/2017 at 20:07
+       quick    two ways    text translation to russian and back demonstrates
+       that every 2 of 10 sentences can be distorted at this moment
+       each horizontal line of pink/green boxes is an    unfolded    lstm on
+       its own. the above figure therefore has 8 stacked lstms in a
+       series. the input to the whole architecture is the ordered set of
+       tokens in the sentence, each represented in the form of a vector.
+       mind you, i said tokens     not words. what gid4 does in
+       pre-processing, is break up all words into tokens/pieces, which are
+       then fed as a series to the neural network. this enables the
+       framework to (atleast partially) understand unseen complicated
+       words. for example, suppose i say the word    pteromerhanophobia   .
+       even though you may not know exactly what it is, you can tell me
+       that it is some sort of fear based on the token    phobia   . google
+       calls this approach wordpiece modeling. the break-up of words into
+       tokens is done based on statistical learning (which group of tokens
+       make most sense?) from a huge vocabulary in the training phase.
+                                                                           /                                               
+                                  lstm                     .                                                          8
+                          lstms              .                                                                     
+                                                                                                    ,                  
+                                                                         .                         ,                
+                                         .     ,                     gid4                                  
+                         ,                                                                       /           ,               
+                                                                                  .                                              
+       (                            ,                 )                                                          .
+                       ,                       ,                                      pteromerhanophobia   .
+                                                                     ,                         ,                  
+                            ,                         -                                                                   .
+       google                                                                      wordpiece.                      
+                                                                                                                        (          
+                                                                ?)                                                       
+                           .
+       each horizontal line of pink / green boxes is    unfolded   lstm
+       itself. in connection with this figure is above 8 lstms stacked in
+       series. initial data for the whole architecture is an ordered set
+       of tokens in a sentence, each represented as a vector. keep in
+       mind, i said tokens     not words. what makes gid4 preprocessing is
+       to break all the words into tokens / pieces, which are then fed to
+       a number of neural network. this allows for the basis (at least
+       partially) invisible difficult to understand speech. for example,
+       suppose i say the word    pteromerhanophobia   . even if you can not
+       know exactly what it is, you can tell me that this is some kind of
+       fear is based on the token    phobia   . google calls this approach to
+       modeling wordpiece. the collapse of the words in the token is based
+       on statistical learning (which group tokens most sense?) of a huge
+       dictionary in preparation.
+       [58]reply
+         1.
+        [59]srjoglekar246 says:
+            [60]20/01/2017 at 21:42
+            aah. its worse than 2/10, tbh. though its not _that_ bad,
+            considering the differences in grammar between the two
+            languages, and the difficult/technical content. its far from
+            perfect per say, but cool nonetheless :-).
+            [61]reply
+    4. pingback: [62]how neural networks generate visual art from
+       inspiration | sachin joglekar's blog
+    5.
+   professional hair says:
+       [63]03/03/2017 at 08:41
+       thankfulness to my father who told me regarding this blog,
+       this blog is truly awesome.
+       [64]reply
+    6.
+   [65]                                                                               says:
+       [66]10/03/2017 at 13:31
+       thanks for the good writeup. it in truth used to bee a leisure
+       account it.
+       glance complicated to more introduced agreeable from
+       you! however, how could we keep in touch?
+       [67]reply
+    7.
+   [68]https://oroskopiosexkaigynaika.wordpress.com says:
+       [69]28/03/2017 at 01:22
+       pretty! this has been ann extremely wonderful article.
+       thanks for providing this information.
+       [70]reply
+    8.
+   [71]bari - patras says:
+       [72]22/07/2017 at 17:13
+       i am regular visitor, how are you everybody? this article poated at
+       this skte is iin fact good.
+       [73]reply
+    9.
+   igoumenitsa ancona says:
+       [74]09/09/2018 at 08:33
+       if some one wants to be updated with newest technologies therefore
+       he must
+       bee ppay a visit his siite and be up to date everyday.
+       [75]reply
+   10. pingback: [76]googles' improved translation making the world
+       smaller - mr.spoc
+
+leave a reply [77]cancel reply
+
+   enter your comment here...
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+
+   fill in your details below or click an icon to log in:
+     *
+     *
+     *
+
+       iframe: [78]googleplus-sign-in
+
+     *
+     *
+
+   [79]gravatar
+   email (required) (address never made public)
+   ____________________
+   name (required)
+   ____________________
+   website
+   ____________________
+   wordpress.com logo
+
+   you are commenting using your wordpress.com account. ( [80]log out /
+   [81]change )
+   google photo
+
+   you are commenting using your google account. ( [82]log out /
+   [83]change )
+   twitter picture
+
+   you are commenting using your twitter account. ( [84]log out /
+   [85]change )
+   facebook photo
+
+   you are commenting using your facebook account. ( [86]log out /
+   [87]change )
+   [88]cancel
+
+   connecting to %s
+
+   [ ] notify me of new comments via email.
+
+   [ ] notify me of new posts via email.
+
+   post comment
+
+follow blog via email
+
+   enter your email address to follow this blog and receive notifications
+   of new posts by email.
+
+   ____________________
+
+   (button) follow
+
+social
+
+     * [89]view srjoglekar   s profile on facebook
+     * [90]view srjoglekar   s profile on linkedin
+     * [91]view srjoglekar246   s profile on github
+
+top posts & pages
+
+     * [92]id28 (for dummies)
+       [93]id28 (for dummies)
+     * [94]the magic behind attribute access in python
+       [95]the magic behind attribute access in python
+     * [96]nelder-mead optimization
+       [97]nelder-mead optimization
+     * [98]an introduction to bayesian belief networks
+       [99]an introduction to bayesian belief networks
+     * [100]linear and quadratic discriminant analysis for ml / statistics
+       newbies
+       [101]linear and quadratic discriminant analysis for ml / statistics
+       newbies
+
+blog stats
+
+     * 426,322 hits
+
+posts by time
+
+   posts by time [select month_______]
+
+categories
+
+     * [102]code snippets
+     * [103]google summer of code 2014
+     * [104]machine learning/ai
+     * [105]programming
+     * [106]uncategorized
+
+recent comments
+
+   [107]kitchen set jati on [108]efficient computation and stor   
+   yara zakaria on [109]cross validation and the bias-   
+   [110]contoh gorden rumah    on [111]efficient computation and stor   
+   [112]how to use influxdb       on [113]nelder-mead optimization
+   [114]time traveller on [115]cross validation and the bias-   
+
+   [116]blog at wordpress.com.
+
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   post to
+   [117]cancel reblog post
+
+   close and accept privacy & cookies: this site uses cookies. by
+   continuing to use this website, you agree to their use.
+   to find out more, including how to control cookies, see here:
+   [118]cookie policy
+
+   iframe: [119]likes-master
+
+   %d bloggers like this:
+
+references
+
+   visible links
+   1. https://codesachin.wordpress.com/feed/
+   2. https://codesachin.wordpress.com/comments/feed/
+   3. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/feed/
+   4. https://codesachin.wordpress.com/2017/01/05/on-interpretable-models/
+   5. https://codesachin.wordpress.com/2017/02/03/how-neural-networks-generate-visual-art-from-inspiration/
+   6. https://public-api.wordpress.com/oembed/?format=json&url=https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/&for=wpcom-auto-discovery
+   7. https://public-api.wordpress.com/oembed/?format=xml&url=https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/&for=wpcom-auto-discovery
+   8. https://codesachin.wordpress.com/osd.xml
+   9. https://s1.wp.com/opensearch.xml
+  10. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#content
+  11. https://codesachin.wordpress.com/
+  12. https://codesachin.wordpress.com/
+  13. https://codesachin.wordpress.com/about/
+  14. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/
+  15. https://codesachin.wordpress.com/author/srjoglekar246/
+  16. https://codesachin.files.wordpress.com/2017/01/screen-shot-2017-01-17-at-4-18-07-pm.png
+  17. https://translate.google.com/
+  18. https://en.wikipedia.org/wiki/statistical_machine_translation#phrase-based_translation
+  19. https://en.wikipedia.org/wiki/neural_machine_translation
+  20. https://codesachin.files.wordpress.com/2017/01/main-qimg-0c9574ceedad13aa45f68431c33c6db5.png
+  21. http://colah.github.io/posts/2015-08-understanding-lstms/
+  22. https://codesachin.files.wordpress.com/2017/01/5655a235588a8.png
+  23. https://codesachin.files.wordpress.com/2017/01/screen-shot-2017-01-16-at-4-17-00-pm.png
+  24. https://codesachin.files.wordpress.com/2017/01/screen-shot-2017-01-17-at-3-59-22-pm.png
+  25. https://codesachin.wordpress.com/2017/02/19/residual-neural-networks-as-ensembles/
+  26. https://codesachin.files.wordpress.com/2017/01/screen-shot-2017-01-17-at-4-01-09-pm.png
+  27. https://codesachin.files.wordpress.com/2017/01/screen-shot-2017-01-17-at-4-07-07-pm.png
+  28. https://en.wikipedia.org/wiki/softmax_function
+  29. https://codesachin.files.wordpress.com/2017/01/id4-model-fast.gif
+  30. https://codesachin.wordpress.com/2015/12/06/id26-for-dummies/
+  31. https://codesachin.files.wordpress.com/2017/01/image01.gif
+  32. https://en.wikipedia.org/wiki/interlingual_machine_translation
+  33. http://www.wired.co.uk/article/google-ai-language-create
+  34. https://research.googleblog.com/2016/09/a-neural-network-for-machine.html
+  35. https://arxiv.org/pdf/1609.08144v2.pdf
+  36. https://research.googleblog.com/2016/11/zero-shot-translation-with-googles.html
+  37. https://arxiv.org/pdf/1611.04558v1.pdf
+  38. https://www.nytimes.com/2016/12/14/magazine/the-great-ai-awakening.html?_r=0
+  39. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?share=twitter
+  40. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?share=facebook
+  41. https://codesachin.wordpress.com/category/machine-learningai/
+  42. https://codesachin.wordpress.com/tag/google/
+  43. https://codesachin.wordpress.com/tag/interlingua/
+  44. https://codesachin.wordpress.com/tag/lstm/
+  45. https://codesachin.wordpress.com/tag/machine-learning/
+  46. https://codesachin.wordpress.com/tag/neural-network/
+  47. https://codesachin.wordpress.com/tag/translate/
+  48. https://codesachin.wordpress.com/2017/01/05/on-interpretable-models/
+  49. https://codesachin.wordpress.com/2017/02/03/how-neural-networks-generate-visual-art-from-inspiration/
+  50. http://www.phpdrill.com/understanding-the-new-google-translate/
+  51. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-679
+  52. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=679#respond
+  53. https://codesachin.wordpress.com/
+  54. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-680
+  55. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=680#respond
+  56. https://plus.google.com/101482522784966360196
+  57. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-683
+  58. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=683#respond
+  59. https://codesachin.wordpress.com/
+  60. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-684
+  61. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=684#respond
+  62. https://codesachin.wordpress.com/2017/02/03/how-neural-networks-generate-visual-art-from-inspiration/
+  63. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-773
+  64. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=773#respond
+  65. https://parluxpistolakia.wordpress.com/2017/01/25/parlux-pistolakia/
+  66. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-795
+  67. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=795#respond
+  68. https://oroskopiosexkaigynaika.wordpress.com/
+  69. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-823
+  70. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=823#respond
+  71. https://passengershipsbaripatras.wordpress.com/2017/06/29/passenger-ships-bari-patras
+  72. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-1848
+  73. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=1848#respond
+  74. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-14690
+  75. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/?replytocom=14690#respond
+  76. https://mr.spoc.pl/googles-improved-translation-making-the-world-smaller/
+  77. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#respond
+  78. https://public-api.wordpress.com/connect/?googleplus-sign-in=https://codesachin.wordpress.com&color_scheme=light
+  79. https://gravatar.com/site/signup/
+  80. javascript:highlandercomments.doexternallogout( 'wordpress' );
+  81. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/
+  82. javascript:highlandercomments.doexternallogout( 'googleplus' );
+  83. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/
+  84. javascript:highlandercomments.doexternallogout( 'twitter' );
+  85. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/
+  86. javascript:highlandercomments.doexternallogout( 'facebook' );
+  87. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/
+  88. javascript:highlandercomments.cancelexternalwindow();
+  89. https://www.facebook.com/srjoglekar/
+  90. https://www.linkedin.com/in/srjoglekar/
+  91. https://github.com/srjoglekar246/
+  92. https://codesachin.wordpress.com/2015/08/16/logistic-regression-for-dummies/
+  93. https://codesachin.wordpress.com/2015/08/16/logistic-regression-for-dummies/
+  94. https://codesachin.wordpress.com/2016/06/09/the-magic-behind-attribute-access-in-python/
+  95. https://codesachin.wordpress.com/2016/06/09/the-magic-behind-attribute-access-in-python/
+  96. https://codesachin.wordpress.com/2016/01/16/nelder-mead-optimization/
+  97. https://codesachin.wordpress.com/2016/01/16/nelder-mead-optimization/
+  98. https://codesachin.wordpress.com/2017/03/10/an-introduction-to-bayesian-belief-networks/
+  99. https://codesachin.wordpress.com/2017/03/10/an-introduction-to-bayesian-belief-networks/
+ 100. https://codesachin.wordpress.com/2015/08/25/linear-and-quadratic-discriminant-analysis-for-ml-statistics-newbies/
+ 101. https://codesachin.wordpress.com/2015/08/25/linear-and-quadratic-discriminant-analysis-for-ml-statistics-newbies/
+ 102. https://codesachin.wordpress.com/category/code-snippets/
+ 103. https://codesachin.wordpress.com/category/google-summer-of-code-2014/
+ 104. https://codesachin.wordpress.com/category/machine-learningai/
+ 105. https://codesachin.wordpress.com/category/programming/
+ 106. https://codesachin.wordpress.com/category/uncategorized/
+ 107. http://www.jualproduksharppoint.zone.id/
+ 108. https://codesachin.wordpress.com/2015/07/03/efficient-computation-and-storage-of-basic-data-statistics-using-redis/comment-page-1/#comment-32123
+ 109. https://codesachin.wordpress.com/2015/08/30/cross-validation-and-the-bias-variance-tradeoff-for-dummies/comment-page-1/#comment-31135
+ 110. http://www.kitchensetminimalisjakarta.zone.id/
+ 111. https://codesachin.wordpress.com/2015/07/03/efficient-computation-and-storage-of-basic-data-statistics-using-redis/comment-page-1/#comment-30209
+ 112. https://www.influxdata.com/blog/how-to-use-influxdbs-holt-winters-function-for-predictions/
+ 113. https://codesachin.wordpress.com/2016/01/16/nelder-mead-optimization/comment-page-1/#comment-29092
+ 114. http://gravatar.com/timetraveller123
+ 115. https://codesachin.wordpress.com/2015/08/30/cross-validation-and-the-bias-variance-tradeoff-for-dummies/comment-page-1/#comment-29075
+ 116. https://wordpress.com/?ref=footer_blog
+ 117. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/
+ 118. https://automattic.com/cookies
+ 119. https://widgets.wp.com/likes/master.html?ver=20190321#ver=20190321
+
+   hidden links:
+ 121. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-form-guest
+ 122. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-form-load-service:wordpress.com
+ 123. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-form-load-service:twitter
+ 124. https://codesachin.wordpress.com/2017/01/18/understanding-the-new-google-translate/#comment-form-load-service:facebook
+ 125. http://www.jualproduksharppoint.zone.id/
+ 126. http://www.kitchensetminimalisjakarta.zone.id/
+ 127. https://www.influxdata.com/blog/how-to-use-influxdbs-holt-winters-function-for-predictions/
+ 128. http://gravatar.com/timetraveller123

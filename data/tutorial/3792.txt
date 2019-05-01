@@ -1,0 +1,1266 @@
+   #[1]sebastian ruder
+
+   [2]sebastian ruder
+     * [3]about
+     * [4]tags
+     * [5]papers
+     * [6]talks
+     * [7]news
+     * [8]faq
+     * [9]nlp news
+     * [10]nlp progress
+     * [11]contact
+
+   13 june 2016 / [12]id27s
+
+on id27s - part 2: approximating the softmax
+
+   on id27s - part 2: approximating the softmax
+
+   this post gives an overview of approximations that can be used to make
+   the expensive softmax layer more efficient.
+
+   table of contents:
+     * [13]softmax-based approaches
+          + [14]hierarchical softmax
+          + [15]differentiated softmax
+          + [16]id98-softmax
+     * [17]sampling-based approaches
+          + [18]importance sampling
+          + [19]adaptive importance sampling
+          + [20]target sampling
+          + [21]noise contrastive estimation
+          + [22]negative sampling
+          + [23]self-normalisation
+          + [24]infrequent normalisation
+          + [25]other approaches
+     * [26]which approach to choose?
+     * [27]conclusion
+
+   this is the second post in a series on id27s and
+   representation learning. in the [28]previous post, we gave an overview
+   of id27 models and introduced the classic neural language
+   model by bengio et al. (2003), the c&w model by collobert and weston
+   (2008), and the id97 model by mikolov et al. (2013). we observed
+   that mitigating the complexity of computing the final softmax layer has
+   been one of the main challenges in devising better id27
+   models, a commonality with machine translation (mt) (jean et al., 2015)
+   ^[29][1] and language modelling (jozefowicz et al., 2016) ^[30][2].
+
+   in this post, we will thus focus on giving an overview of various
+   approximations to the softmax layer that have been proposed over the
+   last years, some of which have so far only been employed in the context
+   of language modelling or mt. we will postpone the discussion of
+   additional hyperparameters to the subsequent post.
+
+   let us know partially re-introduce the previous post's notation both
+   for consistency and to facilitate comparison as well as introduce some
+   new notation: we assume a training corpus containing a sequence of
+   \(t\) training words \(w_1, w_2, w_3, \cdots, w_t\) that belong to a
+   vocabulary \(v\) whose size is \(|v|\). our models generally consider a
+   context \(c\) of \( n \) words. we associate every word with an input
+   embedding \( v_w \) (the eponymous id27 in the embedding
+   layer) with \(d\) dimensions and an output embedding \( v'_w \) (the
+   representation of the word in the weight matrix of the softmax layer).
+   we finally optimize an objective function \(j_\theta\) with regard to
+   our model parameters \(\theta\).
+
+   recall that the softmax calculates the id203 of a word \(w\)
+   given its context \(c\) and can be computed using the following
+   equation:
+
+   \(p(w | c) = \dfrac{\text{exp}({h^\top v'_w})}{\sum_{w_i \in v}
+   \text{exp}({h^\top v'_{w_i}})} \)
+
+   where \(h\) is the output vector of the penultimate network layer. note
+   that we use \(c\) for the context as mentioned above and drop the index
+   \(t\) of the target word \(w_t\) for simplicity. computing the softmax
+   is expensive as the inner product between \(h\) and the output
+   embedding of every word \(w_i\) in the vocabulary \(v\) needs to be
+   computed as part of the sum in the denominator in order to obtain the
+   normalized id203 of the target word \(w\) given its context
+   \(c\).
+
+   in the following we will discuss different strategies that have been
+   proposed to approximate the softmax. these approaches can be grouped
+   into softmax-based and sampling-based approaches. softmax-based
+   approaches are methods that keep the softmax layer intact, but modify
+   its architecture to improve its efficiency. sampling-based approaches
+   on the other hand completely do away with the softmax layer and instead
+   optimise some other id168 that approximates the softmax.
+
+softmax-based approaches
+
+hierarchical softmax
+
+   hierarchical softmax (h-softmax) is an approximation inspired by binary
+   trees that was proposed by morin and bengio (2005) ^[31][3]. h-softmax
+   essentially replaces the flat softmax layer with a hierarchical layer
+   that has the words as leaves, as can be seen in figure 1.
+   this allows us to decompose calculating the id203 of one word
+   into a sequence of id203 calculations, which saves us from having
+   to calculate the expensive id172 over all words. replacing a
+   softmax layer with h-softmax can yield speedups for word prediction
+   tasks of at least \(50 \times\) and is thus critical for low-latency
+   tasks such as real-time communication in [32]google's new messenger app
+   allo.
+   hierarchical softmax figure 1: hierarchical softmax ([33]quora)
+
+   we can think of the regular softmax as a tree of depth \(1\), with each
+   word in \(v\) as a leaf node. computing the softmax id203 of one
+   word then requires normalizing over the probabilities of all \(|v|\)
+   leaves. if we instead structure the softmax as a binary tree, with the
+   words as leaf nodes, then we only need to follow the path to the leaf
+   node of that word, without having to consider any of the other nodes.
+   since a balanced binary tree has a depth of \(\text{log}_2 (|v|)\), we
+   only need to evaluate at most \(\text{log}_2 (|v|)\) nodes to obtain
+   the final id203 of a word. note that this id203 is already
+   normalized, as the probabilities of all leaves in a binary tree sum to
+   \( 1 \) and thus form a id203 distribution. to informally verify
+   this, we can reason that at a tree's root node (node 0) in figure 1),
+   the probabilities of branching decisions must sum to \(1\). at each
+   subsequent node, the id203 mass is then split among its children,
+   until it eventually ends up at the leaf nodes, i.e. the words. since no
+   id203 is lost along the way and since all words are leaves, the
+   probabilities of all words must necessarily sum to \(1\) and hence the
+   hierarchical softmax defines a normalized id203 distribution over
+   all words in \(v\).
+
+   to get a bit more concrete, as we go through the tree, we have to be
+   able to calculate the id203 of taking the left or right branch at
+   every junction. for this reason, we assign a representation to every
+   node. in contrast to the regular softmax, we thus no longer have output
+   embeddings \(v'_w\) for every word \(w\) -- instead, we have embeddings
+   \(v'_n\) for every node \(n\). as we have \(|v|-1\) nodes and each one
+   possesses a unique representation, the number of parameters of
+   h-softmax is almost the same as for the regular softmax. we can now
+   calculate the id203 of going right (or left) at a given node
+   \(n\) given the context \(c\) the following way:
+
+   \( p(\text{right} | n, c) = \sigma (h^\top v'_{n})\).
+
+   this is almost the same as the computations in the regular softmax; now
+   instead of computing the dot product between \(h\) and the output word
+   embedding \(v'_{w}\), we compute the dot product between \(h\) and the
+   embedding \(v'_{w}\) of each node in the tree; additionally, instead of
+   computing a id203 distribution over the entire vocabulary words,
+   we output just one id203, the id203 of going right at node
+   \(n\) in this case, with the sigmoid function. conversely, the
+   id203 of turning left is simply \( 1 - p( \text{right} | n,c)\).
+   hierarchical softmax figure 2: hierarchical softmax computations
+   ([34]hugo lachorelle's youtube lectures)
+
+   the id203 of a word \(w\) given its context \(c\) is then simply
+   the product of the probabilities of taking right and left turns
+   respectively that lead to its leaf node. to illustrate this, given the
+   context "the", "dog", "and", "the", the id203 of the word "cat"
+   in figure 2 can be computed as the product of the id203 of
+   turning left at node 1, turning right at node 2, and turning right at
+   node 5. hugo lachorelle gives a more detailed account in his excellent
+   [35]lecture video. rong (2014) ^[36][4] also does a good job of
+   explaining these concepts and also derives the derivatives of
+   h-softmax.
+
+   obviously, the structure of the tree is of significance. intuitively,
+   we should be able to achieve better performance, if we make it easier
+   for the model to learn the binary predictors at every node, e.g. by
+   enabling it to assign similar probabilities to similar paths. based on
+   this idea, morin and bengio use the synsets in id138 as clusters for
+   the tree. however, they still report inferior performance to the
+   regular softmax. mnih and hinton (2008) ^[37][5] learn the tree
+   structure with a id91 algorithm that recursively partitions the
+   words in two clusters and allows them to achieve the same performance
+   as the regular softmax at a fraction of the computation.
+
+   notably, we are only able to obtain this speed-up during training, when
+   we know the word we want to predict (and consequently its path) in
+   advance. during testing, when we need to find the most likely
+   prediction, we still need to calculate the id203 of all words,
+   although narrowing down the choices in advance helps here.
+
+   in practice, instead of using "right" and "left" in order to designate
+   nodes, we can index every node with a bit vector that corresponds to
+   the path it takes to reach that node. in figure 2, if we assume a 0 bit
+   for turning left and a 1 bit for turning right, we can thus represent
+   the path to "cat" as 011.
+   recall that the path length in a balanced binary tree is \(\text{log}_2
+   |v|\). if we set \(|v| = 10000\), this amounts to an average path
+   length of about \( 13.3 \). analogously, we can represent every word by
+   the bit vector of its path that is on average \(13.3\) bits long. in
+   id205, this is referred to as an information content of
+   \(13.3\) bits per word.
+
+a note on the information content of words
+
+   recall that the information content \(i(w)\) of a word \(w\) is the
+   negative logarithm of its id203 \(p(w)\):
+
+   \(i(w) = -\log_2 p(w) \).
+
+   the id178 \( h \) of all words in a corpus is then the expectation of
+   the information content of all words in the vocabulary:
+
+   \( h = \sum_{i\in v} p(w_i) i(w_i) \).
+
+   we can also conceive of the id178 of a data source as the average
+   number of bits needed to encode it. for a fair coin flip, we need \(1\)
+   bit per flip, whereas we need \(0\) bits for a data source that always
+   emits the same symbol. for a balanced binary tree, where we treat every
+   word equally, the word id178 \(h\) equals the information content
+   \(i(w)\) of every word \(w\), as each word has the same id203.
+   the average word id178 \(h\) in a balanced binary tree with \(|v| =
+   10000\) thus coincides with its average path length:
+
+   \( h = - \sum_{i\in v} \dfrac{1}{10000} \log_2 \dfrac{1}{10000} =
+   13.3\).
+
+   we saw before that the structure of the tree is important. notably, we
+   can leverage the tree structure not only to gain better performance,
+   but also to speed up computation: if we manage to encode more
+   information into the tree, we can get away with taking shorter paths
+   for less informative words. morin and bengio point out that leveraging
+   word probabilities should work even better; as some words are more
+   likely to occur than others, they can be encoded using less
+   information. they note that the word id178 of their corpus (with
+   \(|v| = 10,000\)) is about \( 9.16 \).
+
+   thus, by taking into account frequencies, we can reduce the average
+   number of bits per word in the corpus from \( 13.3 \) to \( 9.16 \) in
+   this case, which amounts to a speed-up of 31%. a [38]huffman tree,
+   which is used by mikolov et al. (2013) ^[39][6] for their hierarchical
+   softmax, generates such a coding by assigning fewer bits to more common
+   symbols. for instance, "the", the most common word in the english
+   language, would be assigned the shortest bit code in the tree, the
+   second most frequent word would be assigned the second-shortest bit
+   code, and so on. while we still need the same number of codes to
+   designate all words, when we predict the words in a corpus, short codes
+   appear now a lot more often, and we consequently need fewer bits to
+   represent each word on average.
+
+   a coding such as huffman coding is also known as id178 encoding, as
+   the length of each codeword is approximately proportional to the
+   id178 of each symbol as we have observed. shannon (1951) ^[40][7]
+   establishes in his experiments that the lower bound on the information
+   rate in english is between \(0.6\) to \(1.3\) bits per character; given
+   an average word length of \(4.5\), this amounts to \(2.7\) - \(5.85\)
+   bits per word.
+
+   to tie this back to language modelling (which we already talked about
+   in the previous post): perplexity, the evaluation measure of language
+   modelling, is \(2^{h}\) where \(h\) is the id178. a unigram id178
+   of \( 9.16 \) thus entails a still very high perplexity of \( 2^{9.16}
+   = 572.0\). we can render this value more tangible by observing that a
+   model with a perplexity of \(572\) is as confused by the data as if it
+   had to choose among \(572\) possibilities for each word uniformly and
+   independently.
+
+   to put this into context: the state-of-the-art language model by
+   jozefowicz et al. (2016) achieves a perplexity of \(24.2\) per word on
+   the 1b word benchmark. such a model would thus require an average of
+   around \(4.60\) bits to encode each word, as \( 2^{4.60} = 24.2 \),
+   which is incredibly close to the experimental lower bounds documented
+   by shannon. if and how we could use such a model to construct a better
+   hierarchical softmax layer is still left to be explored.
+
+differentiated softmax
+
+   chen et al. (2015) ^[41][8] introduce a variation on the traditional
+   softmax layer, the differentiated softmax (d-softmax). d-softmax is
+   based on the intuition that not all words require the same number of
+   parameters: many occurrences of frequent words allow us to fit many
+   parameters to them, while extremely rare words might only allow to fit
+   a few.
+
+   in order to do this, instead of the dense matrix of the regular softmax
+   layer of size \(d \times |v| \) containing the output id27s
+   \( v'_w \in \mathbb{r}^d \), they use a sparse matrix. they then
+   arrange \( v'_w\) in blocks sorted by frequency, with the embeddings in
+   each block being of a certain dimensionality \(d_k \). the number of
+   blocks and their embedding sizes are hyperparameters that can be tuned.
+   differentiated softmax figure 3: differentiated softmax (chen et al.
+   (2015))
+
+   in figure 3, embeddings in partition \(a\) are of dimensionality
+   \(d_a\) (these are embeddings of frequent words, as they are allocated
+   more parameters), while embeddings in partitions \(b\) and \(c\) have
+   \(d_b\) and \(d_c\) dimensions respectively. note that all areas not
+   part of any partition, i.e. the non-shaded areas in figure 1, are set
+   to \(0\).
+
+   the output of the previous hidden layer \(h\) is treated as a
+   concatenation of features corresponding to each partition of the
+   dimensionality of that partition, e.g. \(h\) in figure 3 is made up of
+   partitions of size \(d_a\), \(d_b\), and \(d_b\) respectively. instead
+   of computing the matrix-vector product between the entire output
+   embedding matrix and \(h\) as in the regular softmax, d-softmax then
+   computes the product of each partition and its corresponding section in
+   \(h\).
+
+   as many words will only require comparatively few parameters, the
+   complexity of computing the softmax is reduced, which speeds up
+   training. in contrast to h-softmax, this speed-up persists during
+   testing. chen et al. (2015) observe that d-softmax is the fastest
+   method when testing, while being one of the most accurate. however, as
+   it assigns fewer parameters to rare words, d-softmax does a worse job
+   at modelling them.
+
+id98-softmax
+
+   another modification to the traditional softmax layer is inspired by
+   recent work by kim et al. (2016) ^[42][9] who produce input word
+   embeddings \(v_w\) via a character-level id98. jozefowicz et al. (2016)
+   in turn suggest to do the same thing for the output id27s
+   \(v'_w\) via a character-level id98 -- and refer to this as id98-softmax.
+   note that if we have a id98 at the input and at the output as in figure
+   4, the id98 generating the output id27s \(v'_w\) is
+   necessarily different from the id98 generating the input id27s
+   \(v_w\), just as the input and output id27 matrices would be
+   different.
+   id98-softmax figure 4: id98-softmax (jozefowicz et al. (2016))
+
+   while this still requires computing the regular softmax id172,
+   this approach drastically reduces the number of parameters of the
+   model: instead of storing an embedding matrix of \(d \times |v| \), we
+   now only need to keep track of the parameters of the id98. during
+   testing, the output id27s \(v'_w\) can be pre-computed, so
+   that there is no loss in performance.
+
+   however, as characters are represented in a continuous space and as the
+   resulting model tends to learn a smooth function mapping characters to
+   a id27, character-based models often find it difficult to
+   differentiate between similarly spelled words with different meanings.
+   to mitigate this, the authors add a correction factor that is learned
+   per word, which significantly reduces the performance gap between
+   regular and id98-softmax. by adjusting the dimensionality of the
+   correction term, the authors are able to trade-off model size versus
+   performance.
+
+   the authors also note that instead of using a id98-softmax, the output
+   of the previous layer \(h\) can be fed to a character-level lstm, which
+   predicts the output word one character at a time. instead of a softmax
+   over words, a softmax outputting a id203 distribution over
+   characters would thus be used at every time step. they, however, fail
+   to achieve competitive performance with this layer. ling et al. (2016)
+   ^[43][10] use a similar layer for machine translation and achieve
+   competitive results.
+
+sampling-based approaches
+
+   while the approaches discussed so far still maintain the overall
+   structure of the softmax, sampling-based approaches on the other hand
+   completely do away with the softmax layer. they do this by
+   approximating the id172 in the denominator of the softmax with
+   some other loss that is cheap to compute. however, sampling-based
+   approaches are only useful at training time -- during id136, the
+   full softmax still needs to be computed to obtain a normalised
+   id203.
+
+   in order to gain some intuitions about the softmax denominator's impact
+   on the loss, we will derive the gradient of our id168
+   \(j_\theta\) w.r.t. the parameters of our model \(\theta\).
+   during training, we aim to minimize the cross-id178 loss of our model
+   for every word \(w\) in the training set. this is simply the negative
+   logarithm of the output of our softmax. if you are unsure of this
+   connection, have a look at [44]karpathy's explanation to gain some more
+   intuitions about the connection between softmax and cross-id178. the
+   loss of our model is then the following:
+
+   \(j_\theta = - \text{log} \dfrac{\text{exp}({h^\top v'_{w}})}{\sum_{w_i
+   \in v} \text{exp}({h^\top v'_{w_i}})} \).
+
+   note that in practice \(j_\theta\) would be the average of all negative
+   log-probabilities over the whole corpus. to facilitate the derivation,
+   we decompose \(j_\theta \) into a sum as \(\text{log} \dfrac{x}{y} =
+   \text{log} x - \text{log} y \):
+
+   \(j_\theta = - h^\top v'_{w} + \text{log} \sum_{w_i \in v}
+   \text{exp}(h^\top v'_{w_i}) \)
+
+   for brevity and to conform with the notation of bengio and sen  cal
+   (2003; 2008) ^[45][11], ^[46][12] (note that in the first paper, they
+   compute the gradient of the positive logarithm), we replace the dot
+   product \( h^\top v'_{w} \) with \( - \mathcal{e}(w) \). our loss then
+   looks like the following:
+
+   \(j_\theta = \mathcal{e}(w) + \text{log} \sum_{w_i \in v} \text{exp}( -
+   \mathcal{e}(w_i)) \)
+
+   for back-propagation, we can now compute the gradient \(\nabla \) of
+   \(j_\theta \) w.r.t. our model's parameters \(\theta\):
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) + \nabla_\theta
+   \text{log} \sum_{w_i \in v} \text{exp}(- \mathcal{e}(w_i)) \)
+
+   as the gradient of \( \text{log} x \) is \(\dfrac{1}{x} \), an
+   application of the chain rule yields:
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) +
+   \dfrac{1}{\sum_{w_i \in v} \text{exp}(- \mathcal{e}(w_i))}
+   \nabla_\theta \sum_{w_i \in v} \text{exp}(- \mathcal{e}(w_i) \)
+
+   we can now move the gradient inside the sum:
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) +
+   \dfrac{1}{\sum_{w_i \in v} \text{exp}(- \mathcal{e}(w_i))} \sum_{w_i
+   \in v} \nabla_\theta \text{exp}(- \mathcal{e}(w_i)) \)
+
+   as the gradient of \(\text{exp}(x)\) is just \(\text{exp}(x)\), another
+   application of the chain rule yields:
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) +
+   \dfrac{1}{\sum_{w_i \in v} \text{exp}(- \mathcal{e}(w_i))} \sum_{w_i
+   \in v} \text{exp}(- \mathcal{e}(w_i)) \nabla_\theta (-
+   \mathcal{e}(w_i)) \)
+
+   we can rewrite this as:
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) + \sum_{w_i \in
+   v} \dfrac{\text{exp}(- \mathcal{e}(w_i))}{\sum_{w_i \in v} \text{exp}(-
+   \mathcal{e}(w_i))} \nabla_\theta (- \mathcal{e}(w_i)) \)
+
+   note that \( \dfrac{\text{exp}(- \mathcal{e}(w_i))}{\sum_{w_i \in v}
+   \text{exp}(- \mathcal{e}(w_i))} \) is just the softmax id203
+   \(p(w_i) \) of \(w_i\) (we omit the dependence on the context \(c\)
+   here for brevity). replacing it yields:
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) + \sum_{w_i \in
+   v} p(w_i) \nabla_\theta (- \mathcal{e}(w_i)) \)
+
+   finally, repositioning the negative coefficient in front of the sum
+   yields:
+
+   \(\nabla_\theta j_\theta = \nabla_\theta \mathcal{e}(w) - \sum_{w_i \in
+   v} p(w_i) \nabla_\theta \mathcal{e}(w_i) \)
+
+   bengio and sen  cal (2003) note that the gradient essentially has two
+   parts: a positive reinforcement for the target word \(w\) (the first
+   term in the above equation) and a negative reinforcement for all other
+   words \(w_i\), which is weighted by their id203 (the second
+   term). as we can see, this negative reinforcement is just the
+   expectation \(\mathbb{e}_{w_i \sim p}\) of the gradient of
+   \(\mathcal{e} \) for all words \(w_i\) in \(v\):
+
+   \(\sum_{w_i \in v} p(w_i) \nabla_\theta \mathcal{e}(w_i) =
+   \mathbb{e}_{w_i \sim p}[\nabla_\theta \mathcal{e}(w_i)]\).
+
+   the crux of most sampling-based approach now is to approximate this
+   negative reinforcement in some way to make it easier to compute, since
+   we don't want to sum over the probabilities for all words in \(v\).
+
+importance sampling
+
+   we can approximate the expected value \(\mathbb{e}\) of any id203
+   distribution using the monte carlo method, i.e. by taking the mean of
+   random samples of the id203 distribution. if we knew the
+   network's distribution, i.e. \(p(w)\), we could thus directly sample
+   \(m\) words \( w_1 , \cdots , w_m \) from it and approximate the above
+   expectation with:
+
+   \( \mathbb{e}_{w_i \sim p}[\nabla_\theta \mathcal{e}(w_i)] \approx
+   \dfrac{1}{m} \sum\limits^m_{i=1} \nabla_\theta \mathcal{e}(w_i) \).
+
+   however, in order to sample from the id203 distribution \( p \),
+   we need to compute \( p \), which is just what we wanted to avoid in
+   the first place. we therefore have find some other distribution \( q \)
+   (we call this the proposal distribution), from which it is cheap to
+   sample and which can be used as the basis of monte-carlo sampling.
+   preferably, \(q\) should also be similar to \(p\), since we want our
+   approximated expectation to be as accurate as possible. a
+   straightforward choice in the case of language modelling is to simply
+   use the unigram distribution of the training set for \( q \).
+
+   this is essentially what classical importance sampling (is) does: it
+   uses monte-carlo sampling to approximate a target distribution \(p\)
+   via a proposal distribution \(q\). however, this still requires
+   computing \(p(w)\) for every word \(w\) that is sampled. to avoid this,
+   bengio and sen  cal (2003) use a biased estimator that was first
+   proposed by liu (2001) ^[47][13]. this estimator can be used when \(
+   p(w) \) is computed as a product, which is the case here, since every
+   division can be transformed into a multiplication.
+   essentially, instead of weighting the gradient \(\nabla_\theta
+   \mathcal{e}(w_i)\) with the expensive to compute id203
+   \(p_{w_i}\), we weight it with a factor that leverages the proposal
+   distribution \(q\). for biased is, this factor is
+   \(\dfrac{1}{r}r(w_i)\) where \( r(w) = \dfrac{\text{exp}(-
+   \mathcal{e}(w))}{q(w)} \) and \( r = \sum^m_{j=1} r(w_j) \).
+   note that we use \( r \) and \( r \) instead of \( w\) and \(w\) as in
+   bengio and sen  cal (2003, 2008) to avoid name clashes. as we can see,
+   we still compute the numerator of the softmax, but replace the
+   normalisation in the denominator with the proposal distribution \(q\).
+   our biased estimator that approximates the expectation thus looks like
+   the following:
+
+   \( \mathbb{e}_{w_i \sim p}[\nabla_\theta \mathcal{e}(w_i)] \approx
+   \dfrac{1}{r} \sum\limits^m_{i=1} r(w_i) \nabla_\theta
+   \mathcal{e}(w_i)\)
+
+   note that the fewer samples we use, the worse is our approximation. we
+   additionally need to adjust our sample size during training, as the
+   network's distribution \(p\) might diverge from the unigram
+   distribution \(q \) during training, which leads to divergence of the
+   model, if the sample size that is used is too small. consequently,
+   bengio and sen  cal introduce a measure to calculate the effective
+   sample size in order to protect against possible divergence. finally,
+   the authors report a speed-up factor of \(19 \) over the regular
+   softmax for this method.
+
+adaptive importance sampling
+
+   bengio and sen  cal (2008) note that for importance sampling,
+   substituting more complex distributions, e.g. bigram and trigram
+   distributions, later in training to combat the divergence of the
+   unigram distribution \(q\) from the model's true distribution \(p\)
+   does not help, as id165 distributions seem to be quite different from
+   the distribution of trained neural language models. as an alternative,
+   they propose an id165 distribution that is adapted during training to
+   follow the target distribution \(p\) more closely. to this end, they
+   interpolate a bigram distribution and a unigram distribution according
+   to some mixture function, whose parameters they train with sgd for
+   different frequency bins to minimize the id181
+   between the distribution \( q \) and the target distribution \( p\).
+   for experiments, they report a speed-up factor of about \(100\).
+
+target sampling
+
+   jean et al. (2015) propose to use adaptive importance sampling for
+   machine translation. in order to make the method more suitable for
+   processing on a gpu with limited memory, they limit the number of
+   target words that need to be sampled from. they do this by partitioning
+   the training set and including only a fixed number of sample words in
+   every partition, which form a subset \(v'\) of the vocabulary.
+
+   this essentially means that a separate proposal distribution \(q_i \)
+   can be used for every partition \(i\) of the training set, which
+   assigns equal id203 to all words included in the vocabulary
+   subset \(v'_i\) and zero id203 to all other words.
+
+noise contrastive estimation
+
+   noise contrastive estimation (nce) (gutmann and hyv  rinen, 2010)
+   ^[48][14] is proposed by mnih and teh (2012) ^[49][15] as a more stable
+   sampling method than importance sampling (is), as we have seen that is
+   poses the risk of having the proposal distribution \(q\) diverge from
+   the distribution \(p\) that should be optimized. in contrast to the
+   former, nce does not try to estimate the id203 of a word
+   directly. instead, it uses an auxiliary loss that also optimises the
+   goal of maximizing the id203 of correct words.
+
+   recall the pairwise-ranking criterion of collobert and weston (2008)
+   that ranks positive windows higher than "corrupted" windows, which we
+   discussed in the [50]previous post. nce does a similar thing: we train
+   a model to differentiate the target word from noise. we can thus reduce
+   the problem of predicting the correct word to a binary classification
+   task, where the model tries to distinguish positive, genuine data from
+   noise samples, as can be seen in figure 4 below.
+   noise contrastive estimation figure 4: noise contrastive estimation
+   ([51]stephan gouws' phd dissertation)
+
+   for every word \(w_i\) given its context \(c_i \) of \(n\) previous
+   words \(w_{t-1} , \cdots , w_{t-n+1}\) in the training set, we thus
+   generate \(k\) noise samples \(\tilde{w}_{ik}\) from a noise
+   distribution \(q\). as in is, we can sample from the unigram
+   distribution of the training set. as we need labels to perform our
+   binary classification task, we designate all correct words \(w_i\)
+   given their context \(c_i\) as true (\(y=1\)) and all noise samples
+   \(\tilde{w}_{ik}\) as false (\(y=0\)).
+
+   we can now use id28 to minimize the negative
+   log-likelihood, i.e. cross-id178 of our training examples against the
+   noise (conversely, we could also maximize the positive log-likelihood
+   as some papers do):
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} p(y=1 | w_i,c_i) + k
+   \mathbb{e}_{\tilde{w}_{ik} \sim q} [ \text{log} p(y=0 |
+   \tilde{w}_{ij},c_i)]] \).
+
+   instead of computing the expectation \(\mathbb{e}_{\tilde{w}_{ik} \sim
+   q}\) of our noise samples, which would still require summing over all
+   words in \(v\) to predict the normalised id203 of a negative
+   label, we can again take the mean with the monte carlo approximation:
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} p(y=1 | w_i,c_i) + k
+   \sum_{j=1}^k \dfrac{1}{k} \text{log} p(y=0 | \tilde{w}_{ij},c_i)] \),
+
+   which reduces to:
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} p(y=1 | w_i,c_i) +
+   \sum_{j=1}^k \text{log} p(y=0 | \tilde{w}_{ij},c_i)] \),
+
+   by generating \(k\) noise samples for every genuine word \(w_i\) given
+   its context \(c\), we are effectively sampling words from two different
+   distributions: correct words are sampled from the empirical
+   distribution of the training set \(p_{\text{train}}\) and depend on
+   their context \(c\), whereas noise samples come from the noise
+   distribution \(q\). we can thus represent the id203 of sampling
+   either a positive or a noise sample as a mixture of those two
+   distributions, which are weighted based on the number of samples that
+   come from each:
+
+   \(p(y, w | c) = \dfrac{1}{k+1} p_{\text{train}}(w | c)+
+   \dfrac{k}{k+1}q(w) \).
+
+   given this mixture, we can now calculate the id203 that a sample
+   came from the training \(p_{\text{train}}\) distribution as a
+   id155 of \(y\) given \(w\) and \(c\):
+
+   \( p(y=1 | w,c)= \dfrac{\dfrac{1}{k+1} p_{\text{train}}(w |
+   c)}{\dfrac{1}{k+1} p_{\text{train}}(w | c)+ \dfrac{k}{k+1}q(w)} \),
+
+   which can be simplified to:
+
+   \( p(y=1 | w,c)= \dfrac{p_{\text{train}}(w | c)}{p_{\text{train}}(w |
+   c) + k q(w)} \).
+
+   as we don't know \(p_{\text{train}}\) (which is what we would like to
+   calculate), we replace \(p_{\text{train}}\) with the id203 of our
+   model \(p\):
+
+   \( p(y=1 | w,c)= \dfrac{p(w | c)}{p(w | c) + k q(w)} \).
+
+   the id203 of predicting a noise sample (\(y=0\)) is then simply
+   \(p(y=0 | w,c) = 1 - p(y=1 | w,c)\). note that computing \( p(w | c)
+   \), i.e. the id203 of a word \(w\) given its context \(c\) is
+   essentially the definition of our softmax:
+
+   \(p(w | c) = \dfrac{\text{exp}({h^\top v'_{w}})}{\sum_{w_i \in v}
+   \text{exp}({h^\top v'_{w_i}})} \).
+
+   for notational brevity and unambiguity, let us designate the
+   denominator of the softmax with \(z(c)\), since the denominator only
+   depends on \(h\), which is generated from \(c\) (assuming a fixed
+   \(v\)). the softmax then looks like this:
+
+   \(p(w | c) = \dfrac{\text{exp}({h^\top v'_{w}})}{z(c)} \).
+
+   having to compute \(p(w | c)\) means that -- again -- we need to
+   compute \(z(c)\), which requires us to sum over the probabilities of
+   all words in \(v\). in the case of nce, there exists a neat trick to
+   circumvent this issue: we can treat the normalisation denominator
+   \(z(c)\) as a parameter that the model can learn.
+   mnih and teh (2012) and vaswani et al. (2013) ^[52][16] actually keep
+   \(z(c)\) fixed at \(1\), which they report does not affect the model's
+   performance. this assumption has the nice side-effect of reducing the
+   model's parameters, while ensuring that the model self-normalises by
+   not depending on the explicit normalisation in \(z(c)\). indeed, zoph
+   et al. (2016) ^[53][17] find that even when learned, \(z(c)\) is close
+   to \(1\) and has low variance.
+
+   if we thus set \(z(c)\) to \(1\) in the above softmax equation, we are
+   left with the following id203 of word \(w\) given a context
+   \(c\):
+
+   \(p(w | c) = \text{exp}({h^\top v'_{w}})\).
+
+   we can now insert this term in the above equation to compute \(p(y=1 |
+   w,c)\):
+
+   \( p(y=1 | w,c)= \dfrac{\text{exp}({h^\top v'_{w}})}{\text{exp}({h^\top
+   v'_{w}}) + k q(w)} \).
+
+   inserting this term in turn in our id28 objective
+   finally yields the full nce loss:
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} \dfrac{\text{exp}({h^\top
+   v'_{w_i}})}{\text{exp}({h^\top v'_{w_i}}) + k q(w_i)} + \sum_{j=1}^k
+   \text{log} (1 - \dfrac{\text{exp}({h^\top
+   v'_{\tilde{w}_{ij}}})}{\text{exp}({h^\top v'_{\tilde{w}_{ij}}}) + k
+   q(\tilde{w}_{ij})})] \).
+
+   note that nce has nice theoretical guarantees: it can be shown that as
+   we increase the number of noise samples \(k\), the nce derivative tends
+   towards the gradient of the softmax function. mnih and teh (2012)
+   report that \(25\) noise samples are sufficient to match the
+   performance of the regular softmax, with an expected speed-up factor of
+   about \(45\). for more information on nce, chris dyer has published
+   some excellent notes ^[54][18].
+
+   one caveat of nce is that as typically different noise samples are
+   sampled for every training word \(w\), the noise samples and their
+   gradients cannot be stored in dense matrices, which reduces the benefit
+   of using nce with gpus, as it cannot benefit from fast dense matrix
+   multiplications. jozefowicz et al. (2016) and zoph et al. (2016)
+   independently propose to share noise samples across all training words
+   in a mini-batch, so that nce gradients can be computed with dense
+   matrix operations, which are more efficient on gpus.
+
+similarity between nce and is
+
+   jozefowicz et al. (2016) show that nce and is are not only similar as
+   both are sampling-based approaches, but are strongly connected. while
+   nce uses a binary classification task, they show that is can be
+   described similarly using a surrogate id168: instead of
+   performing binary classification with a logistic id168 like
+   nce, is then optimises a multi-class classification problem with a
+   softmax and cross-id178 id168. they observe that as is
+   performs multi-class classification, it may be a better choice for
+   language modelling, as the loss leads to tied updates between the data
+   and noise samples rather than independent updates as with nce. indeed,
+   jozefowicz et al. (2016) use is for language modelling and obtain
+   state-of-the-art performance (as mentioned above) on the 1b word
+   benchmark.
+
+negative sampling
+
+   negative sampling (neg), the objective that has been popularised by
+   mikolov et al. (2013), can be seen as an approximation to nce. as we
+   have mentioned above, nce can be shown to approximate the loss of the
+   softmax as the number of samples \(k\) increases. neg simplifies nce
+   and does away with this guarantee, as the objective of neg is to learn
+   high-quality word representations rather than achieving low perplexity
+   on a test set, as is the goal in language modelling.
+
+   neg also uses a logistic id168 to minimise the negative
+   log-likelihood of words in the training set. recall that nce calculated
+   the id203 that a word \(w\) comes from the empirical training
+   distribution \(p_{\text{train}}\) given a context \(c\) as follows:
+
+   \( p(y=1 | w,c)= \dfrac{\text{exp}({h^\top v'_{w}})}{\text{exp}({h^\top
+   v'_{w}}) + k q(w)} \).
+
+   the key difference to nce is that neg only approximates this
+   id203 by making it as easy to compute as possible. for this
+   reason, it sets the most expensive term, \(k q(w)\) to \(1\), which
+   leaves us with:
+
+   \( p(y=1 | w,c)= \dfrac{\text{exp}({h^\top v'_{w}})}{\text{exp}({h^\top
+   v'_{w}}) + 1} \).
+
+   \(k q(w) = 1\) is exactly then true, when \(k= |v|\) and \(q\) is a
+   uniform distribution. in this case, neg is equivalent to nce. the
+   reason we set \(k q(w) = 1\) and not to some other constant can be seen
+   by rewriting the equation, as \(p(y=1 | w,c)\) can be transformed into
+   the sigmoid function:
+
+   \( p(y=1 | w,c)= \dfrac{1}{1 + \text{exp}({-h^\top v'_{w}})} \).
+
+   if we now insert this back into the id28 loss from
+   before, we get:
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} \dfrac{1}{1 +
+   \text{exp}({-h^\top v'_{w_i}})} + \sum_{j=1}^k \text{log} (1 -
+   \dfrac{1}{1 + \text{exp}({-h^\top v'_{\tilde{w}_{ij}}})}] \).
+
+   by simplifying slightly, we obtain:
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} \dfrac{1}{1 +
+   \text{exp}({-h^\top v'_{w_i}})} + \sum_{j=1}^k \text{log} (\dfrac{1}{1
+   + \text{exp}({h^\top v'_{\tilde{w}_{ij}}})}] \).
+
+   setting \(\sigma(x) = \dfrac{1}{1 + \text{exp}({-x})}\) finally yields
+   the neg loss:
+
+   \( j_\theta = - \sum_{w_i \in v} [ \text{log} \sigma(h^\top v'_{w_i}) +
+   \sum_{j=1}^k \text{log} \sigma(-h^\top v'_{\tilde{w}_{ij}})] \).
+
+   to conform with the notation of mikolov et al. (2013), \(h\) must be
+   replaced with \(v_{w_i}\), \(v'_{w_i}\) with \(v'_{w_o}\) and
+   \(v_{\tilde{w}_{ij}}\) with \(v'_{w_i}\). also, in contrast to
+   mikolov's neg objective, we a) optimise the objective over the whole
+   corpus, b) minimise negative log-likelihood instead of maximising
+   positive log-likelihood (as mentioned before), and c) have already
+   replaced the expectation \(\mathbb{e}_{\tilde{w}_{ik} \sim q}\) with
+   its monte carlo approximation. for more insights on the derivation of
+   neg, have a look at goldberg and levy's notes ^[55][19].
+
+   we have seen that neg is only equivalent to nce when \(k= |v|\) and
+   \(q\) is uniform. in all other cases, neg only approximates nce, which
+   means that it will not directly optimise the likelihood of correct
+   words, which is key for language modelling. while neg may thus be
+   useful for learning id27s, its lack of asymptotic consistency
+   guarantees makes it inappropriate for language modelling.
+
+self-normalisation
+
+   even though the self-normalisation technique proposed by devlin et al.
+   ^[56][20] is not a sampling-based approach, it provides further
+   intuitions on self-normalisation of language models, which we briefly
+   touched upon. we previously mentioned in passing that by setting the
+   denominator \(z(c)\) of the nce loss to \(1\), the model essentially
+   self-normalises. this is a useful property as it allows us to skip
+   computing the expensive normalisation in \(z(c)\).
+
+   recall that our id168 \(j_\theta\) minimises the negative
+   log-likelihood of all words \(w_i\) in our training data:
+
+   \(j_\theta = - \sum\limits_i [\text{log} \dfrac{\text{exp}({h^\top
+   v'_{w_i}})}{z(c)}] \).
+
+   we can decompose the softmax into a sum as we did before:
+
+   \(j_\theta p(w | c) = - \sum\limits_i [h^\top v'_{w_i} + \text{log}
+   z(c)] \).
+
+   if we are able to constrain our model so that it sets \(z(c) = 1\) or
+   similarly \(\text{log} z(c) = 0\), then we can avoid computing the
+   normalisation in \(z(c)\) altogether. devlin et al. (2014) thus propose
+   to add a squared error penalty term to the id168 that
+   encourages the model to keep \(\text{log} z(c)\) as close as possible
+   to \(0\):
+
+   \(j_\theta = - \sum\limits_i [h^\top v'_{w_i} + \text{log} z(c) -
+   \alpha (\text{log}(z(c)) - 0)^2] \),
+
+   which can be rewritten as:
+
+   \(j_\theta = - \sum\limits_i [h^\top v'_{w_i} + \text{log} z(c) -
+   \alpha \text{log}^2 z(c)] \)
+
+   where \(\alpha\) allows us to trade-off between model accuracy and mean
+   self-normalisation. by doing this, we can essentially guarantee that
+   \(z(c)\) will be as close to \(1\) as we want. at decoding time in
+   their mt system, devlin et al. (2014) then set the denominator of the
+   softmax to \(1\) and only use the numerator for computing \(p(w | c)\)
+   together with their penalty term:
+
+   \(j_\theta = - \sum\limits_i [h^\top v'_{w_i} - \alpha \text{log}^2
+   z(c)] \)
+
+   they report that self-normalisation achieves a speed-up factor of about
+   \(15\), while only resulting in a small degradation of id7 scores
+   compared to a regular non-self-normalizing neural language model.
+
+infrequent normalisation
+
+   andreas and klein (2015) ^[57][21] suggest that it should even be
+   sufficient to only normalise a fraction of the training examples and
+   still obtain approximate self-normalising behaviour. they thus propose
+   infrequent normalisation (in), which down-samples the penalty term,
+   making this a sampling-based approach.
+
+   let us first decompose the sum of the previous loss \(j_\theta\) into
+   two separate sums:
+
+   \(j_\theta = - \sum\limits_i h^\top v'_{w_i} + \alpha \sum\limits_i
+   \text{log}^2 z(c) \).
+
+   we can now down-sample the second term by only computing the
+   normalisation for a subset \(c\) of words \(w_j\) and thus of contexts
+   \(c_j\) (as \(z(c)\) only depends on the context \(c\)) in the training
+   data:
+
+   \(j_\theta = - \sum\limits_i h^\top v'_{w_i} + \dfrac{\alpha}{\gamma}
+   \sum\limits_{c_j \in c} \text{log}^2 z(c_j) \)
+
+   where \(\gamma\) controls the size of the subset \(c\). andreas and
+   klein (2015) suggest that if combines the strengths of nce and
+   self-normalisation as it does not require computing the normalisation
+   for all training examples (which nce avoids entirely), but like
+   self-normalisation allows trading-off between the accuracy of the model
+   and how well normalisation is approximated. they observe a speed-up
+   factor of \(10\) when normalising only a tenth of the training set,
+   with no noticeable performance penalty.
+
+other approaches
+
+   so far, we have focused exclusively on approximating or even entirely
+   avoiding the computation of the softmax denominator \(z(c)\), as it is
+   the most expensive term in the computation. we have thus not paid
+   particular attention to \(h^\top v'_{w}\), i.e. the dot-product between
+   the penultimate layer representation \(h\) and output id27
+   \(v'_{w}\). vijayanarasimhan et al. (2015) ^[58][22] propose fast
+   locality-sensitive hashing to approximate \(h^\top v'_{w}\). however,
+   while this technique accelerates the model at test time, during
+   training, these speed-ups virtually vanish as embeddings must be
+   re-indexed and the batch size increases.
+
+which approach to choose?
+
+   having reviewed the most popular softmax-based and sampling-based
+   approaches, we have shown that there are plenty of alternatives to the
+   good ol' softmax and almost all of them promise a significant speed-up
+   and equivalent or at most marginally deteriorated performance. this
+   naturally poses the question which approach is the best for a
+   particular task.
+   approach speed-up
+   factor during
+   training? during
+   testing? performance
+   (small vocab) performance
+   (large vocab) proportion of
+   parameters
+   softmax 1x - - very good very poor 100%
+   hierarchical softmax 25x (50-100x) x - very poor very good 100%
+   differentiated softmax 2x x x very good very good < 100%
+   id98-softmax - x - - bad - good 30%
+   importance sampling (19x) x - - - 100%
+   adaptive
+   importance sampling (100x) x - - - 100%
+   target sampling 2x x - good bad 100%
+   noise contrastive
+   estimation 8x (45x) x - very bad very bad 100%
+   negative sampling (50-100x) x - - - 100%
+   self-normalisation (15x) x - - - 100%
+   infrequent
+   normalisation 6x (10x) x - very good good 100%
+   table 1: comparison of approaches to approximate the softmax for
+   language modelling.
+
+   we compare the performance of the approaches we discussed in this post
+   for language modelling in table 1. speed-up factors and performance are
+   based on the experiments by chen et al. (2015), while we show speed-up
+   factors reported by the authors of the original papers in brackets. the
+   third and fourth columns indicate if the speed-up is achieved during
+   training and testing respectively. note that divergence of speed-up
+   factors might be due to unoptimised implementations or the fact that
+   the original authors might not have had access to gpus, which benefit
+   the regular softmax more than some of the other approaches. performance
+   for approaches where no comparison is available should largely be
+   analogous to similar approaches, i.e. self-normalisation should achieve
+   similar performance as infrequent normalisation and importance sampling
+   and adaptive importance sampling should achieve similar performance as
+   target sampling. the performance of id98-softmax is as reported by
+   jozefowicz et al. (2016) and ranges from bad to good depending on the
+   size of the correction. of all approaches, only id98-softmax achieves a
+   substantial reduction in parameters as the other approaches still
+   require storing output embeddings. differentiated softmax reduces
+   parameters by being able to store a sparse weight matrix.
+
+   as it always is, there is no clear winner that beats all other
+   approaches on all datasets or tasks. for language modelling, the
+   regular softmax still achieves very good performance on small
+   vocabulary datasets, such as the id32, and even performs well
+   on medium datasets, such as gigaword, but does very poorly on large
+   vocabulary datasets, e.g. the 1b word benchmark. target sampling,
+   hierarchical softmax, and infrequent normalisation in turn do better
+   with large vocabularies.
+   differentiated softmax generally does well for both small and large
+   vocabularies and is the only approach that ensures a speed-up at test
+   time. interestingly, hierarchical softmax (hs) performs very poorly
+   with small vocabularies. however, of all methods, hs is the fastest and
+   processes most training examples in a given time frame. while nce
+   performs well with large vocabularies, it is generally worse than the
+   other methods. negative sampling does not work well for language
+   modelling, but it is generally superior for learning word
+   representations, as attested by id97's success. note that all
+   results should be taken with a grain of salt: chen et al. (2015) report
+   having difficulties using noise contrastive estimation in practice; kim
+   et al. (2016) use hierarchical softmax to achieve state-of-the-art with
+   a small vocabulary, while importance sampling is used by the
+   state-of-the-art language model by jozefowicz et al. (2016) on a
+   dataset with a large vocabulary.
+
+   finally, if you are looking to actually use the described methods,
+   tensorflow has [59]implementations for a few sampling-based approaches
+   and also explains the differences between some of them [60]here.
+
+conclusion
+
+   this overview of different methods to approximate the softmax attempted
+   to provide you with intuitions that can not only be applied to improve
+   and speed-up learning word representations, but are also relevant for
+   language modelling and machine translation. as we have seen, most of
+   these approaches are closely related and are driven by one uniting
+   factor: the necessity to approximate the expensive normalisation in the
+   denominator of the softmax. with these approaches in mind, i hope you
+   feel now better equipped to train and understand your models and that
+   you might even feel ready to work on learning better word
+   representations yourself.
+
+   as we have seen, learning word representations is a vast field and many
+   factors are relevant for success. in the previous blog post, we looked
+   at the architectures of popular models and in this blog post, we
+   investigated more closely a key component, the softmax layer. in the
+   next one, we will introduce glove, a method that relies on matrix
+   factorisation rather than language modelling, and turn our attention to
+   other hyperparameters that are essential for successfully learning word
+   embeddings.
+
+   as always, let me know about any mistakes i made and approaches i
+   missed in the comments below.
+
+citation
+
+   if you found this blog post helpful, please consider citing it as:
+
+   sebastian ruder. on id27s - part 2: approximating the
+   softmax. [61]http://ruder.io/word-embeddings-softmax, 2016.
+
+other blog posts on id27s
+
+   if you want to learn more about id27s, these other blog posts
+   on id27s are also available:
+     * [62]on id27s - part 1
+     * [63]on id27s - part 3: the secret ingredients of id97
+     * [64]unofficial part 4: a survey of cross-lingual embedding models
+     * [65]unofficial part 5: id27s in 2017 - trends and future
+       directions
+
+translations
+
+   this blog post has been translated into the following languages:
+     * [66]chinese
+
+   credit for the cover image goes to [67]stephan gouws who included the
+   image in his [68]phd dissertation and in the [69]tensorflow id97
+   tutorial.
+     __________________________________________________________________
+
+    1. jean, s., cho, k., memisevic, r., & bengio, y. (2015). on using
+       very large target vocabulary for id4.
+       proceedings of the 53rd annual meeting of the association for
+       computational linguistics and the 7th international joint
+       conference on natural language processing (volume 1: long papers),
+       1   10. retrieved from [70]http://www.aclweb.org/anthology/p15-1001
+       [71]      
+    2. jozefowicz, r., vinyals, o., schuster, m., shazeer, n., & wu, y.
+       (2016). exploring the limits of id38. retrieved from
+       [72]http://arxiv.org/abs/1602.02410 [73]      
+    3. morin, f., & bengio, y. (2005). hierarchical probabilistic neural
+       network language model. aistats, 5. [74]      
+    4. rong, x. (2014). id97 parameter learning explained.
+       arxiv:1411.2738, 1   19. retrieved from
+       [75]http://arxiv.org/abs/1411.2738 [76]      
+    5. mnih, a., & hinton, g. e. (2008). a scalable hierarchical
+       distributed language model. advances in neural information
+       processing systems, 1   8. retrieved from
+       [77]http://papers.nips.cc/paper/3583-a-scalable-hierarchical-distri
+       buted-language-model.pdf [78]      
+    6. mikolov, t., chen, k., corrado, g., & dean, j. (2013). distributed
+       representations of words and phrases and their compositionality.
+       nips, 1   9. [79]      
+    7. shannon, c. e. (1951). prediction and id178 of printed english.
+       bell system technical journal, 30(1), 50   64.
+       [80]http://doi.org/10.1002/j.1538-7305.1951.tb01366.x [81]      
+    8. chen, w., grangier, d., & auli, m. (2015). strategies for training
+       large vocabulary neural language models. retrieved from
+       [82]http://arxiv.org/abs/1512.04906 [83]      
+    9. kim, y., jernite, y., sontag, d., & rush, a. m. (2016).
+       character-aware neural language models. aaai. retrieved from
+       [84]http://arxiv.org/abs/1508.06615 [85]      
+   10. ling, w., trancoso, i., dyer, c., & black, a. w. (2016).
+       character-based id4. iclr, 1   11. retrieved
+       from [86]http://arxiv.org/abs/1511.04586 [87]      
+   11. bengio, y., & sen  cal, j.-s. (2003). quick training of
+       probabilistic neural nets by importance sampling. aistats.
+       [88]http://www.iro.umontreal.ca/~lisa/pointeurs/submit_aistats2003.
+       pdf [89]      
+   12. bengio, y., & sen  cal, j.-s. (2008). adaptive importance sampling
+       to accelerate training of a neural probabilistic language model.
+       ieee transactions on neural networks, 19(4), 713   722.
+       [90]http://doi.org/10.1109/tnn.2007.912312 [91]      
+   13. liu, j. s. (2001). monte carlo strategies in scientific computing.
+       springer. [92]http://doi.org/10.1017/cbo9781107415324.004 [93]      
+   14. gutmann, m., & hyv  rinen, a. (2010). noise-contrastive estimation:
+       a new estimation principle for unnormalized statistical models.
+       international conference on artificial intelligence and statistics,
+       1   8. retrieved from
+       [94]http://www.cs.helsinki.fi/u/ahyvarin/papers/gutmann10aistats.pd
+       f [95]      
+   15. mnih, a., & teh, y. w. (2012). a fast and simple algorithm for
+       training neural probabilistic language models. proceedings of the
+       29th international conference on machine learning (icml   12),
+       1751   1758. [96]      
+   16. vaswani, a., zhao, y., fossum, v., & chiang, d. (2013). decoding
+       with large-scale neural language models improves translation.
+       proceedings of the 2013 conference on empirical methods in natural
+       language processing (emnlp 2013), (october), 1387   1392. [97]      
+   17. zoph, b., vaswani, a., may, j., & knight, k. (2016). simple, fast
+       noise-contrastive estimation for large id56 vocabularies. naacl.
+       [98]      
+   18. dyer, c. (2014). notes on noise contrastive estimation and negative
+       sampling. arxiv preprint. retrieved from
+       [99]http://arxiv.org/abs/1410.8251 [100]      
+   19. goldberg, y., & levy, o. (2014). id97 explained: deriving
+       mikolov et al.   s negative-sampling word-embedding method. arxiv
+       preprint arxiv:1402.3722, (2), 1   5. retrieved from
+       [101]http://arxiv.org/abs/1402.3722 [102]      
+   20. devlin, j., zbib, r., huang, z., lamar, t., schwartz, r., &
+       makhoul, j. (2014). fast and robust neural network joint models for
+       id151. proc. acl   2014, 1370   1380. [103]      
+   21. andreas, j., & klein, d. (2015). when and why are id148
+       self-normalizing? naacl-2015, 244   249. [104]      
+   22. vijayanarasimhan, s., shlens, j., monga, r., & yagnik, j. (2015).
+       deep networks with large output spaces. iclr, 1   9. retrieved from
+       [105]http://arxiv.org/abs/1412.7479 [106]      
+
+   sebastian ruder
+
+[107]sebastian ruder
+
+   read [108]more posts by this author.
+   [109]read more
+
+       sebastian ruder    
+
+[110]id27s
+
+     * [111]aaai 2019 highlights: dialogue, reproducibility, and more
+     * [112]emnlp 2018 highlights: inductive bias, cross-lingual learning,
+       and more
+     * [113]a review of the neural history of natural language processing
+
+   [114]see all 9 posts    
+
+   [115]lxmls 2016 highlights
+
+   events
+
+lxmls 2016 highlights
+
+   the lisbon machine learning school (lxmls) is an annual event that
+   brings together researchers and graduate students in ml, nlp, and
+   computational linguistics. this post discusses highlights, key
+   insights, and takeaways from the 6th edition of the summer school.
+
+     * sebastian ruder
+       [116]sebastian ruder
+
+   [117]on id27s - part 1
+
+   id27s
+
+on id27s - part 1
+
+   id27s popularized by id97 are pervasive in current nlp
+   applications. the history of id27s, however, goes back a lot
+   further. this post explores the history of id27s in the
+   context of language modelling.
+
+     * sebastian ruder
+       [118]sebastian ruder
+
+   [119]sebastian ruder
+      
+   on id27s - part 2: approximating the softmax
+   share this
+   please enable javascript to view the [120]comments powered by disqus.
+
+   [121]sebastian ruder    2019
+
+   [122]latest posts [123]twitter [124]ghost
+
+references
+
+   visible links
+   1. http://ruder.io/rss/
+   2. http://ruder.io/
+   3. http://ruder.io/about/
+   4. http://ruder.io/tags/
+   5. http://ruder.io/publications/
+   6. http://ruder.io/talks/
+   7. http://ruder.io/news/
+   8. http://ruder.io/faq/
+   9. http://ruder.io/nlp-news/
+  10. https://nlpprogress.com/
+  11. http://ruder.io/contact/
+  12. http://ruder.io/tag/word-embeddings/index.html
+  13. http://ruder.io/word-embeddings-softmax/index.html#softmaxarchitecturemodifications
+  14. http://ruder.io/word-embeddings-softmax/index.html#hierarchicalsoftmax
+  15. http://ruder.io/word-embeddings-softmax/index.html#differentiatedsoftmax
+  16. http://ruder.io/word-embeddings-softmax/index.html#id98softmax
+  17. http://ruder.io/word-embeddings-softmax/index.html#samplingbasedapproaches
+  18. http://ruder.io/word-embeddings-softmax/index.html#importancesampling
+  19. http://ruder.io/word-embeddings-softmax/index.html#adaptiveimportancesampling
+  20. http://ruder.io/word-embeddings-softmax/index.html#targetsampling
+  21. http://ruder.io/word-embeddings-softmax/index.html#noisecontrastiveestimation
+  22. http://ruder.io/word-embeddings-softmax/index.html#negativesampling
+  23. http://ruder.io/word-embeddings-softmax/index.html#selfnormalisation
+  24. http://ruder.io/word-embeddings-softmax/index.html#infrequentnormalisation
+  25. http://ruder.io/word-embeddings-softmax/index.html#otherapproaches
+  26. http://ruder.io/word-embeddings-softmax/index.html#whichapproachtochoose
+  27. http://ruder.io/word-embeddings-softmax/index.html#conclusion
+  28. http://ruder.io/word-embeddings-1/index.html
+  29. http://ruder.io/word-embeddings-softmax/index.html#fn1
+  30. http://ruder.io/word-embeddings-softmax/index.html#fn2
+  31. http://ruder.io/word-embeddings-softmax/index.html#fn3
+  32. http://googleresearch.blogspot.ie/2016/05/chat-smarter-with-allo.html
+  33. https://www.quora.com/id97-how-can-hierarchical-soft-max-training-method-of-cbow-guarantee-its-self-consistence
+  34. https://www.youtube.com/watch?v=b95ltf2rvwm
+  35. https://www.youtube.com/watch?v=b95ltf2rvwm
+  36. http://ruder.io/word-embeddings-softmax/index.html#fn4
+  37. http://ruder.io/word-embeddings-softmax/index.html#fn5
+  38. https://en.wikipedia.org/wiki/huffman_coding
+  39. http://ruder.io/word-embeddings-softmax/index.html#fn6
+  40. http://ruder.io/word-embeddings-softmax/index.html#fn7
+  41. http://ruder.io/word-embeddings-softmax/index.html#fn8
+  42. http://ruder.io/word-embeddings-softmax/index.html#fn9
+  43. http://ruder.io/word-embeddings-softmax/index.html#fn10
+  44. http://cs231n.github.io/linear-classify/#softmax-classifier
+  45. http://ruder.io/word-embeddings-softmax/index.html#fn11
+  46. http://ruder.io/word-embeddings-softmax/index.html#fn12
+  47. http://ruder.io/word-embeddings-softmax/index.html#fn13
+  48. http://ruder.io/word-embeddings-softmax/index.html#fn14
+  49. http://ruder.io/word-embeddings-softmax/index.html#fn15
+  50. http://ruder.io/word-embeddings-1/index.html
+  51. http://scholar.sun.ac.za/handle/10019.1/98758
+  52. http://ruder.io/word-embeddings-softmax/index.html#fn16
+  53. http://ruder.io/word-embeddings-softmax/index.html#fn17
+  54. http://ruder.io/word-embeddings-softmax/index.html#fn18
+  55. http://ruder.io/word-embeddings-softmax/index.html#fn19
+  56. http://ruder.io/word-embeddings-softmax/index.html#fn20
+  57. http://ruder.io/word-embeddings-softmax/index.html#fn21
+  58. http://ruder.io/word-embeddings-softmax/index.html#fn22
+  59. https://www.tensorflow.org/versions/master/api_docs/python/nn.html#candidate-sampling
+  60. https://www.tensorflow.org/extras/candidate_sampling.pdf
+  61. http://ruder.io/word-embeddings-softmax
+  62. http://ruder.io/word-embeddings-1/index.html
+  63. http://ruder.io/secret-id97/index.html
+  64. http://ruder.io/cross-lingual-embeddings/index.html
+  65. http://ruder.io/word-embeddings-2017/index.html
+  66. http://geek.csdn.net/news/detail/135736
+  67. http://stephangouws.com/
+  68. http://scholar.sun.ac.za/handle/10019.1/98758
+  69. https://www.tensorflow.org/versions/r0.9/tutorials/id97/index.html
+  70. http://www.aclweb.org/anthology/p15-1001
+  71. http://ruder.io/word-embeddings-softmax/index.html#fnref1
+  72. http://arxiv.org/abs/1602.02410
+  73. http://ruder.io/word-embeddings-softmax/index.html#fnref2
+  74. http://ruder.io/word-embeddings-softmax/index.html#fnref3
+  75. http://arxiv.org/abs/1411.2738
+  76. http://ruder.io/word-embeddings-softmax/index.html#fnref4
+  77. http://papers.nips.cc/paper/3583-a-scalable-hierarchical-distributed-language-model.pdf
+  78. http://ruder.io/word-embeddings-softmax/index.html#fnref5
+  79. http://ruder.io/word-embeddings-softmax/index.html#fnref6
+  80. http://doi.org/10.1002/j.1538-7305.1951.tb01366.x
+  81. http://ruder.io/word-embeddings-softmax/index.html#fnref7
+  82. http://arxiv.org/abs/1512.04906
+  83. http://ruder.io/word-embeddings-softmax/index.html#fnref8
+  84. http://arxiv.org/abs/1508.06615
+  85. http://ruder.io/word-embeddings-softmax/index.html#fnref9
+  86. http://arxiv.org/abs/1511.04586
+  87. http://ruder.io/word-embeddings-softmax/index.html#fnref10
+  88. http://www.iro.umontreal.ca/~lisa/pointeurs/submit_aistats2003.pdf
+  89. http://ruder.io/word-embeddings-softmax/index.html#fnref11
+  90. http://doi.org/10.1109/tnn.2007.912312
+  91. http://ruder.io/word-embeddings-softmax/index.html#fnref12
+  92. http://doi.org/10.1017/cbo9781107415324.004
+  93. http://ruder.io/word-embeddings-softmax/index.html#fnref13
+  94. http://www.cs.helsinki.fi/u/ahyvarin/papers/gutmann10aistats.pdf
+  95. http://ruder.io/word-embeddings-softmax/index.html#fnref14
+  96. http://ruder.io/word-embeddings-softmax/index.html#fnref15
+  97. http://ruder.io/word-embeddings-softmax/index.html#fnref16
+  98. http://ruder.io/word-embeddings-softmax/index.html#fnref17
+  99. http://arxiv.org/abs/1410.8251
+ 100. http://ruder.io/word-embeddings-softmax/index.html#fnref18
+ 101. http://arxiv.org/abs/1402.3722
+ 102. http://ruder.io/word-embeddings-softmax/index.html#fnref19
+ 103. http://ruder.io/word-embeddings-softmax/index.html#fnref20
+ 104. http://ruder.io/word-embeddings-softmax/index.html#fnref21
+ 105. http://arxiv.org/abs/1412.7479
+ 106. http://ruder.io/word-embeddings-softmax/index.html#fnref22
+ 107. http://ruder.io/author/sebastian/index.html
+ 108. http://ruder.io/author/sebastian/index.html
+ 109. http://ruder.io/author/sebastian/index.html
+ 110. http://ruder.io/tag/word-embeddings/index.html
+ 111. http://ruder.io/aaai-2019-highlights/index.html
+ 112. http://ruder.io/emnlp-2018-highlights/index.html
+ 113. http://ruder.io/a-review-of-the-recent-history-of-nlp/index.html
+ 114. http://ruder.io/tag/word-embeddings/index.html
+ 115. http://ruder.io/index.html
+ 116. http://ruder.io/author/sebastian/index.html
+ 117. http://ruder.io/index.html
+ 118. http://ruder.io/author/sebastian/index.html
+ 119. http://ruder.io/
+ 120. https://disqus.com/?ref_noscript
+ 121. http://ruder.io/
+ 122. http://ruder.io/
+ 123. https://twitter.com/seb_ruder
+ 124. https://ghost.org/
+
+   hidden links:
+ 126. https://twitter.com/seb_ruder
+ 127. http://ruder.io/rss/index.rss
+ 128. http://ruder.io/index.html
+ 129. http://ruder.io/index.html
+ 130. https://twitter.com/share?text=on%20word%20embeddings%20-%20part%202%3a%20approximating%20the%20softmax&url=http://ruder.io/word-embeddings-softmax/
+ 131. https://www.facebook.com/sharer/sharer.php?u=http://ruder.io/word-embeddings-softmax/

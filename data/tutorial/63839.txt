@@ -1,0 +1,321 @@
+   #[1]seita's place
+
+   [2]seita's place
+
+   [3]about [4]archive [5]new? start here [6]subscribe
+
+going deeper into id23: understanding deep-q-networks
+
+   dec 1, 2016
+
+   the deep q-network (id25) algorithm, as introduced by deepmind in a nips
+   2013 workshop paper, and later published in nature 2015 can be credited
+   with revolutionizing id23. in this post, therefore, i
+   would like to give a guide to a subset of the id25 algorithm. this is a
+   continuation of an [7]earlier id23 article about
+   linear function approximators. my contribution here will be orthogonal
+   to [8]my previous post about the preprocessing steps for game frames.
+
+   before i proceed, i should mention upfront that there are already a lot
+   of great blog posts and guides that people have written about id25. here
+   are the prominent ones i was able to find and read:
+     * [9]denny britz   s notes and implementation of id25 and double-id25. i
+       have not read the code yet, but i imagine this will be my
+       second-favorite id25 implementation aside from [10]spragnur   s
+       version.
+     * [11]nervana   s    demystifying deep id23, by tambet
+       matiisen. this has a useful figure to show intuition on why we want
+       the network to take only the state as input (not the action), and
+       an intuitive argument as to why we don   t want pooling layers with
+       atari games (as opposed to object recognition tasks).
+     * [12]ben lau   s post on using id25 to play flappybird. the part on id25
+       might be useful. i won   t need to use his code.
+     * a post from [13]machine learning for artists (huh, interesting)
+       with some source code and corresponding descriptions.
+     * a [14]long post from ruben fiszel, which also covers some of the
+       major extensions of id25. i will try to write more details on those
+       papers in future blog posts, particularly a3c.
+     * a post from [15]arthur juliani, who also mentions the target
+       network and double-id25.
+
+   i will not try to repeat what these great folks have already done.
+   here, i focus specifically on the aspect of id25 that was the most
+   challenging for me to understand,^[16]1 which was about how the loss
+   function works. i draw upon the posts above to aid me in this process.
+
+   in general, to optimize any function which is complicated, has
+   high-dimensional parameters and high-dimensional data points, one needs
+   to use an algorithm such as stochastic id119 which relies on
+   sampling and then approximating the gradient step . the key to
+   understanding id25 is to understand how we characterize the loss
+   function.
+
+   recall from basic id23 that the optimal q-value is
+   defined from the bellman optimality conditions:
+
+   but is this the definition of a q-value (i.e. a value)?
+
+   nope!
+
+   this is something i had to think carefully before it finally hit home
+   to me, and i think it   s crucial to understanding q-values. when we
+   refer to , all we are referring to is some arbitrary value. we might
+   pull that value out of a table (i.e. tabular id24), or it might
+   be determined based on a linear or neural network function
+   approximator. in the latter case, it   s better to write it as . (i
+   actually prefer writing it as but the deepmind papers use the other
+   notation, so for the rest of this post, i will use their notation.)
+
+   our goal is to get it to satisfy the bellman optimality criteria, which
+   i   ve written above. if we have    adjusted    our function value so that
+   for all input pairings, it satisfies the bellman requirements, then we
+   rewrite the function as with the asterisk.
+
+   let   s now define a id168. we need to do this so that we can
+   perform stochastic id119, which will perform the desired
+      adjustment    to . what do we want? given a state-action pair , the
+   target will be the bellman optimality condition. we will use the
+   standard squared error loss. thus, we write the loss as:
+
+   but we   re not quite done, right? this is for a specific pair. we want
+   the to be close to the    bellman    value across all such pairs.
+   therefore, we take expectations. here   s the tricky part: we need to
+   take expectations with respect to samples , so we have to consider a
+      four-tuple   , instead of a tuple, because the target (bellman)
+   additionally depends on and . the id168 becomes:
+
+   note that i have now added the parameter . however, this actually
+   includes the tabular case. why? suppose we have two states and three
+   actions. thus, the total table size is six, with elements indexed by: .
+   now let   s define a six-dimensional vector . we will decide to encode
+   each of the six values into one component of the vector. thus, . in
+   other words, we parameterize the arbitrary function by , and we
+   directly look at to get the q-values! think about how this differs from
+   the linear approximation case i discussed in my last post. instead of
+   corresponding to one element in the parameter vector , it turns out to
+   be a linear combination of the full along with a state-action dependent
+   vector .
+
+   with the above intuition in mind, we can perform stochastic gradient
+   descent to minimize the id168. it is over expectations of all
+   samples. intuitively, we can think of it as a function of an infinite
+   amount of such samples. in practice, though, to approximate the
+   expectation, we can take a finite amount of samples and use that to
+   form the gradient updater.
+
+   we can continue with this logic until we get to the smallest possible
+   update case, involving just one sample. what does the update look like?
+   with one sample, we have approximated the loss as:
+
+   i have substituted , a single element in , since we assume the tabular
+   case for now. i didn   t do that for the target, since for the purpose of
+   the bellman optimality condition, we assume it is fixed for now. since
+   there   s only one component of    visible    in the id168, the
+   gradient for all components^[17]2 other than is zero. hence, the
+   gradient update is:
+
+   guess what? this is exactly the standard tabular id24 update
+   taught in id23 courses! i wrote [18]the same exact
+   thing in my mdp/rl review last year. here it is, reproduced below:
+
+   let   s switch gears to the id25 case, so we express with the implicit
+   assumption that represents neural network weights. in the nature paper,
+   they express the id168 as:
+
+   (i added in an extra that they were missing, and note that their .)
+
+   this looks very similar to the id168 i had before. let   s
+   deconstruct the differences:
+     * the samples come from , which is assumed to be an experience replay
+       history. this helps to break correlation among the samples. remark:
+       it   s important to know the purpose of experience replay, but
+       nowadays it   s probably out of fashion since the a3c algorithm runs
+       learners in parallel and thus avoids sample correlation across
+       threads.
+     * aside from the fact that we   re using neural networks instead of a
+       tabular parameterization, the weights used for the target versus
+       the current (presumably non-optimal) q-value are different. at
+       iteration , we assume we have some giant weight vector representing
+       all of the neural network weights. we do not, however, use that
+       same vector to parameterize the network. we fix the targets with
+       the previous weight vector .
+
+   these two differences are mentioned in the nature paper in the
+   following text on the first page:
+
+     we address these instabilities with a novel variant of id24,
+     which uses two key ideas. [   ]
+
+   i want to elaborate on the second point in more detail, as i was
+   confused by it for a while. think back to my tabular id24 example
+   in this post. the target was parameterized using . when i perform an
+   update using sgd, i updated . if this turns out to be the same
+   component as , then this will automatically update the target. think of
+   the successor state as being equal to the current state. and, again,
+   during the gradient update, the target was assumed fixed, which is why
+   i did not re-write into a component of ; it   s as if we are    drawing   
+   the value from the table once for the purposes of computing the target,
+   so the value is ignored when we do the gradient computation. after the
+   gradient update, the value may be different.
+
+   deepmind decided to do it a different way. instead, we have to fix the
+   weights for some number of iterations, and then allow the samples to
+   accumulate. the argument for why this works is a bit hand-wavy and i   m
+   not sure if there exists any rigorous mathematical justification. the
+   deepmind paper says that this reduces correlations with the target.
+   this is definitely different from the tabular case i just described,
+   where one update immediately modifies targets. if i wanted to make my
+   tabular case the same as deepmind   s scenario, i would update the
+   weights the normal way, but i would also fix the vector , so that when
+   computing targets only, i would draw from instead of the current .
+
+   you can see explanations about deepmind   s special use of the target
+   network that others have written. denny britz argues that it leads to
+   more stable training:
+
+     trick 2 - target network: use a separate network to estimate the td
+     target. this target network has the same architecture as the
+     function approximator but with frozen parameters. every t steps (a
+     hyperparameter) the parameters from the q network are copied to the
+     target network. this leads to more stable training because it keeps
+     the target function fixed (for a while).
+
+   arthur juliani uses a similar line of reasoning:
+
+     why not use just use one network for both estimations? the issue is
+     that at every step of training, the q-network   s values shift, and if
+     we are using a constantly shifting set of values to adjust our
+     network values, then the value estimations can easily spiral out of
+     control. the network can become destabilized by falling into
+     feedback loops between the target and estimated q-values. in order
+     to mitigate that risk, the target network   s weights are fixed, and
+     only periodically or slowly updated to the primary q-networks
+     values. in this way training can proceed in a more stable manner.
+
+   i want to wrap up by doing some slight investigation of [19]spragnur   s
+   id25 code which relate to the points above about the target network.
+   (the neural network portion in his code is written using the theano and
+   lasagne libraries, which by themselves have some learning curve; i will
+   not elaborate on these as that is beyond the scope of this blog post.)
+   here are three critical parts of the code to understand:
+     * the q_network.py script contains the code for managing the
+       networks. professor sprague uses a shared theano variable to manage
+       the input to the network, called self.imgs_shared. what   s key is
+       that he has to make the dimension , where (just like in my last
+       post). so why the +1? this is needed so that he can produce the
+       q-values for in the id168, which uses the successor state
+       rather than the current state (not to mention the previous weights
+       as well!). the nervana blog post i listed made this distinction,
+       saying that a separate forward pass is needed to compute -values
+       for the successor states. by wrapping everything together into one
+       shared variable, spragnur   s code efficiently utilizes memory.
+       here   s the corresponding code segment:
+
+  # shared variables for training from a minibatch of replayed
+  # state transitions, each consisting of num_frames + 1 (due to
+  # overlap) images, along with the chosen action and resulting
+  # reward and terminal status.
+  self.imgs_shared = theano.shared(
+      np.zeros((batch_size, num_frames + 1, input_height, input_width),
+                dtype=theano.config.floatx))
+
+     * on a related note, the    variable    q_vals contains the q-values for
+       the current minibatch, while next_q_vals contains the q-values for
+       the successor states. since the minibatches used in the default
+       setting are -dimensional numpy arrays, both q_vals and next_q_vals
+       can be thought of as arrays with 32 values each. in both cases,
+       they are computed by calling lasagne.layers.get_output, which has
+       an intuitive name.
+       the code separates the next_q_vals cases based on a
+       self.freeze_interval parameter, which is -1 and 10000 for the nips
+       and nature versions, respectively. for the nips version, spragnur
+       uses the disconnected_grad function, meaning that the expression is
+       not computed in the gradient. i believe this is similar to what i
+       did before with the tabular -learning case, when i didn   t    convert   
+       to .
+       the nature version is different. it will create a second network
+       called self.next_l_out which is independent of the first network
+       self.l_out. during the training process, the code periodically
+       calls self.reset_q_hat() to update the weights of self.next_l_out
+       by copying from the current weights of self.l_out.
+       both of these should accomplish the same goal of having a separate
+       network whose weights are updated periodically. the nature version
+       is certainly easier to understand.
+     * i briefly want to mention a bit about the id74 used.
+       the code, following the nips and nature papers, reports the average
+       reward per episode, which is intuitive and what we ultimately want
+       to optimize. the nips paper argued that the average reward metric
+       is extremely noisy, so they also reported on the average action
+       value encountered during testing. they collected a random amount of
+       states and for each , tracked the -value obtained from that state,
+       and found that the average discounted reward kept increasing.
+       professor sprague   s code computes this value in the ale_agent.py
+       file in the finish_testing method. he seems to do it different from
+       the way the nips paper reports it, though, by subsampling a random
+       set of states after each epoch instead of having that random set
+       fixed for all 100 epochs (i don   t see self.holdout_data assigned
+       anywhere). but, meh, it does basically the same thing.
+
+   i know i said this before, but i really like spragnur   s code.
+
+   that   s all i have to say for now regarding id25s. i hope this post
+   serves as a useful niche in the id25 blog-o-sphere by focusing
+   specifically on how the id168 gets derived. in subsequent
+   posts, i hope to touch upon the major variants of id25 in more detail,
+   particularly a3c. stay tuned!
+     __________________________________________________________________
+
+    1. the most annoying part of id25, though, was figuring out how the
+       preprocessing works. as mentioned earlier, i resolved that through
+       [20]a previous post here. [21]   
+    2. taking the gradient of a function from a vector to a scalar, such
+       as , involves taking partial derivatives for each component. all
+       components other than in this example here will have derivatives of
+       0. [22]   
+
+   please enable javascript to view the [23]comments powered by disqus.
+
+seita's place
+
+     * seita's place
+     * [24]seita@cs.berkeley.edu
+
+     * [25]danieltakeshi
+     * [26](never!)
+
+   this is my blog, where i have written over 300 articles on a variety of
+   topics. recent posts tend to focus on computer science, my area of
+   specialty as a ph.d. student at uc berkeley.
+
+references
+
+   visible links
+   1. https://danieltakeshi.github.io/feed.xml
+   2. https://danieltakeshi.github.io/
+   3. https://danieltakeshi.github.io/about.html
+   4. https://danieltakeshi.github.io/archive.html
+   5. https://danieltakeshi.github.io/new-start-here.html
+   6. https://danieltakeshi.github.io/subscribe.html
+   7. https://danieltakeshi.github.io/2016/10/31/going-deeper-into-reinforcement-learning-understanding-id24-and-linear-function-approximation/
+   8. https://danieltakeshi.github.io/2016/11/25/frame-skipping-and-preprocessing-for-deep-q-networks-on-atari-2600-games/
+   9. https://github.com/dennybritz/reinforcement-learning/tree/master/id25
+  10. https://github.com/spragunr/deep_q_rl
+  11. https://www.nervanasys.com/demystifying-deep-reinforcement-learning/
+  12. https://yanpanlau.github.io/2016/07/10/flappybird-keras.html
+  13. http://ml4a.github.io/guides/deep_q_networks/
+  14. https://rubenfiszel.github.io/posts/rl4j/2016-08-24-reinforcement-learning-and-id25.html#atari
+  15. https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-4-deep-q-networks-and-beyond-8438a3e2b8df#.y5m9i5d8w
+  16. https://danieltakeshi.github.io/2016/12/01/going-deeper-into-reinforcement-learning-understanding-id25/#fn:annoying
+  17. https://danieltakeshi.github.io/2016/12/01/going-deeper-into-reinforcement-learning-understanding-id25/#fn:grad
+  18. https://danieltakeshi.github.io/2015-08-02-markov-decision-processes-and-reinforcement-learning/
+  19. https://github.com/spragunr/deep_q_rl
+  20. https://danieltakeshi.github.io/2016/11/25/frame-skipping-and-preprocessing-for-deep-q-networks-on-atari-2600-games/
+  21. https://danieltakeshi.github.io/2016/12/01/going-deeper-into-reinforcement-learning-understanding-id25/#fnref:annoying
+  22. https://danieltakeshi.github.io/2016/12/01/going-deeper-into-reinforcement-learning-understanding-id25/#fnref:grad
+  23. https://disqus.com/?ref_noscript
+  24. mailto:seita@cs.berkeley.edu
+  25. https://github.com/danieltakeshi
+  26. https://twitter.com/(never!)
+
+   hidden links:
+  28. https://danieltakeshi.github.io/2016/12/01/going-deeper-into-reinforcement-learning-understanding-id25/

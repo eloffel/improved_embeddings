@@ -1,0 +1,462 @@
+   #[1]deep ideas    feed [2]deep ideas    comments feed [3]deep ideas   
+   robot localization i: recursive bayesian estimation comments feed
+   [4]alternate [5]alternate
+
+   [6]facebook[7]twitter[8]email[9]rss[10]linkedin[11]tumblr
+
+   [12]deep ideas logo deep ideas retina logo
+
+a blog on artificial intelligence, deep learning and cognitive science
+
+     * [13]home
+     * [14]list of articles
+     * [15]about me
+     * ____________________
+          
+
+   [16]previous [17]next
+
+     * [18]view larger image self-driving car
+
+robot localization i: recursive bayesian estimation
+
+   this is part 1 in a series of tutorials in which we explore methods
+   for robot localization: the problem of tracking the location of a robot
+   over time with noisy sensors and noisy motors, which is an important
+   task for every autonomous robot, including self-driving cars.
+
+   the methods that we will learn are generic in nature, in that they can
+   be used for various other tasks that involve rational decision making
+   in the face of uncertainty. we will, for the main part, deal with
+   filtering, which is a general method for estimating variables from
+   noisy observations over time. in particular, we will explain the bayes
+   filter and some of its variants     the histogram filter, the kalman
+   filter and the id143. we will show the benefits and
+   shortcomings of each of these algorithms and see how they can be
+   applied to the robot localization problem.
+
+motivation
+
+   the traditional approach in reasoning over time involves strict logical
+   id136. in order for this to work, a few assumptions have to be made
+   about the environment we wish to make decisions in. for instance, the
+   environment has to be fully observable, which means that at any point
+   in time we can exactly measure each aspect of the environment that is
+   relevant to our decision making. additionally, the environment needs to
+   be deterministic, which means that, given the state of the environment
+   at a certain point in time and a decision we choose, the resulting
+   state of the environment is already determined     there is no randomness
+   whatsoever. last but not least, the environment has to be static, which
+   basically means that it waits for us to make our decision before it
+   changes.
+
+   none of these assumptions hold in realistic environments. we can never
+   measure every aspect of an environment that might have an influence on
+   the decision making. we can, however, use sensors to measure a small
+   portion of the environment, but even this small portion we can not
+   measure with complete certainty. we call such environments partially
+   observable.
+
+   whether realistic environments are deterministic or not is actually an
+   unanswered philosophical question. at least for humans and agents, it
+   appears to be non-deterministic, because even though we know physical
+   laws that allow us to describe most natural processes, there are just
+   too many influential factors that we are unable to model precisely
+   (e.g. wind turbulence causing a seemingly random change in the
+   trajectory of a flying ball). regardless of the nondeterminism, we can
+   usually tell what is likely to happen and what is unlikely to happen.
+   thus, we call realistic environments stochastic. moreover, realistic
+   environments are dynamic as opposed to static     they are always
+   changing. for a more thorough treatise of the nature of environments
+   cf. [norvig, pp. 40     46].
+
+   all of these properties of realistic environments result in uncertainty
+   about the state of the world. it is a big challenge to make rational
+   decisions in the face of uncertainty. humans do a great job at this
+   every day. even though we can never know the true state of the world
+   and predict what is going to happen next and how we should act to
+   achieve a desired outcome, we still manage to achieve many of our goals
+   remarkably well. we do this by maintaining a belief about the state of
+   the world at a certain point in time, which we arrive at by both
+   prediction and observation. this belief can be thought of as a
+   id203 distribution over all the possible states of the world,
+   conditioned by our observations. given a belief, we can, for each
+   possible decision, determine the probabilities of each possible
+   outcome. after that, we choose the decisions that are most probable to
+   achieve a desired goal state, maximize a performance measure, or the
+   like. this behavior can reasonably be called rational. of course, we do
+   not actually maintain precise id203 distributions in our brains
+   and carry out calculations, but this is a way of imagining how this
+   cognitive ability of ours roughly works and it gives us a first idea of
+   how it can be implemented algorithmically.
+
+   it is a difficult but interesting task to implement such a behavior for
+   autonomous agents. the purpose of this text is to give an insight into
+   how the first half can be done     the task of maintaining a belief about
+   the state of an environment that is updated over time through making
+   predictions according to a model of how the system develops,
+   interpreting periodically arriving, noisy observations (more
+   specifically, sensor measurements) and incorporating them into the
+   belief.
+
+robot localization
+
+   robot localization is one of the most fundamental problems in mobile
+   robotics. there are multiple instances of the localization problem with
+   different difficulties (cf. [negenborn, pp. 9     11]). in this article,
+   we shall deal with the problem that the robot is given a map of the
+   environment and then either needs to keep track of its position when
+   the initial position is known, or localize itself from scratch when it
+   could theoretically be anywhere.
+
+   one might use methods like gps for positioning, but in many scenarios
+   it is not accurate enough. self-driving cars, for example, need a few
+   centimeters accuracy to be considerable for road traffic. as everyone
+   with a car navigator knows, the accuracy for gps can be grim.
+   therefore, it is not always an option. since there is no reliable
+   sensor to measure a position directly, we need to rely on other
+   observations and infer the actual position from it. a possible way to
+   do so would be to install cameras, use pattern recognition to spot
+   landmarks whose positions on the map are known, determine the distances
+   of the landmarks and then use trilateration to determine the robot   s
+   position.
+
+   it is reasonable to assume that the distance sensors are noisy. it
+   becomes even more difficult when we assume that the robot is moving
+   through the world, because movement is usually noisy as well: even
+   though the robot can control its average speed, motors are subjected to
+   an unmodeled inaccuracy, resulting in unpredictable speed variations.
+   as we can see, this is a situation as described in the previous
+   section: the robot cannot infer its exact position from sensor data
+   and, even if it does know its exact position at a certain point in
+   time, it does not know it for certain anymore a moment later. this is
+   due to the fact that the model it uses to describe the environment
+   cannot describe the marginal factors that cause the motor to be
+   inaccurate. as such, this problem is a good example for filtering and
+   will therefore be used to elucidate the algorithms presented in this
+   article.
+
+recursive bayesian estimation
+
+   before we can deal with the concrete filter algorithms, we have to lay
+   a theoretical foundation. in this article, we will model the world in
+   such a way that all the changes in the environment take place at
+   discrete, equidistant time steps $t \in \mathbb{n}_0$, where sensor
+   measurements arrive at every time step $t \geq 1$. to model uncertainty
+   over continuous time is more difficult, since it involves stochastic
+   differential equations. the discrete-time model can be seen as an
+   approximation at the continuous case. [norvig, p. 567]
+
+state
+
+   at each point in time $t$, we can characterize a dynamic system by a
+   state vector $x_t$, which we simply call the state. this state vector
+   contains the so-called state variables that are necessary to describe
+   the system. we assume that it contains the same state variables at each
+   time step. we define the so-called state space $dom(x_t)$ as the set of
+   all the possible values that $x_t$ might take. if we consider a moving
+   robot on a plain, the state could be $x_t = (x_t, y_t, \dot{x}_t,
+   \dot{y}_t)$ where $x_t$ and $y_t$ refer to the robot   s current position
+   and $\dot{x}_t$ and $\dot{y}_t$ to its movement speed in the x and y
+   direction, respectively. in this case, the state space would be
+   $dom(x_t) = \mathbb{r}^4$.
+
+   for each environment, there are virtually infinitely many possible
+   state vectors, where additional state variables generally make the
+   description of the environment more precise, with the downside of
+   increasing the computational complexity of maintaining a belief. for
+   example, if we consider the robot on a plain again, we could include
+   the wind direction and force in the state vector to account for
+   variations in the robot   s movement that are caused by the wind.
+
+   a state is called complete if it includes all the information that is
+   necessary to predict the future of the system. in realistic examples,
+   the state is usually incomplete. for example, if we assume that there
+   are human beings interfering with the robot on the plain, then the
+   state would have to include data that makes it possible to predict
+   their decisions, which is practically impossible. even in situations
+   where we could in principle include all the influencing factors in the
+   state, it is still often preferable not to include them to reduce
+   computational complexity. in practice, the algorithms described in this
+   article have turned out to be robust to incomplete states. a rule of
+   thumb is to include enough state variables to make unmodeled effects
+   approximately random. [thrun, p. 33]
+
+   as alluded to in the introduction, the state $x_t$ is usually
+   unobservable, which means that we cannot measure it directly. instead,
+   we have sensors that generate a measurement $e_t$ at each time step $t
+   \geq 1$, which is a vector of arbitrary dimension. this measurement
+   vector contains noisy sensor measurements that are caused by the state.
+   in our modeling, $e_t$ always contains the same measurement variables.
+   if we have a gps sensor, then this measurement vector could consist of
+   the measured x and y coordinates. it is important to realize that these
+   measured coordinates are generally not the same as the actual
+   coordinates. instead, they are caused by the actual coordinates but
+   underlie a certain measurement noise due to the inaccuracy of gps.
+
+belief
+
+   as we said, the state $x_t$ is unobservable. all we can do is maintain
+   a belief $bel(x_t)$, given the observations. the process of determining
+   the belief from observations is called filtering or state estimation
+   (cf. [norvig, p. 570]). in mathematical terms, the belief is a
+   id203 distribution over all possible states, conditioned by the
+   observations so far: $bel(x_t) := p(x_t \mid e_{1:t})$, where we use
+   $e_{1:t}$ as a short-hand notation for $(e_1, e_2,    , e_t)$.
+
+   we also define $\overline{bel}(x_t) := p(x_t \mid e_{1:t   1})$, which is
+   the projected or predicted belief, i.e. the id203 distribution
+   over all the possible states at time $t$, given only past observations.
+
+   as we can see, the number of measurements we have to condition by in
+   order to determine the belief increases unboundedly over time. this
+   means that we would have to store all the measurements, which is
+   impossible with a limited memory. additionally, the time needed to
+   compute the belief would increase unboundedly, since we have to
+   consider all the measurements so far. if we want to have a
+   computationally tractable method for calculating the belief at
+   deliberate points in time, we have to find a function $f$ such that
+   $bel(x_{t+1}) = f(bel(x_t), e_{t+1})$. this means that in order to
+   calculate the belief at a certain time step, we take the belief of the
+   previous time step, project it to the new time step and then update it
+   in accordance with new evidence. such a method is called recursive
+   estimation (cf. [norvig, p. 571]). the bayes filter is an algorithm for
+   doing this. but before we can formulate the algorithm and prove its
+   correctness, we have to specify how the world evolves over time and how
+   we interpret sensor input. also, as we will see in the next sections,
+   we have to make some assumptions about the system in order to arrive at
+   a recursive formulation.
+
+transition and sensor models
+
+   as stated in the introduction, realistic environments are
+   non-deterministic but stochastic     given a state $x_t$, we can not tell
+   what the state $x_{t+1}$ will be. regardless of that, we can tell how
+   likely each of the possible states $x_{t+1}$ is, given the state $x_t$.
+   in mathematical terms, we can specify the id155
+   distribution $p(x_{t+1} \mid x_t)$. we call this distribution the
+   transition model, since it is a model of how the environment
+   transitions from one time step to the next.
+
+   analogously, due to the partial observability of the environment (in
+   particular, the inaccuracy of the sensors), we cannot tell which state
+   causes exactly which sensor measurement, since there is always some
+   measurement noise. however, we can tell how likely each possible sensor
+   measurement $e_t$ is, given the state $x_t$. in mathematical terms, we
+   can specify $p(e_t \mid x_t)$, which we call the sensor model. given a
+   sensor measurement $e_t$, it tells us how likely each state is to cause
+   this measurement.
+
+   we will see examples for transition and sensor models in the following
+   sections.
+
+the markov assumption
+
+   in order to be able to arrive at a recursive formula for maintaining
+   the belief $bel(x_t)$, we have to make so-called markov assumptions
+   about both the transition model and the sensor model. we will see in
+   the next section that these two assumptions allow us to arrive at a
+   method to calculate the belief recursively.
+
+   for the transition model, the markov assumption states, that, given the
+   state $x_t$, all states $x_{t+j}$ with $j \geq 1$ are conditionally
+   independent of $x_{0:t   1}$ (cf. [degroot, p. 188, 189]). this gives us
+   $p(x_{t+1} \mid x_{0:t}) = p(x_{t+1} \mid x_t)$. intuitively speaking,
+   this assumption means that if we know the state at a certain point in
+   time, then no previous states give us additional knowledge about the
+   future.
+
+   we also make a sensor markov assumption as follows: $p(e_{t+1} \mid
+   x_{t+1}, e_{1:t}) = p(e_{t+1} \mid x_{t+1})$. this means that if we
+   know the state $x_{t+1}$, then no sensor measurements from the past
+   tell us anything more about the probabilities of each possible sensor
+   measurement $e_{t+1}$.
+
+the bayes filter algorithm
+
+   as we stated in section 3.2, we want a method to calculate
+   $bel(x_{t+1})$ from $bel(x_t)$ and $e_{t+1}$. we can do this in two
+   consecutive steps first, we calculate the projected belief
+   $\overline{bel}(x_{t+1})$ from $bel(x_t)$. this step is usually called
+   projection: we project the belief of the previous time step to the
+   current time step. we can do this in the following way (a proof for
+   this statement can be found in [norvig, p. 572]):
+
+   $$
+   \overline{bel}(x_{t+1}) = \int_{x_t} p(x_{t+1} \mid x_t) bel(x_t)
+   $$
+
+   the process of calculating $bel(x_{t+1})$ from
+   $\overline{bel}(x_{t+1})$ is called update: we update the projected
+   belief with the new evidence $e_{t+1}$. this can be done as follows:
+
+   $$
+   bel(x_{t+1}) = \eta p(e_{t+1} \mid x_{t+1}) \overline{bel}(x_{t+1})
+   $$
+
+   in this formula, $p(e_{t+1} \mid x_{t+1})$ can be obtained from the
+   sensor model. $\eta$ has the function of a normalizing constant. this
+   means that we do not need to calculate it directly from its definition.
+   in the discrete case, it follows from the fact that the probabilities
+   need to sum up to 1. in the continuous case, it follows from the fact
+   that the id203 density function needs to integrate to 1 (cf.
+   [degroot, p. 105]).
+
+   for the recursive formulation to work, we need a prior belief
+   $bel(x_0)$. most commonly, we have no knowledge beforehand, in which
+   case we should assign equal probabilities to each possible state. if we
+   know the state at the beginning and need to keep track of it, we should
+   use a point mass distribution. if we only have partial knowledge, we
+   could use some other distribution.
+
+   the bayes filter algorithm for calculating $bel(x_{t+1})$ from
+   $bel(x_t)$ and $e_t$ can now be formulated as follows (cf. [thrun, p.
+   27]):
+
+     continuous bayes filter
+     * $\overline{bel}(x_{t+1}) = \int_{x_t} p(x_{t+1} \mid x_t) bel(x_t)$
+     * $bel(x_{t+1}) = \eta p(e_{t+1} \mid x_{t+1})
+       \overline{bel}(x_{t+1})$
+
+   under the assumption that $bel(x_0)$ has been initialized correctly,
+   the correctness of this algorithm follows by induction, since we
+   already showed that $bel(x_{t+1})$ is correctly calculated from
+   $bel(x_t)$.
+
+   in principle, we now have a method to calculate the belief at each time
+   step. the question arises, however, how we should represent the belief
+   distribution. for finite state spaces, we can simply replace the
+   integral with a sum over all possible $x_t$ and represent the belief as
+   a finite table. we call this modified version the discrete bayes filter
+   (cf. [thrun, pp. 86, 87]). we will see a concrete example for the
+   discrete bayes filter in the next section.
+
+     discrete bayes filter
+     * $\overline{bel}(x_{t+1}) = \sum{x_t} p(x_{t+1} \mid x_t) bel(x_t)$
+     * $bel(x_{t+1}) = \eta p(e_{t+1} \mid x_{t+1}) bel(x_{t+1})$
+
+   it becomes more difficult if we consider continuous state spaces. in
+   this case, the belief becomes a id203 density function (from now
+   on abbreviated p.d.f.) over all possible states. the general way to
+   represent such a function is by a symbolic formula. the problem arises
+   that an exact representation of a formula for the belief function
+   could, in the general case, grow without bounds over time (cf. [norvig,
+   p. 585]). additionally, the integration step becomes more and more
+   complex and some p.d.f.s are not guaranteed to be integrable offhand.
+   we are going to see three different solutions to this problem, all of
+   which introduce a different way of representing the belief
+   distribution: the histogram filter, the kalman filter and the particle
+   filter.
+
+   continue with [19]part ii: the histogram filter.
+
+references
+
+   [norvig] peter norvig, stuart russel (2010) artificial intelligence     a
+   modern approach. 3rd edition, prentice hall international
+
+   [thrun] sebastian thrun, wolfram burgard, dieter fox (2005)
+   probabilistic robotics
+
+   [negenborn] rudy negenborn (2003) robot localization and kalman filters
+
+   [degroot] morris degroot, mark schervish (2012) id203 and
+   statistics. 4th edition, addison-wesley
+
+   [bessiere] pierre bessire, christian laugier, roland siegwart (2008)
+   probabilistic reasoning and decision making in sensory-motor systems
+
+share this:
+
+     * [20]click to share on twitter (opens in new window)
+     * [21]click to share on facebook (opens in new window)
+     * [22]click to share on google+ (opens in new window)
+     * [23]click to share on skype (opens in new window)
+     * [24]click to share on linkedin (opens in new window)
+     * [25]click to print (opens in new window)
+     * [26]click to share on pocket (opens in new window)
+     * [27]click to share on tumblr (opens in new window)
+     * [28]click to share on reddit (opens in new window)
+     * [29]click to share on telegram (opens in new window)
+     * [30]click to share on pinterest (opens in new window)
+     * [31]click to share on whatsapp (opens in new window)
+     *
+
+related
+
+   by [32]daniel| 2017-09-15t12:15:15+00:00 september 9th,
+   2017|[33]artificial intelligence, [34]machine learning, [35]robotics,
+   [36]self-driving cars|[37]1 comment
+
+stay updated
+
+   subscribe to the mailing list and get updated about new blog posts by
+   email.
+   ____________________
+   [ ] i consent to my submitted data being collected via this form*
+   sign up now
+
+   thank you for subscribing.
+
+   something went wrong.
+
+   i respect your privacy and take protecting it seriously
+
+follow me on twitter
+
+   [38]my tweets
+
+   copyright 2017 daniel sabinasz
+   [39]facebook[40]twitter[41]email[42]rss[43]linkedin[44]tumblr
+
+references
+
+   visible links
+   1. http://www.deepideas.net/feed/
+   2. http://www.deepideas.net/comments/feed/
+   3. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/feed/
+   4. http://www.deepideas.net/wp-json/oembed/1.0/embed?url=http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/
+   5. http://www.deepideas.net/wp-json/oembed/1.0/embed?url=http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/&format=xml
+   6. http://fb.me/deepideas.net
+   7. https://twitter.com/deepideas_net
+   8. mailto:daniel@sabinasz.net
+   9. http://www.deepideas.net/feed/
+  10. https://www.linkedin.com/in/daniel-sabinasz-7b220b100/
+  11. https://deepideas.tumblr.com/
+  12. http://www.deepideas.net/
+  13. http://www.deepideas.net/
+  14. http://www.deepideas.net/list-of-articles/
+  15. http://www.deepideas.net/about-me/
+  16. http://www.deepideas.net/why-chinese-room-argument-flawed/
+  17. http://www.deepideas.net/robot-localization-histogram-filter/
+  18. https://i1.wp.com/www.deepideas.net/wp-content/uploads/2017/09/self_driving_car.jpg?fit=1000,350
+  19. http://www.deepideas.net/robot-localization-histogram-filter/
+  20. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=twitter
+  21. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=facebook
+  22. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=google-plus-1
+  23. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=skype
+  24. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=linkedin
+  25. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/#print
+  26. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=pocket
+  27. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=tumblr
+  28. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=reddit
+  29. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=telegram
+  30. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/?share=pinterest
+  31. https://api.whatsapp.com/send?text=robot localization i: recursive bayesian estimation http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/
+  32. http://www.deepideas.net/author/daniel/
+  33. http://www.deepideas.net/category/artificial-intelligence/
+  34. http://www.deepideas.net/category/artificial-intelligence/machine-learning/
+  35. http://www.deepideas.net/category/artificial-intelligence/robotics/
+  36. http://www.deepideas.net/category/artificial-intelligence/robotics/self-driving-cars/
+  37. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/#comments
+  38. https://twitter.com/deepideas_net
+  39. http://fb.me/deepideas.net
+  40. https://twitter.com/deepideas_net
+  41. mailto:daniel@sabinasz.net
+  42. http://www.deepideas.net/feed/
+  43. https://www.linkedin.com/in/daniel-sabinasz-7b220b100/
+  44. https://deepideas.tumblr.com/
+
+   hidden links:
+  46. http://www.deepideas.net/robot-localization-recursive-bayesian-estimation/
+  47. https://www.facebook.com/deepideas.net/

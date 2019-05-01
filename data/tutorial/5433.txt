@@ -1,0 +1,600 @@
+   [1]ideas [2]learning platform [3]conferences [4]shop
+   search ____________________ submit
+   [5]sign in
+
+on our radar
+
+   [6]ai
+   [7]data
+   [8]economy
+   [9]operations
+   [10]software architecture
+   [11]software engineering
+   [12]web programming
+   [13]see all
+
+   [14]ideas [15]learning platform [16]conferences [17]shop search
+   ____________________ submit
+
+on our radar
+
+   [18]ai
+   [19]data
+   [20]economy
+   [21]operations
+   [22]software architecture
+   [23]software engineering
+   [24]web programming
+   [25]see all
+
+   [26]ai
+
+               using tensorflow to generate images with pixelid56s
+
+   generate new images and fix old ones using neural networks.
+
+   by [27]phillip kuznetsov[28]noah meyer golmant
+
+   september 6, 2017
+
+   montage montage (source: [29]mary-lynn on flickr)
+
+   check out the accompanying [30]github repo with the python code and
+   [31]jupyter notebook for the article.
+
+   [32]pixel recurrent neural networks (pixelid56s) combine a number of
+   techniques to generate natural-looking images using neural networks.
+   pixelid56s model the distribution of image data sets using several new
+   techniques, including a novel spatial lstm cell, and sequentially infer
+   the pixels in an image to (a) generate novel images or (b) predict
+   unseen pixels to complete an occluded image.
+   images produced by a pixelid56 model trained on the 32x32 id163 data
+   set figure 1. images produced by a pixelid56 model trained on the 32x32
+   id163 data set. source:    [33]pixel recurrent neural networks,    used
+   with permission.
+
+   the images in figure 1 were produced by a pixelid56 model trained on the
+   32x32 id163 data set. in this article, we will create a pixelid56 to
+   generate images from the mnist data set. you can follow along in the
+   article, or check out our [34]jupyter notebook.
+
+   before we get started, you   ll need to [35]install tensorflow (tf) for
+   python. check the instructions, but for most people, it should be as
+   easy as running:
+pip install tensorflow
+
+   if you haven   t had a chance to work with tf before, we recommend the
+   o   reilly article, [36]hello, tensorflow! building and training your
+   first tensorflow model.
+
+generative image models and prior work
+
+   we mentioned earlier that the pixelid56 is a generative model. a
+   generative model attempts to model the joint id203 distribution
+   of the data we feed in. in the context of pixelid56, this basically
+   means we want to model all of the possible realistic images as
+   compactly as possible. doing so would allow us to generate novel images
+   from this distribution. modeling the distribution of natural images is
+   a landmark problem in machine learning. several other neural network
+   architectures have attempted to achieve this task, including generative
+   adversarial networks ([37]a. redford, et. al.), variational
+   autoencoders ([38]y. pu, et. al.), and spatial id137 ([39]l.
+   theis, et. al).
+
+pixelid56 generative model
+
+   to model the distribution of images, pixelid56s make the following
+   assumption about pixel intensities: the intensity value of a pixel is
+   dependent on all pixels traversed before it. the image is traversed
+   left-to-right and top-to-bottom along the image.
+   the intensity value of a pixel is dependent on all pixels traversed
+   before it figure 2. the intensity value of a pixel is dependent on all
+   pixels traversed before it   the image is traversed left-to-right and
+   top-to-bottom along the image. source:    [40]pixel recurrent neural
+   networks,    used with permission.
+
+   in an \(nxn\) image, we have that the intensity for pixel \(x_i\) is
+   conditioned on all preceding pixels: \(x_j, 0 \lt j \gt i\), or in
+   other terms:
+   $$x_i \sim p(x_i | x_1, x_2, \cdots, x_{i-1})$$
+
+   we calculate the joint id203 of an image x by multiplying all
+   conditional probabilities of the image togther, as so:
+   $$p(x) = \prod_{i=1}^{n^2} p(x_i | x_1, \cdots, x_{i-1})$$
+
+   we learn these conditional probabilities through a series of special
+   convolutions that capture this context around a given pixel.
+
+diagonal bilstms and convolutions
+
+   lstm cells used by the main variant of pixelid56s capture this
+   conditional dependency across dozens or hundreds of pixels. in the
+   [41]paper [42]by google deepmind, the authors implement a novel spatial
+   bi-directional lstm cell, the diagonal bilstm, to capture the desired
+   spatial context of a pixel.
+   the diagonal bilstm figure 3. the diagonal bilstm captures the desired
+   spatial context of a pixel. source:    [43]pixel recurrent neural
+   networks,    used with permission.
+
+   to aid in capturing context before the first layer of the network, we
+   mask the input image so that for a given pixel \(x_i\) we are
+   predicting, we set the values of all pixels yet to be traversed, \(x_j,
+   j \ge i,\) to 0, to prevent them from contributing to the overall
+   prediction. in subsequent lstm layers, we perform a similar mask, but
+   no longer set \(x_i\) to 0 in the mask. we then skew the image, so that
+   each row is offset by one from the row above it, as shown above. we can
+   then perform a series of k x 1 convolutions on the skewed image using
+   the diagonal bilstm cells.
+
+   this enables us to efficiently capture the preceding pixels in the
+   image to predict the upcoming one. lstm cells also capture a
+   potentially unbounded dependency range between pixels in their
+   receptive field. however, this comes at a high computational cost, as
+   the lstm requires    unrolling    a layer many steps into the future. this
+   begs the question: can we do something more efficient?
+
+a faster method   computing many features at once
+
+   a faster alternative architecture involves replacing the lstm cell with
+   a series of convolutions to capture a large, but bounded receptive
+   field. this allows us to compute the features contained within the
+   receptive field at once, and avoids the computational cost of
+   sequentially computing each cell   s hidden state.
+
+   we can implement the convolution operation like so, performing the
+   masks as needed (access the notebook for this article [44]here):
+def conv2d(
+    inputs,
+    num_outputs,
+    kernel_shape, # [kernel_height, kernel_width]
+    mask_type, # none, "a" or "b",
+    strides=[1, 1], # [column_wise_stride, row_wise_stride]
+    padding="same",
+    activation_fn=none,
+    weights_initializer=tf.contrib.layers.xavier_initializer(),
+    weights_regularizer=none,
+    biases_initializer=tf.zeros_initializer,
+    biases_regularizer=none,
+    scope="conv2d"):
+  with tf.variable_scope(scope):
+    batch_size, height, width, channel = inputs.get_shape().as_list()
+    kernel_h, kernel_w = kernel_shape
+    stride_h, stride_w = strides
+
+    center_h = kernel_h // 2
+    center_w = kernel_w // 2
+
+   here, we use the xavier weights initialization scheme ([45]x. glorot
+   and y. bengio) to create the convolution kernel.
+    weights_shape = [kernel_h, kernel_w, channel, num_outputs]
+    weights = tf.get_variable("weights", weights_shape,
+      tf.float32, weights_initializer, weights_regularizer)
+
+   next, we apply the mask to the image to restrict the focus of the
+   kernel to the current context.
+    if mask_type is not none:
+      mask = np.ones(
+        (kernel_h, kernel_w, channel, num_outputs), dtype=np.float32)
+
+      mask[center_h, center_w+1: ,: ,:] = 0.
+      mask[center_h+1:, :, :, :] = 0.
+
+      if mask_type == 'a':
+        mask[center_h,center_w,:,:] = 0.
+
+      weights *= tf.constant(mask, dtype=tf.float32)
+      tf.add_to_collection('conv2d_weights_%s' % mask_type, weights)
+
+   finally, we apply the convolution to the image and apply an optional
+   activation function like relu.
+    outputs = tf.nn.conv2d(inputs,
+        weights, [1, stride_h, stride_w, 1], padding=padding, name='outputs')
+    tf.add_to_collection('conv2d_outputs', outputs)
+
+    if biases_initializer != none:
+      biases = tf.get_variable("biases", [num_outputs,],
+          tf.float32, biases_initializer, biases_regularizer)
+      outputs = tf.nn.bias_add(outputs, biases, name='outputs_plus_b')
+
+    if activation_fn:
+      outputs = activation_fn(outputs, name='outputs_with_fn')
+    return outputs
+
+generating images with mnist
+
+   for this article, we will train our pixelid56 on the mnist data set.
+   then, we   ll draw from the
+
+   pixelid56s model to generate handwritten digits that don   t appear in our
+   data set. you can download the [46]data set here   however, if you use
+   the load_data() function from [47]utils.py, you won   t have to worry
+   about this. we   ll also demonstrate the pixelid56s ability to complete a
+   partially occluded image by predicting the rest of the pixels.
+
+features of the network
+
+   in place of diagonal bilstm layers, we use the convolutions described
+   earlier.
+
+   in addition to the convolutional layers, pixelid56s also makes use of
+   residual connections ([48]he, et. al.). residual connections
+   effectively copy the output from early layers in the network and
+   concatenate this with the output of a deeper layer. this helps preserve
+   information learned earlier in the model. for the convolutional layers
+   in our model, these residual connections look something like this:
+   residual connections in the convolutional layers figure 4. residual
+   connections in the convolutional layers. source:    [49]pixel recurrent
+   neural networks,    used with permission.
+
+   the residual connections allow our model to increase in depth and still
+   gain accuracy, while simultaneously making the model easier to
+   optimize.
+
+   the final layer applies a sigmoid activation function on the input.
+   this layer outputs a value between 0 and 1 that is the resulting
+   normalized pixel intensity.
+
+   with this in mind, the final architecture looks like this:
+   tensorflow graph of our layers figure 5. tensorflow graph of our
+   layers, generated using [50]tensorboard. credit: phillip kuznetsov and
+   noah golmant.
+
+   using this architecture and the convolution operations described above,
+   we can construct the network.
+def pixelid56(height, width, channel, params):
+    """
+    args
+    height, width, channel - the dimensions of the input
+    params the hyperparameters of the network
+    """
+    input_shape = [none, height, width, channel]
+    inputs = tf.placeholder(tf.float32, input_shape)
+
+   here we apply a 7x7 convolution to the image while applying the initial
+   a mask that removes the self-connection to the pixel being predicted.
+    # input of main recurrent layers
+    scope = "conv_inputs"
+    conv_inputs = conv2d(inputs, params.hidden_dims, [7, 7], "a", scope=scope)
+
+   next, we construct a series of 1x1 convolutions to apply to the image.
+    # main recurrent layers
+    last_hid = conv_inputs
+    for idx in xrange(params.recurrent_length):
+        scope = 'conv%d' % idx
+        last_hid = conv2d(last_hid, 3, [1, 1], "b", scope=scope)
+        print("building %s" % scope)
+
+   then, we construct another series of 1x1 convolutions using relu
+   activation.
+    # output recurrent layers
+    for idx in xrange(params.out_recurrent_length):
+        scope = 'conv_out%d' % idx
+        last_hid = tf.nn.relu(conv2d(last_hid, params.out_hidden_dims, [1, 1], "
+b", scope=scope))
+        print("building %s" % scope)
+
+   finally, we apply one final convolution layer with a sigmoid activation
+   to produce a series of pixel predictions for the image.
+    conv2d_out_logits = conv2d(last_hid, 1, [1, 1], "b", scope='conv2d_out_logit
+s')
+    output = tf.nn.sigmoid(conv2d_out_logits)
+    return inputs, output, conv2d_out_logits
+inputs, output, conv2d_out_logits = pixelid56(height, width, channel, p)
+
+training procedure
+
+   to train the network, we supply mini-batches of binarized images and
+   predict each pixel in parallel using our network. we minimize the cross
+   id178 between our predictions and the binary pixel values of the
+   images. we optimize this objective using an rmsprop optimizer with a
+   learning rate of 0.001, selected using grid search. the google deepmind
+   paper lists rmsprop optimization as the empirically most effective
+   optimizer through all experiments. in practice, we find that clipping
+   the gradients helps stabilize learning. we use a batch size of 100 and
+   16 hidden units for each convolution.
+
+   let   s optimize the network we constructed above using this procedure:
+loss = tf.reduce_mean(tf.nn.sigmoid_cross_id178_with_logits(conv2d_out_logits,
+ inputs, name='loss'))
+
+optimizer = tf.train.rmspropoptimizer(p.learning_rate)
+grads_and_vars = optimizer.compute_gradients(loss)
+
+new_grads_and_vars = \
+    [(tf.clip_by_value(gv[0], -p.grad_clip, p.grad_clip), gv[1]) for gv in grads
+_and_vars]
+optim = optimizer.apply_gradients(new_grads_and_vars)
+
+generation and occlusion completion
+
+   after training the network, we can use the resulting model to generate
+   sample images using the generative model we   ve described. we can also
+   infer the remaining pixel values in a partially occluded image to
+   complete it. the code to do so is fairly simple:
+def predict(sess, images, inputs, output):
+    return sess.run(output, {inputs: images})
+
+def generate(sess, height, width, inputs, output):
+    samples = np.zeros((100, height, width, 1), dtype='float32')
+
+    for i in range(height):
+        for j in range(width):
+            next_sample = binarize(predict(sess, samples, inputs, output))
+            samples[:, i, j] = next_sample[:, i, j]
+
+    return samples
+
+def generate_occlusions(sess, height, width, inputs, output):
+    samples = occlude(images, height, width)
+    starting_position = [0,height//2]
+    for i in range(starting_position[1], height):
+        for j in range(starting_position[0], width):
+            next_sample = binarize(predict(sess, samples, inputs, output))
+            samples[:, i, j] = next_sample[:, i, j]
+    return samples
+
+   we can complete occluded images by using the same generative procedure,
+   only modifying the starting point.
+   results on generating occluded images figure 6. results on generating
+   occluded images. the first panel shows the digits prior to the
+   occlusion. the second panel demonstrates what an occluded image looks
+   like. the third panel demonstrates the neural network   s best guesses
+   for what the rest of the occluded image should look like. credit:
+   phillip kuznetsov and noah golmant.
+
+   as you can see, the algorithm can successfully finish an occluded
+   image. clearly, there are some discrepancies in the generated numbers
+   and the original numbers. for example, the 7 in the top left becomes a
+   9 in the generated image. however, these mistakes are not
+   unreasonable   the curve that remains after the occlusion could
+   arbitrarily belong to several different handwritten digits.
+
+next steps
+
+   the pixelid56 framework provides a useful architecture for generating
+   modeling. although we implement a single color channel version for
+   mnist, google deepmind   s original paper discusses a slightly more
+   sophisticated architecture that can deal with multi-channel color
+   images. this system can model more complex data sets like [51]cifar10
+   and [52]id163. the tensorflow magenta team has an [53]excellent
+   review that explains the mathematics behind this algorithm at a higher
+   level than the paper.
+
+   what we   ve shown here is a benchmark with a very simple data set using
+   a relatively fast model that can learn the distribution of mnist
+   images. next steps might include extending this model to work with
+   images composed of multiple color channels, like cifar10.
+
+   another option is to implement the original diagonal bilstm cell in
+   place of the faster convolutions. this implementation is much more
+   computationally expensive   even on a state-of-the-art gpu. we found in
+   practice that the convolution-based architecture ran approximately 20x
+   faster than the diagonal bilstm one.
+
+   further work on the convolution-based architecture, pixelid98, can be
+   found in the paper [54]conditional image generation with pixelid98
+   decoders. openai recently went a step further and [55]open sourced a
+   repo that implements a computationally faster version of the above
+   paper using several significant architecture improvements.
+
+   don   t forget to check out our [56]notebook and repo to play around with
+   this code yourself! as a note, if you don   t own a gpu, you can rent one
+   from aws for cheap. phillip wrote a [57]guide on how to start an aws
+   ec2 instance for deep learning   including how to set up a jupyter
+   notebook server.
+
+   this post is a collaboration between o'reilly and [58]tensorflow.
+   [59]see our statement of editorial independence.
+   article image: montage (source: [60]mary-lynn on flickr).
+   tags: [61]all about tensorflow
+
+   share
+    1. [62]tweet
+    2.
+    3.
+     __________________________________________________________________
+
+[63]phillip kuznetsov
+
+   phillip is currently a senior studying eecs at uc berkeley. he
+   founded machine learning @ berkeley, an organization on the berkeley
+   campus devoted to delivering quality machine learning educational
+   content, engaging students in machine learning research, and having
+   members lead projects with industry partners. through the organization,
+   he's started numerous educational initiatives, including the data
+   science decal   a course teaching the fundamentals of data science and
+   machine learning. his current research interests lie in adversarial
+   machi...
+   [64]more
+
+[65]noah meyer golmant
+
+   noah is a third-year undergraduate studying mathematics and computer
+   science at uc berkeley. he is also a member of machine learning @
+   berkeley.
+   [66]more
+     __________________________________________________________________
+
+   [67]bots landscape.
+
+   [68]ai
+
+[69]infographic: the bot platform ecosystem
+
+   by [70]jon bruner
+
+   a look at the artificial intelligence and messaging platforms behind
+   the fast-growing chatbot community
+
+   video
+   [71]vertical forest, milan.
+
+   [72]ai
+
+[73]evolve ai
+
+   by [74]naveen rao
+
+   naveen rao explains how intel nervana is evolving the ai stack from
+   silicon to the cloud.
+
+   [75]welcome sign at o'reilly ai conference 2016
+
+   [76]ai
+
+[77]highlights from the o'reilly ai conference in new york 2016
+
+   by [78]mac slocum
+
+   watch highlights covering artificial intelligence, machine learning,
+   intelligence engineering, and more. from the o'reilly ai conference in
+   new york 2016.
+
+   video
+   [79]close up of uber's self driving car in pittsburgh.
+
+   [80]ai
+
+[81]how ai is propelling driverless cars, the future of surface transport
+
+   by [82]shahin farshchi
+
+   shahin farshchi examines role artificial intelligence will play in
+   driverless cars.
+
+about us
+
+     * [83]our company
+     * [84]teach/speak/write
+     * [85]careers
+     * [86]customer service
+     * [87]contact us
+
+site map
+
+     * [88]ideas
+     * [89]learning
+     * [90]topics
+     * [91]all
+
+     *
+     *
+     *
+     *
+     *
+
+      2019 o'reilly media, inc. all trademarks and registered trademarks
+   appearing on oreilly.com are the property of their respective owners.
+   [92]terms of service     [93]privacy policy     [94]editorial independence
+
+   animal
+
+   iframe: [95]https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+references
+
+   visible links
+   1. https://www.oreilly.com/ideas
+   2. https://learning.oreilly.com/
+   3. http://www.oreilly.com/conferences/
+   4. http://shop.oreilly.com/
+   5. https://www.oreilly.com/sign-in.html
+   6. https://www.oreilly.com/topics/ai
+   7. https://www.oreilly.com/topics/data
+   8. https://www.oreilly.com/topics/economy
+   9. https://www.oreilly.com/topics/operations
+  10. https://www.oreilly.com/topics/software-architecture
+  11. https://www.oreilly.com/topics/software-engineering
+  12. https://www.oreilly.com/topics/web-programming
+  13. https://www.oreilly.com/topics
+  14. https://www.oreilly.com/ideas
+  15. https://learning.oreilly.com/
+  16. http://www.oreilly.com/conferences/
+  17. http://shop.oreilly.com/
+  18. https://www.oreilly.com/topics/ai
+  19. https://www.oreilly.com/topics/data
+  20. https://www.oreilly.com/topics/economy
+  21. https://www.oreilly.com/topics/operations
+  22. https://www.oreilly.com/topics/software-architecture
+  23. https://www.oreilly.com/topics/software-engineering
+  24. https://www.oreilly.com/topics/web-programming
+  25. https://www.oreilly.com/topics
+  26. https://www.oreilly.com/topics/ai
+  27. https://www.oreilly.com/people/phillip-kuznetsov
+  28. https://www.oreilly.com/people/noah-meyer-golmant
+  29. https://www.flickr.com/photos/mary-lynn/131160735
+  30. https://github.com/philkuz/pixelid56
+  31. https://github.com/philkuz/pixelid56/blob/master/pixelid56.ipynb
+  32. https://arxiv.org/pdf/1601.06759v3.pdf
+  33. https://arxiv.org/pdf/1601.06759v3.pdf
+  34. https://github.com/philkuz/pixelid56/blob/master/pixelid56.ipynb
+  35. https://www.tensorflow.org/install/
+  36. https://www.oreilly.com/learning/hello-tensorflow
+  37. https://arxiv.org/abs/1511.06434
+  38. https://arxiv.org/abs/1609.08976
+  39. https://arxiv.org/abs/1506.03478v2
+  40. https://arxiv.org/pdf/1601.06759v3.pdf
+  41. https://arxiv.org/pdf/1601.06759v3.pdf
+  42. https://arxiv.org/pdf/1601.06759v3.pdf
+  43. https://arxiv.org/pdf/1601.06759v3.pdf
+  44. https://github.com/philkuz/pixelid56/blob/master/draftredux.ipynb
+  45. http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+  46. http://yann.lecun.com/exdb/mnist/
+  47. https://github.com/philkuz/pixelid56/blob/master/utils.py
+  48. https://arxiv.org/abs/1512.03385
+  49. https://arxiv.org/pdf/1601.06759v3.pdf
+  50. https://www.tensorflow.org/get_started/summaries_and_tensorboard
+  51. https://www.google.com/url?q=https://www.cs.toronto.edu/~kriz/cifar.html&sa=d&ust=1487746033540000&usg=afqjcnhaffjak4dukpoqpn5i1abnyth1cg
+  52. http://www.image-net.org/
+  53. https://github.com/tensorflow/magenta/blob/master/magenta/reviews/pixelid56.md
+  54. https://arxiv.org/pdf/1606.05328v2.pdf
+  55. https://github.com/openai/pixel-id98
+  56. https://github.com/philkuz/pixelid56/blob/master/pixelid56.ipynb
+  57. https://github.com/philkuz/deepaws
+  58. https://www.tensorflow.org/
+  59. http://www.oreilly.com/about/editorial_independence.html
+  60. https://www.flickr.com/photos/mary-lynn/131160735
+  61. https://www.oreilly.com/tags/all-about-tensorflow
+  62. https://twitter.com/share
+  63. https://www.oreilly.com/people/phillip-kuznetsov
+  64. https://www.oreilly.com/people/phillip-kuznetsov
+  65. https://www.oreilly.com/people/noah-meyer-golmant
+  66. https://www.oreilly.com/people/noah-meyer-golmant
+  67. https://www.oreilly.com/ideas/infographic-the-bot-platform-ecosystem
+  68. https://www.oreilly.com/topics/ai
+  69. https://www.oreilly.com/ideas/infographic-the-bot-platform-ecosystem
+  70. https://www.oreilly.com/people/b1d73-jon-bruner
+  71. https://www.oreilly.com/ideas/evolve-ai
+  72. https://www.oreilly.com/topics/ai
+  73. https://www.oreilly.com/ideas/evolve-ai
+  74. https://www.oreilly.com/people/14d38-naveen-rao
+  75. https://www.oreilly.com/ideas/keynotes-from-ai-new-york-2016
+  76. https://www.oreilly.com/topics/ai
+  77. https://www.oreilly.com/ideas/keynotes-from-ai-new-york-2016
+  78. https://www.oreilly.com/people/0d2c1-mac-slocum
+  79. https://www.oreilly.com/ideas/how-ai-is-propelling-driverless-cars-the-future-of-surface-transport
+  80. https://www.oreilly.com/topics/ai
+  81. https://www.oreilly.com/ideas/how-ai-is-propelling-driverless-cars-the-future-of-surface-transport
+  82. https://www.oreilly.com/people/c7521-shahin-farshchi
+  83. http://oreilly.com/about/
+  84. http://oreilly.com/work-with-us.html
+  85. http://oreilly.com/careers/
+  86. http://shop.oreilly.com/category/customer-service.do
+  87. http://shop.oreilly.com/category/customer-service.do
+  88. https://www.oreilly.com/ideas
+  89. https://www.oreilly.com/topics/oreilly-learning
+  90. https://www.oreilly.com/topics
+  91. https://www.oreilly.com/all
+  92. http://oreilly.com/terms/
+  93. http://oreilly.com/privacy.html
+  94. http://www.oreilly.com/about/editorial_independence.html
+  95. https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+   hidden links:
+  97. https://www.oreilly.com/
+  98. https://www.facebook.com/oreilly/
+  99. https://twitter.com/oreillymedia
+ 100. https://www.youtube.com/user/oreillymedia
+ 101. https://plus.google.com/+oreillymedia
+ 102. https://www.linkedin.com/company/oreilly-media
+ 103. https://www.oreilly.com/

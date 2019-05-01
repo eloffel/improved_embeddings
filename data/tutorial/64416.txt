@@ -1,0 +1,359 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]towards data science
+     * [9]data science
+     * [10]machine learning
+     * [11]programming
+     * [12]visualization
+     * [13]ai
+     * [14]data journalism
+     * [15]contribute
+     __________________________________________________________________
+
+deep neural network implemented in pure sql over bigquery
+
+   [16]go to the profile of harisankar haridas, phd
+   [17]harisankar haridas, phd (button) blockedunblock (button)
+   followfollowing
+   mar 13, 2018
+   [1*vkrnzc8jhk0mdrdosfjiha.jpeg]
+   [0*elgkxnqyq6e07jgl.]
+
+   in this post, we   ll implement a basic deep neural network with one
+   hidden layer (and relu and softmax id180) purely in sql.
+   the end-to-end steps for neural network training including the forward
+   pass and back-propagation will be implemented as a single sql query on
+   bigquery. as it runs on bigquery, in effect we are performing
+   distributed neural network training on 100s to 1000s of servers. sounds
+   cool! right ?
+
+   that said, please note that this is a fun project to test out the
+   limits of sql and bigquery and to look at neural network training from
+   a declarative data transformation perspective. this was done without
+   any practical application in mind, though i   ll be discussing some
+   practical research implications towards the end. let   s get started.
+
+   we   ll start with a simple neural network-based classifier. it has an
+   input dimension of 2 and a binary output. we   ll have a hidden layer
+   with a dimension of 2 and the relu activation function. the output
+   layer will have a two dimensional output with a softmax function in the
+   end. the steps we   ll follow in implementing the network will be an
+   sql-based version of the python example shown in karpathy   s cs231n
+   [18]tutorial.
+
+model
+
+   the model has the following parameters:
+
+   input-to-hidden
+     * w: 2x2 weight matrix (elements: w_00, w_01, w_10, w_11)
+     * b: 2x1 bias vector (elements: b_0, b_1)
+
+   hidden-to-output
+     * w2: 2x2 weight matrix (elements: w2_00, w2_01, w2_10, w2_11)
+     * b2: 2x1 bias vector (elements: b2_0, b2_1)
+
+   the training data is stored in a bigquery table with the columns x1 and
+   x2 having the input and y having the output as shown below (table name:
+   example_project.example_dataset.example_table).
+   [0*9gdqaaz8fg7e_trd.]
+
+   as mentioned earlier, we   ll implement the entire training as a single
+   sql query. the query will return the values of the parameters after the
+   training is completed. as you might have guessed, this will be a
+   heavily nested query. we   ll do step-by-step construction to prepare
+   this query. we   ll start with the innermost sub-query and then we   ll add
+   the nested outer layers one by one.
+
+forward pass
+
+   initially, we   ll assign random normal values for the weight parameters
+   w and w2 and zero values to the bias parameters b and b2. the random
+   values for w and w2 can be generated within sql itself. for simplicity,
+   we   ll generate these values externally and use within the sql query.
+   the inner sub-query for initializing the parameters is:
+
+   iframe: [19]/media/0e7956f3be95a587ae4e4ce03a5a7947?postid=f3ed245814d3
+
+   please note that the table
+   example_project.example_dataset.example_table already contains the
+   columns x1, x2 and y. the model parameters will be added as additional
+   columns in the result of the above query.
+
+   next, we   ll compute the hidden layer. we   ll denote the hidden layer
+   with a vector d having elements d0 and d1. we   ll need to perform the
+   matrix operation: d = np.maximum(0, np.dot(x, w) + b) where x denotes
+   the input vector (elements x1 and x2). this matrix operation involves
+   firstly multiplying x with the weights in w and then adding the bias
+   vector b. then the result is passed through the non-linear relu
+   activation function which just sets the negative values to 0. the
+   equivalent query in sql is:
+
+   iframe: [20]/media/0a6d7bf873ef97e6f6dbdc1074418d31?postid=f3ed245814d3
+
+   the above query adds two new columns d0 and d1 to the results of the
+   previous inner sub-query. the output of the above query is shown below.
+   [0*9-webnfnvm8hlhc1.]
+
+   this completes the input-to-hidden layer transformation. now we   ll
+   perform the hidden layer-to-output layer transformation.
+
+   first, we   ll compute the scores for the output layer. the formula is:
+   scores = np.dot(d, w2) + b2. then we   ll apply a softmax function on the
+   scores to obtain the predicted id203 of each class. the
+   equivalent inner sub-query in sql is:
+
+   iframe: [21]/media/8aee0e3f56951a21dda232cc0428ebae?postid=f3ed245814d3
+
+   this completes the forward pass of the neural network. next, we   ll do
+   back-propagation to adjust the model parameters based on the comparison
+   of the predicted output (probs) with the expected output (y).
+
+   first we   ll compute the aggregate loss resulting from the current
+   prediction. we   ll use the cross-id178 id168 to compute the
+   loss. we   ll first compute the negative log of the predicted
+   probabilities of the correct class in each example. cross-id178 loss
+   is nothing but the average of these values across all the instances in
+   x and y. the natural log is an [22]increasing function. hence, it is
+   intuitive to define the loss as the negative of the log of the
+   predicted id203 of the correct class. if the predicted
+   id203 of the correct class is high, loss will be low. conversely,
+   if the predicted id203 of the correct class is low, loss will be
+   high.
+
+   to reduce the chance of over-fitting, we   ll add l2 id173 too.
+   in the overall loss, we   ll include 0.5*reg*np.sum(w*w) +
+   0.5*reg*np.sum(w2*w2) where reg is a hyper-parameter. including this
+   function in the loss will penalize high magnitude values in the weight
+   vectors.
+
+   in the query, we   ll also count the number of training examples
+   (num_examples). this will be useful later when computing averages. the
+   query in sql to compute the overall loss is:
+
+   iframe: [23]/media/d94cb71ad6afc6c5bbf4d9d85cd254bb?postid=f3ed245814d3
+
+back-propagation
+
+   next, for back-propagation, we   ll compute the partial derivatives of
+   each of the parameters w.r.t the loss. we   ll use the chain rule to
+   compute this layer by layer starting with the last layer. first, we   ll
+   compute the gradients of the scores by using the derivatives of the
+   cross id178 and softmax functions. the query corresponding to this
+   is:
+
+   iframe: [24]/media/f9ff8be853bc014e6e5fbad4d295200d?postid=f3ed245814d3
+
+   recall that we computed the scores using scores = np.dot(d, w2) + b2.
+   hence, based on the derivatives of the scores (termed dscores), we can
+   compute the gradients of the hidden layer d and the model parameters w2
+   and b2. the corresponding query is:
+
+   iframe: [25]/media/bd87463109da9f3b0673ffab3450de7d?postid=f3ed245814d3
+
+   proceeding in a similar way, we know that d = np.maximum(0, np.dot(x,
+   w) + b). thus by using the derivative of d, we can compute the
+   derivatives of w and b. no point in computing the derivative of x as it
+   is not a model parameter or computed using any model parameter. the
+   query to compute the derivatives of w and b are:
+
+   iframe: [26]/media/dd929c5c53499fb592673fce55031727?postid=f3ed245814d3
+
+   finally, we   ll update the model parameters w, b, w2 and b2 using their
+   respective gradients. this can be computed by param -= learning_rate *
+   d_param where learning_rate is a parameter. an additional factor of
+   reg*weight will also be added in dw and dw2 to incorporate l2
+   id173 in the gradient computation. we   ll also remove the
+   temporary columns like dw_00, correct_logprobs etc. which we created in
+   the inner sub-queries and retain only the training data (columns x1, x2
+   and y) and the model parameters (weights and biases). the corresponding
+   query is:
+
+   iframe: [27]/media/bf28ef646c88dc1a88b5a58db6e5700b?postid=f3ed245814d3
+
+   this completes one iteration of forward pass and back-propagation. the
+   above query will provide the updated values of the weights and biases.
+   sample result is shown below:
+   [0*gyf1siikduqf-c9x.]
+
+   to do more training iterations, we   ll perform all the above steps
+   recursively. we can do this using a simple python function. the code is
+   available in [28]link. as we add more iterations, the query gets
+   heavily nested. the resulting query for performing 10 training
+   iterations is available in [29]link.
+
+   because of the heavy nesting and the complexity of the query, i ran
+   into multiple resource limits while trying to execute it in bigquery.
+   bigquery   s standard sql dialect is scaling better compared to its
+   legacy sql dialect. even with standard sql, for a dataset with 100k
+   instances, it is tough to perform more than 10 iterations. because of
+   the resource limits, we   ll evaluate this model on a simple decision
+   boundary, so that we   ll get a decent accuracy with a small number of
+   iterations.
+
+   we   ll use a simple dataset with inputs x1 and x2 which are sampled from
+   a normal distribution with mean 0 and variance 1. the binary output y
+   simply checks whether x1 + x2 is greater than zero or not. to train
+   faster within 10 iterations, we   ll use a high learning rate of 2.0
+   (note: such high value is not recommended in practice as the learning
+   could diverge). applying the above query with 10 iterations gives the
+   learned model parameters as shown below.
+   [0*eal4cdf_az20quzg.]
+
+   we   ll store the result into a new table using bigquery   s    [30]save to
+   table    functionality. we can now check the accuracy on the training
+   data by performing only the forward pass and then comparing the
+   predicted and expected results. the query snippet for this is in
+   [31]link. we   re able to get an accuracy of 93% with 10 iterations
+   (accuracy is similar on a separate test dataset).
+   [0*elgkxnqyq6e07jgl.]
+
+   if we can go till ~100 iterations, we   ll get an accuracy of more than
+   99%.
+
+optimizations
+
+   this concludes the fun project of implementing a deep neural network
+   using pure sql in bigquery. where do we go from here ? as we saw,
+   resource limitation is factor which limits the size of the dataset and
+   the number of training iterations we could perform. other than hoping
+   that google will relax the resource limits, we could do multiple
+   optimizations to address this.
+     * we can create intermediate tables and multiple sql queries to
+       perform more iterations. for example, the result of the first 10
+       iterations can be stored in an intermediate table. the same
+       training query can now be applied on this intermediate table for
+       performing the next 10 iterations. thus in effect, we   ve performed
+       20 training iterations. this can be repeated multiple times to
+       perform a large number of iterations.
+     * instead of adding outer queries at each step, we could use
+       functions of functions whenever possible. for example, we can
+       compute both scores and probs in a single sub-query instead of 2
+       nested sub-queries.
+     * in the above example, i   ve retained all the intermediate columns
+       till the last outer query. some of them like correct_logprobs can
+       be removed earlier (though the sql engine might perform this
+       optimization automatically).
+     * application of user defined functions (udfs) can be explored. if
+       interested, you can check out a [32]project where bigquery udf is
+       used for model serving (however, training is not performed using
+       sql or udfs).
+
+implications
+
+   now let us look at the deeper implications of a distributed sql engine
+   in the context of deep learning. one limitation of warehouse sql
+   engines like bigquery and presto is that the query processing is
+   performed using cpus instead of gpus. it would be interesting to check
+   out the results with gpu-accelerated sql databases like blazingdb and
+   mapd. one straightforward approach to check out would be to perform
+   query and data distribution using a distributed sql engine and to
+   perform the local computations using a gpu accelerated database.
+
+   taking a step back, we can see that right now, performing distributed
+   deep learning is hard. a large body of research work spread over
+   decades has gone into distributed sql engines which resulted in
+   techniques for query planning, data partitioning, operator placement,
+   check-pointing, multi-query scheduling etc. some of it could be
+   incorporated in distributed deep learning. if you   re interested on
+   these lines, please have a look at this [33]paper for a general
+   research discussion on distributed databases and deep learning.
+
+   hope you had fun as i did! please share your comments and thoughts
+   below. i   ll be happy to respond.
+
+     * [34]machine learning
+     * [35]deep learning
+     * [36]sql
+     * [37]bigquery
+     * [38]towards data science
+
+   (button)
+   (button)
+   (button) 632 claps
+   (button) (button) (button) 8 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [39]go to the profile of harisankar haridas, phd
+
+[40]harisankar haridas, phd
+
+   hands-on r&d in deep semi-supervised learning and scalable architecture
+   | chief scientist@shieldsquare | views are personal
+
+     (button) follow
+   [41]towards data science
+
+[42]towards data science
+
+   sharing concepts, ideas, and codes.
+
+     * (button)
+       (button) 632
+     * (button)
+     *
+     *
+
+   [43]towards data science
+   never miss a story from towards data science, when you sign up for
+   medium. [44]learn more
+   never miss a story from towards data science
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://towardsdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/f3ed245814d3
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://towardsdatascience.com/deep-neural-network-implemented-in-pure-sql-over-bigquery-f3ed245814d3&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://towardsdatascience.com/deep-neural-network-implemented-in-pure-sql-over-bigquery-f3ed245814d3&source=--------------------------nav_reg&operation=register
+   8. https://towardsdatascience.com/?source=logo-lo_9gxdhm02xtyw---7f60cf5620c9
+   9. https://towardsdatascience.com/data-science/home
+  10. https://towardsdatascience.com/machine-learning/home
+  11. https://towardsdatascience.com/programming/home
+  12. https://towardsdatascience.com/data-visualization/home
+  13. https://towardsdatascience.com/artificial-intelligence/home
+  14. https://towardsdatascience.com/data-journalism/home
+  15. https://towardsdatascience.com/contribute/home
+  16. https://towardsdatascience.com/@harisankarh?source=post_header_lockup
+  17. https://towardsdatascience.com/@harisankarh
+  18. https://cs231n.github.io/neural-networks-case-study/
+  19. https://towardsdatascience.com/media/0e7956f3be95a587ae4e4ce03a5a7947?postid=f3ed245814d3
+  20. https://towardsdatascience.com/media/0a6d7bf873ef97e6f6dbdc1074418d31?postid=f3ed245814d3
+  21. https://towardsdatascience.com/media/8aee0e3f56951a21dda232cc0428ebae?postid=f3ed245814d3
+  22. http://mathworld.wolfram.com/increasingfunction.html
+  23. https://towardsdatascience.com/media/d94cb71ad6afc6c5bbf4d9d85cd254bb?postid=f3ed245814d3
+  24. https://towardsdatascience.com/media/f9ff8be853bc014e6e5fbad4d295200d?postid=f3ed245814d3
+  25. https://towardsdatascience.com/media/bd87463109da9f3b0673ffab3450de7d?postid=f3ed245814d3
+  26. https://towardsdatascience.com/media/dd929c5c53499fb592673fce55031727?postid=f3ed245814d3
+  27. https://towardsdatascience.com/media/bf28ef646c88dc1a88b5a58db6e5700b?postid=f3ed245814d3
+  28. https://github.com/harisankarh/nn-sql-bq/blob/master/training.py
+  29. https://github.com/harisankarh/nn-sql-bq/blob/master/out.txt
+  30. https://cloud.google.com/bigquery/docs/writing-results#saving_query_results_to_a_table
+  31. https://github.com/harisankarh/nn-sql-bq/blob/master/query_for_prediction.sql
+  32. https://github.com/groovenauts/queryitsmart/blob/master/whatisit.md
+  33. https://sigmodrecord.org/publications/sigmodrecord/1606/pdfs/04_vision_wang.pdf
+  34. https://towardsdatascience.com/tagged/machine-learning?source=post
+  35. https://towardsdatascience.com/tagged/deep-learning?source=post
+  36. https://towardsdatascience.com/tagged/sql?source=post
+  37. https://towardsdatascience.com/tagged/bigquery?source=post
+  38. https://towardsdatascience.com/tagged/towards-data-science?source=post
+  39. https://towardsdatascience.com/@harisankarh?source=footer_card
+  40. https://towardsdatascience.com/@harisankarh
+  41. https://towardsdatascience.com/?source=footer_card
+  42. https://towardsdatascience.com/?source=footer_card
+  43. https://towardsdatascience.com/
+  44. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  46. https://medium.com/p/f3ed245814d3/share/twitter
+  47. https://medium.com/p/f3ed245814d3/share/facebook
+  48. https://medium.com/p/f3ed245814d3/share/twitter
+  49. https://medium.com/p/f3ed245814d3/share/facebook

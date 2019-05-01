@@ -1,0 +1,1923 @@
+billion-scale similarity search with gpus
+
+jeff johnson
+
+facebook ai research
+
+new york
+
+matthijs douze
+
+facebook ai research
+
+paris
+
+herv  e j  egou
+
+facebook ai research
+
+paris
+
+7
+1
+0
+2
+
+ 
+
+b
+e
+f
+8
+2
+
+ 
+
+ 
+ 
+]
+
+v
+c
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+4
+3
+7
+8
+0
+
+.
+
+2
+0
+7
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+similarity search    nds application in specialized database
+systems handling complex data such as images or videos,
+which are typically represented by high-dimensional features
+and require speci   c indexing structures. this paper tackles
+the problem of better utilizing gpus for this task. while
+gpus excel at data-parallel tasks, prior approaches are bot-
+tlenecked by algorithms that expose less parallelism, such as
+k-min selection, or make poor use of the memory hierarchy.
+we propose a design for k-selection that operates at up
+to 55% of theoretical peak performance, enabling a nearest
+neighbor implementation that is 8.5   faster than prior gpu
+state of the art. we apply it in di   erent similarity search
+scenarios, by proposing optimized design for brute-force, ap-
+proximate and compressed-domain search based on product
+quantization. in all these setups, we outperform the state of
+the art by large margins. our implementation enables the
+construction of a high accuracy id92 graph on 95 million
+images from the yfcc100m dataset in 35 minutes, and of
+a graph connecting 1 billion vectors in less than 12 hours
+on 4 maxwell titan x gpus. we have open-sourced our
+approach1 for the sake of comparison and reproducibility.
+
+1.
+
+introduction
+
+images and videos constitute a new massive source of data
+for indexing and search. extensive metadata for this con-
+tent is often not available. search and interpretation of this
+and other human-generated content, like text, is di   cult and
+important. a variety of machine learning and deep learn-
+ing algorithms are being used to interpret and classify these
+complex, real-world entities. popular examples include the
+text representation known as id97 [32], representations
+of images by convolutional neural networks [39, 19], and im-
+age descriptors for instance search [20]. such representations
+or embeddings are usually real-valued, high-dimensional vec-
+tors of 50 to 1000+ dimensions. many of these vector repre-
+sentations can only e   ectively be produced on gpu systems,
+
+1https://github.com/facebookresearch/faiss
+
+as the underlying processes either have high arithmetic com-
+plexity and/or high data bandwidth demands [28], or cannot
+be e   ectively partitioned without failing due to communi-
+cation overhead or representation quality [38]. once pro-
+duced, their manipulation is itself arithmetically intensive.
+however, how to utilize gpu assets is not straightforward.
+more generally, how to exploit new heterogeneous architec-
+tures is a key subject for the database community [9].
+
+in this context, searching by numerical similarity rather
+than via structured relations is more suitable. this could be
+to    nd the most similar content to a picture, or to    nd the
+vectors that have the highest response to a linear classi   er
+on all vectors of a collection.
+
+one of the most expensive operations to be performed on
+large collections is to compute a id92 graph. it is a directed
+graph where each vector of the database is a node and each
+edge connects a node to its k nearest neighbors. this is
+our    agship application. note, state of the art methods like
+nn-descent [15] have a large memory overhead on top of
+the dataset itself and cannot readily scale to the billion-sized
+databases we consider.
+
+such applications must deal with the curse of dimension-
+ality [46], rendering both exhaustive search or exact index-
+ing for non-exhaustive search impractical on billion-scale
+databases. this is why there is a large body of work on
+approximate search and/or graph construction. to handle
+huge datasets that do not    t in ram, several approaches
+employ an internal compressed representation of the vec-
+tors using an encoding. this is especially convenient for
+memory-limited devices like gpus. it turns out that accept-
+ing a minimal accuracy loss results in orders of magnitude
+of compression [21]. the most popular vector compression
+methods can be classi   ed into either binary codes [18, 22],
+or quantization methods [25, 37]. both have the desirable
+property that searching neighbors does not require recon-
+structing the vectors.
+
+our paper focuses on methods based on product quanti-
+zation (pq) codes, as these were shown to be more e   ective
+than binary codes [34]. in addition, binary codes incur im-
+portant overheads for non-exhaustive search methods [35].
+several improvements were proposed after the original prod-
+uct quantization proposal known as ivfadc [25]; most are
+di   cult to implement e   ciently on gpu. for instance, the
+inverted multi-index [4], useful for high-speed/low-quality
+operating points, depends on a complicated    multi-sequence   
+algorithm. the optimized product quantization or opq [17]
+is a linear transformation on the input vectors that improves
+the accuracy of the product quantization; it can be applied
+
+1
+
+as a pre-processing. the simd-optimized ivfadc imple-
+mentation from [2] operates only with sub-optimal parame-
+ters (few coarse quantization centroids). many other meth-
+ods, like lopq and the polysemous codes [27, 16] are too
+complex to be implemented e   ciently on gpus.
+
+there are many implementations of similarity search on
+gpus, but mostly with binary codes [36], small datasets [44],
+or exhaustive search [14, 40, 41]. to the best of our knowl-
+edge, only the work by wieschollek et al. [47] appears suit-
+able for billion-scale datasets with quantization codes. this
+is the prior state of the art on gpus, which we compare
+against in section 6.4.
+
+this paper makes the following contributions:
+    a gpu k-selection algorithm, operating in fast register
+memory and    exible enough to be fusable with other
+kernels, for which we provide a complexity analysis;
+
+    a near-optimal algorithmic layout for exact and ap-
+
+proximate k-nearest neighbor search on gpu;
+
+    a range of experiments that show that these improve-
+ments outperform previous art by a large margin on
+mid- to large-scale nearest-neighbor search tasks, in
+single or multi-gpu con   gurations.
+
+the paper is organized as follows. section 2 introduces
+the context and notation. section 3 reviews gpu archi-
+tecture and discusses problems appearing when using it for
+similarity search. section 4 introduces one of our main con-
+tributions, i.e., our k-selection method for gpus, while sec-
+tion 5 provides details regarding the algorithm computation
+layout. finally, section 6 provides extensive experiments for
+our approach, compares it to the state of the art, and shows
+concrete use cases for image collections.
+
+2. problem statement
+we are concerned with similarity search in vector collec-
+tions. given the query vector x     rd and the collection2
+[yi]i=0:(cid:96) (yi     rd), we search:
+
+exact search. the exact solution computes the full pair-
+wise distance matrix d = [(cid:107)xj     yi(cid:107)2
+2]j=0:nq,i=0:(cid:96)     rnq  (cid:96).
+in practice, we use the decomposition
+
+(cid:107)xj     yi(cid:107)2
+
+2 = (cid:107)xj(cid:107)2 + (cid:107)yi(cid:107)2     2(cid:104)xj, yi(cid:105).
+
+(2)
+
+the two    rst terms can be precomputed in one pass over
+the matrices x and y whose rows are the [xj] and [yi]. the
+bottleneck is to evaluate (cid:104)xj, yi(cid:105), equivalent to the matrix
+multiplication xy (cid:62). the k-nearest neighbors for each of
+the nq queries are k-selected along each row of d.
+
+compressed-domain search. from now on, we focus on
+approximate nearest-neighbor search. we consider, in par-
+ticular, the ivfadc indexing structure [25]. the ivfadc
+index relies on two levels of quantization, and the database
+vectors are encoded. the database vector y is approximated
+as:
+
+y     q(y) = q1(y) + q2(y     q1(y))
+
+(3)
+where q1 : rd     c1     rd and q2 : rd     c2     rd are quan-
+tizers; i.e., functions that output an element from a    nite
+set. since the sets are    nite, q(y) is encoded as the index of
+q1(y) and that of q2(y     q1(y)). the    rst-level quantizer is a
+coarse quantizer and the second level    ne quantizer encodes
+the residual vector after the    rst level.
+
+the asymmetric distance computation (adc) search
+
+method returns an approximate result:
+
+ladc = k-argmini=0:(cid:96)(cid:107)x     q(yi)(cid:107)2.
+
+(4)
+
+for ivfadc the search is not exhaustive. vectors for
+which the distance is computed are pre-selected depending
+on the    rst-level quantizer q1:
+
+livf =    -argminc   c1
+
+(cid:107)x     c(cid:107)2.
+
+(5)
+
+the multi-probe parameter    is the number of coarse-level
+centroids we consider. the quantizer operates a nearest-
+neighbor search with exact distances, in the set of reproduc-
+tion values. then, the ivfadc search computes
+
+l = k-argmini=0:(cid:96)(cid:107)x     yi(cid:107)2,
+
+(1)
+
+livfadc =
+
+k-argmin
+
+i=0:(cid:96) s.t. q1(yi)   livf
+
+(cid:107)x     q(yi)(cid:107)2.
+
+(6)
+
+i.e., we search the k nearest neighbors of x in terms of l2
+distance. the l2 distance is used most often, as it is op-
+timized by design when learning several embeddings (e.g.,
+[20]), due to its attractive id202 properties.
+
+the lowest distances are collected by k-selection. for an
+array [ai]i=0:(cid:96), k-selection    nds the k lowest valued elements
+[asi ]i=0:k, asi     asi+1 , along with the indices [si]i=0:k, 0    
+si < (cid:96), of those elements from the input array. the ai will be
+32-bit    oating point values; the si are 32- or 64-bit integers.
+other comparators are sometimes desired; e.g., for cosine
+similarity we search for highest values. the order between
+equivalent keys asi = asj is not speci   ed.
+
+batching. typically, searches are performed in batches
+of nq query vectors [xj]j=0:nq (xj     rd) in parallel, which
+allows for more    exibility when executing on multiple cpu
+threads or on gpu. batching for k-selection entails selecting
+nq    k elements and indices from nq separate arrays, where
+each array is of a potentially di   erent length (cid:96)i     k.
+2to avoid clutter in 0-based indexing, we use the array no-
+tation 0 : (cid:96) to denote the range {0, ..., (cid:96)     1} inclusive.
+
+hence, ivfadc relies on the same distance estimations as
+the two-step quantization of adc, but computes them only
+on a subset of vectors.
+the corresponding data structure, the inverted    le, groups
+the vectors yi into |c1| inverted lists i1, ...,i|c1| with homo-
+geneous q1(yi). therefore, the most memory-intensive op-
+eration is computing livfadc, and boils down to linearly
+scanning    inverted lists.
+
+explode. we typically use |c1|        
+
+the quantizers. the quantizers q1 and q2 have di   erent
+properties. q1 needs to have a relatively low number of repro-
+duction values so that the number of inverted lists does not
+(cid:96), trained via id116.
+for q2, we can a   ord to spend more memory for a more ex-
+tensive representation. the id of the vector (a 4- or 8-byte
+integer) is also stored in the inverted lists, so it makes no
+sense to have shorter codes than that; i.e., log2 |c2| > 4    8.
+product quantizer. we use a product quantizer [25] for q2,
+which provides a large number of reproduction values with-
+out increasing the processing cost. it interprets the vector y
+as b sub-vectors y = [y0...yb   1], where b is an even divisor of
+
+2
+
+the dimension d. each sub-vector is quantized with its own
+quantizer, yielding the tuple (q0(y0), ..., qb   1(yb   1)). the
+sub-quantizers typically have 256 reproduction values, to    t
+in one byte. the quantization value of the product quantizer
+is then q2(y) = q0(y0) + 256    q1(y1) + ... + 256b   1    qb   1,
+which from a storage point of view is just the concatena-
+tion of the bytes produced by each sub-quantizer. thus, the
+product quantizer generates b-byte codes with |c2| = 256b
+reproduction values. the id116 dictionaries of the quan-
+tizers are small and quantization is computationally cheap.
+
+3. gpu: overview and k-selection
+this section reviews salient details of nvidia   s general-
+purpose gpu architecture and programming model [30]. we
+then focus on one of the less gpu-compliant parts involved
+in similarity search, namely the k-selection, and discuss the
+literature and challenges.
+3.1 architecture
+
+gpu lanes and warps. the nvidia gpu is a general-
+purpose computer that executes instruction streams using
+a 32-wide vector of cuda threads (the warp); individual
+threads in the warp are referred to as lanes, with a lane
+id from 0     31. despite the    thread    terminology, the best
+analogy to modern vectorized multicore cpus is that each
+warp is a separate cpu hardware thread, as the warp shares
+an instruction counter. warp lanes taking di   erent execu-
+tion paths results in warp divergence, reducing performance.
+each lane has up to 255 32-bit registers in a shared register
+   le. the cpu analogy is that there are up to 255 vector
+registers of width 32, with warp lanes as simd vector lanes.
+
+collections of warps. a user-con   gurable collection of 1
+to 32 warps comprises a block or a co-operative thread ar-
+ray (cta). each block has a high speed shared memory, up
+to 48 kib in size. individual cuda threads have a block-
+relative id, called a thread id, which can be used to parti-
+tion and assign work. each block is run on a single core of
+the gpu called a streaming multiprocessor (sm). each sm
+has functional units, including alus, memory load/store
+units, and various special instruction units. a gpu hides
+execution latencies by having many operations in    ight on
+warps across all sms. each individual warp lane instruction
+throughput is low and latency is high, but the aggregate
+arithmetic throughput of all sms together is 5     10   higher
+than typical cpus.
+
+grids and kernels. blocks are organized in a grid of blocks
+in a kernel. each block is assigned a grid relative id. the
+kernel is the unit of work (instruction stream with argu-
+ments) scheduled by the host cpu for the gpu to execute.
+after a block runs through to completion, new blocks can
+be scheduled. blocks from di   erent kernels can run concur-
+rently. ordering between kernels is controllable via ordering
+primitives such as streams and events.
+
+resources and occupancy. the number of blocks execut-
+ing concurrently depends upon shared memory and register
+resources used by each block. per-cuda thread register us-
+age is determined at compilation time, while shared memory
+usage can be chosen at runtime. this usage a   ects occu-
+pancy on the gpu. if a block demands all 48 kib of shared
+memory for its private usage, or 128 registers per thread as
+
+opposed to 32, then only 1     2 other blocks can run concur-
+rently on the same sm, resulting in low occupancy. under
+high occupancy more blocks will be present across all sms,
+allowing more work to be in    ight at once.
+
+memory types. di   erent blocks and kernels communicate
+through global memory, typically 4     32 gb in size, with 5    
+10   higher bandwidth than cpu main memory. shared
+memory is analogous to cpu l1 cache in terms of speed.
+gpu register    le memory is the highest bandwidth memory.
+in order to maintain the high number of instructions in    ight
+on a gpu, a vast register    le is also required: 14 mb in the
+latest pascal p100, in contrast with a few tens of kb on
+cpu. a ratio of 250 : 6.25 : 1 for register to shared to global
+memory aggregate cross-sectional bandwidth is typical on
+gpu, yielding 10     100s of tb/s for the register    le [10].
+3.2 gpu register    le usage
+
+structured register data. shared and register memory
+usage involves e   ciency tradeo   s; they lower occupancy but
+can increase overall performance by retaining a larger work-
+ing set in a faster memory. making heavy use of register-
+resident data at the expense of occupancy or instead of
+shared memory is often pro   table [43].
+
+as the gpu register    le is very large, storing structured
+data (not just temporary operands) is useful. a single lane
+can use its (scalar) registers to solve a local task, but with
+limited parallelism and storage.
+instead, lanes in a gpu
+warp can instead exchange register data using the warp shuf-
+   e instruction, enabling warp-wide parallelism and storage.
+
+lane-stride register array. a common pattern to achieve
+this is a lane-stride register array. that is, given elements
+[ai]i=0:(cid:96), each successive value is held in a register by neigh-
+boring lanes. the array is stored in (cid:96)/32 registers per lane,
+with (cid:96) a multiple of 32. lane j stores {aj, a32+j, ..., a(cid:96)   32+j},
+while register r holds {a32r, a32r+1, ..., a32r+31}.
+for manipulating the [ai], the register in which ai is stored
+(i.e., (cid:98)i/32(cid:99)) and (cid:96) must be known at assembly time, while
+the lane (i.e., i mod 32) can be runtime knowledge. a wide
+variety of access patterns (shift, any-to-any) are provided;
+we use the butter   y permutation [29] extensively.
+3.3 k-selection on cpu versus gpu
+
+k-selection algorithms, often for arbitrarily large (cid:96) and
+k, can be translated to a gpu, including radix selection
+and bucket selection [1], probabilistic selection [33], quick-
+select [14], and truncated sorts [40]. their performance is
+dominated by multiple passes over the input in global mem-
+ory. sometimes for similarity search, the input distances are
+computed on-the-   y or stored only in small blocks, not in
+their entirety. the full, explicit array might be too large to
+   t into any memory, and its size could be unknown at the
+start of the processing, rendering algorithms that require
+multiple passes impractical. they su   er from other issues
+as well. quickselect requires partitioning on a storage of
+size o((cid:96)), a data-dependent memory movement. this can
+result in excessive memory transactions, or requiring parallel
+pre   x sums to determine write o   sets, with synchronization
+overhead. radix selection has no partitioning but multiple
+passes are still required.
+
+heap parallelism. in similarity search applications, one
+is usually interested only in a small number of results, k <
+
+3
+
+1000 or so. in this regime, selection via max-heap is a typi-
+cal choice on the cpu, but heaps do not expose much data
+parallelism (due to serial tree update) and cannot saturate
+simd execution units. the ad-heap [31] takes better advan-
+tage of parallelism available in heterogeneous systems, but
+still attempts to partition serial and parallel work between
+appropriate execution units. despite the serial nature of
+heap update, for small k the cpu can maintain all of its
+state in the l1 cache with little e   ort, and l1 cache latency
+and bandwidth remains a limiting factor. other similarity
+search components, like pq code manipulation, tend to have
+greater impact on cpu performance [2].
+
+gpu heaps. heaps can be similarly implemented on a
+gpu [7]. however, a straightforward gpu heap implemen-
+tation su   ers from high warp divergence and irregular, data-
+dependent memory movement, since the path taken for each
+inserted element depends upon other values in the heap.
+
+gpu parallel priority queues [24] improve over the serial
+heap update by allowing multiple concurrent updates, but
+they require a potential number of small sorts for each insert
+and data-dependent memory movement. moreover, it uses
+multiple synchronization barriers through kernel launches in
+di   erent streams, plus the additional latency of successive
+kernel launches and coordination with the cpu host.
+
+other more novel gpu algorithms are available for small
+k, namely the selection algorithm in the fgknn library [41].
+this is a complex algorithm that may su   er from too many
+synchronization points, greater kernel launch overhead, us-
+age of slower memories, excessive use of hierarchy, partition-
+ing and bu   ering. however, we take inspiration from this
+particular algorithm through the use of parallel merges as
+seen in their merge queue structure.
+
+4. fast k-selection on the gpu
+
+for any cpu or gpu algorithm, either memory or arith-
+metic throughput should be the limiting factor as per the
+roo   ine performance model [48]. for input from global mem-
+ory, k-selection cannot run faster than the time required to
+scan the input once at peak memory bandwidth. we aim to
+get as close to this limit as possible. thus, we wish to per-
+form a single pass over the input data (from global memory
+or produced on-the-   y, perhaps fused with a kernel that is
+generating the data).
+
+we want to keep intermediate state in the fastest memory:
+the register    le. the major disadvantage of register memory
+is that the indexing into the register    le must be known at
+assembly time, which is a strong constraint on the algorithm.
+4.1
+
+in-register sorting
+
+we use an in-register sorting primitive as a building block.
+sorting networks are commonly used on simd architec-
+tures [13], as they exploit vector parallelism. they are eas-
+ily implemented on the gpu, and we build sorting networks
+with lane-stride register arrays.
+
+we use a variant of batcher   s bitonic sorting network [8],
+which is a set of parallel merges on an array of size 2k. each
+merge takes s arrays of length t (s and t a power of 2) to s/2
+arrays of length 2t, using log2(t) parallel steps. a bitonic
+sort applies this merge recursively: to sort an array of length
+(cid:96), merge (cid:96) arrays of length 1 to (cid:96)/2 arrays of length 2, to (cid:96)/4
+arrays of length 4, successively to 1 sorted array of length (cid:96),
+leading to 1
+
+2 (log2((cid:96))2 + log2((cid:96))) parallel merge steps.
+
+algorithm 1 odd-size merging network
+parallel for i     0 : min((cid:96)l, (cid:96)r) do
+
+function merge-odd([li]i=0:(cid:96)l , [ri]i=0:(cid:96)r )
+
+(cid:46) inverted 1st stage; inputs are already sorted
+
+compare-swap(l(cid:96)l   i   1, ri)
+
+end for
+parallel do
+
+(cid:46) if (cid:96)l = (cid:96)r and a power-of-2, these are equivalent
+merge-odd-continue([li]i=0:(cid:96)l , left)
+merge-odd-continue([ri]i=0:(cid:96)r , right)
+
+end do
+
+end function
+function merge-odd-continue([xi]i=0:(cid:96), p)
+
+if (cid:96) > 1 then
+
+h     2(cid:100)log2 (cid:96)(cid:101)   1
+parallel for i     0 : (cid:96)     h do
+
+(cid:46) largest power-of-2 < (cid:96)
+
+(cid:46) implemented with warp shu   e butter   y
+
+compare-swap(xi, xi+h)
+
+end for
+parallel do
+
+if p = left then
+
+(cid:46) left side recursion
+
+merge-odd-continue([xi]i=0:(cid:96)   h, left)
+merge-odd-continue([xi]i=(cid:96)   h:(cid:96), right)
+
+else
+
+(cid:46) right side recursion
+
+merge-odd-continue([xi]i=0:h, left)
+merge-odd-continue([xi]i=h:(cid:96), right)
+
+end if
+
+end do
+
+end if
+
+end function
+
+odd-size merging and sorting networks. if some input
+data is already sorted, we can modify the network to avoid
+merging steps. we may also not have a full power-of-2 set of
+data, in which case we can e   ciently shortcut to deal with
+the smaller size.
+
+algorithm 1 is an odd-sized merging network that merges
+already sorted left and right arrays, each of arbitrary length.
+while the bitonic network merges bitonic sequences, we start
+with monotonic sequences: sequences sorted monotonically.
+a bitonic merge is made monotonic by reversing the    rst
+comparator stage.
+
+the odd size algorithm is derived by considering arrays to
+be padded to the next highest power-of-2 size with dummy
+
+figure 1: odd-size network merging arrays of sizes
+5 and 3. bullets indicate parallel compare/swap.
+dashed lines are elided elements or comparisons.
+
+4
+
+1348903713430987034317890313478901334789step1step 2step 3step 4figure 2: overview of warpselect. the input val-
+ues stream in on the left, and the warp queue on the
+right holds the output result.
+
+elements that are never swapped (the merge is monotonic)
+and are already properly positioned; any comparisons with
+dummy elements are elided. a left array is considered to
+be padded with dummy elements at the start; a right ar-
+ray has them at the end. a merge of two sorted arrays
+of length (cid:96)l and (cid:96)r to a sorted array of (cid:96)l + (cid:96)r requires
+(cid:100)log2(max((cid:96)l, (cid:96)r))(cid:101) + 1 parallel steps. figure 1 shows algo-
+rithm 1   s merging network for arrays of size 5 and 3, with 4
+parallel steps.
+
+the compare-swap is implemented using warp shu   es on
+a lane-stride register array. swaps with a stride a multiple
+of 32 occur directly within a lane as the lane holds both
+elements locally. swaps of stride     16 or a non-multiple of
+32 occur with warp shu   es. in practice, used array lengths
+are multiples of 32 as they are held in lane-stride arrays.
+
+algorithm 2 odd-size sorting network
+
+function sort-odd([xi]i=0:(cid:96))
+
+if (cid:96) > 1 then
+
+parallel do
+
+sort-odd([xi]i=0:(cid:98)(cid:96)/2(cid:99))
+sort-odd([xi]i=(cid:98)(cid:96)/2(cid:99):(cid:96))
+
+end do
+merge-odd([xi]i=0:(cid:98)(cid:96)/2(cid:99), [xi]i=(cid:98)(cid:96)/2(cid:99):(cid:96))
+
+end if
+
+end function
+
+algorithm 2 extends the merge to a full sort. assuming no
+
+structure present in the input data, 1
+parallel steps are required for sorting data of length (cid:96).
+4.2 warpselect
+
+2 ((cid:100)log2((cid:96))(cid:101)2 +(cid:100)log2((cid:96))(cid:101))
+
+our k-selection implementation, warpselect, maintains
+state entirely in registers, requires only a single pass over
+data and avoids cross-warp synchronization. it uses merge-
+odd and sort-odd as primitives. since the register    le pro-
+vides much more storage than shared memory, it supports
+k     1024. each warp is dedicated to k-selection to a single
+one of the n arrays [ai]. if n is large enough, a single warp
+per each [ai] will result in full gpu occupancy. large (cid:96) per
+warp is handled by recursive decomposition, if (cid:96) is known in
+advance.
+
+overview. our approach (algorithm 3 and figure 2) oper-
+ates on values, with associated indices carried along (omit-
+ted from the description for simplicity). it selects the k least
+values that come from global memory, or from intermediate
+value registers if fused into another kernel providing the val-
+ues. let [ai]i=0:(cid:96) be the sequence provided for selection.
+
+the elements (on the left of figure 2) are processed in
+groups of 32, the warp size. lane j is responsible for pro-
+cessing {aj, a32+j, ...}; thus, if the elements come from global
+memory, the reads are contiguous and coalesced into a min-
+imal number of memory transactions.
+
+i     t j
+
+data structures. each lane j maintains a small queue
+of t elements in registers, called the thread queues [t j
+i ]i=0:t,
+ordered from largest to smallest (t j
+i+1). the choice of
+t is made relative to k, see section 4.3. the thread queue is
+a    rst-level    lter for new values coming in. if a new a32i+j
+is greater than the largest key currently in the queue, t j
+0 , it
+is guaranteed that it won   t be in the k smallest    nal results.
+the warp shares a lane-stride register array of k smallest
+seen elements, [wi]i=0:k, called the warp queue. it is ordered
+from smallest to largest (wi     wi+1); if the requested k is
+not a multiple of 32, we round it up. this is a second level
+data structure that will be used to maintain all of the k
+smallest warp-wide seen values. the thread and warp queues
+are initialized to maximum sentinel values, e.g., +   .
+update. the three invariants maintained are:
+
+    all per-lane t j
+    all per-lane t j
+
+wi
+
+0 are not in the min-k
+
+0 are greater than all warp queue keys
+
+    all ai seen so far in the min-k are contained in either
+i ]i=0:t,j=0:32), or in the
+
+some lane   s thread queue ([t j
+warp queue.
+
+lane j receives a new a32i+j and attempts to insert it into
+0 , then the new pair is by
+
+its thread queue. if a32i+j > t j
+de   nition not in the k minimum, and can be rejected.
+
+otherwise, it is inserted into its proper sorted position
+in the thread queue, thus ejecting the old t j
+0 . all lanes
+complete doing this with their new received pair and their
+thread queue, but it is now possible that the second invariant
+have been violated. using the warp ballot instruction, we
+determine if any lane has violated the second invariant. if
+not, we are free to continue processing new elements.
+
+restoring the invariants.
+if any lane has its invariant
+violated, then the warp uses odd-merge to merge and sort
+the thread and warp queues together. the new warp queue
+
+algorithm 3 warpselect pseudocode for lane j
+
+function warpselect(a)
+
+if a < t j
+
+0 then
+
+insert a into our [t j
+
+i ]i=0:t
+
+end if
+if warp-ballot(t j
+
+0 < wk   1) then
+
+(cid:46) reinterpret thread queues as lane-stride array
+
+[  i]i=0:32t     cast([t j
+
+i ]i=0:t,j=0:32)
+
+(cid:46) concatenate and sort thread queues
+
+sort-odd([  i]i=0:32t)
+merge-odd([wi]i=0:k, [  i]i=0:32t)
+(cid:46) reinterpret lane-stride array as thread queues
+i ]i=0:t,j=0:32     cast([  i]i=0:32t)
+[t j
+reverse-array([ti]i=0:t)
+
+(cid:46) back in thread queue order, invariant restored
+
+end if
+
+end function
+
+5
+
+input insertionthreadqueuemerging  networkwarp queuelane 0lane 1lane 31coalesced read. . . . .. . . . .. . . . .. . . . . . . . . . .. . . . . . . . . . . . . . . . . . . .  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .will be the min-k elements across the merged, sorted queues,
+and the new thread queues will be the remainder, from min-
+(k + 1) to min-(k + 32t + 1). this restores the invariants and
+we are free to continue processing subsequent elements.
+
+since the thread and warp queues are already sorted, we
+merge the sorted warp queue of length k with 32 sorted
+arrays of length t. supporting odd-sized merges is important
+because batcher   s formulation would require that 32t = k
+and is a power-of-2; thus if k = 1024, t must be 32. we
+found that the optimal t is way smaller (see below).
+
+using odd-merge to merge the 32 already sorted thread
+queues would require a struct-of-arrays to array-of-structs
+transposition in registers across the warp, since the t succes-
+sive sorted values are held in di   erent registers in the same
+lane rather than a lane-stride array. this is possible [12],
+but would use a comparable number of warp shu   es, so we
+just reinterpret the thread queue registers as an (unsorted)
+lane-stride array and sort from scratch. signi   cant speedup
+is realizable by using odd-merge for the merge of the ag-
+gregate sorted thread queues with the warp queue.
+
+handling the remainder. if there are remainder elements
+because (cid:96) is not a multiple of 32, those are inserted into the
+thread queues for the lanes that have them, after which we
+proceed to the output stage.
+
+output. a    nal sort and merge is made of the thread and
+warp queues, after which the warp queue holds all min-k
+values.
+4.3 complexity and parameter selection
+
+for each incoming group of 32 elements, warpselect
+can perform 1, 2 or 3 constant-time operations, all happen-
+ing in warp-wide parallel time:
+
+1. read 32 elements, compare to all thread queue heads
+
+t j
+0 , cost c1, happens n1 times;
+2. if    j     {0, ..., 31}, a32n+j < t j
+
+0 , perform insertion sort
+on those speci   c thread queues, cost c2 = o(t), hap-
+pens n2 times;
+
+3. if    j, t j
+
+0 < wk   1, sort and merge queues, cost c3 =
+o(t log(32t)2 + k log(max(k, 32t))), happens n3 times.
+
+thus, the total cost is n1c1 + n2c2 + n3c3. n1 = (cid:96)/32,
+and on random data drawn independently, n2 = o(k log((cid:96)))
+and n3 = o(k log((cid:96))/t), see the appendix for a full deriva-
+tion. hence, the trade-o    is to balance a cost in n2c2 and
+one in n3c3. the practical choice for t given k and (cid:96) was
+made by experiment on a variety of id92 data. for k     32,
+we use t = 2, k     128 uses t = 3, k     256 uses t = 4, and
+k     1024 uses t = 8, all irrespective of (cid:96).
+
+5. computation layout
+
+this section explains how ivfadc, one of the indexing
+methods originally built upon product quantization [25], is
+implemented e   ciently. details on distance computations
+and articulation with k-selection are the key to understand-
+ing why this method can outperform more recent gpu-
+compliant approximate nearest neighbor strategies [47].
+5.1 exact search
+
+we brie   y come back to the exhaustive search method,
+often referred to as exact brute-force. it is interesting on its
+
+own for exact nearest neighbor search in small datasets. it
+is also a component of many indexes in the literature. in
+our case, we use it for the ivfadc coarse quantizer q1.
+
+as stated in section 2, the distance computation boils
+down to a id127. we use optimized gemm
+routines in the cublas library to calculate the    2(cid:104)xj, yi(cid:105)
+term for l2 distance, resulting in a partial distance matrix
+d(cid:48). to complete the distance calculation, we use a fused
+k-selection kernel that adds the (cid:107)yi(cid:107)2 term to each entry of
+the distance matrix and immediately submits the value to
+k-selection in registers. the (cid:107)xj(cid:107)2 term need not be taken
+into account before k-selection. kernel fusion thus allows
+for only 2 passes (gemm write, k-select read) over d(cid:48), com-
+pared to other implementations that may require 3 or more.
+row-wise k-selection is likely not fusable with a well-tuned
+gemm kernel, or would result in lower overall e   ciency.
+as d(cid:48) does not    t in gpu memory for realistic problem
+sizes, the problem is tiled over the batch of queries, with
+tq     nq queries being run in a single tile. each of the (cid:100)nq/tq(cid:101)
+tiles are independent problems, but we run two in parallel
+on di   erent streams to better occupy the gpu, so the e   ec-
+tive memory requirement of d is o(2(cid:96)tq). the computation
+can similarly be tiled over (cid:96). for very large input coming
+from the cpu, we support bu   ering with pinned memory
+to overlap cpu to gpu copy with gpu compute.
+5.2
+
+ivfadc indexing
+
+pq lookup tables. at its core, the ivfadc requires com-
+puting the distance from a vector to a set of product quanti-
+zation reproduction values. by developing equation (6) for
+a database vector y, we obtain:
+
+(cid:107)x     q(y)(cid:107)2
+
+2 = (cid:107)x     q1(y)     q2(y     q1(y))(cid:107)2
+2.
+
+if we decompose the residual vectors left after q1 as:
+
+y     q1(y) = [(cid:101)y1       (cid:101)yb] and
+x     q1(y) = [(cid:102)x1        (cid:101)xb]
+2 = (cid:107)(cid:102)x1     q1((cid:101)y1)(cid:107)2
+
+2 + ... + (cid:107)(cid:101)xb     qb((cid:101)yb)(cid:107)2
+
+2.
+
+then the distance is rewritten as:
+(cid:107)x     q(y)(cid:107)2
+
+(7)
+
+(8)
+
+(9)
+
+(10)
+
+each quantizer q1, ..., qb has 256 reproduction values, so
+when x and q1(y) are known all distances can be precom-
+puted and stored in tables t1, ..., tb each of size 256 [25].
+computing the sum (10) consists of b look-ups and addi-
+tions. comparing the cost to compute n distances:
+
+    explicit computation: n    d mutiply-adds;
+    with lookup tables: 256    d multiply-adds and n    b
+
+lookup-adds.
+
+this is the key to the e   ciency of the product quantizer.
+in our gpu implementation, b is any multiple of 4 up to
+64. the codes are stored as sequential groups of b bytes per
+vector within lists.
+
+ivfadc lookup tables. when scanning over the ele-
+ments of the inverted list il (where by de   nition q1(y) is
+constant), the look-up table method can be applied, as the
+query x and q1(y) are known.
+
+6
+
+moreover, the computation of the tables t1 . . . tb is fur-
+2 in equation
+
+ther optimized [5]. the expression of (cid:107)x   q(y)(cid:107)2
+(7) can be decomposed as:
+2 + 2(cid:104)q1(y), q2(...)(cid:105)
+(cid:107)q2(...)(cid:107)2
+
++(cid:107)x     q1(y)(cid:107)2
+
+   2(cid:104)x, q2(...)(cid:105)
+
+.
+
+2
+
+(cid:125)
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+(cid:125)
+
+(cid:125)
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+(cid:124)
+
+(cid:123)(cid:122)
+
+term 1
+
+term 2
+
+term 3
+
+(11)
+the objective is to minimize inner loop computations.
+the computations we can do in advance and store in lookup
+tables are as follows:
+
+    term 1 is independent of the query. it can be precom-
+puted from the quantizers, and stored in a table t of
+size |c1|    256    b;
+
+    term 2 is the distance to q1   s reproduction value. it is
+
+thus a by-product of the    rst-level quantizer q1;
+
+    term 3 can be computed independently of the inverted
+
+list. its computation costs d    256 multiply-adds.
+
+this decomposition is used to produce the lookup tables
+t1 . . . tb used during the scan of the inverted list. for a
+single query, computing the       b tables from scratch costs
+      d    256 multiply-adds, while this decomposition costs
+256  d multiply-adds and     b  256 additions. on the gpu,
+the memory usage of t can be prohibitive, so we enable the
+decomposition only when memory is a not a concern.
+5.3 gpu implementation
+
+algorithm 4 summarizes the process as one would im-
+plement it on a cpu. the inverted lists are stored as two
+separate arrays, for pq codes and associated ids. ids are
+resolved only if k-selection determines k-nearest member-
+ship. this lookup yields a few sparse memory reads in a
+large array, thus the ids can optionally be stored on cpu
+for tiny performance cost.
+
+list scanning. a kernel is responsible for scanning the   
+closest inverted lists for each query, and calculating the per-
+vector pair distances using the lookup tables ti. the ti are
+stored in shared memory: up to nq       maxi |ii|  b lookups
+are required for a query set (trillions of accesses in practice),
+and are random access. this limits b to at most 48 (32-
+bit    oating point) or 96 (16-bit    oating point) with current
+architectures. in case we do not use the decomposition of
+equation (11), the ti are calculated by a separate kernel
+before scanning.
+multi-pass kernels. each nq       pairs of query against
+inverted list can be processed independently. at one ex-
+treme, a block is dedicated to each of these, resulting in up
+to nq          maxi |ii| partial results being written back to
+global memory, which is then k-selected to nq    k    nal re-
+sults. this yields high parallelism but can exceed available
+gpu global memory; as with exact search, we choose a tile
+size tq     nq to reduce memory consumption, bounding its
+complexity by o(2tq   maxi |ii|) with multi-streaming.
+
+a single warp could be dedicated to k-selection of each
+tq set of lists, which could result in low parallelism. we
+introduce a two-pass k-selection, reducing tq          maxi |ii|
+to tq    f    k partial results for some subdivision factor f .
+this is reduced again via k-selection to the    nal tq  k results.
+fused kernel. as with exact search, we experimented with
+a kernel that dedicates a single block to scanning all    lists
+
+7
+
+for a single query, with k-selection fused with distance com-
+putation. this is possible as warpselect does not    ght for
+the shared memory resource which is severely limited. this
+reduces global memory write-back, since almost all interme-
+diate results can be eliminated. however, unlike k-selection
+overhead for exact computation, a signi   cant portion of the
+runtime is the gather from the ti in shared memory and lin-
+ear scanning of the ii from global memory; the write-back is
+not a dominant contributor. timing for the fused kernel is
+improved by at most 15%, and for some problem sizes would
+be subject to lower parallelism and worse performance with-
+out subsequent decomposition. therefore, and for reasons
+of implementation simplicity, we do not use this layout.
+
+algorithm 4 ivfpq batch search routine
+
+function ivfpq-search([x1, ..., xnq ], i1, ...,i|c1|)
+
+for i     0 : nq do (cid:46) batch quantization of section 5.1
+
+ivf        -argminc   c1
+li
+
+(cid:107)x     c(cid:107)2
+
+end for
+for i     0 : nq do
+l     []
+compute term 3 (see section 5.2)
+for l in li
+
+ivf do
+compute distance tables t1, ..., tb
+for j in il do
+
+(cid:46) distance table
+
+(cid:46)    loops
+
+(cid:46) distance estimation, equation (10)
+
+d     (cid:107)xi     q(yj)(cid:107)2
+append (d, l, j) to l
+
+2
+
+end for
+
+end for
+ri     k-select smallest distances d from l
+
+end for
+return r
+
+end function
+
+5.4 multi-gpu parallelism
+
+modern servers can support several gpus. we employ
+
+this capability for both compute power and memory.
+
+replication. if an index instance    ts in the memory of a
+single gpu, it can be replicated across r di   erent gpus. to
+query nq vectors, each replica handles a fraction nq/r of the
+queries, joining the results back together on a single gpu
+or in cpu memory. replication has near linear speedup,
+except for a potential loss in e   ciency for small nq.
+
+sharding. if an index instance does not    t in the memory
+of a single gpu, an index can be sharded across s di   er-
+ent gpus. for adding (cid:96) vectors, each shard receives (cid:96)/s of
+the vectors, and for query, each shard handles the full query
+set nq, joining the partial results (an additional round of k-
+selection is still required) on a single gpu or in cpu mem-
+ory. for a given index size (cid:96), sharding will yield a speedup
+(sharding has a query of nq against (cid:96)/s versus replication
+with a query of nq/r against (cid:96)), but is usually less than
+pure replication due to    xed overhead and cost of subse-
+quent k-selection.
+replication and sharding can be used together (s shards,
+each with r replicas for s   r gpus in total). sharding or
+replication are both fairly trivial, and the same principle can
+be used to distribute an index across multiple machines.
+
+method
+bidmach [11]
+ours
+ours
+
+# gpus
+
+1
+1
+4
+
+# centroids
+4096
+256
+320 s
+735 s
+316 s
+140 s
+84 s
+100 s
+
+table 1: mnist8m id116 performance
+
+6.2 id116 id91
+
+the exact search method with k = 1 can be used by a k-
+means id91 method in the assignment stage, to assign
+nq training vectors to |c1| centroids. despite the fact that
+it does not use the ivfadc and k = 1 selection is trivial (a
+parallel reduction is used for the k = 1 case, not warpse-
+lect), id116 is a good benchmark for the id91 used
+to train the quantizer q1.
+
+we apply the algorithm on mnist8m images. the 8.1m
+images are graylevel digits in 28x28 pixels, linearized to vec-
+tors of 784-d. we compare this id116 implementation to
+the gpu id116 of bidmach [11], which was shown to be
+more e   cient than several distributed id116 implemen-
+tations that require dozens of machines3. both algorithms
+were run for 20 iterations. table 1 shows that our imple-
+mentation is more than 2   faster, although both are built
+upon cublas. our implementation receives some bene   t
+from the k-selection fusion into l2 distance computation.
+for multi-gpu execution via replicas, the speedup is close
+to linear for large enough problems (3.16   for 4 gpus with
+4096 centroids). note that this benchmark is somewhat un-
+realistic, as one would typically sub-sample the dataset ran-
+domly when so few centroids are requested.
+
+large scale. we can also compare to [3], an approximate
+cpu method that clusters 108 128-d vectors to 85k cen-
+troids. their id91 method runs in 46 minutes, but re-
+quires 56 minutes (at least) of pre-processing to encode the
+vectors. our method performs exact id116 on 4 gpus in
+52 minutes without any pre-processing.
+6.3 exact nearest neighbor search
+
+we consider a classical dataset used to evaluate nearest
+neighbor search: sift1m [25].
+its characteristic sizes are
+(cid:96) = 106, d = 128, nq = 104. computing the partial distance
+matrix d(cid:48) costs nq    (cid:96)    d = 1.28 t   op, which runs in less
+than one second on current gpus. figure 4 shows the cost
+of the distance computations against the cost of our tiling
+of the gemm for the    2(cid:104)xj, yi(cid:105) term of equation 2 and
+the peak possible k-selection performance on the distance
+matrix of size nq  (cid:96), which additionally accounts for reading
+the tiled result matrix d(cid:48) at peak memory bandwidth.
+
+in addition to our method from section 5, we include
+times from the two gpu libraries evaluated for k-selection
+performance in section 6.1. we make several observations:
+    for k-selection, the naive algorithm that sorts the full
+result array for each query using thrust::sort_by_key
+is more than 10   slower than the comparison methods;
+    l2 distance and k-selection cost is dominant for all but
+our method, which has 85 % of the peak possible
+performance, assuming gemm usage and our tiling
+
+3bidmach numbers from https://github.com/biddata/
+bidmach/wiki/benchmarks#kmeans
+
+8
+
+figure 3: runtimes for di   erent k-selection meth-
+ods, as a function of array length (cid:96). simultaneous
+arrays processed are nq = 10000. k = 100 for full lines,
+k = 1000 for dashed lines.
+
+6. experiments & applications
+
+this section compares our gpu k-selection and nearest-
+neighbor approach to existing libraries. unless stated other-
+wise, experiments are carried out on a 2  2.8ghz intel xeon
+e5-2680v2 with 4 maxwell titan x gpus on cuda 8.0.
+6.1 k-selection performance
+
+we compare against two other gpu small k-selection im-
+plementations: the row-based merge queue with bu   ered
+search and hierarchical partition extracted from the fgknn
+library of tang et al. [41] and truncated bitonic sort (tbis )
+from sismanis et al. [40]. both were extracted from their re-
+spective exact search libraries.
+we evaluate k-selection for k = 100 and 1000 of each row
+from a row-major matrix nq    (cid:96) of random 32-bit    oating
+point values on a single titan x. the batch size nq is    xed
+at 10000, and the array lengths (cid:96) vary from 1000 to 128000.
+inputs and outputs to the problem remain resident in gpu
+memory, with the output being of size nq    k, with corre-
+sponding indices. thus, the input problem sizes range from
+40 mb ((cid:96) = 1000) to 5.12 gb ((cid:96) = 128k). tbis requires large
+auxiliary storage, and is limited to (cid:96)     48000 in our tests.
+figure 3 shows our relative performance against tbis and
+fgknn. it also includes the peak possible performance given
+by the memory bandwidth limit of the titan x. the rela-
+tive performance of warpselect over fgknn increases for
+larger k; even tbis starts to outperform fgknn for larger (cid:96)
+at k = 1000. we look especially at the largest (cid:96) = 128000.
+warpselect is 1.62   faster at k = 100, 2.01   at k = 1000.
+performance against peak possible drops o    for all imple-
+mentations at larger k. warpselect operates at 55% of
+peak at k = 100 but only 16% of peak at k = 1000. this
+is due to additional overhead assocated with bigger thread
+queues and merge/sort networks for large k.
+
+di   erences from fgknn. warpselect is in   uenced by
+fgknn, but has several improvements: all state is maintained
+in registers (no shared memory), no inter-warp synchroniza-
+tion or bu   ering is used, no    hierarchical partition   , the k-
+selection can be fused into other kernels, and it uses odd-size
+networks for e   cient merging and sorting.
+
+                                                                                                                                                                                                                                                                                                                                                                                       figure 4: exact search id92 time for the sift1m
+dataset with varying k on 1 titan x gpu.
+
+of the partial distance matrix d(cid:48) on top of gemm is
+close to optimal. the cublas gemm itself has low
+e   ciency for small reduction sizes (d = 128);
+
+    our fused l2/k-selection kernel is important. our
+same exact algorithm without fusion (requiring an ad-
+ditional pass through d(cid:48)) is at least 25% slower.
+
+e   cient k-selection is even more important in situations
+where approximate methods are used to compute distances,
+because the relative cost of k-selection with respect to dis-
+tance computation increases.
+6.4 billion-scale approximate search
+there are few studies on gpu-based approximate nearest-
+neighbor search on large datasets ((cid:96) (cid:29) 106). we report a
+few comparison points here on index search, using standard
+datasets and evaluation protocol in this    eld.
+
+sift1m. for the sake of completeness, we    rst compare
+our gpu search speed on sift1m with the implementation
+of wieschollek et al. [47]. they obtain a nearest neighbor re-
+call at 1 (fraction of queries where the true nearest neighbor
+is in the top 1 result) of r@1 = 0.51, and r@100 = 0.86 in
+0.02 ms per query on a titan x. for the same time budget,
+our implementation obtains r@1 = 0.80 and r@100 = 0.95.
+
+sift1b. we compare again with wieschollek et al., on the
+sift1b dataset [26] of 1 billion sift image features at nq =
+104. we compare the search performance in terms of same
+memory usage for similar accuracy (more accurate methods
+may involve greater search time or memory usage). on a
+single gpu, with m = 8 bytes per vector, r@10 = 0.376 in
+17.7   s per query vector, versus their reported r@10 = 0.35
+in 150   s per query vector. thus, our implementation is
+more accurate at a speed 8.5   faster.
+deep1b. we also experimented on the deep1b dataset [6]
+of (cid:96)=1 billion id98 representations for images at nq = 104.
+the paper that introduces the dataset reports cpu results
+(1 thread): r@1 = 0.45 in 20 ms search time per vector. we
+use a pq encoding of m = 20, with d = 80 via opq [17],
+and |c1| = 218, which uses a comparable dataset storage as
+the original paper (20 gb). this requires multiple gpus as
+it is too large for a single gpu   s global memory, so we con-
+sider 4 gpus with s = 2, r = 2. we obtain a r@1 = 0.4517
+in 0.0133 ms per vector. while the hardware platforms are
+
+figure 5: speed/accuracy trade-o    of brute-force
+10-nn graph construction for the yfcc100m and
+deep1b datasets.
+
+di   erent, it shows that making searches on gpus is a game-
+changer in terms of speed achievable on a single machine.
+6.5 the id92 graph
+
+an example usage of our similarity search method is to
+construct a k-nearest neighbor graph of a dataset via brute
+force (all vectors queried against the entire index).
+
+experimental setup. we evaluate the trade-o    between
+speed, precision and memory on two datasets: 95 million
+images from the yfcc100m dataset [42] and deep1b. for
+yfcc100m, we compute id98 descriptors as the one-before-
+last layer of a resnet [23], reduced to d = 128 with pca.
+
+the evaluation measures the trade-o    between:
+    speed: how much time it takes to build the ivfadc
+index from scratch and construct the whole id92 graph
+(k = 10) by searching nearest neighbors for all vectors
+in the dataset. thus, this is an end-to-end test that
+includes indexing as well as search time;
+
+    quality: we sample 10,000 images for which we com-
+pute the exact nearest neighbors. our accuracy mea-
+sure is the fraction of 10 found nearest neighbors that
+are within the ground-truth 10 nearest neighbors.
+
+for yfcc100m, we use a coarse quantizer (216 centroids),
+and consider m = 16, 32 and 64 byte pq encodings for each
+vector. for deep1b, we pre-process the vectors to d = 120
+via opq, use |c1| = 218 and consider m = 20, 40. for a
+given encoding, we vary    from 1 to 256, to obtain trade-
+o   s between e   ciency and quality, as seen in figure 5.
+
+9
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   figure 6: path in the id92 graph of 95 million images from yfcc100m. the    rst and the last image are
+given; the algorithm computes the smoothest path between them.
+
+discussion. for yfcc100m we used s = 1, r = 4. an
+accuracy of more than 0.8 is obtained in 35 minutes. for
+deep1b, a lower-quality graph can be built in 6 hours,
+with higher quality in about half a day. we also experi-
+mented with more gpus by doubling the replica set, us-
+ing 8 maxwell m40s (the m40 is roughly equivalent in per-
+formance to the titan x). performance is improved sub-
+linearly (    1.6   for m = 20,     1.7   for m = 40).
+
+for comparison, the largest id92 graph construction we
+are aware of used a dataset comprising 36.5 million 384-
+d vectors, which took a cluster of 128 cpu servers 108.7
+hours of compute [45], using nn-descent [15]. note that
+nn-descent could also build or re   ne the id92 graph for
+the datasets we consider, but it has a large memory over-
+head over the graph storage, which is already 80 gb for
+deep1b. moreover it requires random access across all vec-
+tors (384 gb for deep1b).
+
+the largest gpu id92 graph construction we found is a
+brute-force construction using exact search with gemm, of
+a dataset of 20 million 15,000-d vectors, which took a cluster
+of 32 tesla c2050 gpus 10 days [14]. assuming computa-
+tion scales with gemm cost for the distance matrix, this
+approach for deep1b would take an impractical 200 days
+of computation time on their cluster.
+
+6.6 using the id92 graph
+
+when a id92 graph has been constructed for an image
+dataset, we can    nd paths in the graph between any two
+images, provided there is a single connected component (this
+is the case). for example, we can search the shortest path
+between two images of    owers, by propagating neighbors
+from a starting image to a destination image. denoting by
+s and d the source and destination images, and dij the
+distance between nodes, we search the path p = {p1, ..., pn}
+with p1 = s and pn = d such that
+
+min
+
+p
+
+max
+i=1..n
+
+dpipi+1 ,
+
+(12)
+
+i.e., we want to favor smooth transitions. an example re-
+sult is shown in figure 6 from yfcc100m4. it was ob-
+tained after 20 seconds of propagation in a id92 graph with
+k = 15 neighbors. since there are many    ower images in the
+dataset, the transitions are smooth.
+
+4the mapping from vectors to images is not available for
+deep1b
+
+7. conclusion
+
+the arithmetic throughput and memory bandwidth of
+gpus are well into the tera   ops and hundreds of gigabytes
+per second. however,
+implementing algorithms that ap-
+proach these performance levels is complex and counter-
+intuitive. in this paper, we presented the algorithmic struc-
+ture of similarity search methods that achieves near-optimal
+performance on gpus.
+
+this work enables applications that needed complex ap-
+proximate algorithms before. for example, the approaches
+presented here make it possible to do exact id116 cluster-
+ing or to compute the id92 graph with simple brute-force
+approaches in less time than a cpu (or a cluster of them)
+would take to do this approximately.
+
+gpu hardware is now very common on scienti   c work-
+stations, due to their popularity for machine learning algo-
+rithms. we believe that our work further demonstrates their
+interest for database applications. along with this work, we
+are publishing a carefully engineered implementation of this
+paper   s algorithms, so that these gpus can now also be used
+for e   cient similarity search.
+
+8. references
+[1] t. alabi, j. d. blanchard, b. gordon, and r. steinbach.
+fast k-selection algorithms for graphics processing units.
+acm journal of experimental algorithmics,
+17:4.2:4.1   4.2:4.29, october 2012.
+
+[2] f. andr  e, a.-m. kermarrec, and n. l. scouarnec. cache
+
+locality is not enough: high-performance nearest neighbor
+search with product quantization fast scan. in proc.
+international conference on very large databases, pages
+288   299, 2015.
+
+[3] y. avrithis, y. kalantidis, e. anagnostopoulos, and i. z.
+
+emiris. web-scale image id91 revisited. in proc.
+international conference on id161, pages
+1502   1510, 2015.
+
+[4] a. babenko and v. lempitsky. the inverted multi-index.
+
+in proc. ieee conference on id161 and
+pattern recognition, pages 3069   3076, june 2012.
+
+[5] a. babenko and v. lempitsky. improving bilayer product
+
+quantization for billion-scale approximate nearest neighbors
+in high dimensions. arxiv preprint arxiv:1404.1831, 2014.
+
+[6] a. babenko and v. lempitsky. e   cient indexing of
+
+billion-scale datasets of deep descriptors. in proc. ieee
+conference on id161 and pattern recognition,
+pages 2055   2063, june 2016.
+
+[7] r. barrientos, j. g  omez, c. tenllado, m. prieto, and
+
+m. marin. knn query processing in metric spaces using
+gpus. in international european conference on parallel
+and distributed computing, volume 6852 of lecture notes
+
+10
+
+in computer science, pages 380   392, bordeaux, france,
+september 2011. springer.
+
+[8] k. e. batcher. sorting networks and their applications. in
+
+proc. spring joint computer conference, afips    68
+(spring), pages 307   314, new york, ny, usa, 1968. acm.
+
+[9] p. boncz, w. lehner, and t. neumann. special issue:
+modern hardware. the vldb journal, 25(5):623   624,
+2016.
+
+[10] j. canny, d. l. w. hall, and d. klein. a multi-tera   op
+
+constituency parser using gpus. in proc. empirical
+methods on natural language processing, pages 1898   1907.
+acl, 2013.
+
+and signal processing, pages 861   864, may 2011.
+
+[27] y. kalantidis and y. avrithis. locally optimized product
+quantization for approximate nearest neighbor search. in
+proc. ieee conference on id161 and pattern
+recognition, pages 2329   2336, june 2014.
+
+[28] a. krizhevsky, i. sutskever, and g. e. hinton. id163
+classi   cation with deep convolutional neural networks. in
+advances in neural information processing systems, pages
+1097   1105, 2012.
+
+[29] f. t. leighton. introduction to parallel algorithms and
+
+architectures: array, trees, hypercubes. morgan
+kaufmann publishers inc., san francisco, ca, usa, 1992.
+
+[11] j. canny and h. zhao. bidmach: large-scale learning with
+
+[30] e. lindholm, j. nickolls, s. oberman, and j. montrym.
+
+zero memory allocation. in biglearn workshop, nips,
+2013.
+
+nvidia tesla: a uni   ed graphics and computing
+architecture. ieee micro, 28(2):39   55, march 2008.
+
+[12] b. catanzaro, a. keller, and m. garland. a decomposition
+
+[31] w. liu and b. vinter. ad-heap: an e   cient heap data
+
+for in-place matrix transposition. in proc. acm
+symposium on principles and practice of parallel
+programming, ppopp    14, pages 193   206, 2014.
+
+[13] j. chhugani, a. d. nguyen, v. w. lee, w. macy,
+m. hagog, y.-k. chen, a. baransi, s. kumar, and
+p. dubey. e   cient implementation of sorting on multi-core
+simd cpu architecture. proc. vldb endow.,
+1(2):1313   1324, august 2008.
+
+[14] a. dashti. e   cient computation of k-nearest neighbor
+
+graphs for large high-dimensional data sets on gpu clusters.
+master   s thesis, university of wisconsin milwaukee, august
+2013.
+
+[15] w. dong, m. charikar, and k. li. e   cient k-nearest
+
+neighbor graph construction for generic similarity measures.
+in www: proceeding of the international conference on
+world wide web, pages 577   586, march 2011.
+
+[16] m. douze, h. j  egou, and f. perronnin. polysemous codes.
+in proc. european conference on id161, pages
+785   801. springer, october 2016.
+
+[17] t. ge, k. he, q. ke, and j. sun. optimized product
+
+quantization. ieee trans. pami, 36(4):744   755, 2014.
+
+structure for asymmetric multicore processors. in proc. of
+workshop on general purpose processing using gpus,
+pages 54:54   54:63. acm, 2014.
+
+[32] t. mikolov, i. sutskever, k. chen, g. s. corrado, and
+
+j. dean. distributed representations of words and phrases
+and their compositionality. in advances in neural
+information processing systems, pages 3111   3119, 2013.
+
+[33] l. monroe, j. wendelberger, and s. michalak. randomized
+
+selection on the gpu. in proc. acm symposium on high
+performance graphics, pages 89   98, 2011.
+
+[34] m. norouzi and d. fleet. cartesian id116. in proc.
+
+ieee conference on id161 and pattern
+recognition, pages 3017   3024, june 2013.
+
+[35] m. norouzi, a. punjani, and d. j. fleet. fast search in
+
+hamming space with multi-index hashing. in proc. ieee
+conference on id161 and pattern recognition,
+pages 3108   3115, 2012.
+
+[36] j. pan and d. manocha. fast gpu-based locality sensitive
+hashing for k-nearest neighbor computation. in proc. acm
+international conference on advances in geographic
+information systems, pages 211   220, 2011.
+
+[18] y. gong and s. lazebnik. iterative quantization: a
+
+[37] l. paulev  e, h. j  egou, and l. amsaleg. locality sensitive
+
+procrustean approach to learning binary codes. in proc.
+ieee conference on id161 and pattern
+recognition, pages 817   824, june 2011.
+
+hashing: a comparison of hash function types and querying
+mechanisms. pattern recognition letters, 31(11):1348   1358,
+august 2010.
+
+[19] y. gong, l. wang, r. guo, and s. lazebnik. multi-scale
+
+[38] o. shamir. fundamental limits of online and distributed
+
+orderless pooling of deep convolutional activation features.
+in proc. european conference on id161, pages
+392   407, 2014.
+
+algorithms for statistical learning and estimation. in
+advances in neural information processing systems, pages
+163   171, 2014.
+
+[20] a. gordo, j. almazan, j. revaud, and d. larlus. deep
+
+[39] a. sharif razavian, h. azizpour, j. sullivan, and
+
+id162: learning global representations for image
+search. in proc. european conference on id161,
+pages 241   257, 2016.
+
+s. carlsson. id98 features o   -the-shelf: an astounding
+baseline for recognition. in cvpr workshops, pages
+512   519, 2014.
+
+[21] s. han, h. mao, and w. j. dally. deep compression:
+
+[40] n. sismanis, n. pitsianis, and x. sun. parallel search of
+
+compressing deep neural networks with pruning, trained
+quantization and hu   man coding. arxiv preprint
+arxiv:1510.00149, 2015.
+
+k-nearest neighbors with synchronous operations. in ieee
+high performance extreme computing conference, pages
+1   6, 2012.
+
+[22] k. he, f. wen, and j. sun. id116 hashing: an
+
+[41] x. tang, z. huang, d. m. eyers, s. mills, and m. guo.
+
+a   nity-preserving quantization method for learning binary
+compact codes. in proc. ieee conference on computer
+vision and pattern recognition, pages 2938   2945, june
+2013.
+
+[23] k. he, x. zhang, s. ren, and j. sun. deep residual
+
+learning for image recognition. in proc. ieee conference
+on id161 and pattern recognition, pages
+770   778, june 2016.
+
+[24] x. he, d. agarwal, and s. k. prasad. design and
+
+implementation of a parallel priority queue on many-core
+architectures. ieee international conference on high
+performance computing, pages 1   10, 2012.
+
+[25] h. j  egou, m. douze, and c. schmid. product quantization
+
+for nearest neighbor search. ieee trans. pami,
+33(1):117   128, january 2011.
+
+[26] h. j  egou, r. tavenard, m. douze, and l. amsaleg.
+searching in one billion vectors: re-rank with source
+coding. in international conference on acoustics, speech,
+
+e   cient selection algorithm for fast id92 search on gpus.
+in ieee international parallel & distributed processing
+symposium, pages 397   406, 2015.
+
+[42] b. thomee, d. a. shamma, g. friedland, b. elizalde,
+
+k. ni, d. poland, d. borth, and l.-j. li. yfcc100m: the
+new data in multimedia research. communications of the
+acm, 59(2):64   73, january 2016.
+
+[43] v. volkov and j. w. demmel. benchmarking gpus to tune
+
+dense id202. in proc. acm/ieee conference on
+supercomputing, pages 31:1   31:11, 2008.
+
+[44] a. wakatani and a. murakami. gpgpu implementation of
+
+nearest neighbor search with product quantization. in
+ieee international symposium on parallel and distributed
+processing with applications, pages 248   253, 2014.
+
+[45] t. warashina, k. aoyama, h. sawada, and t. hattori.
+
+e   cient k-nearest neighbor graph construction using
+mapreduce for large-scale data sets. ieice transactions,
+
+11
+
+(cid:40)
+
+97-d(12):3142   3154, 2014.
+
+[46] r. weber, h.-j. schek, and s. blott. a quantitative
+analysis and performance study for similarity-search
+methods in high-dimensional spaces. in proc. international
+conference on very large databases, pages 194   205, 1998.
+
+[47] p. wieschollek, o. wang, a. sorkine-hornung, and
+
+h. p. a. lensch. e   cient large-scale approximate nearest
+neighbor search on the gpu. in proc. ieee conference on
+id161 and pattern recognition, pages
+2027   2035, june 2016.
+
+[48] s. williams, a. waterman, and d. patterson. roo   ine: an
+
+insightful visual performance model for multicore
+architectures. communications of the acm, 52(4):65   76,
+april 2009.
+
+appendix: complexity analysis of warpselect
+we derive the average number of times updates are triggered
+in warpselect, for use in section 4.3.
+let the input to k-selection be a sequence {a1, a2, ..., a(cid:96)}
+(1-based indexing), a randomly chosen permutation of a set
+of distinct elements. elements are read sequentially in c
+groups of size w (the warp; in our case, w = 32); assume (cid:96)
+is a multiple of w, so c = (cid:96)/w. recall that t is the thread
+queue length. we call elements prior to or at position n
+in the min-k seen so far the successive min-k (at n). the
+likelihood that an is in the successive min-k at n is:
+
+  (n, k) :=
+
+1
+k/n
+
+if n     k
+if n > k
+
+(13)
+
+as each an, n > k has a k/n chance as all permutations are
+equally likely, and all elements in the    rst k qualify.
+
+counting the insertion sorts. in a given lane, an inser-
+tion sort is triggered if the incoming value is in the successive
+min-k + t values, but the lane has    seen    only wc0 + (c    c0)
+values, where c0 is the previous won warp ballot. the prob-
+ability of this happening is:
+
+  (wc0 + (c     c0), k + t)     k + t
+wc
+
+for c > k.
+
+(14)
+
+the approximation considers that the thread queue has seen
+all the wc values, not just those assigned to its lane. the
+id203 of any lane triggering an insertion sort is then:
+
+(cid:18)
+
+1    
+
+1     k + t
+wc
+
+(cid:19)w     k + t
+
+c
+
+.
+
+(15)
+
+here the approximation is a    rst-order taylor expansion.
+summing up the probabilities over c gives an expected num-
+ber of insertions of n2     (k + t) log(c) = o(k log((cid:96)/w)).
+counting full sorts. we seek n3 =   ((cid:96), k, t, w), the ex-
+pected number of full sorts required for warpselect.
+
+single lane. for now, we assume w = 1, so c = (cid:96). let
+  ((cid:96), m, k) be the id203 that in an sequence {a1, ..., a(cid:96)},
+exactly m of the elements as encountered by a sequential
+scanner (w = 1) are in the successive min-k. given m, there
+
+(cid:1) places where these successive min-k elements can
+
+are (cid:0) (cid:96)
+
+m
+
+occur. it is given by a recurrence relation:
+
+  ((cid:96), m, k) :=
+
+1
+0
+0
+(  ((cid:96)     1, m     1, k)      ((cid:96), k)+
+  ((cid:96)     1, m, k)    (1       ((cid:96), k)))
+
+(cid:96) = 0 and m = 0
+(cid:96) = 0 and m > 0
+(cid:96) > 0 and m = 0
+
+                                       
+
+otherwise.
+
+(16)
+
+12
+
+the last case is the id203 of: there is a (cid:96)     1 se-
+quence with m     1 successive min-k elements preceding us,
+and the current element is in the successive min-k, or the
+current element is not in the successive min-k, m ones are
+before us. we can then develop a recurrence relationship for
+  ((cid:96), k, t, 1). note that
+
+min((bt+max(0,t   1)),(cid:96))
+
+  ((cid:96), b, k, t) :=
+
+  ((cid:96), m, k)
+
+(17)
+
+for b where 0     bt     (cid:96) is the fraction of all sequences of
+length (cid:96) that will force b sorts of data by winning the thread
+queue ballot, as there have to be bt to (bt + max(0, t     1))
+elements in the successive min-k for these sorts to happen (as
+the min-k elements will over   ow the thread queues). there
+are at most (cid:98)(cid:96)/t(cid:99) won ballots that can occur, as it takes t
+separate sequential current min-k seen elements to win the
+ballot.   ((cid:96), k, t, 1) is thus the expectation of this over all
+possible b:
+
+(cid:88)
+
+m=bt
+
+(cid:98)(cid:96)/t(cid:99)(cid:88)
+
+  ((cid:96), k, t, 1) =
+
+b      ((cid:96), b, k, t).
+
+(18)
+
+b=1
+
+this can be computed by id145. analyti-
+cally, note that for t = 1, k = 1,   ((cid:96), 1, 1, 1) is the harmonic
+number h(cid:96) = 1 + 1
+(cid:96) , which converges to ln((cid:96)) +   
+(the euler-mascheroni constant   ) as (cid:96)        .
+
+3 + ... + 1
+
+2 + 1
+
+for t = 1, k > 1, (cid:96) > k,   ((cid:96), k, 1, 1) = k + k(h(cid:96)     hk)
+or o(k log((cid:96))), as the    rst k elements are in the successive
+k+2 +...+ k
+(cid:96) .
+min-k, and the expectation for the rest is
+
+k+1 + k
+
+k
+
+for t > 1, k > 1, (cid:96) > k, note that there are some number
+d, k     d     (cid:96) of successive min-k determinations d made
+for each possible {a1, ..., a(cid:96)}. the number of won ballots for
+each case is by de   nition (cid:98)d/t(cid:99), as the thread queue must
+   ll up t times. thus,   ((cid:96), k, t, 1) = o(k log((cid:96))/t).
+multiple lanes. the w > 1 case is complicated by the
+fact that there are joint probabilities to consider (if more
+than one of the w workers triggers a sort for a given group,
+only one sort takes place). however, the likelihood can be
+bounded. let   (cid:48)((cid:96), k, t, w) be the expected won ballots as-
+suming no mutual interference between the w workers for
+winning ballots (i.e., we win b ballots if there are b     w
+workers that independently win a ballot at a single step),
+but with the shared min-k set after each sort from the joint
+sequence. assume that k     w. then:
+
+(cid:32)(cid:24) k
+
+(cid:25)
+
+(cid:100)(cid:96)/w(cid:101)   (cid:100)k/w(cid:101)(cid:88)
+
+(cid:33)
+
+(cid:48)
+
+  
+
+((cid:96), k, 1, w)     w
+
++
+
+w((cid:100)k/w(cid:101) + i)
+    w  ((cid:100)(cid:96)/w(cid:101), k, 1, 1) = o(wk log((cid:96)/w))
+
+i=1
+
+w
+
+k
+
+(19)
+where the likelihood of the w workers seeing a successive
+min-k element has an upper bound of that of the    rst worker
+at each step. as before, the number of won ballots is scaled
+by t, so   (cid:48)((cid:96), k, t, w) = o(wk log((cid:96)/w)/t). mutual interfer-
+ence can only reduce the number of ballots, so we obtain the
+same upper bound for   ((cid:96), k, t, w).
+
+

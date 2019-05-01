@@ -1,0 +1,609 @@
+understanding and implementing cyclegan in tensorflow[1]  
+
+   [2]hardik bansal , [3]archit rathore
+
+introduction[4]  
+
+   transferring characteristics from one image to another is an exciting
+   proposition. how cool would it be if you could take a photo and
+   [5]convert it into the style of van gogh or picasso!
+
+   starry doge
+   starry doge
+
+   or maybe you want to put a smile on agent 42's face with the virally
+   popular [6]faceapp
+
+   a happy hitman
+   a happy hitman
+
+   these are examples of cross domain image transfer - we want to take an
+   image from an input domain $d_i$ and then transform it into an image of
+   target domain $d_t$ without necessarily having a one-to-one mapping
+   between images from input to target domain in the training set.
+   relaxation of having one-to-one mapping makes this formulation quite
+   powerful - the same method could be used to tackle a variety of
+   problems by varying the input-output domain pairs - performing artistic
+   style transfer, adding bokeh effect to phone camera photos, creating
+   outline maps from satellite images or convert horses to zebras and vice
+   versa!! this is achieved by a type of generative model, specifically a
+   generative adversarial network dubbed cyclegan by the authors of
+   [7]this paper. here are some examples of what cyclegan can do.
+
+   the power of cyclegans!
+   source: [8]cyclegan repository
+
+   we are not going to go look at gans from scratch, check out [9]this
+   simplified tutorial to get a hang of it. [10]this workshop video at
+   nips 2016 by ian goodfellow (the guy behind the gans) is also a great
+   resource. what we will be doing in this post is look at how to
+   implement a cyclegan in tensorflow.
+
+   the paper we are going to implement is titled "unpaired image-to-image
+   translation using cycle-consistent adversarial networks". the title is
+   quite a mouthful and it helps to look at each phrase individually
+   before trying to understand the model all at once
+     __________________________________________________________________
+
+   unpaired image-to-image translation
+
+   [img_translation.jpg]
+   figure from the paper
+
+   as mentioned earlier, the cyclegan works without paired examples of
+   transformation from source to target domain. recent methods such as
+   [11]pix2pix depend on the availaibilty of training examples where the
+   same data is available in both domains. the power of cyclegan lies in
+   being able to learn such transformations without one-to-one mapping
+   between training data in source and target domains. the need for a
+   paired image in the target domain is eliminated by making a two-step
+   transformation of source domain image - first by trying to map it to
+   target domain and then back to the original image. mapping the image to
+   target domain is done using a generator network and the quality of this
+   generated image is improved by pitching the generator against a
+   discrimintor (as described below)
+     __________________________________________________________________
+
+   adversarial networks
+   we have a generator network and discriminator network playing against
+   each other. the generator tries to produce samples from the desired
+   distribution and the discriminator tries to predict if the sample is
+   from the actual distribution or produced by the generator. the
+   generator and discriminator are trained jointly. the effect this has is
+   that eventually the generator learns to approximate the underlying
+   distribution completely and the discriminator is left guessing
+   randomly.
+     __________________________________________________________________
+
+   cycle-consistent
+   the above adversarial method of training has a problem though. quoting
+   the authors of the original paper:
+
+     adversarial training can, in theory, learn mappings $g$ and $f$ that
+     produce outputs identically distributed as target domains $y$ and
+     $x$ respectively. however, with large enough capacity, a network can
+     map the same set of input images to any random permutation of images
+     in the target domain, where any of the learned mappings can induce
+     an output distribution that matches the target distribution. thus,
+     an adversarial loss alone cannot guarantee that the learned function
+     can map an individual input $x_i$ to a desired output $y_i$.
+
+   to regularize the model, the authors introduce the constraint of
+   cycle-consistency - if we transform from source distribution to target
+   and then back again to source distribution, we should get samples from
+   our source distribution.
+
+network architecture[12]  
+
+   model architecture
+     __________________________________________________________________
+
+   model architecture 1
+   simplified view of cyclegan architecture
+
+   in a paired dataset, every image, say $img_a$, is manually mapped to
+   some image, say $img_b$, in target domain, such that they share various
+   features. features that can be used to map an image $(img_a/img_b)$ to
+   its correspondingly mapped counterpart $(img_b/img_a)$. basically,
+   pairing is done to make input and output share some common features.
+   this mapping defines meaningful transformation of an image from one
+   damain to another domain. so, when we have paired dataset, generator
+   must take an input, say $input_a$, from domain $d_a$ and map this image
+   to an output image, say $gen_b$, which must be close to its mapped
+   counterpart. but we don't have this luxury in unpaired dataset, there
+   is no pre-defined meaningful transformation that we can learn, so, we
+   will create it. we need to make sure that there is some meaningful
+   relation between input image and generated image. so, authors tried to
+   enforce this by saying that generator will map input image $(input_a)$
+   from domain $d_a$ to some image in target domain $d_b$, but to make
+   sure that there is meaningful relation between these images, they must
+   share some feature, features that can be used to map this output image
+   back to input image, so there must be another generator that must be
+   able to map back this output image back to original input. so, you can
+   see this condition defining a meaningful mapping between $input_a$ and
+   $gen_b$.
+
+   in a nutshell, the model works by taking an input image from domain
+   $d_a$ which is fed to our first generator $generator_{a\rightarrow b}$
+   whose job is to transform a given image from domain $d_a$ to an image
+   in target domain $d_b$. this new generated image is then fed to another
+   generator $generator_{b\rightarrow a}$ which converts it back into an
+   image, $cyclic_a$, from our original domain $d_a$ (think of
+   autoencoders, except that our latent space is $d_t$). and as we
+   discussed in above paragraph, this output image must be close to
+   original input image to define a meaningful mapping that is absent in
+   unpaired dataset.
+
+   as you can see in above figure, two inputs are fed into each
+   discriminator(one is original image corresponding to that domain and
+   other is the generated image via a generator) and the job of
+   discriminator is to distinguish between them, so that discriminator is
+   able to defy the adversary (in this case generator) and reject images
+   generated by it. while the generator would like to make sure that these
+   images get accepted by the discriminator, so it will try to generate
+   images which are very close to original images in class $d_b$. (in
+   fact, the generator and discriminator are actually playing a game whose
+   nash equilibrium is achieved when the generator's distribution becomes
+   same as the desired distribution)
+
+   implementing cyclegan in tensorflow is quite straightforward. the
+   following sections explain the implementation of components of cyclegan
+   and the complete code can be found [13]here.
+
+building the generator[14]  
+
+   high level structure of generator can be viewed in the following image.
+
+   model architecture 1
+
+   the generator have three components:
+    1. encoder
+    2. transformer
+    3. decoder
+
+   following are the parameters we have used for the mode.
+ngf = 32 # number of filters in first layer of generator
+ndf = 64 # number of filters in first layer of discriminator
+batch_size = 1 # batch_size
+pool_size = 50 # pool_size
+img_width = 256 # imput image will of width 256
+img_height = 256 # input image will be of height 256
+img_depth = 3 # rgb format
+
+   first three parameters are self explanatory and we will explain what
+   pool_size means in the generated image pool section.
+
+encoding:[15]  
+
+   for the purpose of simplicity, throughout the article we will assume
+   that the input size is $[256, 256, 3]$. the first step is extracting
+   the features from an image which is done a convolution network. to
+   learn the basics about convolutional networks you can go through this
+   very intuitive blog post by [16]ujjwalkarn. as input a convolution
+   network takes an image, size of filter window that we move over input
+   image to extract out features and the stride size to decide how much we
+   will move filter window after each step. so the first layer of encoding
+   looks like this:
+o_c1 = general_conv2d(input_gen,
+                      num_features=ngf,
+                      window_width=7,
+                      window_height=7,
+                      stride_width=1,
+                      stride_height=1)
+
+   here input_gen is the input image to the generator, num_features is the
+   number of output features we extract out of the convolution layer,
+   which can also be seen as number of different filters used to extract
+   different features. window_width and window_height denote the width and
+   heigth of filter window that we will move accross the input image to
+   extract features and similarly stride_width and stride_height defines
+   the shift of filter patch after each step. the output $o_{c_1}$ is a
+   tensor of dimensions $[256, 256, 64]$ which is again passed through
+   another convolution layer. here, ngf = 64 as mentioned earlier. i have
+   defined the general_conv2d function. we can add other layers like relu
+   or batch id172 layer but we are skipping the details of these
+   layers in this tutorial.
+def general_conv2d(inputconv, o_d=64, f_h=7, f_w=7, s_h=1, s_w=1):
+    with tf.variable_scope(name):
+        conv = tf.contrib.layers.conv2d(inputconv, num_features, [window_width,
+window_height], [stride_width, stride_height],
+                                        padding, activation_fn=none, weights_ini
+tializer=tf.truncated_normal_initializer(stddev=stddev),
+                                        biases_initializer=tf.constant_initializ
+er(0.0))
+
+   further:
+o_c2 = general_conv2d(o_c1, num_features=64*2, window_width=3, window_height=3,
+stride_width=2, stride_height=2)
+# o_c2.shape = (128, 128, 128)
+
+o_enc_a = general_conv2d(o_c2, num_features=64*4, window_width=3, window_height=
+3, stride_width=2, stride_height=2)
+# o_enc_a.shape = (64, 64, 256)
+
+   each convolution layer leads to extraction of progressively higher
+   level features. it can also be seen as compressing an image into 256
+   features vectors of size 64*64 each. we are now in good shape to
+   transform this feature vector of a image in domain $d_a$ to feature
+   vector of an image in domain $d_b$.
+
+   to summarize, we took an image from domain $d_a$ of size $[256, 256,
+   3]$ which we fed into our encoder to get output $o_{enc}^{a}$ of size
+   $[64, 64, 256]$.
+
+transformation:[17]  
+
+   you can view these layers as combining different nearby features of an
+   image and then based on these features making decision about how we
+   would like to transform that feature vector/encoding ($o_{enc}^{a}$) of
+   an image from $d_a$ to that of $d_b$. so for this, authors have used 6
+   layer of resnet blocks as follow:
+o_r1 = build_resnet_block(o_enc_a, num_features=64*4)
+o_r2 = build_resnet_block(o_r1, num_features=64*4)
+o_r3 = build_resnet_block(o_r2, num_features=64*4)
+o_r4 = build_resnet_block(o_r3, num_features=64*4)
+o_r5 = build_resnet_block(o_r4, num_features=64*4)
+o_enc_b = build_resnet_block(o_r5, num_features=64*4)
+
+# o_enc_b.shape = (64, 64, 256)
+
+   here $o_{enc}^{b}$ denotes the final output of this layer which will be
+   of the size $[64,64,256]$. and as discussed ealier, this can be seens
+   as the feature vector for an image in domain $d_b$.
+
+   you must be wondering what is this build_resnet_block function and what
+   does it do? build_resnet_block is a neural network layer which consists
+   of two convolution layers where a residue of input is added to the
+   output. this is done to ensure properties of input of previous layers
+   are available for later layers as well, so that the their output do not
+   deviate much from original input, otherwise the characteristics of
+   original images will not be retained in the output and results will be
+   very abrupt. as we discussed earlier, one of the primary aim fo the
+   task is to retain the characteristic of original input like the size
+   and shape of the object, so residual networks are a great fit for these
+   kind of transformations. resnet block can be summarized in following
+   image
+
+   model architecture 1
+
+   code for resnet block is as follow:
+def resnet_blocks(input_res, num_features):
+
+    out_res_1 = general_conv2d(input_res, num_features,
+                               window_width=3,
+                               window_heigth=3,
+                               stride_width=1,
+                               stride_heigth=1)
+    out_res_2 = general_conv2d(out_res_1, num_features,
+                               window_width=3,
+                               window_heigth=3,
+                               stride_width=1,
+                               stride_heigth=1)
+    return (out_res_2 + input_res)
+
+decoding[18]  
+
+   up until now we have fed a feature vector $o_{enc}^{a}$ into a
+   transformation layer to get another feature vector $o_{enc}^{b}$ of
+   size $[64, 64, 256]$.
+
+   decoding step is exact opposite of step 1, we will build back the low
+   level features back from the feature vector. this is done by applying a
+   deconvolution (or transpose convolution) layer.
+o_d1 = general_deconv2d(o_enc_b, num_features=ngf*2 window_width=3, window_heigh
+t=3, stride_width=2, stride_height=2)
+o_d2 = general_deconv2d(o_d1, num_features=ngf, window_width=3, window_height=3,
+ stride_width=2, stride_height=2)
+
+   finally we will convert this low level feature to image in domain $d_b$
+   as follow:
+gen_b = general_conv2d(o_d2, num_features=3, window_width=7, window_height=7, st
+ride_width=1, stride_height=1)
+
+   so, finally we have the generate image $gen_b$ of size $[256,256,3]$
+   and the code for building generator can be compressed to following
+   function
+def build_generator(input_gen):
+    o_c1 = general_conv2d(input_gen, num_features=ngf, window_width=7, window_he
+ight=7, stride_width=1, stride_height=1)
+    o_c2 = general_conv2d(o_c1, num_features=ngf*2, window_width=3, window_heigh
+t=3, stride_width=2, stride_height=2)
+    o_enc_a = general_conv2d(o_c2, num_features=ngf*4, window_width=3, window_he
+ight=3, stride_width=2, stride_height=2)
+
+    # transformation
+    o_r1 = build_resnet_block(o_enc_a, num_features=64*4)
+    o_r2 = build_resnet_block(o_r1, num_features=64*4)
+    o_r3 = build_resnet_block(o_r2, num_features=64*4)
+    o_r4 = build_resnet_block(o_r3, num_features=64*4)
+    o_r5 = build_resnet_block(o_r4, num_features=64*4)
+    o_enc_b = build_resnet_block(o_r5, num_features=64*4)
+
+    #decoding
+    o_d1 = general_deconv2d(o_enc_b, num_features=ngf*2 window_width=3, window_h
+eight=3, stride_width=2, stride_height=2)
+    o_d2 = general_deconv2d(o_d1, num_features=ngf, window_width=3, window_heigh
+t=3, stride_width=2, stride_height=2)
+    gen_b = general_conv2d(o_d2, num_features=3, window_width=7, window_height=7
+, stride_width=1, stride_height=1)
+
+    return gen_b
+
+building the discriminator[19]  
+
+   we discussed how to build a generator, however for adversarial training
+   of the network we need to build a discriminator as well. the
+   discriminator would take an image as an input and try to predict if it
+   is an original or the output from the generator. generator can be
+   visualized in following image.
+
+   model architecture 1
+
+   the discriminator is simply a convolution network in our case. first,
+   we will extract the features from the image.
+o_c1 = general_conv2d(input_disc, ndf, f, f, 2, 2)
+o_c2 = general_conv2d(o_c1, ndf*2, f, f, 2, 2)
+o_enc_a = general_conv2d(o_c2, ndf*4, f, f, 2, 2)
+o_c4 = general_conv2d(o_enc_a, ndf*8, f, f, 2, 2)
+
+   next step is deciding whether these features belongs to that particular
+   category or not. for that we will add a final convolution layer that
+   produces a 1 dimensional output. here, $ndf$ denotes the number of
+   features in initial layer of discriminator that one can vary or
+   experiment with to get the best result.
+decision = general_conv2d(o_c4, 1, f, f, 1, 1, 0.02)
+
+   we now have two main components of the model, namely generator and
+   discriminator, and since we want to make this model work in both the
+   direction i.e., from $a \rightarrow b$ and from $ b \rightarrow a$, we
+   will have two generators, namely $generator_{a\rightarrow b}$ and
+   $generator_{b\rightarrow a}$, and two discriminators, namely
+   $discriminator_a$ and $discriminator_b$.
+
+building the model[20]  
+
+   before getting to loss funtion let us define the base and see how to
+   take input, construct the model.
+input_a = tf.placeholder(tf.float32, [batch_size, img_width, img_height, img_lay
+er], name="input_a")
+input_b = tf.placeholder(tf.float32, [batch_size, img_width, img_height, img_lay
+er], name="input_b")
+
+   these placeholders will act as input while defining our model as
+   follow.
+gen_b = build_generator(input_a, name="generator_atob")
+gen_a = build_generator(input_b, name="generator_btoa")
+dec_a = build_discriminator(input_a, name="discriminator_a")
+dec_b = build_discriminator(input_b, name="discriminator_b")
+
+dec_gen_a = build_discriminator(gen_a, "discriminator_a")
+dec_gen_b = build_discriminator(gen_b, "discriminator_b")
+cyc_a = build_generator(gen_b, "generator_btoa")
+cyc_b = build_generator(gen_a, "generator_atob")
+
+   above variable names are quite intuitive in nature. $gen$ represents
+   image generated after using corresponding generator and $dec$
+   represents decision after feeding the corresponding input to the
+   discriminator.
+
+id168[21]  
+
+   by now we have two generators and two discriminators. we need to design
+   the id168 in a way which accomplishes our goal. the loss
+   function can be seen having four parts:
+    1. discriminator must approve all the original images of the
+       corresponding categories.
+    2. discriminator must reject all the images which are generated by
+       corresponding generators to fool them.
+    3. generators must make the discriminators approve all the generated
+       images, so as to fool them.
+    4. the generated image must retain the property of original image, so
+       if we generate a fake image using a generator say
+       $generator_{a\rightarrow b}$ then we must be able to get back to
+       original image using the another generator $generator_{b\rightarrow
+       a}$ - it must satisfy cyclic-consistency.
+
+discriminator loss[22]  
+
+part 1[23]  
+
+   discriminator must be trained such that recommendation for images from
+   category a must be as close to 1, and vice versa for discriminator b.
+   so discriminator a would like to minimize $(discriminator_a(a) - 1)^2$
+   and same goes for b as well. this can be implemented as:
+d_a_loss_1 = tf.reduce_mean(tf.squared_difference(dec_a,1))
+d_b_loss_1 = tf.reduce_mean(tf.squared_difference(dec_b,1))
+
+part 2[24]  
+
+   since, discriniator should be able to distinguish between generated and
+   original images, it should also be predicting 0 for images produced by
+   the generator, i.e. discriminator a wwould like to minimize
+   $(discriminator_a(generator_{b\rightarrow a}(b)))^2$. it can be
+   calculated as follow:
+d_a_loss_2 = tf.reduce_mean(tf.square(dec_gen_a))
+d_b_loss_2 = tf.reduce_mean(tf.square(dec_gen_b))
+
+d_a_loss = (d_a_loss_1 + d_a_loss_2)/2
+d_b_loss = (d_b_loss_1 + d_b_loss_2)/2
+
+generator loss[25]  
+
+   generator should eventually be able to fool the discriminator about the
+   authencity of it's generated images. this can done if the
+   recommendation by discriminator for the generated images is as close to
+   1 as possible. so generator would like to minimize
+   $(discriminator_b(generator_{a\rightarrow b}(a)) -1)^2$ so the loss is:
+g_loss_b_1 = tf.reduce_mean(tf.squared_difference(dec_gen_a,1))
+g_loss_a_1 = tf.reduce_mean(tf.squared_difference(dec_gen_a,1))
+
+cyclic loss[26]  
+
+   and the last one and one of the most important one is the cyclic loss
+   that captures that we are able to get the image back using another
+   generator and thus the difference between the original image and the
+   cyclic image should be as small as possible.
+cyc_loss = tf.reduce_mean(tf.abs(input_a-cyc_a)) + tf.reduce_mean(tf.abs(input_b
+-cyc_b))
+
+   the complete generator loss is then:
+g_loss_a = g_loss_a_1 + 10*cyc_loss
+g_loss_b = g_loss_b_1 + 10*cyc_loss
+
+   the multiplicative factor of 10 for cyc_loss assigns more importance to
+   cyclic loss than the discrimination loss.
+
+putting it together[27]  
+
+   with the id168 defined, all the is needed to train the model is
+   to minimize the id168 w.r.t. model parameters.
+d_a_trainer = optimizer.minimize(d_loss_a, var_list=d_a_vars)
+d_b_trainer = optimizer.minimize(d_loss_b, var_list=d_b_vars)
+g_a_trainer = optimizer.minimize(g_loss_a, var_list=g_a_vars)
+g_b_trainer = optimizer.minimize(g_loss_b, var_list=g_b_vars)
+
+training the model[28]  
+
+for epoch in range(0,100):
+    # define the learning rate schedule. the learning rate is kept
+    # constant upto 100 epochs and then slowly decayed
+    if(epoch < 100) :
+        curr_lr = 0.0002
+    else:
+        curr_lr = 0.0002 - 0.0002*(epoch-100)/100
+
+    # running the training loop for all batches
+    for ptr in range(0,num_images):
+
+        # train generator g_a->b
+        _, gen_b_temp = sess.run([g_a_trainer, gen_b],
+                                 feed_dict={input_a:a_input[ptr], input_b:b_inpu
+t[ptr], lr:curr_lr})
+
+        # we need gen_b_temp because to calculate the error in training d_b
+        _ = sess.run([d_b_trainer],
+                     feed_dict={input_a:a_input[ptr], input_b:b_input[ptr], lr:c
+urr_lr})
+
+        # same for g_b->a and d_a as follow
+        _, gen_a_temp = sess.run([g_b_trainer, gen_a],
+                                 feed_dict={input_a:a_input[ptr], input_b:b_inpu
+t[ptr], lr:curr_lr})
+        _ = sess.run([d_a_trainer],
+                     feed_dict={input_a:a_input[ptr], input_b:b_input[ptr], lr:c
+urr_lr})
+
+   you can see in above training function that one by one we are calling
+   trainers corresponding to different dicriminators and generators. for
+   training them, we need to feed traing images and learning rate of the
+   optimizer. since, we have batch_size = 1, so, num_batches = num_images.
+
+   since, we are nearly done with the code, below is look at the default
+   parameters that we took to train the model
+
+generated image pool[29]  
+
+   calculating the discriminator loss for each generated image would be
+   computationally prohibitive. to speed up training we store a collection
+   of previously generated images for each domain and to use only one of
+   these images for calculating the error. first, fill the image_pool one
+   by one until its full and after that randomly replace an image from the
+   pool and store the latest one and use the replaced image for training
+   in that iteration.
+def image_pool(self, num_gen, gen_img, gen_pool):
+    if(num_gen < pool_size):
+        gen_img_pool[num_gen] = gen_img
+        return gen_img
+    else :
+        p = random.random()
+        if p > 0.5:
+            # randomly selecting an id to return for calculating the discriminat
+or loss
+            random_id = random.randint(0,pool_size-1)
+            temp = gen_img_pool[random_id]
+            gen_pool[random_id] = gen_img
+            return temp
+        else :
+            return gen_img
+
+gen_image_pool_a = tf.placeholder(tf.float32, [batch_size, img_width, img_height
+, img_layer], name="gen_img_pool_a")
+gen_image_pool_b = tf.placeholder(tf.float32, [batch_size, img_width, img_height
+, img_layer], name="gen_img_pool_b")
+
+gen_pool_rec_a = build_gen_discriminator(gen_image_pool_a, "d_a")
+gen_pool_rec_b = build_gen_discriminator(gen_image_pool_b, "d_b")
+
+# also the discriminator loss will change as follow
+
+d_a_loss_2 = tf.reduce_mean(tf.square(gen_pool_rec_a))
+d_a_loss_2 = tf.reduce_mean(tf.square(gen_pool_rec_a))
+
+   the image pool requires minor modifications to the code. for complete
+   code refer to the implementation [30]here.
+
+results[31]  
+
+   we ran the model for [32]horse2zebra dataset but because of the lack of
+   resources, we just ran the model for 100 epochs and got following
+   results.
+
+   model architecture 1
+   results
+
+final comments[33]  
+
+    1. during training we noticed that the ouput results were sensitive to
+       initialization. thanks to [34]vanhuyz for pointing this out and
+       suggesting training multiple times to get best results. you might
+       notice background color being reversed as in following image. this
+       effect can be observed only after 10-20 epochs and you can try to
+       run the code again.
+       distortion
+       distortion
+    2. we also think that this model is not good fit to change the shape
+       of object. we tried to run the model for converting a men's face to
+       a look alike women's face. for that we used celeba dataset but the
+       results are not good and images produced are quite distorted.
+
+   if you spot any mistakes or feel if we missed anything please tell us
+   about it in the comments. thanks! for reading the blog.
+   please enable javascript to view the [35]comments powered by disqus.
+
+references
+
+   1. https://hardikbansal.github.io/cycleganblog/#understanding-and-implementing-cyclegan-in-tensorflow
+   2. https://github.com/hardikbansal
+   3. https://github.com/architrathore
+   4. https://hardikbansal.github.io/cycleganblog/#introduction
+   5. https://dmitryulyanov.github.io/feed-forward-neural-doodle/
+   6. https://play.google.com/store/apps/details?id=io.faceapp
+   7. https://arxiv.org/abs/1703.10593
+   8. https://github.com/junyanz/cyclegan/
+   9. http://blog.aylien.com/introduction-generative-adversarial-networks-code-tensorflow/
+  10. https://www.youtube.com/watch?v=rvgyvhyt15e
+  11. https://arxiv.org/abs/1611.07004
+  12. https://hardikbansal.github.io/cycleganblog/#network-architecture
+  13. https://github.com/hardikbansal/cyclegan/
+  14. https://hardikbansal.github.io/cycleganblog/#building-the-generator
+  15. https://hardikbansal.github.io/cycleganblog/#encoding:
+  16. https://ujjwalkarn.me/2016/08/11/intuitive-explanation-convnets/
+  17. https://hardikbansal.github.io/cycleganblog/#transformation:
+  18. https://hardikbansal.github.io/cycleganblog/#decoding
+  19. https://hardikbansal.github.io/cycleganblog/#building-the-discriminator
+  20. https://hardikbansal.github.io/cycleganblog/#building-the-model
+  21. https://hardikbansal.github.io/cycleganblog/#loss-function
+  22. https://hardikbansal.github.io/cycleganblog/#discriminator-loss
+  23. https://hardikbansal.github.io/cycleganblog/#part-1
+  24. https://hardikbansal.github.io/cycleganblog/#part-2
+  25. https://hardikbansal.github.io/cycleganblog/#generator-loss
+  26. https://hardikbansal.github.io/cycleganblog/#cyclic-loss
+  27. https://hardikbansal.github.io/cycleganblog/#putting-it-together
+  28. https://hardikbansal.github.io/cycleganblog/#training-the-model
+  29. https://hardikbansal.github.io/cycleganblog/#generated-image-pool
+  30. https://github.com/hardikbansal/cyclegan/
+  31. https://hardikbansal.github.io/cycleganblog/#results
+  32. https://people.eecs.berkeley.edu/~taesung_park/cyclegan/datasets/horse2zebra.zip
+  33. https://hardikbansal.github.io/cycleganblog/#final-comments
+  34. https://github.com/vanhuyz
+  35. https://disqus.com/?ref_noscript

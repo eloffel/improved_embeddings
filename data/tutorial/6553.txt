@@ -1,0 +1,464 @@
+   iframe: [1]//www.googletagmanager.com/ns.html?id=gtm-5cvqbg
+
+   (button)
+   blog
+   [2]skip to content
+   [3]blog
+   menu
+     * [4]latest stories
+     * [5]product news
+     * [6]topics
+
+   ____________________ (button)
+     * (button)
+     *
+          + [7]about
+          + [8]rss feed
+         
+
+   ____________________ (button)
+     * [9]latest stories
+     * [10]products
+     * [11]topics
+     * [12]about
+     * [13]rss feed
+
+   data analytics
+
+intro to text classification with keras: automatically tagging stack overflow
+posts
+
+   sara robinson
+   developer advocate
+   josh gordon
+   developer advocate
+   marianne linhares monteiro
+   da intern
+   october 6, 2017
+
+   as humans, our brains can easily read a piece of text and extract the
+   topic, tone, and sentiment. up until just a few years ago, teaching a
+   computer to do the same thing required extensive machine learning
+   expertise and access to powerful computing resources. now, frameworks
+   like [14]tensorflow are helping to simplify the process of building
+   machine learning models, and making it more accessible to developers
+   with no background in ml.
+
+   in this post, we   ll show you how to build a simple model to predict the
+   [15]tag of a stack overflow question. we   ll solve this text
+   classification problem using [16]keras, a high-level api built in to
+   tensorflow.
+
+   you can find the complete code for this post on [17]github.
+
+getting the comment data
+
+   data is at the core of any machine learning problem. to build our text
+   classification model, we   ll need to train it on a large dataset of
+   stack overflow questions. after training our model, we   ll also need a
+   test dataset to check its accuracy with data it has never seen before.
+   our first step is getting the stack overflow questions and tags. this
+   data is [18]available in bigquery as a public dataset.
+
+   we   ll have our model classify stack overflow posts from the [19]top 20
+   tags. to keep things simple, we only selected posts with a single tag.
+   we   ll train the model on 2000 comments from each of the 20 tags, so our
+   dataset will include 40,000 examples in total. we   ll reserve 20% of
+   this data (8,000 examples) for testing our model.
+
+   with this [20]sql query, we can extract our data from bigquery (we   ll
+   split it into training, validation, and test sets later). you can also
+   view the [21]query on github.
+
+   the data in bigquery looks like this:
+   keras-tags-1220m.png
+
+   bigquery makes it easy to download the output of this query as a csv by
+   clicking on the    download as csv    option above our results:
+   keras-tags-2mirj.png
+
+   now that we have our data in a csv file, we   re ready to format it for
+   our model.
+
+id159
+
+   preprocessing data
+
+   we   ll use a simple [22]id159 to classify questions. this
+   type of model takes the collection of words in each post as input. it
+   will be able to determine whether each word appears in a post, but it
+   won   t understand grammar or sequence  (think of the inputs as a bag of
+   scrabble tiles, where each tile represents a word). for example, our
+   model will be able to understand that the words    screen    and    listview   
+   are frequently tagged as android, but it won   t know anything about the
+   order in which they frequently appear.
+
+   processing input features
+
+   our input data is the post title and body, but we can   t feed text
+   directly into our model. instead, we need to put it into numeric
+   representation, which is a format the model can understand. to do this,
+   we   ll create an array of the top words in our vocabulary. a comment
+   will be represented by a dense vector of our vocabulary size, with a 0
+   or 1 indicating the absence or presence of a given word from the
+   vocabulary in a comment. let   s say our vocabulary consisted of five
+   words represented by the following array:
+  [   listview   ,    strftime   ,    studio   ,    isnan   ,    script   ]
+
+   the input vector for the sentence    how to make a listview in android
+   studio    would look like the following, with the indices of each of the
+   three words in our example sentence represented by a 1 in their
+   corresponding index in our vocabulary:
+  [1 0 1 0 0]
+
+   since our dataset of stack overflow posts has over 100,000 unique words
+   in the vocabulary, we   ll limit the vocab size for our model to the top
+   1000 most commonly used words (this is a parameter you can experiment
+   with). first we   ll use [23]pandas to read our csv file of training
+   data:
+  data = pd.read_csv("stack-overflow.csv")
+
+   when feeding data into our model, we   ll separate it into training and
+   test data. the majority of our data will be used as examples that our
+   model will use to update its weights and biases. when the model has
+   finished training, we   ll reserve a subset of our data to test its
+   accuracy on examples it hasn   t seen before. a typical rule for this is
+   to use 80% of your data for training and 20% for testing. here   s the
+   code to split our pandas dataframe into train and test sets:
+  train_size = int(len(data) * .8)
+train_posts = data['post'][:train_size]
+train_tags = data['tags'][:train_size]
+test_posts = data['post'][train_size:]
+test_tags = data['tags'][train_size:]
+
+   we could write the code to create our bag of word vectors from scratch,
+   but keras has some built in methods for preprocessing text to make this
+   simple. the [24]tokenizer class provides methods to count the unique
+   words in our vocabulary and assign each of those words to indices.
+   we   ll create an instance of the tokenizer class, and then pass it the
+   pandas dataframe of text we want to train on. calling fit_on_texts()
+   automatically creates a word index lookup of our vocabulary. by passing
+   a num_words param to the tokenizer, it will limit our vocabulary to the
+   top words:
+  vocab_size = 1000
+tokenize = text.tokenizer(num_words=vocab_size)
+tokenize.fit_on_texts(train_posts)
+
+   with our tokenizer, we can now use the texts_to_matrix method to create
+   the training data we   ll pass our model. this will take each post   s text
+   and turn it into a vocab_size    bag    array, with 1s indicating the
+   indices where words in a question are present in the vocabulary:
+  x_train = tokenize.texts_to_matrix(train_posts)
+
+processing output labels
+
+   the tag for each question is a string (i.e.    javascript    or    php   ).
+   first, we   ll need to encode each tag as an integer. but instead of
+   using a single int as the label for each input, we   ll turn it into a
+   one-hot vector. if we had only 5 tags (labels) in our dataset and the
+   label    java    was associated with the index 3, our one-hot label vector
+   would look like this:
+
+  [0 0 0 1 0]
+
+   we feed a one-hot vector to our model instead of a single integer
+   because when we use our model for prediction, it will output a vector
+   of probabilities for each post like the following:
+  [ 0.08078627  0.24490279  0.21754906  0.23220219  0.22455971]
+
+   scikit-learn has a [25]labelbinarizer class which makes it easy to
+   build these one-hot vectors. we can pass it the labels column from our
+   pandas dataframe and then call fit() and transform() on it:
+  encoder = labelbinarizer()
+encoder.fit(train_tags)
+y_train = encoder.transform(train_tags)
+y_test = encoder.transform(test_tags)
+
+   with our features and labels in a format keras can read, we   re ready to
+   build our text classification model.
+
+building the model
+
+   to define the layers of our model we   ll use the keras [26]sequential
+   model api. this lets us easily define the shape of our input data and
+   the type of layers that make up our model. we can start defining our
+   model with one line of code:
+
+  model = sequential()
+
+   now we   re ready to add our input layer. the input layer will take the
+   vocab_size arrays for each comment. we   ll specify this as a [27]dense
+   layer in keras, which means each neuron in this layer will be fully
+   connected to all neurons in the next layer. we pass the dense layer two
+   parameters: the dimensionality of the layer   s output (number of
+   neurons) and the shape of our input data. choosing the number of
+   dimensions requires some experimentation, and there is a lot of
+   discussion on the best approach for doing this. it   s common to use a
+   power of 2 as the number of dimensions, so we   ll start with 512. the
+   number of rows in our input data will be the number of posts we   re
+   feeding the model at each training step (called batch size), and the
+   number of columns will be the size of our vocabulary. with that, we   re
+   ready to define the dense input layer. the activation function tells
+   our model how to calculate the output of a layer (you can read more
+   about relu [28]here).
+  model.add(dense(512, input_shape=(vocab_size,)))
+model.add(activation('relu'))
+
+   our network will have one more layer. since it   s the last layer in our
+   network, it   ll be our output layer. the model will take the    bag of
+   words    for each comment and output a 20-element array indicating the
+   id203 that the question belongs to each of our 20 tags. to
+   achieve this output the layer will use the [29]softmax activation
+   function. if that sounds confusing, softmax just means the model will
+   normalize the evidence for each possible label into a id203 (from
+   0 to 1), and these 20 values for a given comment will sum up to 1.
+
+   how will our model take the vocab_size input, transform it to a
+   512-dimensional layer, and transform that into an output layer with 20
+   id203 neurons? the beauty of keras is that it   ll handle those
+   computations for us     all we need to do is tell it the shape of our
+   input data, output data, and the type of each layer. the following code
+   will complete our model:
+  model.add(dense(num_labels))
+model.add(activation('softmax'))
+
+   we just defined our model in 5 lines of code.
+
+training and evaluating the model
+
+   to prepare our model for training, we need to call the compile method
+   with the id168 we want to use, the type of optimizer, and the
+   metrics our model should evaluate during training and testing. we   ll
+   use the [30]cross id178 id168, since each of our comments can
+   only belong to one post. the optimizer is the function our model uses
+   to minimize loss. in this example we   ll use the adam optimizer. there
+   are many optimizers available, all of which are different
+   implementations of id119 (read more about optimizers
+   [31]here). for metrics we   ll evaluate accuracy, which will tell us the
+   percentage of comments it assigned the correct label to:
+
+  model.compile(loss='categorical_crossid178',
+              optimizer='adam',
+              metrics=['accuracy'])
+
+   to train our model, we   ll call the fit() method, pass it our training
+   data and labels, the number of examples to process in each batch (batch
+   size), how many times the model should train on our entire dataset
+   (epochs), and the validation split. validation_split tells keras what
+   percentage of our training data to reserve for validation.
+  history = model.fit(x_train, y_train,
+                    batch_size=batch_size,
+                    epochs=2,
+                    verbose=1,
+                    validation_split=0.1)
+
+   in a machine learning experiment, the goal is to generate accurate
+   predictions on questions the model hasn   t seen before. to do this we   ll
+   compute our model   s accuracy on our test set, which was hidden from the
+   model during the training process:
+  score = model.evaluate(x_test, y_test,
+                       batch_size=batch_size, verbose=1)
+print('test score:', score[0])
+print('test accuracy:', score[1])
+
+   we   re ready to run training! in this example, our model will go through
+   our dataset 2 times. if it   s learning correctly, the loss should
+   decrease and accuracy should increase after each epoch. here are the
+   logs after running training and validation over 2 epochs:
+  train on 28800 samples, validate on 3200 samples
+epoch 1/2
+28800/28800 [==============================] - 6s - loss: 0.9771 - acc: 0.7182 -
+ val_loss: 0.6109 - val_acc: 0.8081
+epoch 2/2
+28800/28800 [==============================] - 6s - loss: 0.5524 - acc: 0.8247 -
+ val_loss: 0.5879 - val_acc: 0.8159
+
+   how well did the model do? a confusion matrix is a great way to see how
+   many questions the model tagged correctly, and where mistakes were most
+   commonly made. for example, we can see that our model had the highest
+   accuracy on questions tagged    angularjs    and it occasionally confused
+   questions tagged as    objective-c    with    iphone    or    ios   . this makes
+   sense since we were only looking at questions with exactly one tag.
+   keras-tags-4mfpu.png
+
+generating predictions
+
+   we   ve built and trained a model and evaluated its accuracy, but we   re
+   not quite done. now that the model is trained, what if we want it to
+   generate a prediction for a few examples?
+
+   here we   ll pass our model 10 posts from our test set. all we need to do
+   to generate predictions is call predict() on our model, passing it the
+   post converted to a bag of words matrix:
+  for i in range(10):
+    prediction = model.predict(np.array([x_test[i]]))
+
+   prediction is now a 1x20 array: 1 row for the individual question and
+   20 columns for the softmax id203 that the question belongs to
+   each tag. for this array of probabilities generated by our model, we
+   want to get the index of the highest value, find the tag associated
+   with that index from our labelbinarizer, and output the question text
+   and predicted label:
+  text_labels = encoder.classes_
+predicted_label = text_labels[np.argmax(prediction[0])]
+print(test_posts.iloc[i][:50], "...")
+print('actual label:' + test_tags.iloc[i])
+print("predicted label: " + predicted_label)
+
+   here   s the output from a few predictions:
+   keras-tags-59c2g.png
+
+next steps
+
+   this post introduced a simple way to represent stack overflow questions
+   and build a model to classify them using the keras api. our emphasis
+   here hasn   t been on accuracy. to improve that, we could experiment with
+   various hyperparameters:
+
+     * changing the vocab size the bow model uses
+     * changing batch size, number of epochs, or the dimensionality of the
+       input layer
+     * increasing the size of our training dataset
+     * adding [32]dropout to one of our layers to prevent the model from
+       overfitting
+
+   remember that with bag of words, the model disregards the order of
+   words in our text. since the order of words in a question contributes
+   to its meaning, this is probably something we want to preserve in our
+   representation.
+
+   in the next post, we   ll approach this problem from a big data
+   perspective. we   ll work with a much larger dataset that doesn   t fit
+   into memory, and show how you can train a model at scale using
+   tensorflow estimators, and the new datasets api.we   d love to hear what
+   you   re building with keras or if there   s another topic you   d like to
+   see covered on the blog     let us know in the comments or find us on
+   twitter at @[33]srobtweets, @[34]random_forests, and @[35]hereismari.
+   posted in:
+     * [36]data analytics
+
+related articles
+
+     * next19_session.png
+    8 statistically sound smart analytics sessions to attend at next    19
+     * gsuite_bq.png
+    simplify reporting with the sheets data connector for bigquery, and
+       voila: automated content updates for g suite
+     * google_bq_a_rnd1.jpg
+    migrating your traditional data warehouse platform to bigquery:
+       announcing the data warehouse migration offer
+     * rice_genome.png
+    analyzing 3024 rice genomes characterized by deepvariant
+     * ggc_ncaa_3686.jpg
+    let the queries begin: how we built our analytics pipeline for ncaa
+       march madness
+     * ncaa march madness b
+    turning data into ncaa march madness insights
+
+     * (button) show related articles
+
+related articles
+          + next19_session.png
+         8 statistically sound smart analytics sessions to attend at next
+               19
+          + gsuite_bq.png
+         simplify reporting with the sheets data connector for bigquery,
+            and voila: automated content updates for g suite
+          + google_bq_a_rnd1.jpg
+         migrating your traditional data warehouse platform to bigquery:
+            announcing the data warehouse migration offer
+          + rice_genome.png
+         analyzing 3024 rice genomes characterized by deepvariant
+          + ggc_ncaa_3686.jpg
+         let the queries begin: how we built our analytics pipeline for
+            ncaa march madness
+          + ncaa march madness b
+         turning data into ncaa march madness insights
+
+   follow us
+     *
+     *
+     *
+     *
+     *
+
+     * [37]privacy
+     * [38]terms
+     * [39]about google
+     * [40]google cloud products
+
+     * [41]help
+
+references
+
+   visible links
+   1. https://www.googletagmanager.com/ns.html?id=gtm-5cvqbg
+   2. https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts#jump-content
+   3. https://cloud.google.com/blog/
+   4. https://cloud.google.com/blog/
+   5. https://cloud.google.com/blog/products
+   6. https://cloud.google.com/blog/topics
+   7. https://cloud.google.com/blog/about
+   8. https://cloudblog.withgoogle.com/rss/
+   9. https://cloud.google.com/blog/
+  10. https://cloud.google.com/blog/products
+  11. https://cloud.google.com/blog/topics
+  12. https://cloud.google.com/blog/about
+  13. https://cloudblog.withgoogle.com/rss/
+  14. https://www.tensorflow.org/
+  15. https://stackoverflow.com/help/tagging
+  16. https://keras.io/
+  17. https://github.com/tensorflow/workshops/tree/master/extras/keras-bag-of-words
+  18. https://bigquery.cloud.google.com/dataset/bigquery-public-data:stackoverflow?pli=1
+  19. https://stackoverflow.com/tags
+  20. https://bigquery.cloud.google.com/savedquery/513927984416:c494494324be4a80b1fc55f613abb39c
+  21. https://github.com/tensorflow/workshops/blob/master/extras/keras-bag-of-words/stack-overflow-query.sql
+  22. https://en.wikipedia.org/wiki/bag-of-words_model
+  23. http://pandas.pydata.org/
+  24. https://keras.io/preprocessing/text/#tokenizer
+  25. http://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.labelbinarizer.html
+  26. https://keras.io/models/sequential/
+  27. https://keras.io/layers/core/
+  28. http://cs231n.github.io/neural-networks-1/
+  29. https://en.wikipedia.org/wiki/softmax_function
+  30. https://en.wikipedia.org/wiki/cross_id178
+  31. https://en.wikipedia.org/wiki/hyperparameter_(machine_learning)
+  32. https://keras.io/layers/core/
+  33. https://twitter.com/srobtweets
+  34. https://twitter.com/random_forests
+  35. https://twitter.com/hereismari
+  36. https://cloud.google.com/blog/products/data-analytics
+  37. https://www.google.com/policies/privacy/
+  38. https://www.google.com/intl/en/policies/terms/regional.html
+  39. https://www.google.com/about/
+  40. https://cloud.google.com/products/
+  41. https://support.google.com/
+
+   hidden links:
+  43. https://cloud.google.com/
+  44. https://www.facebook.com/sharer/sharer.php?caption=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts&u=https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/
+  45. https://twitter.com/intent/tweet?text=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts%20@google&url=https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/
+  46. https://www.linkedin.com/sharearticle?mini=true&url=https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/&title=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts
+  47. mailto:?subject=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts&body=check%20out%20this%20article%20on%20the%20cloud%20blog:%0a%0aintro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts%0a%0akeras%20on%20bigquery%20allows%20robust%20tag%20suggestion%20on%20stack%20overflow%20posts.%20learn%20how%20to%20train%20a%20classifier%20model%20on%20a%20dataset%20of%20real%20stack%20overflow%20posts.%0a%0ahttps://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/
+  48. https://www.facebook.com/sharer/sharer.php?caption=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts&u=https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/
+  49. https://twitter.com/intent/tweet?text=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts%20@google&url=https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/
+  50. https://www.linkedin.com/sharearticle?mini=true&url=https://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/&title=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts
+  51. mailto:?subject=intro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts&body=check%20out%20this%20article%20on%20the%20cloud%20blog:%0a%0aintro%20to%20text%20classification%20with%20keras:%20automatically%20tagging%20stack%20overflow%20posts%0a%0akeras%20on%20bigquery%20allows%20robust%20tag%20suggestion%20on%20stack%20overflow%20posts.%20learn%20how%20to%20train%20a%20classifier%20model%20on%20a%20dataset%20of%20real%20stack%20overflow%20posts.%0a%0ahttps://cloud.google.com/blog/products/gcp/intro-to-text-classification-with-keras-automatically-tagging-stack-overflow-posts/
+  52. https://cloud.google.com/blog/products/data-analytics/8-statistically-sound-smart-analytics-sessions-to-attend-at-next19
+  53. https://cloud.google.com/blog/products/g-suite/simplify-reporting-with-the-sheets-data-connector-for-bigquery-and-voila-automated-content-updates-for-g-suite
+  54. https://cloud.google.com/blog/products/data-analytics/migrating-your-traditional-data-warehouse-platform-to-bigquery-announcing-the-data-warehouse-migration-offer
+  55. https://cloud.google.com/blog/products/data-analytics/analyzing-3024-rice-genomes-characterized-by-deepvariant
+  56. https://cloud.google.com/blog/products/data-analytics/let-the-queries-begin-how-we-built-our-analytics-pipeline-for-ncaa-march-madness
+  57. https://cloud.google.com/blog/topics/inside-google-cloud/turning-data-into-ncaa-march-madness-insights
+  58. https://cloud.google.com/blog/products/data-analytics/8-statistically-sound-smart-analytics-sessions-to-attend-at-next19
+  59. https://cloud.google.com/blog/products/g-suite/simplify-reporting-with-the-sheets-data-connector-for-bigquery-and-voila-automated-content-updates-for-g-suite
+  60. https://cloud.google.com/blog/products/data-analytics/migrating-your-traditional-data-warehouse-platform-to-bigquery-announcing-the-data-warehouse-migration-offer
+  61. https://cloud.google.com/blog/products/data-analytics/analyzing-3024-rice-genomes-characterized-by-deepvariant
+  62. https://cloud.google.com/blog/products/data-analytics/let-the-queries-begin-how-we-built-our-analytics-pipeline-for-ncaa-march-madness
+  63. https://cloud.google.com/blog/topics/inside-google-cloud/turning-data-into-ncaa-march-madness-insights
+  64. https://cloudblog.withgoogle.com/rss
+  65. https://www.facebook.com/googlecloud/
+  66. https://twitter.com/googlecloud
+  67. https://www.youtube.com/googlecloud
+  68. https://www.linkedin.com/showcase/google-cloud/
+  69. https://www.google.com/

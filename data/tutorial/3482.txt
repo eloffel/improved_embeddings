@@ -1,0 +1,366 @@
+   [1]jacob's id161 and machine learning blog [ ]
+   [2]about me
+
+            pruning deep neural networks to make them fast and small
+
+   [3]my pytorch implementation of [4][1611.06440 pruning convolutional
+   neural networks for resource efficient id136].
+
+   tl;dr: by using pruning a vgg-16 based dogs-vs-cats classifier is made
+   x3 faster and x4 smaller.
+     __________________________________________________________________
+
+   pruning neural networks is an old idea going back to 1990 [5](with yan
+   lecun   s optimal brain damage work) and before. the idea is that among
+   the many parameters in the network, some are redundant and don   t
+   contribute a lot to the output.
+
+   if you could rank the neurons in the network according to how much they
+   contribute, you could then remove the low ranking neurons from the
+   network, resulting in a smaller and faster network.
+
+   getting faster/smaller networks is important for running these deep
+   learning networks on mobile devices.
+
+   the ranking can be done according to the l1/l2 mean of neuron weights,
+   their mean activations, the number of times a neuron wasn   t zero on
+   some validation set, and other creative methods . after the pruning,
+   the accuracy will drop (hopefully not too much if the ranking clever),
+   and the network is usually trained more to recover.
+
+   if we prune too much at once, the network might be damaged so much it
+   won   t be able to recover.
+
+   so in practice this is an iterative process - often called    iterative
+   pruning   : prune / train / repeat.
+
+   pruning steps
+
+   the image is taken from [6][1611.06440 pruning convolutional neural
+   networks for resource efficient id136]
+
+sounds good, why isn   t this more popular?
+
+   there are a lot of papers about pruning, but i   ve never encountered
+   pruning used in real life deep learning projects.
+
+   which is surprising considering all the effort on running deep learning
+   on mobile devices. i guess the reason is a combination of:
+     * the ranking methods weren   t good enough until now, resulting in too
+       big of an accuracy drop.
+     * it   s a pain to implement.
+     * those who do use pruning, keep it for themselves as a secret sauce
+       advantage.
+
+   so, i decided to implement pruning myself and see if i could get good
+   results with it.
+
+   in this post we will go over a few pruning methods, and then dive into
+   the implementation details of one of the recent methods.
+
+   we will fine tune a vgg network to classify cats/dogs on the [7]kaggle
+   dogs vs cats dataset, which represents a kind of id21 that
+   i think is very common in practice.
+
+   then we will prune the network and speed it up by a factor of almost
+   x3, and reduce the size by a factor of almost x4!
+     __________________________________________________________________
+
+pruning for speed vs pruning for a small model
+
+   in vgg16 90% of the weights are in the fully connected layers, but
+   those account for 1% of the total floating point operations.
+
+   up until recently most of the works focused on pruning the fully
+   connected layers. by pruning those, the model size can be dramatically
+   reduced.
+
+   we will focus here on pruning entire filters in convolutional layers.
+
+   but this has a cool side affect of also reducing memory. as observed in
+   the [8][1611.06440 pruning convolutional neural networks for resource
+   efficient id136] paper, the deeper the layer, the more it will get
+   pruned.
+
+   this means the last convolutional layer will get pruned a lot, and a
+   lot of neurons from the fully connected layer following it will also be
+   discarded!
+
+   when pruning the convolutional filters, another option would be to
+   reduce the weights in each filter, or remove a specific dimension of a
+   single kernel. you can end up with filters that are sparse, but it   s
+   not trivial the get a computational speed up. recent works advocate
+      structured sparsity    where entire filters are pruned instead.
+
+   one important thing several of these papers show, is that by training
+   and then pruning a larger network, especially in the case of transfer
+   learning, they get results that are much better than training a smaller
+   network from scratch.
+
+   lets now briefly review a few methods.
+
+[9][1608.08710 pruning filters for effecient convnets]
+
+   in this work they advocate pruning entire convolutional filters.
+   pruning a filter with index k affects the layer it resides in, and the
+   following layer. all the input channels at index k, in the following
+   layer, will have to removed, since they won   t exist any more after the
+   pruning.
+
+   pruning a convolutional filter entire filter
+
+   the image is from [10][1608.08710 pruning filters for effecient
+   convnets]
+
+   in case the following layer is a fully connected layer, and the size of
+   the feature map of that channel would be mxn, then mxn neurons be
+   removed from the fully connected layer.
+
+   the neuron ranking in this work is fairly simple. it   s the l1 norm of
+   the weights of each filter.
+
+   at each pruning iteration they rank all the filters, prune the m lowest
+   ranking filters globally among all the layers, retrain and repeat.
+
+[11][1512.08571 structured pruning of deep convolutional neural networks]
+
+   this work seems similar, but the ranking is much more complex. they
+   keep a set of n id143s, which represent n convolutional
+   filters to be pruned.
+
+   each particle is assigned a score based on the network accuracy on a
+   validation set, when the filter represented by the particle was not
+   masked out. then based on the new score, new pruning masks are sampled.
+
+   since running this process is heavy, they used a small validation set
+   for measuring the particle scores.
+
+[12][1611.06440 pruning convolutional neural networks for resource efficient
+id136]
+
+   this is a really cool work from nvidia.
+
+   first they state the pruning problem as a combinatorial optimization
+   problem: choose a subset of weights b, such that when pruning them the
+   network cost change will be minimal.
+
+   pruning as a combinatorial optimization problem
+
+   notice how they used the absolute difference and not just the
+   difference. using the absolute difference enforces that the pruned
+   network won   t decrease the network performance too much, but it also
+   shouldn   t increase it. in the paper they show this gives better
+   results, presumably because it   s more stable.
+
+   now all ranking methods can be judged by this cost function.
+
+oracle pruning
+
+   vgg16 has 4224 convolutional filters. the    ideal    ranking method would
+   be brute force - prune each filter, and then observe how the cost
+   function changes when running on the training set. since they are from
+   nvidia and they have access to a gazillion gpus they did just that.
+   this is called the oracle ranking - the best possible ranking for
+   minimizing the network cost change. now to measure the effectiveness of
+   other ranking methods, they compute the spearman correlation with the
+   oracle. surprise surprise, the ranking method they came up with
+   (described next) correlates most with the oracle.
+
+   they come up with a new neuron ranking method based on a first order
+   (meaning fast to compute) taylor expansion of the network cost
+   function.
+
+   pruning a filter h is the same as zeroing it out.
+
+   c(w, d) is the average network cost function on the dataset d, when the
+   network weights are set to w. now we can evaluate c(w, d) as an
+   expansion around c(w, d, h = 0). they should be pretty close, since
+   removing a single filter shouldn   t affect the cost too much.
+
+   the ranking of h is then abs(c(w, d, h = 0) - c(w, d)).
+
+   taylor expansion taylor expansion
+
+   the rankings of each layer are then normalized by the l2 norm of the
+   ranks in that layer. i guess this kind of empiric, and i   m not sure why
+   is this needed, but it greatly effects the quality of the pruning.
+
+   this rank is quite intuitive. we could   ve used both the activation, and
+   the gradient, as ranking methods by themselves. if any of them are
+   high, that means they are significant to the output. multiplying them
+   gives us a way to throw/keep the filter if either the gradients or the
+   activations are very low or high.
+
+   this makes me wonder - did they pose the pruning problem as minimizing
+   the difference of the network costs, and then come up with the taylor
+   expansion method, or was it other way around, and the difference of
+   network costs oracle was a way to back up their new method ? :-)
+
+   in the paper their method outperformed other methods in accuracy, too,
+   so it looks like the oracle is a good indicator.
+
+   anyway i think this is a nice method that   s more friendly to code and
+   test, than say, a id143, so we will explore this further!
+
+pruning a cats vs dogs classifier using the taylor criteria ranking
+
+   so lets say we have a id21 task where we need to create a
+   classifier from a relatively small dataset. [13]like in this keras blog
+   post.
+
+   can we use a powerful pre-trained network like vgg for transfer
+   learning, and then prune the network?
+
+   if many features learned in vgg16 are about cars, peoples and houses -
+   how much do they contribute to a simple dog/cat classifier ?
+
+   this is a kind of a problem that i think is very common.
+
+   as a training set we will use 1000 images of cats, and 1000 images of
+   dogs, from the [14]kaggle dogs vs cats data set. as a testing set we
+   will use 400 images of cats, and 400 images of dogs.
+
+first lets show off some statistics.
+
+   the accuracy dropped from 98.7% to 97.5%.
+
+   the network size reduced from 538 mb to 150 mb.
+
+   on a i7 cpu the id136 time reduced from 0.78 to 0.277 seconds for a
+   single image, almost a factor x3 reduction!
+
+step one - train a large network
+
+   we will take vgg16, drop the fully connected layers, and add three new
+   fully connected layers. we will freeze the convolutional layers, and
+   retrain only the new fully connected layers. in pytorch, the new layers
+   look like this:
+self.classifier = nn.sequential(
+            nn.dropout(),
+            nn.linear(25088, 4096),
+            nn.relu(inplace=true),
+            nn.dropout(),
+            nn.linear(4096, 4096),
+            nn.relu(inplace=true),
+            nn.linear(4096, 2))
+
+   after training for 20 epoches with data augmentation, we get an
+   accuracy of 98.7% on the testing set.
+
+step two - rank the filters
+
+   to compute the taylor criteria, we need to perform a forward+backward
+   pass on our dataset (or on a smaller part of it if it   s too large. but
+   since we have only 2000 images lets use that).
+
+   now we need to somehow get both the gradients and the activations for
+   convolutional layers. in pytorch we can register a hook on the gradient
+   computation, so a callback is called when they are ready:
+for layer, (name, module) in enumerate(self.model.features._modules.items()):
+        x = module(x)
+        if isinstance(module, torch.nn.modules.conv.conv2d):
+                x.register_hook(self.compute_rank)
+                self.activations.append(x)
+                self.activation_to_layer[activation_index] = layer
+                activation_index += 1
+
+   now we have the activations in self.activations, and when a gradient is
+   ready, compute_rank will be called:
+def compute_rank(self, grad):
+        activation_index = len(self.activations) - self.grad_index - 1
+        activation = self.activations[activation_index]
+        values = \
+                torch.sum((activation * grad), dim = 0).\
+                        sum(dim=2).sum(dim=3)[0, :, 0, 0].data
+
+        # normalize the rank by the filter dimensions
+        values = \
+                values / (activation.size(0) * activation.size(2) * activation.s
+ize(3))
+
+        if activation_index not in self.filter_ranks:
+                self.filter_ranks[activation_index] = \
+                        torch.floattensor(activation.size(1)).zero_().cuda()
+
+        self.filter_ranks[activation_index] += values
+        self.grad_index += 1
+
+   this did a point wise multiplication of each activation in the batch
+   and it   s gradient, and then for each activation (that is an output of a
+   convolution) we sum in all dimensions except the dimension of the
+   output.
+
+   for example, if the batch size was 32, the number of outputs for a
+   specific activation was 256 and the spatial size of that activation was
+   112x112 such the activation/gradient shapes were 32x256x112x112, then
+   the output will be a 256 sized vector representing the ranks of the 256
+   filters in this layer.
+
+   now that we have the ranking, we can use a min heap to get the n lowest
+   ranking filters. unlike in the nvidia paper where they used n=1 at each
+   iteration, to get results faster we will use n=512! this means that
+   each pruning iteration, we will remove 12% from the original number of
+   the 4224 convolutional filters.
+
+   the distribution of the low ranking filters is interesting. most of the
+   filters pruned are from the deeper layer. here is a peek of which
+   filters were pruned after the first iteration:
+   layer number number of pruned filters pruned
+   layer 0      6
+   layer 2      1
+   layer 5      4
+   layer 7      3
+   layer 10     23
+   layer 12     13
+   layer 14     9
+   layer 17     51
+   layer 19     35
+   layer 21     52
+   layer 24     68
+   layer 26     74
+   layer 28     73
+
+step 3 - fine tune and repeat
+
+   at this stage, we unfreeze all the layers and retrain the network for
+   10 epoches, which was enough to get good results on this dataset. then
+   we go back to step 1 with the modified network, and repeat.
+
+   this is the real price we pay - that   s 50% of the number of epoches
+   used to train the network, at a single iteration. in this toy dataset
+   we can get away with it since the dataset is small. if you   re doing
+   this for a huge dataset, you better have lots of gpus.
+
+summary
+
+   i think pruning is an overlooked method that is going to get a lot more
+   attention and use in practice. we showed how we can get nice results on
+   a toy dataset. i think many problems deep learning is used to solve in
+   practice are similar to this one, using id21 on a limited
+   dataset, so they can benefit from pruning too.
+
+   please enable javascript to view the [15]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://jacobgil.github.io/
+   2. https://jacobgil.github.io/about/
+   3. https://github.com/jacobgil/pytorch-pruning
+   4. https://arxiv.org/abs/1611.06440
+   5. http://yann.lecun.com/exdb/publis/pdf/lecun-90b.pdf
+   6. https://arxiv.org/abs/1611.06440
+   7. https://www.kaggle.com/c/dogs-vs-cats
+   8. https://arxiv.org/abs/1611.06440
+   9. https://arxiv.org/abs/1608.08710
+  10. https://arxiv.org/abs/1608.08710
+  11. https://arxiv.org/abs/1512.08571
+  12. https://arxiv.org/abs/1611.06440
+  13. https://blog.keras.io/building-powerful-image-classification-models-using-very-little-data.html
+  14. [kaggle dogs vs cats dataset](https://www.kaggle.com/c/dogs-vs-cats)
+  15. http://disqus.com/?ref_noscript
+
+   hidden links:
+  17. https://github.com/jacobgil
+  18. https://twitter.com/jacobgildenblat
+  19. https://jacobgil.github.io/about/

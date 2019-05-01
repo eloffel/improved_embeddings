@@ -1,0 +1,316 @@
+{
+  "cells": [
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "%matplotlib inline"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "\nclassifying names with a character-level id56\n*********************************************\n**author**: `sean robertson <https://github.com/spro/practical-pytorch>`_\n\nwe will be building and training a basic character-level id56 to classify\nwords. a character-level id56 reads words as a series of characters -\noutputting a prediction and \"hidden state\" at each step, feeding its\nprevious hidden state into each next step. we take the final prediction\nto be the output, i.e. which class the word belongs to.\n\nspecifically, we'll train on a few thousand surnames from 18 languages\nof origin, and predict which language a name is from based on the\nspelling:\n\n::\n\n    $ python predict.py hinton\n    (-0.47) scottish\n    (-1.52) english\n    (-3.57) irish\n\n    $ python predict.py schmidhuber\n    (-0.19) german\n    (-2.48) czech\n    (-2.68) dutch\n\n\n**recommended reading:**\n\ni assume you have at least installed pytorch, know python, and\nunderstand tensors:\n\n-  http://pytorch.org/ for installation instructions\n-  :doc:`/beginner/deep_learning_60min_blitz` to get started with pytorch in general\n-  :doc:`/beginner/pytorch_with_examples` for a wide and deep overview\n-  :doc:`/beginner/former_torchies_tutorial` if you are former lua torch user\n\nit would also be useful to know about id56s and how they work:\n\n-  `the unreasonable effectiveness of recurrent neural\n   networks <http://karpathy.github.io/2015/05/21/id56-effectiveness/>`__\n   shows a bunch of real life examples\n-  `understanding lstm\n   networks <http://colah.github.io/posts/2015-08-understanding-lstms/>`__\n   is about lstms specifically but also informative about id56s in\n   general\n\npreparing the data\n==================\n\n.. note::\n   download the data from\n   `here <https://download.pytorch.org/tutorial/data.zip>`_\n   and extract it to the current directory.\n\nincluded in the ``data/names`` directory are 18 text files named as\n\"[language].txt\". each file contains a bunch of names, one name per\nline, mostly romanized (but we still need to convert from unicode to\nascii).\n\nwe'll end up with a dictionary of lists of names per language,\n``{language: [names ...]}``. the generic variables \"category\" and \"line\"\n(for language and name in our case) are used for later extensibility.\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "from __future__ import unicode_literals, print_function, division\nfrom io import open\nimport glob\nimport os\n\ndef findfiles(path): return glob.glob(path)\n\nprint(findfiles('data/names/*.txt'))\n\nimport unicodedata\nimport string\n\nall_letters = string.ascii_letters + \" .,;'\"\nn_letters = len(all_letters)\n\n# turn a unicode string to plain ascii, thanks to http://stackoverflow.com/a/518232/2809427\ndef unicodetoascii(s):\n    return ''.join(\n        c for c in unicodedata.normalize('nfd', s)\n        if unicodedata.category(c) != 'mn'\n        and c in all_letters\n    )\n\nprint(unicodetoascii('\u015alus\u00e0rski'))\n\n# build the category_lines dictionary, a list of names per language\ncategory_lines = {}\nall_categories = []\n\n# read a file and split into lines\ndef readlines(filename):\n    lines = open(filename, encoding='utf-8').read().strip().split('\\n')\n    return [unicodetoascii(line) for line in lines]\n\nfor filename in findfiles('data/names/*.txt'):\n    category = os.path.splitext(os.path.basename(filename))[0]\n    all_categories.append(category)\n    lines = readlines(filename)\n    category_lines[category] = lines\n\nn_categories = len(all_categories)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "now we have ``category_lines``, a dictionary mapping each category\n(language) to a list of lines (names). we also kept track of\n``all_categories`` (just a list of languages) and ``n_categories`` for\nlater reference.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "print(category_lines['italian'][:5])"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "turning names into tensors\n--------------------------\n\nnow that we have all the names organized, we need to turn them into\ntensors to make any use of them.\n\nto represent a single letter, we use a \"one-hot vector\" of size\n``<1 x n_letters>``. a one-hot vector is filled with 0s except for a 1\nat index of the current letter, e.g. ``\"b\" = <0 1 0 0 0 ...>``.\n\nto make a word we join a bunch of those into a 2d matrix\n``<line_length x 1 x n_letters>``.\n\nthat extra 1 dimension is because pytorch assumes everything is in\nbatches - we're just using a batch size of 1 here.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "import torch\n\n# find letter index from all_letters, e.g. \"a\" = 0\ndef lettertoindex(letter):\n    return all_letters.find(letter)\n\n# just for demonstration, turn a letter into a <1 x n_letters> tensor\ndef lettertotensor(letter):\n    tensor = torch.zeros(1, n_letters)\n    tensor[0][lettertoindex(letter)] = 1\n    return tensor\n\n# turn a line into a <line_length x 1 x n_letters>,\n# or an array of one-hot letter vectors\ndef linetotensor(line):\n    tensor = torch.zeros(len(line), 1, n_letters)\n    for li, letter in enumerate(line):\n        tensor[li][0][lettertoindex(letter)] = 1\n    return tensor\n\nprint(lettertotensor('j'))\n\nprint(linetotensor('jones').size())"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "creating the network\n====================\n\nbefore autograd, creating a recurrent neural network in torch involved\ncloning the parameters of a layer over several timesteps. the layers\nheld hidden state and gradients which are now entirely handled by the\ngraph itself. this means you can implement a id56 in a very \"pure\" way,\nas regular feed-forward layers.\n\nthis id56 module (mostly copied from `the pytorch for torch users\ntutorial <http://pytorch.org/tutorials/beginner/former_torchies/\nnn_tutorial.html#example-2-recurrent-net>`__)\nis just 2 linear layers which operate on an input and hidden state, with\na logsoftmax layer after the output.\n\n.. figure:: https://i.imgur.com/z2xbyso.png\n   :alt:\n\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "import torch.nn as nn\n\nclass id56(nn.module):\n    def __init__(self, input_size, hidden_size, output_size):\n        super(id56, self).__init__()\n\n        self.hidden_size = hidden_size\n\n        self.i2h = nn.linear(input_size + hidden_size, hidden_size)\n        self.i2o = nn.linear(input_size + hidden_size, output_size)\n        self.softmax = nn.logsoftmax(dim=1)\n\n    def forward(self, input, hidden):\n        combined = torch.cat((input, hidden), 1)\n        hidden = self.i2h(combined)\n        output = self.i2o(combined)\n        output = self.softmax(output)\n        return output, hidden\n\n    def inithidden(self):\n        return torch.zeros(1, self.hidden_size)\n\nn_hidden = 128\nid56 = id56(n_letters, n_hidden, n_categories)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "to run a step of this network we need to pass an input (in our case, the\ntensor for the current letter) and a previous hidden state (which we\ninitialize as zeros at first). we'll get back the output (id203 of\neach language) and a next hidden state (which we keep for the next\nstep).\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "input = lettertotensor('a')\nhidden =torch.zeros(1, n_hidden)\n\noutput, next_hidden = id56(input, hidden)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "for the sake of efficiency we don't want to be creating a new tensor for\nevery step, so we will use ``linetotensor`` instead of\n``lettertotensor`` and use slices. this could be further optimized by\npre-computing batches of tensors.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "input = linetotensor('albert')\nhidden = torch.zeros(1, n_hidden)\n\noutput, next_hidden = id56(input[0], hidden)\nprint(output)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "as you can see the output is a ``<1 x n_categories>`` tensor, where\nevery item is the likelihood of that category (higher is more likely).\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "training\n========\npreparing for training\n----------------------\n\nbefore going into training we should make a few helper functions. the\nfirst is to interpret the output of the network, which we know to be a\nlikelihood of each category. we can use ``tensor.topk`` to get the index\nof the greatest value:\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "def categoryfromoutput(output):\n    top_n, top_i = output.topk(1)\n    category_i = top_i[0].item()\n    return all_categories[category_i], category_i\n\nprint(categoryfromoutput(output))"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "we will also want a quick way to get a training example (a name and its\nlanguage):\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "import random\n\ndef randomchoice(l):\n    return l[random.randint(0, len(l) - 1)]\n\ndef randomtrainingexample():\n    category = randomchoice(all_categories)\n    line = randomchoice(category_lines[category])\n    category_tensor = torch.tensor([all_categories.index(category)], dtype=torch.long)\n    line_tensor = linetotensor(line)\n    return category, line, category_tensor, line_tensor\n\nfor i in range(10):\n    category, line, category_tensor, line_tensor = randomtrainingexample()\n    print('category =', category, '/ line =', line)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "training the network\n--------------------\n\nnow all it takes to train this network is show it a bunch of examples,\nhave it make guesses, and tell it if it's wrong.\n\nfor the id168 ``nn.nllloss`` is appropriate, since the last\nlayer of the id56 is ``nn.logsoftmax``.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "criterion = nn.nllloss()"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "each loop of training will:\n\n-  create input and target tensors\n-  create a zeroed initial hidden state\n-  read each letter in and\n\n   -  keep hidden state for next letter\n\n-  compare final output to target\n-  back-propagate\n-  return the output and loss\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "learning_rate = 0.005 # if you set this too high, it might explode. if too low, it might not learn\n\ndef train(category_tensor, line_tensor):\n    hidden = id56.inithidden()\n\n    id56.zero_grad()\n\n    for i in range(line_tensor.size()[0]):\n        output, hidden = id56(line_tensor[i], hidden)\n\n    loss = criterion(output, category_tensor)\n    loss.backward()\n\n    # add parameters' gradients to their values, multiplied by learning rate\n    for p in id56.parameters():\n        p.data.add_(-learning_rate, p.grad.data)\n\n    return output, loss.item()"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "now we just have to run that with a bunch of examples. since the\n``train`` function returns both the output and loss we can print its\nguesses and also keep track of loss for plotting. since there are 1000s\nof examples we print only every ``print_every`` examples, and take an\naverage of the loss.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "import time\nimport math\n\nn_iters = 100000\nprint_every = 5000\nplot_every = 1000\n\n\n\n# keep track of losses for plotting\ncurrent_loss = 0\nall_losses = []\n\ndef timesince(since):\n    now = time.time()\n    s = now - since\n    m = math.floor(s / 60)\n    s -= m * 60\n    return '%dm %ds' % (m, s)\n\nstart = time.time()\n\nfor iter in range(1, n_iters + 1):\n    category, line, category_tensor, line_tensor = randomtrainingexample()\n    output, loss = train(category_tensor, line_tensor)\n    current_loss += loss\n\n    # print iter number, loss, name and guess\n    if iter % print_every == 0:\n        guess, guess_i = categoryfromoutput(output)\n        correct = '\u2713' if guess == category else '\u2717 (%s)' % category\n        print('%d %d%% (%s) %.4f %s / %s %s' % (iter, iter / n_iters * 100, timesince(start), loss, line, guess, correct))\n\n    # add current loss avg to list of losses\n    if iter % plot_every == 0:\n        all_losses.append(current_loss / plot_every)\n        current_loss = 0"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "plotting the results\n--------------------\n\nplotting the historical loss from ``all_losses`` shows the network\nlearning:\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "import matplotlib.pyplot as plt\nimport matplotlib.ticker as ticker\n\nplt.figure()\nplt.plot(all_losses)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "evaluating the results\n======================\n\nto see how well the network performs on different categories, we will\ncreate a confusion matrix, indicating for every actual language (rows)\nwhich language the network guesses (columns). to calculate the confusion\nmatrix a bunch of samples are run through the network with\n``evaluate()``, which is the same as ``train()`` minus the backprop.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "# keep track of correct guesses in a confusion matrix\nconfusion = torch.zeros(n_categories, n_categories)\nn_confusion = 10000\n\n# just return an output given a line\ndef evaluate(line_tensor):\n    hidden = id56.inithidden()\n\n    for i in range(line_tensor.size()[0]):\n        output, hidden = id56(line_tensor[i], hidden)\n\n    return output\n\n# go through a bunch of examples and record which are correctly guessed\nfor i in range(n_confusion):\n    category, line, category_tensor, line_tensor = randomtrainingexample()\n    output = evaluate(line_tensor)\n    guess, guess_i = categoryfromoutput(output)\n    category_i = all_categories.index(category)\n    confusion[category_i][guess_i] += 1\n\n# normalize by dividing every row by its sum\nfor i in range(n_categories):\n    confusion[i] = confusion[i] / confusion[i].sum()\n\n# set up plot\nfig = plt.figure()\nax = fig.add_subplot(111)\ncax = ax.matshow(confusion.numpy())\nfig.colorbar(cax)\n\n# set up axes\nax.set_xticklabels([''] + all_categories, rotation=90)\nax.set_yticklabels([''] + all_categories)\n\n# force label at every tick\nax.xaxis.set_major_locator(ticker.multiplelocator(1))\nax.yaxis.set_major_locator(ticker.multiplelocator(1))\n\n# sphinx_gallery_thumbnail_number = 2\nplt.show()"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "you can pick out bright spots off the main axis that show which\nlanguages it guesses incorrectly, e.g. chinese for korean, and spanish\nfor italian. it seems to do very well with greek, and very poorly with\nenglish (perhaps because of overlap with other languages).\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "running on user input\n---------------------\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": false
+      },
+      "outputs": [],
+      "source": [
+        "def predict(input_line, n_predictions=3):\n    print('\\n> %s' % input_line)\n    with torch.no_grad():\n        output = evaluate(linetotensor(input_line))\n\n        # get top n categories\n        topv, topi = output.topk(n_predictions, 1, true)\n        predictions = []\n\n        for i in range(n_predictions):\n            value = topv[0][i].item()\n            category_index = topi[0][i].item()\n            print('(%.2f) %s' % (value, all_categories[category_index]))\n            predictions.append([value, all_categories[category_index]])\n\npredict('dovesky')\npredict('jackson')\npredict('satoshi')"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "the final versions of the scripts `in the practical pytorch\nrepo <https://github.com/spro/practical-pytorch/tree/master/char-id56-classification>`__\nsplit the above code into a few files:\n\n-  ``data.py`` (loads files)\n-  ``model.py`` (defines the id56)\n-  ``train.py`` (runs training)\n-  ``predict.py`` (runs ``predict()`` with command line arguments)\n-  ``server.py`` (serve prediction as a json api with bottle.py)\n\nrun ``train.py`` to train and save the network.\n\nrun ``predict.py`` with a name to view predictions:\n\n::\n\n    $ python predict.py hazaki\n    (-0.42) japanese\n    (-1.39) polish\n    (-3.51) czech\n\nrun ``server.py`` and visit http://localhost:5533/yourname to get json\noutput of predictions.\n\n\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "exercises\n=========\n\n-  try with a different dataset of line -> category, for example:\n\n   -  any word -> language\n   -  first name -> gender\n   -  character name -> writer\n   -  page title -> blog or subreddit\n\n-  get better results with a bigger and/or better shaped network\n\n   -  add more linear layers\n   -  try the ``nn.lstm`` and ``nn.gru`` layers\n   -  combine multiple of these id56s as a higher level network\n\n\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "python 3",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+      },
+      "file_extension": ".py",
+      "mimetype": "text/x-python",
+      "name": "python",
+      "nbconvert_exporter": "python",
+      "pygments_lexer": "ipython3",
+      "version": "3.6.6"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 0
+}

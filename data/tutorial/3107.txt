@@ -1,0 +1,248 @@
+   #[1]adam paszke
+
+   [2]adam paszke
+
+lstm implementation explained
+
+   aug 30, 2015
+
+preface
+
+   for a long time i   ve been looking for a good tutorial on implementing
+   id137. they seemed to be complicated and i   ve never done
+   anything with them before. quick googling didn   t help, as all i   ve
+   found were some slides.
+
+   fortunately, i took part in [3]kaggle eeg competition and thought that
+   it might be fun to use lstms and finally learn how they work. i based
+   [4]my solution and this post   s code on [5]char-id56 by [6]andrej
+   karpathy, which i highly recommend you to check out.
+
+id56 misconception
+
+   there is one important thing that as i feel hasn   t been emphasized
+   strongly enough (and is the main reason why i couldn   t get myself to do
+   anything with id56s). there isn   t much difference between an id56 and
+   feedforward network implementation. it   s the easiest to implement an
+   id56 just as a feedforward network with some parts of the input feeding
+   into the middle of the stack, and a bunch of outputs coming out from
+   there as well. there is no magic internal state kept in the network.
+   it   s provided as a part of the input!
+   [id56vsfnn.svg]
+   the overall structure of id56s is very similar to that of feedforward
+   networks.
+
+lstm refresher
+
+   this section will cover only the formal definition of lstms. there are
+   lots of other nice blog posts describing in detail how can you imagine
+   and think of these equations.
+
+   lstms have many variations, but we   ll stick to a simple one. one cell
+   consists of three gates (input, forget, output), and a cell unit. gates
+   use a sigmoid activation, while input and cell state is often
+   transformed with tanh. lstm cell can be defined with a following set of
+   equations:
+
+   gates:
+
+   input transform:
+
+   state update:
+
+   it can be pictured like this:
+   lstm cell diagram
+
+   because of the gating mechanism the cell can keep a piece of
+   information for long periods of time during work and protect the
+   gradient inside the cell from harmful changes during the training.
+   vanilla lstms don   t have a forget gate and add unchanged cell state
+   during the update (it can be seen as a recurrent connection with a
+   constant weight of 1), what is often referred to as a constant error
+   carousel (cec). it   s called like that, because it solves a serious id56
+   training problem of vanishing and exploding gradients, which in turn
+   makes it possible to learn long-term relationships.
+
+building your own lstm layer
+
+   the code for this tutorial will be using torch7. don   t worry if you
+   don   t know it. i   ll explain everything, so you   ll be able to implement
+   the same algorithm in your favorite framework.
+
+   the network will be implemented as a nngraph.gmodule, which basically
+   means that we   ll define a computation graph consisting of standard nn
+   modules. we will need the following layers:
+     * nn.identity() - passes on the input (used as a placeholder for
+       input)
+     * nn.dropout(p) - standard dropout module (drops with id203 1 -
+       p)
+     * nn.linear(in, out) - an affine transform from in dimensions to out
+       dims
+     * nn.narrow(dim, start, len) - selects a subvector along dim
+       dimension having len elements starting from start index
+     * nn.sigmoid() - applies sigmoid element-wise
+     * nn.tanh() - applies tanh element-wise
+     * nn.cmultable() - outputs the product of tensors in forwarded table
+     * nn.caddtable() - outputs the sum of tensors in forwarded table
+
+inputs
+
+   first, let   s define the input structure. the array-like objects in lua
+   are called tables. this network will accept a table of tensors like the
+   one below:
+   input table structure
+local inputs = {}
+table.insert(inputs, nn.identity()())   -- network input
+table.insert(inputs, nn.identity()())   -- c at time t-1
+table.insert(inputs, nn.identity()())   -- h at time t-1
+local input = inputs[1]
+local prev_c = inputs[2]
+local prev_h = inputs[3]
+
+   identity modules will just copy whatever we provide to the network into
+   the graph.
+
+computing gate values
+
+   to make our implementation faster we will be applying the
+   transformations of the whole lstm layer simultaneously.
+local i2h = nn.linear(input_size, 4 * id56_size)(input)  -- input to hidden
+local h2h = nn.linear(id56_size, 4 * id56_size)(prev_h)   -- hidden to hidden
+local preactivations = nn.caddtable()({i2h, h2h})       -- i2h + h2h
+
+   if you   re unfamiliar with nngraph it probably seems strange that we   re
+   constructing a module and already calling it once more with a graph
+   node. what actually happens is that the second call converts the
+   nn.module to nngraph.gmodule and the argument specifies it   s parent in
+   the graph.
+
+   preactivations outputs a vector created by a linear transform of input
+   and previous hidden state. these are raw values which will be used to
+   compute the gate activations and the cell input. this vector is divided
+   into 4 parts, each of size id56_size. the first will be used for in
+   gates, second for forget gates, third for out gates and the last one as
+   a cell input (so the indices of respective gates and input of a cell
+   number \(i\) are \(\left\{i,\ \text{id56_size}+i,\
+   2\cdot\text{id56_size}+i,\ 3\cdot\text{id56_size}+i\right\}\)).
+   first graph part first part closeup
+
+   next, we have to apply a nonlinearity, but while all the gates use the
+   sigmoid, we will use a tanh for the input preactivation. because of
+   this, we will place two nn.narrow modules, which will select
+   appropriate parts of the preactivation vector.
+-- gates
+local pre_sigmoid_chunk = nn.narrow(2, 1, 3 * id56_size)(preactivations)
+local all_gates = nn.sigmoid()(pre_sigmoid_chunk)
+
+-- input
+local in_chunk = nn.narrow(2, 3 * id56_size + 1, id56_size)(preactivations)
+local in_transform = nn.tanh()(in_chunk)
+
+   after the nonlinearities we have to place a couple more nn.narrows and
+   we have the gates done!
+local in_gate = nn.narrow(2, 1, id56_size)(all_gates)
+local forget_gate = nn.narrow(2, id56_size + 1, id56_size)(all_gates)
+local out_gate = nn.narrow(2, 2 * id56_size + 1, id56_size)(all_gates)
+
+   second graph part second part closeup
+
+cell and hidden state
+
+   having computed the gate values we can now calculate the current cell
+   state. all that   s required are just two nn.cmultable modules (one for
+   \(f \cdot c_{t-1}^{l}\) and one for \(i \cdot x\)), and a nn.caddtable
+   to sum them up to a current cell state.
+-- previous cell state contribution
+local c_forget = nn.cmultable()({forget_gate, prev_c})
+-- input contribution
+local c_input = nn.cmultable()({in_gate, in_transform})
+-- next cell state
+local next_c = nn.caddtable()({
+  c_forget,
+  c_input
+})
+
+   it   s finally time to implement hidden state calculation. it   s the
+   simplest part, because it just involves applying tanh to current cell
+   state (nn.tanh) and multiplying it with an output gate (nn.cmultable).
+local c_transform = nn.tanh()(next_c)
+local next_h = nn.cmultable()({out_gate, c_transform})
+
+   third graph part third part closeup
+
+defining the module
+
+   now, if you want to export the whole graph as a standalone module you
+   can wrap it like that:
+-- module outputs
+outputs = {}
+table.insert(outputs, next_c)
+table.insert(outputs, next_h)
+
+-- packs the graph into a convenient module with standard api (:forward(), :back
+ward())
+return nn.gmodule(inputs, outputs)
+
+examples
+
+   lstm layer implementation is available [7]here. you can use it like
+   that:
+th> lstm = require 'lstm.lua'
+                                                                      [0.0224s]
+th> layer = lstm.create(3, 2)
+                                                                      [0.0019s]
+th> layer:forward({torch.randn(1,3), torch.randn(1,2), torch.randn(1,2)})
+{
+  1 : doubletensor - size: 1x2
+  2 : doubletensor - size: 1x2
+}
+                                                                      [0.0005s]
+
+   to make a multi-layer lstm network you can forward subsequent layers in
+   a for loop, taking next_h from previous layer as next layer   s input.
+   you can check [8]this example.
+
+training
+
+   if you   re interested please leave a comment and i   ll try to expand this
+   post!
+
+that   s it!
+
+   that   s it. it   s quite easy to implement any id56 when you understand how
+   to deal with the hidden state. after connecting several layers just put
+   a regular mlp on top and connect it to last layer   s hidden state and
+   you   re done!
+
+   here are some nice papers on id56s if you   re interested:
+     * [9]visualizing and understanding recurrent networks
+     * [10]an empirical exploration of recurrent network architectures
+     * [11]recurrent neural network id173
+     * [12]sequence to sequence learning with neural networks
+
+   please enable javascript to view the [13]comments powered by disqus.
+
+     * [14]apaszke
+     * [15]apaszke
+
+references
+
+   visible links
+   1. https://apaszke.github.io/feed.xml
+   2. http://apaszke.github.io/posts.html
+   3. https://www.kaggle.com/c/grasp-and-lift-eeg-detection
+   4. https://github.com/apaszke/kaggle-grasp-and-lift
+   5. https://github.com/karpathy/char-id56
+   6. https://karpathy.github.io/
+   7. http://apaszke.github.io/assets/posts/lstm-explained/lstm.lua
+   8. http://apaszke.github.io/assets/posts/lstm-explained/multilayer.lua
+   9. http://arxiv.org/abs/1506.02078
+  10. http://www.jmlr.org/proceedings/papers/v37/jozefowicz15.pdf
+  11. http://arxiv.org/abs/1409.2329
+  12. http://papers.nips.cc/paper/5346-sequence-to-sequence-learning-with-neural-networks.pdf
+  13. https://disqus.com/?ref_noscript
+  14. https://github.com/apaszke
+  15. https://twitter.com/apaszke
+
+   hidden links:
+  17. http://apaszke.github.io/lstm-explained.html

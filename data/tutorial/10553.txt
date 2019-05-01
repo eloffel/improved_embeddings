@@ -1,0 +1,2727 @@
+deep unsupervised learning using
+nonequilibrium thermodynamics
+
+5
+1
+0
+2
+
+ 
+
+v
+o
+n
+8
+1
+
+ 
+
+ 
+ 
+]
+
+g
+l
+.
+s
+c
+[
+ 
+ 
+
+8
+v
+5
+8
+5
+3
+0
+
+.
+
+3
+0
+5
+1
+:
+v
+i
+x
+r
+a
+
+jascha sohl-dickstein
+stanford university
+eric a. weiss
+university of california, berkeley
+niru maheswaranathan
+stanford university
+surya ganguli
+stanford university
+
+jascha@stanford.edu
+
+eaweiss@berkeley.edu
+
+nirum@stanford.edu
+
+sganguli@stanford.edu
+
+abstract
+
+a central problem in machine learning involves
+modeling complex data-sets using highly    exi-
+ble families of id203 distributions in which
+learning, sampling,
+id136, and evaluation
+are still analytically or computationally tractable.
+here, we develop an approach that simultane-
+ously achieves both    exibility and tractability.
+the essential idea, inspired by non-equilibrium
+statistical physics, is to systematically and slowly
+destroy structure in a data distribution through
+an iterative forward diffusion process. we then
+learn a reverse diffusion process that restores
+structure in data, yielding a highly    exible and
+tractable generative model of the data. this ap-
+proach allows us to rapidly learn, sample from,
+and evaluate probabilities in deep generative
+models with thousands of layers or time steps,
+as well as to compute conditional and posterior
+probabilities under the learned model. we addi-
+tionally release an open source reference imple-
+mentation of the algorithm.
+
+1. introduction
+historically, probabilistic models suffer from a tradeoff be-
+tween two con   icting objectives: tractability and    exibil-
+ity. models that are tractable can be analytically evaluated
+and easily    t to data (e.g. a gaussian or laplace). however,
+
+proceedings of the 32 nd international conference on machine
+learning, lille, france, 2015. jmlr: w&cp volume 37. copy-
+right 2015 by the author(s).
+
+these models are unable to aptly describe structure in rich
+datasets. on the other hand, models that are    exible can be
+molded to    t structure in arbitrary data. for example, we
+can de   ne models in terms of any (non-negative) function
+  (x) yielding the    exible distribution p (x) =   (x)
+z , where
+z is a id172 constant. however, computing this
+id172 constant is generally intractable. evaluating,
+training, or drawing samples from such    exible models typ-
+ically requires a very expensive monte carlo process.
+a variety of analytic approximations exist which amelio-
+rate, but do not remove, this tradeoff   for instance mean
+   eld theory and its expansions (t, 1982; tanaka, 1998),
+id58 (jordan et al., 1999), contrastive diver-
+gence (welling & hinton, 2002; hinton, 2002), minimum
+id203    ow (sohl-dickstein et al., 2011b;a), minimum
+kl contraction (lyu, 2011), proper scoring rules (gneit-
+ing & raftery, 2007; parry et al., 2012), score matching
+(hyv  arinen, 2005), pseudolikelihood (besag, 1975), loopy
+belief propagation (murphy et al., 1999), and many, many
+more. non-parametric methods (gershman & blei, 2012)
+can also be very effective1.
+
+1.1. diffusion probabilistic models
+
+we present a novel way to de   ne probabilistic models that
+allows:
+
+1. extreme    exibility in model structure,
+2. exact sampling,
+
+1non-parametric methods can be seen as transitioning
+smoothly between tractable and    exible models. for instance,
+a non-parametric gaussian mixture model will represent a small
+amount of data using a single gaussian, but may represent in   nite
+data as a mixture of an in   nite number of gaussians.
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+3. easy multiplication with other distributions, e.g. in or-
+
+der to compute a posterior, and
+
+4. the model log likelihood, and the id203 of indi-
+
+vidual states, to be cheaply evaluated.
+
+our method uses a markov chain to gradually convert one
+distribution into another, an idea used in non-equilibrium
+statistical physics (jarzynski, 1997) and sequential monte
+carlo (neal, 2001). we build a generative markov chain
+which converts a simple known distribution (e.g. a gaus-
+sian) into a target (data) distribution using a diffusion pro-
+cess. rather than use this markov chain to approximately
+evaluate a model which has been otherwise de   ned, we ex-
+plicitly de   ne the probabilistic model as the endpoint of the
+markov chain. since each step in the diffusion chain has an
+analytically evaluable id203, the full chain can also be
+analytically evaluated.
+learning in this framework involves estimating small per-
+turbations to a diffusion process. estimating small pertur-
+bations is more tractable than explicitly describing the full
+distribution with a single, non-analytically-normalizable,
+potential function. furthermore, since a diffusion process
+exists for any smooth target distribution, this method can
+capture data distributions of arbitrary form.
+we demonstrate the utility of these diffusion probabilistic
+models by training high log likelihood models for a two-
+dimensional swiss roll, binary sequence, handwritten digit
+(mnist), and several natural image (cifar-10, bark, and
+dead leaves) datasets.
+
+1.2. relationship to other work
+
+the wake-sleep algorithm (hinton, 1995; dayan et al.,
+1995) introduced the idea of training id136 and gen-
+erative probabilistic models against each other.
+this
+approach remained largely unexplored for nearly two
+decades, though with some exceptions (sminchisescu et al.,
+2006; kavukcuoglu et al., 2010). there has been a re-
+cent explosion of work developing this idea. in (kingma
+& welling, 2013; gregor et al., 2013; rezende et al., 2014;
+ozair & bengio, 2014) variational learning and id136
+algorithms were developed which allow a    exible genera-
+tive model and posterior distribution over latent variables
+to be directly trained against each other.
+the variational bound in these papers is similar to the one
+used in our training objective and in the earlier work of
+(sminchisescu et al., 2006). however, our motivation and
+model form are both quite different, and the present work
+retains the following differences and advantages relative to
+these techniques:
+
+1. we develop our framework using ideas from physics,
+quasi-static processes, and annealed importance sam-
+pling rather than from id58ian methods.
+
+2. we show how to easily multiply the learned distribu-
+tion with another id203 distribution (eg with a
+conditional distribution in order to compute a poste-
+rior)
+
+3. we address the dif   culty that training the id136
+model can prove particularly challenging in varia-
+tional id136 methods, due to the asymmetry in the
+objective between the id136 and generative mod-
+els. we restrict the forward (id136) process to a
+simple functional form, in such a way that the re-
+verse (generative) process will have the same func-
+tional form.
+
+4. we train models with thousands of layers (or time
+
+steps), rather than only a handful of layers.
+
+5. we provide upper and lower bounds on the id178
+
+production in each layer (or time step)
+
+there are a number of related techniques for training prob-
+abilistic models (summarized below) that develop highly
+   exible forms for generative models, train stochastic tra-
+jectories, or learn the reversal of a id110.
+reweighted wake-sleep (bornschein & bengio, 2015) de-
+velops extensions and improved learning rules for the orig-
+inal wake-sleep algorithm. generative stochastic networks
+(bengio & thibodeau-laufer, 2013; yao et al., 2014) train
+a markov kernel to match its equilibrium distribution to
+the data distribution. neural autoregressive distribution
+estimators (larochelle & murray, 2011) (and their recur-
+rent (uria et al., 2013a) and deep (uria et al., 2013b) ex-
+tensions) decompose a joint distribution into a sequence
+of tractable conditional distributions over each dimension.
+adversarial networks (goodfellow et al., 2014) train a gen-
+erative model against a classi   er which attempts to dis-
+tinguish generated samples from true data. a similar ob-
+jective in (schmidhuber, 1992) learns a two-way map-
+ping to a representation with marginally independent units.
+in (rippel & adams, 2013; dinh et al., 2014) bijective
+deterministic maps are learned to a latent representation
+in (stuhlm  uller
+with a simple factorial density function.
+et al., 2013) stochastic inverses are learned for bayesian
+networks. mixtures of conditional gaussian scale mix-
+tures (mcgsms) (theis et al., 2012) describe a dataset
+using gaussian scale mixtures, with parameters which de-
+pend on a sequence of causal neighborhoods. there is
+additionally signi   cant work learning    exible generative
+mappings from simple latent distributions to data distribu-
+tions     early examples including (mackay, 1995) where
+neural networks are introduced as generative models, and
+(bishop et al., 1998) where a stochastic manifold mapping
+is learned from a latent space to the data space. we will
+compare experimentally against adversarial networks and
+mcgsms.
+related ideas from physics include the jarzynski equal-
+ity (jarzynski, 1997), known in machine learning as an-
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+t = 0
+
+t = t
+2
+
+t = t
+
+q(cid:0)x(0      t )(cid:1)
+
+p(cid:0)x(0      t )(cid:1)
+
+(cid:0)x(t), t(cid:1)     x(t)
+
+f  
+
+(cid:16)
+
+x(0      t )(cid:17)
+
+figure 1. the proposed modeling framework trained on 2-d swiss roll data. the top row shows time slices from the forward trajectory
+. the data distribution (left) undergoes gaussian diffusion, which gradually transforms it into an identity-covariance gaus-
+q
+
+. an identity-covariance
+sian (right). the middle row shows the corresponding time slices from the trained reverse trajectory p
+gaussian (right) undergoes a gaussian diffusion process with learned mean and covariance functions, and is gradually transformed back
+into the data distribution (left). the bottom row shows the drift term, f  
+
+(cid:17)     x(t), for the same reverse diffusion process.
+
+x(t), t
+
+(cid:16)
+
+(cid:16)
+
+x(0      t )(cid:17)
+
+nealed importance sampling (ais) (neal, 2001), which
+uses a markov chain which slowly converts one distribu-
+tion into another to compute a ratio of normalizing con-
+stants. in (burda et al., 2014) it is shown that ais can also
+be performed using the reverse rather than forward trajec-
+tory. langevin dynamics (langevin, 1908), which are the
+stochastic realization of the fokker-planck equation, show
+how to de   ne a gaussian diffusion process which has any
+target distribution as its equilibrium. in (suykens & vande-
+walle, 1995) the fokker-planck equation is used to perform
+stochastic optimization. finally, the kolmogorov forward
+and backward equations (feller, 1949) show that for many
+forward diffusion processes, the reverse diffusion processes
+can be described using the same functional form.
+
+2. algorithm
+our goal is to de   ne a forward (or id136) diffusion pro-
+cess which converts any complex data distribution into a
+simple, tractable, distribution, and then learn a    nite-time
+reversal of this diffusion process which de   nes our gener-
+ative model distribution (see figure 1). we    rst describe
+the forward, id136 diffusion process. we then show
+
+how the reverse, generative diffusion process can be trained
+and used to evaluate probabilities. we also derive id178
+bounds for the reverse process, and show how the learned
+distributions can be multiplied by any second distribution
+(e.g. as would be done to compute a posterior when in-
+painting or denoising an image).
+
+2.1. forward trajectory
+
+we label the data distribution q(cid:0)x(0)(cid:1). the data distribu-
+
+tion is gradually converted into a well behaved (analyti-
+cally tractable) distribution    (y) by repeated application
+of a markov diffusion kernel t   (y|y(cid:48);   ) for    (y), where
+   is the diffusion rate,
+
+(cid:90)
+
+   (y) =
+
+(cid:16)
+
+q
+
+x(t)|x(t   1)(cid:17)
+
+= t  
+
+(cid:16)
+
+dy(cid:48)t   (y|y(cid:48);   )    (y(cid:48))
+x(t)|x(t   1);   t
+
+.
+
+(cid:17)
+
+(1)
+
+(2)
+
+202202202202202202202202202202202202deep unsupervised learning using nonequilibrium thermodynamics
+
+t = 0
+
+t = t
+2
+
+t = t
+
+p(cid:0)x(0      t )(cid:1)
+
+figure 2. binary sequence learning via binomial diffusion. a binomial diffusion model was trained on binary    heartbeat    data, where a
+pulse occurs every 5th bin. generated samples (left) are identical to the training data. the sampling procedure consists of initialization
+at independent binomial noise (right), which is then transformed into the data distribution by a binomial diffusion process, with trained
+bit    ip probabilities. each row contains an independent sample. for ease of visualization, all samples have been shifted so that a pulse
+occurs in the    rst column. in the raw sequence data, the    rst pulse is uniformly distributed over the    rst    ve bins.
+
+(a)
+
+(c)
+
+(b)
+
+(d)
+
+figure 3. the proposed framework trained on the cifar-10 (krizhevsky & hinton, 2009) dataset. (a) example holdout data (similar
+to training data). (b) holdout data corrupted with gaussian noise of variance 1 (snr = 1). (c) denoised images, generated by sampling
+from the posterior distribution over denoised images conditioned on the images in (b). (d) samples generated by the diffusion model.
+
+the forward trajectory, corresponding to starting at the data
+distribution and performing t steps of diffusion, is thus
+
+(cid:16)
+
+x(0      t )(cid:17)
+
+q
+
+(cid:16)
+
+x(0)(cid:17) t(cid:89)
+
+q
+
+(cid:16)
+
+x(t)|x(t   1)(cid:17)
+
+= q
+
+(3)
+
+t=1
+
+for the experiments shown below, q(cid:0)x(t)|x(t   1)(cid:1) corre-
+
+sponds to either gaussian diffusion into a gaussian distri-
+bution with identity-covariance, or binomial diffusion into
+an independent binomial distribution. table app.1 gives
+the diffusion kernels for both gaussian and binomial distri-
+butions.
+
+051015bin05101520sample051015bin05101520sample051015bin05101520sampledeep unsupervised learning using nonequilibrium thermodynamics
+
+2.2. reverse trajectory
+
+the generative distribution will be trained to describe the
+same trajectory, but in reverse,
+
+x(t )(cid:17)
+(cid:16)
+x(0      t )(cid:17)
+
+p
+
+(cid:16)
+
+p
+
+x(t )(cid:17)
+(cid:16)
+x(t )(cid:17) t(cid:89)
+(cid:16)
+
+=   
+
+= p
+
+(cid:16)
+
+x(t   1)|x(t)(cid:17)
+
+.
+
+p
+
+(4)
+
+(5)
+
+t=1
+
+for both gaussian and binomial diffusion, for continuous
+diffusion (limit of small step size   ) the reversal of the
+diffusion process has the identical functional form as the
+
+forward process (feller, 1949). since q(cid:0)x(t)|x(t   1)(cid:1) is a
+q(cid:0)x(t   1)|x(t)(cid:1) will also be a gaussian (binomial) distribu-
+
+gaussian (binomial) distribution, and if   t is small, then
+
+(cid:0)x(t), t(cid:1) and f  
+
+(cid:0)x(t), t(cid:1) are functions de   ning
+(cid:0)x(t), t(cid:1) is a function providing the
+
+tion. the longer the trajectory the smaller the diffusion rate
+   can be made.
+during learning only the mean and covariance for a gaus-
+sian diffusion kernel, or the bit    ip id203 for a bi-
+nomial kernel, need be estimated. as shown in table
+app.1, f  
+the mean and covariance of the reverse markov transitions
+for a gaussian, and fb
+bit    ip id203 for a binomial distribution. the compu-
+tational cost of running this algorithm is the cost of these
+functions, times the number of time-steps. for all results in
+this paper, multi-layer id88s are used to de   ne these
+functions. a wide range of regression or function    tting
+techniques would be applicable however, including nonpa-
+rameteric methods.
+
+2.3. model id203
+
+(cid:16)
+
+x(0)(cid:17)
+
+p
+
+(cid:90)
+
+the id203 the generative model assigns to the data is
+
+(cid:16)
+
+x(0      t )(cid:17)
+
+=
+
+dx(1      t )p
+
+.
+
+(6)
+
+(cid:16)
+
+x(0)(cid:17)
+
+p
+
+naively this integral is intractable     but taking a cue from
+annealed importance sampling and the jarzynski equality,
+we instead evaluate the relative id203 of the forward
+and reverse trajectories, averaged over forward trajectories,
+
+(cid:90)
+(cid:90)
+(cid:90)
+
+=
+
+=
+
+=
+
+dx(1      t )p
+
+dx(1      t )q
+
+x(0      t )(cid:17) q(cid:0)x(1      t )|x(0)(cid:1)
+(cid:16)
+q(cid:0)x(1      t )|x(0)(cid:1) (7)
+p(cid:0)x(0      t )(cid:1)
+x(1      t )|x(0)(cid:17)
+(cid:16)
+q(cid:0)x(1      t )|x(0)(cid:1)
+(cid:16)
+x(1      t )|x(0)(cid:17)  
+p(cid:0)x(t   1)|x(t)(cid:1)
+x(t )(cid:17) t(cid:89)
+q(cid:0)x(t)|x(t   1)(cid:1) .
+
+(8)
+
+(9)
+
+t=1
+
+dx(1      t )q
+
+(cid:16)
+
+p
+
+this can be evaluated rapidly by averaging over samples
+
+from the forward trajectory q(cid:0)x(1      t )|x(0)(cid:1). for in   nites-
+identical then only a single sample from q(cid:0)x(1      t )|x(0)(cid:1)
+
+imal    the forward and reverse distribution over trajecto-
+ries can be made identical (see section 2.2).
+if they are
+
+is required to exactly evaluate the above integral, as can
+be seen by substitution. this corresponds to the case of a
+quasi-static process in statistical physics (spinney & ford,
+2013; jarzynski, 2011).
+
+training amounts to maximizing the model log likelihood,
+
+2.4. training
+
+(cid:90)
+(cid:90)
+
+l =
+
+=
+
+dx(0)q
+
+dx(0)q
+
+log p
+
+(cid:16)
+
+x(0)(cid:17)
+x(0)(cid:17)
+(cid:16)
+x(0)(cid:17)  
+(cid:16)
+       (cid:82) dx(1      t )q(cid:0)x(1      t )|x(0)(cid:1)  
+p(cid:0)x(t )(cid:1)(cid:81)t
+(cid:16)
+x(0      t )(cid:17)  
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+x(t )(cid:17) t(cid:89)
+
+p(x(t   1)|x(t))
+q(x(t)|x(t   1))
+
+dx(0      t )q
+
+(cid:16)
+
+(cid:34)
+
+t=1
+
+p
+
+log
+
+t=1
+
+(10)
+
+(11)
+
+       ,
+
+.
+
+(12)
+
+log
+
+(cid:90)
+
+l    
+
+which has a lower bound provided by jensen   s inequality,
+
+as described in appendix b, for our diffusion trajectories
+this reduces to,
+
+l     k
+
+(cid:90)
+(cid:16)
+x(0), x(t)(cid:17)  
+k =     t(cid:88)
+x(t   1)|x(t), x(0)(cid:17)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)p
+(cid:16)
+(cid:16)
+x(t )|x(0)(cid:17)     hq
+(cid:16)
+x(1)|x(0)(cid:17)     hp
+
+dx(0)dx(t)q
+
++ hq
+
+dkl
+
+(cid:16)
+
+(cid:16)
+
+t=2
+
+q
+
+x(t   1)|x(t)(cid:17)(cid:17)
+(cid:16)
+x(t )(cid:17)
+
+.
+
+(13)
+
+(14)
+
+where the entropies and kl divergences can be analyt-
+ically computed. the derivation of this bound parallels
+the derivation of the log likelihood bound in variational
+bayesian methods.
+as in section 2.3 if the forward and reverse trajectories are
+identical, corresponding to a quasi-static process, then the
+inequality in equation 13 becomes an equality.
+training consists of    nding the reverse markov transitions
+which maximize this lower bound on the log likelihood,
+
+(cid:16)
+
+x(t   1)|x(t)(cid:17)
+
+  p
+
+= argmax
+
+p(x(t   1)|x(t))
+
+k.
+
+(15)
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+the speci   c targets of estimation for gaussian and bino-
+mial diffusion are given in table app.1.
+thus, the task of estimating a id203 distribution has
+been reduced to the task of performing regression on the
+functions which set the mean and covariance of a sequence
+of gaussians (or set the state    ip id203 for a sequence
+of bernoulli trials).
+
+2.4.1. setting the diffusion rate   t
+the choice of   t in the forward trajectory is important for
+the performance of the trained model.
+in ais, the right
+schedule of intermediate distributions can greatly improve
+the accuracy of the log partition function estimate (grosse
+et al., 2013). in thermodynamics the schedule taken when
+moving between equilibrium distributions determines how
+much free energy is lost (spinney & ford, 2013; jarzynski,
+2011).
+in the case of gaussian diffusion, we learn2 the forward
+diffusion schedule   2      t by gradient ascent on k. the
+variance   1 of the    rst step is    xed to a small constant
+to prevent over   tting. the dependence of samples from
+
+q(cid:0)x(1      t )|x(0)(cid:1) on   1      t is made explicit by using    frozen
+
+noise        as in (kingma & welling, 2013) the noise is treated
+as an additional auxiliary variable, and held constant while
+computing partial derivatives of k with respect to the pa-
+rameters.
+for binomial diffusion, the discrete state space makes gra-
+dient ascent with frozen noise impossible. we instead
+choose the forward diffusion schedule   1      t to erase a con-
+t of the original signal per diffusion step,
+stant fraction 1
+yielding a diffusion rate of   t = (t     t + 1)
+
+   1.
+
+2.5. multiplying distributions, and computing
+
+posteriors
+
+tasks such as computing a posterior in order to do signal
+denoising or id136 of missing values requires multipli-
+
+cation of the model distribution p(cid:0)x(0)(cid:1) with a second dis-
+tribution, or bounded positive function, r(cid:0)x(0)(cid:1), producing
+a new distribution   p(cid:0)x(0)(cid:1)     p(cid:0)x(0)(cid:1) r(cid:0)x(0)(cid:1).
+
+multiplying distributions is costly and dif   cult for many
+techniques,
+including id5, gsns,
+nades, and most id114. however, under a dif-
+fusion model it is straightforward, since the second distri-
+bution can be treated either as a small perturbation to each
+step in the diffusion process, or often exactly multiplied
+into each diffusion step. figures 3 and 5 demonstrate the
+use of a diffusion model to perform denoising and inpaint-
+ing of natural images. the following sections describe how
+
+2recent experiments suggest that it is just as effective to in-
+
+stead use the same    xed   t schedule as for binomial diffusion.
+
+to multiply distributions in the context of diffusion proba-
+bilistic models.
+
+2.5.1. modified marginal distributions
+
+the intermediate distributions by a corresponding function
+
+first, in order to compute   p(cid:0)x(0)(cid:1), we multiply each of
+r(cid:0)x(t)(cid:1). we use a tilde above a distribution or markov
+been modi   ed in this way.   p(cid:0)x(0      t )(cid:1) is the modi   ed re-
+verse trajectory, which starts at the distribution   p(cid:0)x(t )(cid:1) =
+p(cid:0)x(t )(cid:1) r(cid:0)x(t )(cid:1) and proceeds through the sequence of
+
+transition to denote that it belongs to a trajectory that has
+
+1
+  zt
+intermediate distributions
+1
+  zt
+
+x(t)(cid:17)
+
+(cid:16)
+
+=
+
+  p
+
+(cid:16)
+
+x(t)(cid:17)
+
+r
+
+(cid:16)
+
+x(t)(cid:17)
+
+p
+
+,
+
+(16)
+
+,
+
+where   zt is the normalizing constant for the tth intermedi-
+ate distribution.
+
+.
+
+p
+
+p
+
+  p
+
+  p
+
+=
+
+=
+
+=
+
+  zt
+
+(18)
+
+(17)
+
+(cid:90)
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+dx(t+1)p
+
+dx(t+1)   p
+
+dx(t+1)   p
+
+(cid:90)
+(cid:90)
+
+(cid:16)
+(cid:16)
+
+xt+1)(cid:17)
+
+2.5.2. modified diffusion steps
+
+sion process obeys the equilibrium condition
+
+xt) | x(t+1)(cid:17)
+
+instead obey the equilibrium condition for the perturbed
+distribution,
+
+(cid:16)
+x(t)(cid:17)
+p(cid:0)x(t)(cid:1) r(cid:0)x(t)(cid:1)
+x(t)(cid:17)
+
+the markov kernel p(cid:0)x(t) | x(t+1)(cid:1) for the reverse diffu-
+(cid:16)
+x(t(cid:17)
+we wish the perturbed markov kernel   p(cid:0)x(t) | x(t+1)(cid:1) to
+xt+1)(cid:17)
+
+x(t) | x(t+1)(cid:17)
+x(t) | x(t+1)(cid:17)  
+p(cid:0)x(t+1)(cid:1) r(cid:0)x(t+1)(cid:1)
+x(t) | x(t+1)(cid:17)  
+  ztr(cid:0)x(t+1)(cid:1)
+x(t+1)(cid:17)
+(cid:16)
+  zt+1r(cid:0)x(t)(cid:1) p
+x(t)|x(t+1)(cid:17)   zt+1r(cid:0)x(t)(cid:1)
+(cid:16)
+  ztr(cid:0)x(t+1)(cid:1) .
+bility distribution, so we choose   p(cid:0)x(t)|x(t+1)(cid:1) to be the
+x(t)|x(t+1)(cid:17)
+(cid:16)
+x(t)(cid:17)
+(cid:16)
+x(t)|x(t+1)(cid:17)
+
+equation 21 may not correspond to a normalized proba-
+
+x(t)|x(t+1)(cid:17)
+
+corresponding normalized distribution
+
+equation 20 will be satis   ed if
+
+dx(t+1)   p
+
+  zt+1
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+(cid:90)
+
+(20)
+
+(21)
+
+(19)
+
+= p
+
+=
+
+=
+
+  p
+
+  p
+
+p
+
+1
+
+r
+
+,
+
+,
+
+.
+
+(cid:0)x(t+1)(cid:1) p
+
+  zt
+
+(22)
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+(a)
+
+(b)
+
+(c)
+
+figure 4. the proposed framework trained on dead leaf images (jeulin, 1997; lee et al., 2001). (a) example training image. (b) a sample
+from the previous state of the art natural image model (theis et al., 2012) trained on identical data, reproduced here with permission.
+(c) a sample generated by the diffusion model. note that it demonstrates fairly consistent occlusion relationships, displays a multiscale
+distribution over object sizes, and produces circle-like objects, especially at smaller scales. as shown in table 2, the diffusion model has
+the highest log likelihood on the test set.
+
+(cid:0)x(t+1)(cid:1) is the id172 constant.
+
+means that
+
+r(x(t))
+r(x(t+1))
+
+can be treated as a small perturbation
+
+where   zt
+for a gaussian, each diffusion step is typically very sharply
+
+fects the mean, but not the id172 constant, so in
+this case equations 21 and 22 are equivalent (see appendix
+c).
+
+peaked relative to r(cid:0)x(t)(cid:1), due to its small variance. this
+to p(cid:0)x(t)|x(t+1)(cid:1). a small perturbation to a gaussian ef-
+2.5.3. applying r(cid:0)x(t)(cid:1)
+if r(cid:0)x(t)(cid:1) is suf   ciently smooth, then it can be treated
+p(cid:0)x(t)|x(t+1)(cid:1). in this case   p(cid:0)x(t)|x(t+1)(cid:1) will have an
+identical functional form to p(cid:0)x(t)|x(t+1)(cid:1), but with per-
+
+as a small perturbation to the reverse diffusion kernel
+
+distribution in closed form, then it can be directly multi-
+
+turbed mean for the gaussian kernel, or with perturbed    ip
+rate for the binomial kernel. the perturbed diffusion ker-
+nels are given in table app.1, and are derived for the gaus-
+sian in appendix c.
+
+if r(cid:0)x(t)(cid:1) can be multiplied with a gaussian (or binomial)
+plied with the reverse diffusion kernel p(cid:0)x(t)|x(t+1)(cid:1) in
+closed form. this applies in the case where r(cid:0)x(t)(cid:1) con-
+2.5.4. choosing r(cid:0)x(t)(cid:1)
+typically, r(cid:0)x(t)(cid:1) should be chosen to change slowly over
+
+sists of a delta function for some subset of coordinates, as
+in the inpainting example in figure 5.
+
+the course of the trajectory. for the experiments in this
+paper we chose it to be constant,
+
+(cid:16)
+
+x(t)(cid:17)
+
+r
+
+(cid:16)
+
+x(0)(cid:17)
+
+= r
+
+.
+
+(23)
+
+another convenient choice is r(cid:0)x(t)(cid:1) = r(cid:0)x(0)(cid:1) t    t
+der this second choice r(cid:0)x(t)(cid:1) makes no contribution to the
+tees that drawing the initial sample from   p(cid:0)x(t )(cid:1) for the
+
+starting distribution for the reverse trajectory. this guaran-
+
+t . un-
+
+reverse trajectory remains straightforward.
+
+2.6. id178 of reverse process
+
+hq
+
+(cid:16)
+
+x(t)|x(t   1)(cid:17)
+
+since the forward process is known, we can derive upper
+and lower bounds on the conditional id178 of each step
+in the reverse trajectory, and thus on the log likelihood,
+
+(cid:16)
+x(t   1)|x(0)(cid:17)     hq
+(cid:16)
+x(t   1)|x(t)(cid:17)     hq
+
+(cid:16)
+x(t)|x(0)(cid:17)
+x(t)|x(t   1)(cid:17)
+q(cid:0)x(1      t )|x(0)(cid:1), and can be analytically computed. the
+
+where both the upper and lower bounds depend only on
+
+    hq
+
++ hq
+
+(cid:16)
+
+(24)
+
+,
+
+derivation is provided in appendix a.
+
+3. experiments
+we train diffusion probabilistic models on a variety of con-
+tinuous datasets, and a binary dataset. we then demonstrate
+sampling from the trained model and inpainting of miss-
+ing data, and compare model performance against other
+techniques. in all cases the objective function and gradi-
+ent were computed using theano (bergstra & breuleux,
+2010). model training was with sfo (sohl-dickstein et al.,
+2014), except for cifar-10. cifar-10 results used the
+
+3 an earlier version of this paper reported higher log likeli-
+hood bounds on cifar-10. these were the result of the model
+learning the 8-bit quantization of pixel values in the cifar-10
+dataset. the log likelihood bounds reported here are instead for
+data that has been pre-processed by adding uniform noise to re-
+move pixel quantization, as recommended in (theis et al., 2015).
+
+050100150200250050100150200250050100150200250050100150200250050100150200250050100150200250deep unsupervised learning using nonequilibrium thermodynamics
+
+(a)
+
+(b)
+
+(c)
+
+figure 5. inpainting. (a) a bark image from (lazebnik et al., 2005). (b) the same image with the central 100  100 pixel region replaced
+for the reverse trajectory. (c) the central 100  100 region has been
+with isotropic gaussian noise. this is the initialization   p
+inpainted using a diffusion probabilistic model trained on images of bark, by sampling from the posterior distribution over the missing
+region conditioned on the rest of the image. note the long-range spatial structure, for instance in the crack entering on the left side of the
+inpainted region. the sample from the posterior was generated as described in section 2.5, where r
+was set to a delta function
+for known data, and a constant for missing data.
+
+(cid:16)
+x(0)(cid:17)
+
+(cid:16)
+x(t )(cid:17)
+
+dataset
+swiss roll
+binary heartbeat
+bark
+dead leaves
+cifar-103
+mnist
+
+k
+2.35 bits
+-2.414 bits/seq.
+-0.55 bits/pixel
+1.489 bits/pixel
+5.4    0.2 bits/pixel
+
+k     lnull
+6.45 bits
+12.024 bits/seq.
+1.5 bits/pixel
+3.536 bits/pixel
+11.5    0.2 bits/pixel
+
+see table 2
+
+(cid:16)
+
+table 1. the lower bound k on the log likelihood, computed on a
+holdout set, for each of the trained models. see equation 12. the
+right column is the improvement relative to an isotropic gaussian
+or independent binomial distribution. lnull is the log likelihood
+. all datasets except for binary heartbeat were scaled
+of   
+by a constant to give them variance 1 before computing log like-
+lihood.
+
+x(0)(cid:17)
+
+open source implementation of the algorithm, and rm-
+sprop for optimization. the lower bound on the log like-
+lihood provided by our model is reported for all datasets
+in table 1. a reference implementation of the algorithm
+utilizing blocks (van merri  enboer et al., 2015) is avail-
+able at https://github.com/sohl-dickstein/
+diffusion-probabilistic-models.
+
+3.1. toy problems
+
+3.1.1. swiss roll
+
+a diffusion probabilistic model was built of a two dimen-
+sional swiss roll distribution, using a radial basis function
+network to generate f  
+trated in figure 1, the swiss roll distribution was success-
+fully learned. see appendix section d.1.1 for more details.
+
+(cid:0)x(t), t(cid:1). as illus-
+
+(cid:0)x(t), t(cid:1) and f  
+
+model
+dead leaves
+mcgsm
+diffusion
+
+mnist
+
+stacked cae
+dbn
+deep gsn
+diffusion
+adversarial net
+perfect model
+
+log likelihood
+
+1.244 bits/pixel
+1.489 bits/pixel
+174    2.3 bits
+199    2.9 bits
+309    1.6 bits
+317    2.7 bits
+325    2.9 bits
+349    3.3 bits
+
+table 2. log likelihood comparisons to other algorithms. dead
+leaves images were evaluated using identical training and test data
+as in (theis et al., 2012). mnist log likelihoods were estimated
+using the parzen-window code from (goodfellow et al., 2014),
+with values given in bits, and show that our performance is com-
+parable to other recent techniques. the perfect model entry was
+computed by applying the parzen code to samples from the train-
+ing data.
+
+3.1.2. binary heartbeat distribution
+
+a diffusion probabilistic model was trained on simple bi-
+nary sequences of length 20, where a 1 occurs every 5th
+time bin, and the remainder of the bins are 0, using a multi-
+layer id88 to generate the bernoulli rates fb
+of the reverse trajectory. the log likelihood under the true
+distribution is log2
+can be seen in figure 2 and table 1 learning was nearly
+perfect. see appendix section d.1.2 for more details.
+
+(cid:0)x(t), t(cid:1)
+(cid:1) =    2.322 bits per sequence. as
+
+(cid:0) 1
+
+5
+
+3.2. images
+
+we trained gaussian diffusion probabilistic models on sev-
+eral image datasets. the multi-scale convolutional archi-
+
+050100150200250300050100150200250300050100150200250300050100150200250300050100150200250300050100150200250300deep unsupervised learning using nonequilibrium thermodynamics
+
+tecture shared by these experiments is described in ap-
+pendix section d.2.1, and illustrated in figure d.1.
+
+3.2.1. datasets
+mnist in order to allow a direct comparison against
+previous work on a simple dataset, we trained on mnist
+digits (lecun & cortes, 1998). log likelihoods relative to
+(bengio et al., 2012; bengio & thibodeau-laufer, 2013;
+goodfellow et al., 2014) are given in table 2. samples
+from the mnist model are given in appendix figure
+app.1. our training algorithm provides an asymptotically
+consistent lower bound on the log likelihood. however
+most previous reported results on continuous mnist log
+likelihood rely on parzen-window based estimates com-
+puted from model samples. for this comparison we there-
+fore estimate mnist log likelihood using the parzen-
+window code released with (goodfellow et al., 2014).
+
+cifar-10 a probabilistic model was    t to the training
+images for the cifar-10 challenge dataset (krizhevsky &
+hinton, 2009). samples from the trained model are pro-
+vided in figure 3.
+
+dead leaf images dead leaf images (jeulin, 1997; lee
+et al., 2001) consist of layered occluding circles, drawn
+from a power law distribution over scales. they have an an-
+alytically tractable structure, but capture many of the statis-
+tical complexities of natural images, and therefore provide
+a compelling test case for natural image models. as illus-
+trated in table 2 and figure 4, we achieve state of the art
+performance on the dead leaves dataset.
+
+bark texture images a probabilistic model was trained
+on bark texture images (t01-t04) from (lazebnik et al.,
+2005). for this dataset we demonstrate that it is straightfor-
+ward to evaluate or generate from a posterior distribution,
+by inpainting a large region of missing data using a sample
+from the model posterior in figure 5.
+
+4. conclusion
+we have introduced a novel algorithm for modeling proba-
+bility distributions that enables exact sampling and evalua-
+tion of probabilities and demonstrated its effectiveness on a
+variety of toy and real datasets, including challenging natu-
+ral image datasets. for each of these tests we used a similar
+basic algorithm, showing that our method can accurately
+model a wide variety of distributions. most existing den-
+sity estimation techniques must sacri   ce modeling power
+in order to stay tractable and ef   cient, and sampling or
+evaluation are often extremely expensive. the core of our
+algorithm consists of estimating the reversal of a markov
+diffusion chain which maps data to a noise distribution; as
+
+the number of steps is made large, the reversal distribution
+of each diffusion step becomes simple and easy to estimate.
+the result is an algorithm that can learn a    t to any data dis-
+tribution, but which remains tractable to train, exactly sam-
+ple from, and evaluate, and under which it is straightfor-
+ward to manipulate conditional and posterior distributions.
+
+acknowledgements
+we thank lucas theis, subhaneil lahiri, ben poole,
+diederik p. kingma, taco cohen, philip bachman, and
+a  aron van den oord for extremely helpful discussion, and
+ian goodfellow for parzen-window code. we thank khan
+academy and the of   ce of naval research for funding
+jascha sohl-dickstein, and we thank the of   ce of naval
+research and the burroughs-wellcome, sloan, and james
+s. mcdonnell foundations for funding surya ganguli.
+
+references
+barron, j. t., biggin, m. d., arbelaez, p., knowles, d. w.,
+keranen, s. v., and malik, j. volumetric semantic seg-
+in 2013
+mentation using pyramid context features.
+ieee international conference on id161, pp.
+3448   3455. ieee, december 2013. isbn 978-1-4799-
+2840-8. doi: 10.1109/iccv.2013.428.
+
+bengio, y. and thibodeau-laufer, e.
+
+deep genera-
+tive stochastic networks trainable by backprop. arxiv
+preprint arxiv:1306.1091, 2013.
+
+bengio, y., mesnil, g., dauphin, y., and rifai, s. bet-
+ter mixing via deep representations. arxiv preprint
+arxiv:1207.4404, july 2012.
+
+bergstra, j. and breuleux, o. theano: a cpu and gpu
+math expression compiler. proceedings of the python
+for scienti   c computing conference (scipy), 2010.
+
+besag, j. statistical analysis of non-lattice data. the
+
+statistician, 24(3), 179-195, 1975.
+
+bishop, c., svens  en, m., and williams, c. gtm: the gen-
+erative topographic mapping. neural computation, 1998.
+
+bornschein, j. and bengio, y. reweighted wake-sleep.
+international conference on learning representations,
+june 2015.
+
+burda, y., grosse, r. b., and salakhutdinov, r. accu-
+rate and conservative estimates of mrf log-likelihood
+using reverse annealing. arxiv:1412.8566, december
+2014.
+
+dayan, p., hinton, g. e., neal, r. m., and zemel, r. s. the
+helmholtz machine. neural computation, 7(5):889   904,
+1995.
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+dinh, l., krueger, d., and bengio, y. nice: non-linear
+independent components estimation. arxiv:1410.8516,
+pp. 11, october 2014.
+
+kavukcuoglu, k., ranzato, m., and lecun, y. fast infer-
+ence in sparse coding algorithms with applications to ob-
+ject recognition. arxiv preprint arxiv:1010.3467, 2010.
+
+feller, w. on the theory of stochastic processes, with par-
+ticular reference to applications. in proceedings of the
+[first] berkeley symposium on mathematical statistics
+and id203. the regents of the university of cali-
+fornia, 1949.
+
+gershman, s. j. and blei, d. m. a tutorial on bayesian
+nonparametric models. journal of mathematical psy-
+chology, 56(1):1   12, 2012.
+
+gneiting, t. and raftery, a. e. strictly proper scoring rules,
+prediction, and estimation. journal of the american sta-
+tistical association, 102(477):359   378, 2007.
+
+goodfellow, i. j., pouget-abadie, j., mirza, m., xu, b.,
+warde-farley, d., ozair, s., courville, a., and bengio,
+y. generative adversarial nets. advances in neural
+information processing systems, 2014.
+
+gregor, k., danihelka, i., mnih, a., blundell, c., and wier-
+stra, d. deep autoregressive networks. arxiv preprint
+arxiv:1310.8499, october 2013.
+
+grosse, r. b., maddison, c. j., and salakhutdinov, r. an-
+nealing between distributions by averaging moments. in
+advances in neural information processing systems, pp.
+2769   2777, 2013.
+
+hinton, g. e. training products of experts by minimiz-
+ing contrastive divergence. neural computation, 14(8):
+1771   1800, 2002.
+
+hinton, g. e. the wake-sleep algorithm for unsupervised
+
+neural networks ). science, 1995.
+
+hyv  arinen, a. estimation of non-normalized statistical
+journal of machine
+
+models using score matching.
+learning research, 6:695   709, 2005.
+
+jarzynski, c. equilibrium free-energy differences from
+nonequilibrium measurements: a master-equation ap-
+proach. physical review e, january 1997.
+
+jarzynski, c. equalities and inequalities:
+
+irreversibility
+and the second law of thermodynamics at the nanoscale.
+annu. rev. condens. matter phys., 2011.
+
+jeulin, d. dead leaves models: from space tesselation to
+random functions. proc. of the symposium on the ad-
+vances in the theory and applications of random sets,
+1997.
+
+kingma, d. p. and welling, m. auto-encoding variational
+bayes. international conference on learning represen-
+tations, december 2013.
+
+krizhevsky, a. and hinton, g. learning multiple layers of
+features from tiny images. computer science depart-
+ment university of toronto tech. rep., 2009.
+
+langevin, p. sur la th  eorie du mouvement brownien. cr
+
+acad. sci. paris, 146(530-533), 1908.
+
+larochelle, h. and murray, i. the neural autoregressive
+distribution estimator. journal of machine learning re-
+search, 2011.
+
+lazebnik, s., schmid, c., and ponce, j. a sparse texture
+representation using local af   ne regions. pattern analy-
+sis and machine intelligence, ieee transactions on, 27
+(8):1265   1278, 2005.
+
+lecun, y. and cortes, c. the mnist database of hand-
+
+written digits. 1998.
+
+lee, a., mumford, d., and huang, j. occlusion models for
+natural images: a statistical study of a scale-invariant
+dead leaves model. international journal of computer
+vision, 2001.
+
+lyu, s. unifying non-maximum likelihood learning ob-
+jectives with minimum kl contraction. advances in
+neural information processing systems 24, pp. 64   72,
+2011.
+
+mackay, d. bayesian neural networks and density net-
+works. nuclear instruments and methods in physics re-
+search section a: accelerators, spectrometers, detec-
+tors and associated equipment, 1995.
+
+murphy, k. p., weiss, y., and jordan, m. i. loopy be-
+lief propagation for approximate id136: an empiri-
+cal study. in proceedings of the fifteenth conference on
+uncertainty in arti   cial intelligence, pp. 467   475. mor-
+gan kaufmann publishers inc., 1999.
+
+neal, r. annealed importance sampling. statistics and
+
+computing, january 2001.
+
+ozair, s. and bengio, y. deep directed generative au-
+
+toencoders. arxiv:1410.0630, october 2014.
+
+jordan, m. i., ghahramani, z., jaakkola, t. s., and saul,
+l. k. an introduction to variational methods for graphi-
+cal models. machine learning, 37(2):183   233, 1999.
+
+parry, m., dawid, a. p., lauritzen, s., and others. proper
+local scoring rules. the annals of statistics, 40(1):561   
+592, 2012.
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+theis, l., van den oord, a., and bethge, m. a note
+on the evaluation of generative models. arxiv preprint
+arxiv:1511.01844, 2015.
+
+uria, b., murray,
+
+i., and larochelle, h.
+
+rnade:
+the real-valued neural autoregressive density-estimator.
+advances in neural information processing systems,
+2013a.
+
+uria, b., murray, i., and larochelle, h. a deep and
+tractable density estimator. arxiv:1310.1757, pp. 9,
+october 2013b.
+
+van merri  enboer, b., chorowski, j., serdyuk, d., bengio,
+y., bogdanov, d., dumoulin, v., and warde-farley, d.
+blocks and fuel. zenodo, may 2015. doi: 10.5281/
+zenodo.17721.
+
+welling, m. and hinton, g. a new learning algorithm for
+mean    eld id82s. lecture notes in com-
+puter science, january 2002.
+
+yao, l., ozair, s., cho, k., and bengio, y. on the equiv-
+alence between deep nade and generative stochastic
+networks. in machine learning and knowledge discov-
+ery in databases, pp. 322   336. springer, 2014.
+
+rezende, d. j., mohamed, s., and wierstra, d. stochas-
+tic id26 and approximate id136 in deep
+proceedings of the 31st inter-
+generative models.
+national conference on machine learning (icml-14),
+january 2014.
+
+rippel, o. and adams, r. p.
+
+high-dimensional
+id203 estimation with deep density models.
+arxiv:1410.8516, pp. 12, february 2013.
+
+schmidhuber, j. learning factorial codes by predictability
+
+minimization. neural computation, 1992.
+
+sminchisescu, c., kanaujia, a., and metaxas, d. learning
+joint top-down and bottom-up processes for 3d visual
+id136. in id161 and pattern recognition,
+2006 ieee computer society conference on, volume 2,
+pp. 1743   1752. ieee, 2006.
+
+sohl-dickstein, j., battaglino, p., and deweese, m. new
+method for parameter estimation in probabilistic mod-
+els: minimum id203 flow. physical review let-
+ters, 107(22):11   14, november 2011a.
+issn 0031-
+9007. doi: 10.1103/physrevlett.107.220601.
+
+sohl-dickstein,
+
+j., battaglino, p. b., and deweese,
+interna-
+m. r. minimum id203 flow learning.
+tional conference on machine learning, 107(22):11   
+14, november 2011b. issn 0031-9007. doi: 10.1103/
+physrevlett.107.220601.
+
+sohl-dickstein, j., poole, b., and ganguli, s. fast large-
+scale optimization by unifying stochastic gradient and
+quasi-id77s. in proceedings of the 31st inter-
+national conference on machine learning (icml-14),
+pp. 604   612, 2014.
+
+spinney, r. and ford, i. fluctuation relations : a peda-
+gogical overview. arxiv preprint arxiv:1201.6381, pp.
+3   56, 2013.
+
+stuhlm  uller, a., taylor, j., and goodman, n. learning
+stochastic inverses. advances in neural information
+processing systems, 2013.
+
+suykens, j. and vandewalle, j. nonid76
+using a fokker-planck learning machine. in 12th euro-
+pean conference on circuit theory and design, 1995.
+
+t, p. convergence condition of the tap equation for the
+in   nite-ranged ising spin glass model. j. phys. a: math.
+gen. 15 1971, 1982.
+
+tanaka, t. mean-   eld theory of id82 learn-
+
+ing. physical review letters e, january 1998.
+
+theis, l., hosseini, r., and bethge, m. mixtures of condi-
+tional gaussian scale mixtures applied to multiscale im-
+age representations. plos one, 7(7):e39857, 2012.
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+appendix
+
+a. conditional id178 bounds derivation
+the conditional id178 hq
+
+(cid:0)x(t   1)|x(t)(cid:1) of a step in the reverse trajectory is
+x(t), x(t   1)(cid:17)
+(cid:16)
+x(t)|x(t   1)(cid:17)
+(cid:16)
+x(t)|x(t   1)(cid:17)
+(cid:16)
+
+x(t   1), x(t)(cid:17)
+(cid:16)
+x(t)(cid:17)
+x(t   1)|x(t)(cid:17)
+x(t   1)|x(t)(cid:17)
+(cid:16)
+
+= hq
+
+= hq
+
++ hq
+
+(cid:16)
+
+hq
+
+= hq
+
+hq
+
++ hq
+
++ hq
+
+(cid:16)
+
+hq
+
+(cid:16)
+(cid:16)
+
+x(t   1)(cid:17)
+x(t   1)(cid:17)     hq
+
+(cid:16)
+
+x(t)(cid:17)
+
+(25)
+
+(26)
+
+(27)
+
+an upper bound on the id178 change can be constructed by observing that    (y) is the maximum id178 distribution.
+this holds without quali   cation for the binomial distribution, and holds for variance 1 training data for the gaussian case.
+for the gaussian case, training data must therefore be scaled to have unit norm for the following equalities to hold. it need
+not be whitened. the upper bound is derived as follows,
+
+(cid:16)
+
+hq
+
+x(t   1)(cid:17)     hq
+
+hq
+
+x(t)(cid:17)     hq
+(cid:16)
+(cid:16)
+x(t)(cid:17)     0
+x(t   1)|x(t)(cid:17)     hq
+
+(cid:16)
+(cid:16)
+
+x(t   1)(cid:17)
+x(t)|x(t   1)(cid:17)
+
+(cid:16)
+
+hq
+
+(28)
+
+(29)
+
+(30)
+
+.
+
+a lower bound on the id178 difference can be established by observing that additional steps in a markov chain do not
+increase the information available about the initial state in the chain, and thus do not decrease the conditional id178 of
+the initial state,
+
+(cid:16)
+(cid:16)
+(cid:16)
+
+hq
+
+hq
+
+hq
+
+hq
+
+(cid:16)
+
++ hq
+
+(cid:16)
+x(t   1)(cid:17)     hq
+x(t   1)(cid:17)     hq
+x(t   1)(cid:17)     hq
+
+x(0)|x(t)(cid:17)     hq
+(cid:16)
+x(t)(cid:17)     hq
+(cid:16)
+x(t)(cid:17)     hq
+(cid:16)
+x(t)(cid:17)     hq
+(cid:16)
+x(t   1)|x(t)(cid:17)     hq
+(cid:16)
+x(t)|x(t   1)(cid:17)     hq
+
+x(0)|x(t   1)(cid:17)
+(cid:16)
+x(0)|x(t   1)(cid:17)
+(cid:16)
+(cid:16)
+x(t   1)(cid:17)     hq
+(cid:16)
+x(0), x(t   1)(cid:17)     hq
+(cid:16)
+x(0), x(t)(cid:17)
+(cid:16)
+x(t   1)|x(0)(cid:17)     hq
+(cid:16)
+x(t)|x(0)(cid:17)
+(cid:16)
+x(t)|x(t   1)(cid:17)
+(cid:16)
+x(t   1)|x(0)(cid:17)     hq
+(cid:16)
+x(t)|x(t   1)(cid:17)
+x(t   1)|x(t)(cid:17)     hq
+
+x(0)|x(t)(cid:17)     hq
+(cid:16)
+x(t)|x(0)(cid:17)
+x(t   1)|x(0)(cid:17)     hq
+
++ hq
+
+(cid:16)
+
+(cid:16)
+
+hq
+
+.
+
+combining these expressions, we bound the conditional id178 for a single step,
+
+(cid:16)
+
+x(t)(cid:17)
+
+(31)
+
+(32)
+
+(33)
+
+(34)
+
+(35)
+
+(cid:16)
+
+x(t)|x(0)(cid:17)
+
+hq
+
+where both the upper and lower bounds depend only on the conditional forward trajectory q(cid:0)x(1      t )|x(0)(cid:1), and can be
+
++ hq
+
+(36)
+
+,
+
+analytically computed.
+
+b. log likelihood lower bound
+the lower bound on the log likelihood is
+
+l     k
+
+(cid:90)
+
+k =
+
+dx(0      t )q
+
+(cid:16)
+
+x(0      t )(cid:17)
+
+(cid:34)
+
+log
+
+p
+
+(cid:16)
+
+x(t )(cid:17) t(cid:89)
+
+t=1
+
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+
+(37)
+
+(38)
+
+(39)
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+b.1. id178 of p(cid:0)x(t )(cid:1)
+we can peel off the contribution from p(cid:0)x(t )(cid:1), and rewrite it as an id178,
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+(cid:90)
+(cid:90)
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+(cid:90)
+(cid:90)
+
+x(0      t )(cid:17) t(cid:88)
+x(0      t )(cid:17) t(cid:88)
+
+dx(0      t )q
+
+dx(0      t )q
+
+(cid:16)
+(cid:16)
+
+(cid:34)
+(cid:34)
+
+k =
+
+log
+
+log
+
+t=1
+
++
+
++
+
+=
+
+t=1
+
+(cid:16)
+(cid:16)
+
+x(t )(cid:17)
+x(t )(cid:17)
+
+log p
+
+x(t )(cid:17)
+(cid:16)
+log   (cid:0)xt(cid:1)
+
+dx(t )q
+
+dx(t )q
+
+(40)
+
+(41)
+
+.
+
+by design, the cross id178 to   (cid:0)x(t)(cid:1) is constant under our diffusion kernels, and equal to the id178 of p(cid:0)x(t )(cid:1).
+
+(42)
+
+therefore,
+
+(cid:90)
+
+t(cid:88)
+
+t=1
+
+k =
+
+(cid:16)
+
+x(0      t )(cid:17)
+
+log
+
+dx(0      t )q
+
+(cid:34)
+
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+
+(cid:16)
+
+x(t )(cid:17)
+
+.
+
+    hp
+
+(43)
+
+b.2. remove the edge effect at t = 0
+
+in order to avoid edge effects, we set the    nal step of the reverse trajectory to be identical to the corresponding forward
+diffusion step,
+
+.
+
+(44)
+
+(cid:34)
+
+q(cid:0)x(1)|x(0)(cid:1)   (cid:0)x(1)(cid:1)(cid:35)
+q(cid:0)x(1)|x(0)(cid:1)   (cid:0)x(0)(cid:1)
+
+(cid:16)
+
+x(t )(cid:17)
+
+    hp
+
+(45)
+
+(46)
+
+(cid:0)x(t )(cid:1) is a constant for all t.
+
+(cid:17)
+
+p
+
+=
+
++
+
+t=2
+
+t=2
+
+log
+
+log
+
+= q
+
+k =
+
+(cid:90)
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+(cid:90)
+(cid:90)
+
+(cid:34)
+(cid:34)
+
+dx(0)dx(1)q
+
+dx(0      t )q
+
+dx(0      t )q
+
+x(0)|x(1);   1
+
+t(cid:88)
+t(cid:88)
+
+x(0), x(1)(cid:17)
+
+x(1)|x(0)(cid:17)   (cid:0)x(0)(cid:1)
+
+  (cid:0)x(1)(cid:1) = t  
+
+(cid:16)
+x(0      t )(cid:17)
+(cid:16)
+x(0      t )(cid:17)
+
+we then use this equivalence to remove the contribution of the    rst time-step in the sum,
+
+x(0)|x(1)(cid:17)
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+q(cid:0)x(t)|x(t   1)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+where we again used the fact that by design    (cid:82) dx(t)q(cid:0)x(t)(cid:1) log   (cid:0)x(t)(cid:1) = hp
+b.3. rewrite in terms of posterior q(cid:0)x(t   1)|x(0)(cid:1)
+q(cid:0)x(t)|x(t   1), x(0)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+x(0      t )(cid:17)
+(cid:16)
+q(cid:0)x(t)|x(0)(cid:1) (cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+q(cid:0)x(t   1)|x(t), x(0)(cid:1) q(cid:0)x(t   1)|x(0)(cid:1)
+
+because the forward trajectory is a markov process,
+
+x(0      t )(cid:17)
+
+x(t )(cid:17)
+
+dx(0      t )q
+
+dx(0      t )q
+
+t(cid:88)
+
+t(cid:88)
+
+    hp
+
+    hp
+
+(cid:16)
+
+(cid:34)
+
+(cid:34)
+
+(cid:90)
+
+(cid:90)
+
+k =
+
+k =
+
+log
+
+log
+
+log
+
+t=2
+
+,
+
+t=2
+
+using bayes    rule we can rewrite this in terms of a posterior and marginals from the forward trajectory,
+
+(cid:16)
+x(t )(cid:17)
+
+.
+
+(47)
+
+(cid:16)
+x(t )(cid:17)
+
+    hp
+
+.
+
+(48)
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+figure app.1. samples from a diffusion probabilistic model trained on mnist digits. note that unlike many mnist sample    gures,
+these are true samples rather than the mean of the gaussian or binomial distribution from which samples would be drawn.
+
+b.4. rewrite in terms of kl divergences and entropies
+
+we then recognize that several terms are conditional entropies,
+
+(cid:90)
+(cid:90)
+
+t(cid:88)
+t(cid:88)
+
+t=2
+
+t=2
+
+k =
+
+=
+
+(cid:16)
+x(0      t )(cid:17)
+(cid:16)
+x(0      t )(cid:17)
+
+dx(0      t )q
+
+dx(0      t )q
+
+log
+
+log
+
+(cid:34)
+(cid:34)
+
+q(cid:0)x(t   1)|x(t), x(0)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+q(cid:0)x(t   1)|x(t), x(0)(cid:1)(cid:35)
+p(cid:0)x(t   1)|x(t)(cid:1)
+x(0), x(t)(cid:17)
+(cid:16)
+x(t )|x(0)(cid:17)     hq
+(cid:16)
+
+dx(0)dx(t)q
+
+(cid:16)
+
++
+
+hq
+
+(cid:104)
+(cid:16)
+x(t)|x(0)(cid:17)     hq
+t(cid:88)
+(cid:16)
+x(t )|x(0)(cid:17)     hq
+(cid:16)
+
+(cid:16)
+x(t   1)|x(0)(cid:17)(cid:105)     hp
+(cid:16)
+x(1)|x(0)(cid:17)     hp
+(cid:16)
+x(t )(cid:17)
+
+t=2
+
+.
+
+x(t )(cid:17)
+
+(49)
+
++ hq
+
+(cid:16)
+
+x(t   1)|x(t)(cid:17)(cid:17)
+
+(50)
+
+(51)
+
+(cid:16)
+
+(cid:16)
+x(1)|x(0)(cid:17)     hp
+
+x(t   1)|x(t), x(0)(cid:17)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)p
+x(t )(cid:17)
+(cid:16)
+
+dkl
+
+q
+
+.
+
+k =     t(cid:88)
+
+(cid:90)
+
+t=2
+
++ hq
+
+finally we transform the log ratio of id203 distributions into a kl divergence,
+
+note that the entropies can be analytically computed, and the kl divergence can be analytically computed given x(0) and
+x(t).
+
+(analytically
+
+behaved
+
+well
+tractable) distribution
+forward diffusion kernel
+reverse diffusion kernel
+training targets
+forward distribution
+reverse distribution
+log likelihood
+lower bound on log likelihood
+
+perturbed reverse diffusion kernel
+
+gaussian
+
+  (cid:0)x(t )(cid:1) = n(cid:0)x(t ); 0, i(cid:1)
+q(cid:0)x(t)|x(t   1)(cid:1) = n(cid:0)x(t); x(t   1)   
+p(cid:0)x(t   1)|x(t)(cid:1) = n(cid:0)x(t   1); f  
+(cid:0)x(t), t(cid:1), f  
+q(cid:0)x(0      t )(cid:1) =
+p(cid:0)x(0      t )(cid:1) =
+  p(cid:0)x(t   1)|x(t)(cid:1) = n
+
+   (cid:80)t
+(cid:32)
+
+k =
+
+l =
+
+t=2
+
+f  
+
+1       t, i  t
+
+(cid:1)
+(cid:0)x(t), t(cid:1)(cid:1)
+(cid:0)x(t), t(cid:1) , f  
+(cid:0)x(t), t(cid:1),   1      t
+
+e
+q(x(0),x(t))
+
+(cid:2)dkl
+(cid:0)x(t), t(cid:1) + f  
+(cid:16)
+(cid:17)
+
+x(t   1); f  
+(cid:17)(cid:105)
+
+i
+
+binomial
+
+b(cid:0)x(t ); 0.5(cid:1)
+b(cid:0)x(t); x(t   1) (1       t) + 0.5  t
+b(cid:0)x(t   1); fb
+(cid:0)x(t), t(cid:1)
+
+(cid:0)x(t), t(cid:1)(cid:1)
+
+(cid:1)
+
+fb
+
+t=1 q(cid:0)x(t)|x(t   1)(cid:1)
+q(cid:0)x(0)(cid:1)(cid:81)t
+  (cid:0)x(t )(cid:1)(cid:81)t
+t=1 p(cid:0)x(t   1)|x(t)(cid:1)
+(cid:82) dx(0)q(cid:0)x(0)(cid:1) log p(cid:0)x(0)(cid:1)
+(cid:0)q(cid:0)x(t   1)|x(t), x(0)(cid:1)(cid:12)(cid:12)(cid:12)(cid:12)p(cid:0)x(t   1)|x(t)(cid:1)(cid:1)(cid:3) + hq
+(cid:0)x(t )|x(0)(cid:1)     hq
+(cid:0)x(t), t(cid:1)(cid:33)
+(cid:12)(cid:12)(cid:12)(cid:12)x(t   1)(cid:48)
+(cid:0)x(t), t(cid:1)     log r
+x(t   1)(cid:48)(cid:17)
+
+b(cid:16)
+
+   x(t   1)(cid:48)
+
+x(t   1)
+
+, f  
+
+(cid:16)
+
+=f  (x(t),t)
+
+i
+
+(cid:0)x(1)|x(0)(cid:1)     hp
+
+(cid:0)x(t )(cid:1)
+
+ct   1
+
+dt   1
+dt   1
+i +(1   ct   1
+
+i
+
+i
+
+i
+
+;
+
+xt   1
+
+i
+
+)(1   dt   1
+
+i
+
+)
+
+(cid:17)
+
+table app.1. the key equations in this paper for the speci   c cases of gaussian and binomial diffusion processes. n (u;   ,   ) is a gaussian distribution with mean    and covariance
+  . b (u; r) is the distribution for a single bernoulli trial, with u = 1 occurring with id203 r, and u = 0 occurring with id203 1     r. finally, for the perturbed bernoulli
+trials bt
+
+, and the distribution is given for a single bit i.
+
+i = x(t   1) (1       t) + 0.5  t, ct
+
+x(t+1), t
+
+, and dt
+
+i = r
+
+(cid:16)
+
+(cid:104)
+
+i =
+
+fb
+
+x(t)
+i = 1
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+(cid:0)x(t), t(cid:1),    = f  
+
+(cid:0)x(t), t(cid:1), and y = x(t   1).
+
+using this notation,
+
+c. perturbed gaussian transition
+
+we wish to compute   p(cid:0)x(t   1) | x(t)(cid:1). for notational simplicity, let    = f  
+y | x(t)(cid:17)
+
+r (y)
+= n (y;   ,   ) r (y) .
+we can rewrite this in terms of energy functions, where er (y) =     log r (y),
+
+y | x(t)(cid:17)     p
+y | x(t)(cid:17)     exp [   e (y)]
+
+(cid:16)
+
+(cid:16)
+
+(cid:16)
+
+  p
+
+  p
+
+e (y) =
+
+1
+2
+
+(y       )t      1 (y       ) + er (y) .
+
+2 (y       )t      1 (y       ), then we can approximate it using its taylor expansion around   .
+if er (y) is smooth relative to 1
+one suf   cient condition is that the eigenvalues of the hessian of er (y) are everywhere much smaller magnitude than the
+eigenvalues of      1. we then have
+
+where g =
+
+   er(y(cid:48))
+
+   y(cid:48)
+
+(cid:12)(cid:12)(cid:12)(cid:12)y(cid:48)=  
+
+er (y)     er (  ) + (y       ) g
+
+. plugging this in to the full energy,
+
+e (y)     1
+2
+1
+2
+1
+2
+
+=
+
+=
+
+(y       )t      1 (y       ) + (y       )t g + constant
+yt      1y     1
+2
+(y        +   g)t      1 (y        +   g) + constant.
+
+yt      1       1
+2
+
+  t      1y +
+
+1
+2
+
+yt      1  g +
+
+gt        1y + constant
+
+1
+2
+
+this corresponds to a gaussian,
+
+  p
+
+substituting back in the original formalism, this is,
+
+(cid:16)
+
+x(t   1) | x(t)(cid:17)     n
+
+  p
+
+      x(t   1); f  
+
+(cid:16)
+
+(cid:16)
+
+y | x(t)(cid:17)     n (y;          g,   ) .
+x(t   1)(cid:48)(cid:17)
+(cid:17)
+
+(cid:17)     log r
+
+(cid:16)
+
+(cid:16)
+
+x(t), t
+
++ f  
+
+x(t), t
+
+   x(t   1)(cid:48)
+
+(cid:12)(cid:12)(cid:12)(cid:12)(cid:12)x(t   1)(cid:48)
+
+=f  (x(t),t)
+
+(cid:17)       .
+
+x(t), t
+
+(cid:16)
+
+, f  
+
+(52)
+
+(53)
+
+(54)
+
+(55)
+
+(56)
+
+(57)
+
+(58)
+
+(59)
+
+(60)
+
+(61)
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+d. experimental details
+d.1. toy problems
+
+d.1.1. swiss roll
+
+a probabilistic model was built of a two dimensional swiss
+
+roll distribution. the generative model p(cid:0)x(0      t )(cid:1) con-
+(cid:0)x(t), t(cid:1) and a diago-
+(cid:0)x(t), t(cid:1) for the reverse trajectory. the top, read-
+(cid:0)x(t), t(cid:1) was passed through a sigmoid to restrict
+
+sisted of 40 time steps of gaussian diffusion initialized
+at an identity-covariance gaussian distribution. a (nor-
+malized) id80 with a single hid-
+den layer and 16 hidden units was trained to generate the
+mean and covariance functions f  
+nal f  
+out, layer for each function was learned independently for
+each time step, but for all other layers weights were shared
+across all time steps and both functions. the top layer out-
+put of f  
+it between 0 and 1. as can be seen in figure 1, the swiss
+roll distribution was successfully learned.
+
+d.1.2. binary heartbeat distribution
+
+(cid:16)
+
+x(t )
+i = 1
+
+(cid:17)
+(cid:0)x(t), t(cid:1) of the re-
+
+a probabilistic model was trained on simple binary se-
+quences of length 20, where a 1 occurs every 5th time
+bin, and the remainder of the bins are 0. the generative
+model consisted of 2000 time steps of binomial diffusion
+initialized at an independent binomial distribution with the
+same mean activity as the data (p
+= 0.2). a
+multilayer id88 with sigmoid nonlinearities, 20 in-
+put units and three hidden layers with 50 units each was
+trained to generate the bernoulli rates fb
+verse trajectory. the top, readout, layer was learned inde-
+pendently for each time step, but for all other layers weights
+were shared across all time steps. the top layer output was
+passed through a sigmoid to restrict it between 0 and 1. as
+can be seen in figure 2, the heartbeat distribution was suc-
+cessfully learned. the log likelihood under the true gener-
+ating process is log2
+can be seen in figure 2 and table 1 learning was nearly
+perfect.
+
+(cid:1) =    2.322 bits per sequence. as
+
+(cid:0) 1
+
+5
+
+d.2. images
+
+d.2.1. architecture
+readout
+in all cases, a convolutional network was used
+to produce a vector of outputs yi     r2j for each image
+pixel i. the entries in yi are divided into two equal sized
+subsets, y   and y  .
+
+for each pixel i,
+
+z  
+i =
+
+the bump functions consist of
+
+gj (t) =
+
+exp
+
+(cid:80)j
+
+k=1 exp
+
+j=1
+
+y  
+ijgj (t) .
+
+j(cid:88)
+(cid:16)    1
+2w2 (t       j)2(cid:17)
+2w2 (t       k)2(cid:17) ,
+(cid:16)    1
+
+(62)
+
+(63)
+
+where   j     (0, t ) is the bump center, and w is the spacing
+between bump centers. z   is generated in an identical way,
+but using y  .
+for all image experiments a number of timesteps t = 1000
+was used, except for the bark dataset which used t = 500.
+
+mean and variance finally, these outputs are combined
+to produce a diffusion mean and variance prediction for
+each pixel i,
+
+  ii =   (cid:0)z  
+
+i +      1 (  t)(cid:1) ,
+
+  i = (xi     z  
+
+i ) (1       ii) + z  
+i .
+
+(cid:0)x(t)|x(t   1);   t
+(cid:1),
+would result from applying p(cid:0)x(t   1)|x(t)(cid:1) many times.   
+
+where both    and    are parameterized as a perturbation
+around the forward diffusion kernel t  
+and z  
+i
+
+is the mean of the equilibrium distribution that
+
+(64)
+(65)
+
+is restricted to be a diagonal matrix.
+
+multi-scale convolution we wish to accomplish goals
+that are often achieved with pooling networks     specif-
+ically, we wish to discover and make use of long-range
+and multi-scale dependencies in the training data. how-
+ever, since the network output is a vector of coef   cients
+for every pixel it is important to generate a full resolution
+rather than down-sampled feature map. we therefore de   ne
+multi-scale-convolution layers that consist of the following
+steps:
+
+1. perform mean pooling to downsample the image to
+multiple scales. downsampling is performed in pow-
+ers of two.
+
+2. performing convolution at each scale.
+3. upsample all scales to full resolution, and sum the re-
+
+4. perform a pointwise nonlinear transformation, con-
+
+sulting images.
+sisting of a soft relu (log [1 + exp (  )]).
+
+temporal dependence the convolution output y   is
+used as per-pixel weighting coef   cients in a sum over time-
+i     r
+dependent    bump    functions, generating an output z  
+
+the composition of the    rst three linear operations resem-
+bles convolution by a multiscale convolution kernel, up to
+blocking artifacts introduced by upsampling. this method
+of achieving multiscale convolution was described in (bar-
+ron et al., 2013).
+
+deep unsupervised learning using nonequilibrium thermodynamics
+
+(cid:16)
+
+x(t), t
+
+(cid:17)
+
+(cid:16)
+
+(cid:17)
+
+figure d.1. network architecture for mean function f  
+
+x(t), t
+
+and covariance function f  
+, for experiments in section
+3.2. the input image x(t) passes through several layers of multi-
+scale convolution (section d.2.1). it then passes through several
+convolutional layers with 1    1 kernels. this is equivalent to a
+dense transformation performed on each pixel. a linear transfor-
+mation generates coef   cients for readout of both mean   (t) and
+covariance   (t) for each pixel. finally, a time dependent readout
+function converts those coef   cients into mean and covariance im-
+ages, as described in section d.2.1. for cifar-10 a dense (or
+fully connected) pathway was used in parallel to the multi-scale
+convolutional pathway. for mnist, the dense pathway was used
+to the exclusion of the multi-scale convolutional pathway.
+
+dense layers dense (acting on the full image vector)
+and kernel-width-1 convolutional (acting separately on the
+feature vector for each pixel) layers share the same form.
+they consist of a linear transformation, followed by a tanh
+nonlinearity.
+
+inputdensemulti-scaleconvolutionconvolution1x1 kerneltemporalcoefficientstemporalcoefficientsdensemulti-scaleconvolutionmeanimagecovarianceimageconvolution1x1 kernel

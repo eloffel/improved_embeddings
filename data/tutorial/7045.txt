@@ -1,0 +1,1597 @@
+   #[1]monik's blog    feed [2]monik's blog    comments feed [3]monik's blog
+      a noob   s guide to implementing id56-lstm using tensorflow comments
+   feed [4]jnana : hyperfocus education [5]a quick guide to getting a
+   django     uwsgi     nginx server up on ubuntu 16.04 (aws ec2) [6]alternate
+   [7]alternate
+
+   [8]monik's blog
+
+     * [9]home
+     * [10]about
+     * [11]github
+     * [12]linkedin
+     * [13]contact
+
+a noob   s guide to implementing id56-lstm using tensorflow
+
+   categories [14]machine learning[15]june 20, 2016
+
+   the purpose of this tutorial is to help anybody write their first
+   [16]id56 [17]lstm model without much background in artificial neural
+   networks or machine learning. the discussion is not centered around the
+   theory or working of such networks but on writing code for solving a
+   particular problem. we will understand how neural networks let us solve
+   some problems effortlessly, and how they can be applied to a multitude
+   of other problems.
+
+what are id56s?
+
+   simple multi-layered neural networks are classifiers which when given a
+   certain input, tag the input as belonging to one of the many classes.
+   they are trained using the existing id26 algorithms. these
+   networks are great at what they do but they are not capable of handling
+   inputs which come in a sequence. for example, for a neural net to
+   identify the nouns in a sentence, having just the word as input is not
+   helpful at all. a lot of information is present in the context of the
+   word which can only be determined by looking at the words near the
+   given word. the entire sequence is to be studied to determine the
+   output. this is where recurrent neural networks (id56s) find their
+   use. as the id56 traverses the input sequence, output for every input
+   also becomes a part of the input for the next item of the sequence. you
+   can read more about the utility of id56s in[18] andrej karpathy   s
+   brilliant blog post. it is helpful to note the    recurrent    property of
+   the network, where the previous output for an input item becomes a part
+   of the current input which comprises the current item in the sequence
+   and the last output. when done over and over, the last output would be
+   the result of all the previous inputs and the last input.
+
+what is lstm?
+
+   id56s are very apt for sequence classification problems and the reason
+   they   re so good at this is that they   re able to retain important data
+   from the previous inputs and use that information to modify the current
+   output. if the sequences are quite long, the gradients (values
+   calculated to tune the network) computed during their training
+   (id26) either vanish (multiplication of many 0 < values < 1)
+   or explode (multiplication of many large values) causing it to train
+   very slowly.
+
+   long short term memory is a id56 architecture which addresses the
+   problem of training over long sequences and retaining memory. lstms
+   solve the gradient problem by introducing a few more gates that control
+   access to the cell state. you could refer to [19]colah   s  blog post
+   which is a great place to understand the working of lstms. if you
+   didn   t get what is being discussed, that   s fine and you can safely move
+   to the next part.
+
+the task
+
+   given a binary string (a string with just 0s and 1s) of length 20, we
+   need to determine the count of 1s in a binary string. for example,
+      01010010011011100110    has 11 ones. so the input for our program will
+   be a string of length twenty that contains 0s and 1s and the output
+   must be a single number between 0 and 20 which represents the number of
+   ones in the string. here is a link to the [20]complete gist, in case
+   you just want to jump at the code.
+
+   even an amateur programmer can   t help but giggle at the task
+   definition. it won   t take anybody more than a minute to execute this
+   program and get the correct output on every input (0% error).
+count = 0
+for i in input_string:
+    if i == '1':
+        count+=1
+
+   anybody in their right mind would wonder, if it is so easy, why the
+   hell can   t a computer figure it out by itself? computers aren   t that
+   smart without a human instructor. computers need to be given precise
+   instructions and the    thinking    has to be done by the human issuing the
+   commands. machines can repeat the most complicated calculations a
+   gazillion times over but they still fail miserably at things humans do
+   painlessly, like recognizing cats in a picture.
+
+   what we plan to do is to feed neural network enough input data and tell
+   it the correct output values for those inputs. post that, we will give
+   it input that it has not seen before and we will see how many of those
+   does the program get right.
+
+generating the training input data
+
+   each input is a binary string of length twenty. the way we will
+   represent it will be as a python list of 0s and 1s. the test input to
+   be used for training will contain many such lists.
+import numpy as np
+from random import shuffle
+
+train_input = ['{0:020b}'.format(i) for i in range(2**20)]
+shuffle(train_input)
+train_input = [map(int,i) for i in train_input]
+ti  = []
+for i in train_input:
+    temp_list = []
+    for j in i:
+            temp_list.append([j])
+    ti.append(np.array(temp_list))
+train_input = ti
+
+   there can be a total of 2^20  ~ 10^6 combinations of 1s and 0s in a
+   string of length 20. we generate a list of all the   2^20  numbers,
+   convert it to their binary string and shuffle the entire list.  each
+   binary string is then converted to a list of 0s and 1s. tensorflow
+   requires input as a tensor (a tensorflow variable) of the dimensions
+   [batch_size, sequence_length, input_dimension] (a 3d variable). in our
+   case, batch_size is something we   ll determine later but sequence_length
+   is fixed at 20 and input_dimension is 1 (i.e each individual bit of the
+   string). each bit will actually be represented as a list containing
+   just that bit. a list of 20 such lists will form a sequence which we
+   convert to a numpy array. a list of all such sequences is the value of
+   train_input that we   re trying to compute. if you print the first few
+   values of train_input, it would look like
+[
+ array([[0],[0],[1],[0],[0],[1],[0],[1],[1],[0],[0],[0],[1],[1],[1],[1],[1],[1],
+[0],[0]]),
+ array([[1],[1],[0],[0],[0],[0],[1],[1],[1],[1],[1],[0],[0],[1],[0],[0],[0],[1],
+[0],[1]]),
+ .....
+]
+
+   don   t worry about the values if they don   t match yours because they
+   will be different as they are in random order.
+
+generating the training output data
+
+   for every sequence, the result can be anything between 0 and 20. so we
+   have 21 choices per sequence. very clearly, our task is a sequence
+   classification problem. each sequence belongs to the class number which
+   is the same as the count of ones in the sequence. the representation of
+   the output would be a list of the length of 21 with zeros at all
+   positions except a one at the index of the class to which the sequence
+   belongs.
+[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+ 0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17 18 19 20
+this is a sample output for a sequence which belongs to 4th class i.e has 4 ones
+
+   more formally, this is called the one hot encoded representation.
+train_output = []
+
+for i in train_input:
+    count = 0
+    for j in i:
+        if j[0] == 1:
+            count+=1
+    temp_list = ([0]*21)
+    temp_list[count]=1
+    train_output.append(temp_list)
+
+   for every training input sequence, we generate an equivalent one hot
+   encoded output representation.
+
+generating the test data
+
+   for any supervised machine learning task, we need some data as training
+   data to teach our program to identify the correct outputs and some data
+   as test data to check how our program performs on inputs that it hasn   t
+   seen before. letting test and training data overlap is self-defeating
+   because, if you had already practiced the questions that were to come
+   in your exam, you would most definitely ace it.  currently in our
+   train_input and train_output, we have 2^20  (1,048,576) unique
+   examples. we will split those into two sets, one for training and the
+   other for testing. we will take 10,000 examples (0.9% of the entire
+   data) from the dataset and use it as training data and use the rest of
+   the 1,038,576 examples as test data.
+num_examples = 10000
+test_input = train_input[num_examples:]
+test_output = train_output[num_examples:] #everything beyond 10,000
+
+train_input = train_input[:num_examples]
+train_output = train_output[:num_examples] #till 10,000
+
+designing the model
+
+   this is the most important part of the tutorial. tensorflow and various
+   other libraries ([21]theano, [22]torch, [23]pybrain) provide tools for
+   users to design the model without getting into the nitty-gritty of
+   implementing the neural network, the optimization or the
+   id26 algorithm.
+
+   danijar outlines a great way to [24]organize tensorflow models which
+   you might want to use later to organize tidy up your code. for the
+   purpose of this tutorial, we will skip that and focus on writing code
+   that just works.
+
+   import the required packages to begin with. if you haven   t already
+   installed tensorflow, follow the instructions on [25]this page and then
+   continue.
+import tensorflow as tf
+
+   after importing the tensorflow, we will define two variables which will
+   hold the input data and the target data.
+data = tf.placeholder(tf.float32, [none, 20,1])
+target = tf.placeholder(tf.float32, [none, 21])
+
+   the dimensions for data are [batch size, sequence length, input
+   dimension]. we let the batch size be unknown and to be determined at
+   runtime. target will hold the training output data which are the
+   correct results that we desire. we   ve made tensorflow placeholders
+   which are basically just what they are, placeholders that will be
+   supplied with data later.
+
+   now we will create the id56 cell. tensorflow provides support for lstm,
+   gru (slightly different architecture than lstm) and simple id56 cells.
+   we   re going to use lstm for this task.
+num_hidden = 24
+cell = tf.nn.id56_cell.lstmcell(num_hidden,state_is_tuple=true)
+
+   for each lstm cell that we initialise, we need to supply a value for
+   the hidden dimension, or as some people like to call it, the number of
+   units in the lstm cell. the value of it is it up to you, too high a
+   value may lead to overfitting or a very low value may yield extremely
+   poor results. as many experts have put it, selecting the right
+   parameters is more of an art than science.
+
+   before we write any more code, it is imperative to understand how
+   tensorflow computation graphs work. from a hacker perspective, it is
+   enough to think of it as having two phases. the first phase is building
+   the computation graph where you define all the calculations and
+   functions that you will execute during runtime. the second phase is the
+   execution phase where a tensorflow session is created and the graph
+   that was defined earlier is executed with the data we supply.
+val, state = tf.nn.dynamic_id56(cell, data, dtype=tf.float32)
+
+   we unroll the network and pass the data to it and store the output in
+   val. we also get the state at the end of the dynamic run as a return
+   value but we discard it because every time we look at a new sequence,
+   the state becomes irrelevant for us. please note, writing this line of
+   code doesn   t mean it is executed. we   re still in the first phase of
+   designing the model. think of these as functions that are stored in
+   variables which will be invoked when we start a session.
+val = tf.transpose(val, [1, 0, 2])
+last = tf.gather(val, int(val.get_shape()[0]) - 1)
+
+   we transpose the output to switch batch size with sequence size. after
+   that we take the values of outputs only at sequence   s last input, which
+   means in a string of 20 we   re only interested in the output we got at
+   the 20th character and the rest of the output for previous characters
+   is irrelevant here.
+weight = tf.variable(tf.truncated_normal([num_hidden, int(target.get_shape()[1])
+]))
+bias = tf.variable(tf.constant(0.1, shape=[target.get_shape()[1]]))
+
+   what we want to do is apply the final transformation to the outputs of
+   the lstm and map it to the 21 output classes. we define weights and
+   biases, and multiply the output with the weights and add the bias
+   values to it. the dimension of the weights will be num_hidden x
+   number_of_classes. thus on multiplication with the output (val), the
+   resulting dimension will be batch_size x number_of_classes which is
+   what we are looking for.
+prediction = tf.nn.softmax(tf.matmul(last, weight) + bias)
+
+   after multiplying the output with the weights and adding the bias, we
+   will have a matrix with a variety of different values for each class.
+   what we are interested in is the id203 score for each class i.e
+   the chance that the sequence belongs to a particular class. we then
+   calculate the [26]softmax activation to give us the id203 scores.
+
+   what is this function and why are we using it?
+
+   [codecogseqn-1.gif?resize=70%2c46]
+
+
+   this function takes in a vector of values and returns a id203
+   distribution for each index depending upon its value. this function
+   returns a id203 scores (sum of all the values equate to one)
+   which is the final output that we need. if you want to learn more about
+   softmax, head over to [27]this link.
+cross_id178 = -tf.reduce_sum(target * tf.log(tf.clip_by_value(prediction,1e-10
+,1.0)))
+
+   the next step is to calculate the loss or in less technical words, our
+   degree of incorrectness. we calculate the cross id178 loss (more
+   details [28]here) and use that as our cost function. the cost function
+   will help us determine how poorly or how well our predictions stack
+   against the actual results. this is the function that we are trying to
+   minimize. if you don   t want to delve into the technical details, it is
+   okay to just understand what cross id178 loss is calculating. the log
+   term helps us measure the degree to which the network got it right or
+   wrong. say for example, if the target was 1 and the prediction is close
+   to one, our loss would not be much because the values of -log(x) where
+   x nears 1 is almost 0. for the same target, if the prediction was 0,
+   the cost would increase by a huge amount because -log(x) is very high
+   when x is close to zero. adding the log term helps in penalizing the
+   model more if it is terribly wrong and very little when the prediction
+   is close to the target. the last step in model design is to prepare the
+   optimization function.
+optimizer = tf.train.adamoptimizer()
+minimize = optimizer.minimize(cross_id178)
+
+   tensorflow has a few optimization functions like rmspropoptimizer,
+   adagradoptimizer, etc. we choose adamoptimzer and we set minimize to
+   the function that shall minimize the cross_id178 loss that we
+   calculated previously.
+
+calculating the error on test data
+
+mistakes = tf.not_equal(tf.argmax(target, 1), tf.argmax(prediction, 1))
+error = tf.reduce_mean(tf.cast(mistakes, tf.float32))
+
+   this error is a count of how many sequences in the test dataset were
+   classified incorrectly. this gives us an idea of the correctness of the
+   model on the test dataset.
+
+execution of the graph
+
+   we   re done with designing the model. now the model is to be executed!
+init_op = tf.initialize_all_variables()
+sess = tf.session()
+sess.run(init_op)
+
+   we start a session and initialize all the variables that we   ve defined.
+   after that, we begin our training process.
+batch_size = 1000
+no_of_batches = int(len(train_input)/batch_size)
+epoch = 5000
+for i in range(epoch):
+    ptr = 0
+    for j in range(no_of_batches):
+        inp, out = train_input[ptr:ptr+batch_size], train_output[ptr:ptr+batch_s
+ize]
+        ptr+=batch_size
+        sess.run(minimize,{data: inp, target: out})
+    print "epoch - ",str(i)
+incorrect = sess.run(error,{data: test_input, target: test_output})
+print('epoch {:2d} error {:3.1f}%'.format(i + 1, 100 * incorrect))
+sess.close()
+
+   we decide the batch size and divide the training data accordingly. i   ve
+   fixed the batch size at 1000 but you would want to experiment by
+   changing it to see how it impacts your results and training time.
+
+   if you are familiar with [29]stochastic id119, this idea
+   would seem fairly simple. instead of updating the values after running
+   it through all the training samples, we break the training set into
+   smaller batches and run it for those. after processing each batch, the
+   values of the network are tuned. so every few steps, the network
+   weights are adjusted.  stochastic optimization methods are known to
+   perform better than their counterparts for certain functions. this is
+   because the stochastic methods converge much faster but this may not
+   always be the case.
+
+   for every batch, we get the input and output data and we run minimize,
+   the optimizer function to minimize the cost. all the calculation of
+   prediction, cost and id26 is done by tensorflow. we pass the
+   feed_dict in sess.run along with the function. the feed_dict is a way
+   of assigning data to tensorflow variables in that frame. so we pass the
+   input data along with target (correct) outputs. the functions that we
+   wrote above, are now being executed.
+
+   that   s all. we   ve made our toy lstm-id56 that learns to count just by
+   looking at correct examples! this wasn   t very intuitive to me when i
+   trained it for the first time, so i added this line of code below the
+   error calculation that would print the result for a particular example.
+    print sess.run(model.prediction,{data: [[[1],[0],[0],[1],[1],[0],[1],[1],[1]
+,[0],[1],[0],[0],[1],[1],[0],[1],[1],[1],[0]]]})
+
+   so as the model trains, you will notice how the id203 score at
+   the correct index in the list gradually increases. here   s a link to the
+   [30]complete gist of the code.
+
+concerns regarding the training data
+
+   many would ask, why use a training data set which is just 1% of the all
+   the data. well, to be able to train it on a cpu with a single core, a
+   higher number would increase the time exponentially. you could of
+   course adjust the batch size to still keep the number of updates same
+   but the final decision is always up to the model designer. despite
+   everything, you will be surprised with the results when you realize
+   that 1% of the data was enough to let the network achieve stellar
+   results!
+
+tinkering with the model
+
+   you can try changing the parameter values to see how it affects the
+   performance and training time. you can also try adding multiple layers
+   to the id56 to make your model more complex and enable it to learn more
+   features. an important feature you can implement is to add the ability
+   to [31]save the model values after every few iterations and retrieve
+   those values to perform predictions in future. you could also change
+   the cell from lstm to gru or a simple id56 cell and compare the
+   performance.
+
+results
+
+   training the model with 10,000 sequences, batch size of 1,000 and 5000
+   epochs  on a macbookpro/8gb/2.4ghz/i5 and no gpu took me about 3-4
+   hours. and now the answer to the question, everybody is waiting for.
+   how well did it perform?
+epoch 5000 error 0.1%
+
+   for the final epoch, the error rate is 0.1% across the entire (almost
+   so because our test data is 99% of all possible combinations)  dataset!
+   this is pretty close to what somebody with the least programming skills
+   would have been able to achieve (0% error). but, our neural network
+   figured that out by itself! we did not instruct it to perform any of
+   the counting operations.
+
+   if you want to speed up the process, you could try reducing the length
+   of the binary string and adjusting the values elsewhere in the code to
+   make it work.
+
+what can you do now?
+
+   now that you   ve implemented your lstm model, what else is there that
+   you can do? sequence classification can be applied to a lot of
+   different problems, like [32]handwritten digit recognition or even
+   autonomous car driving! think of the rows of the image as individual
+   steps or inputs and the entire image to be the sequence. you must
+   classify the image as belonging to one of the classes which could be
+   to halt, accelerate, turn left, turn right or continue at same speed.
+   training data could be a stopper but hell, you could even generate it
+   yourself. there is so much more waiting to be done!
+
+   *the post has been updated to be compatible with tensorflow version 0.9
+   and above.
+
+share this:
+
+     * [33]click to share on twitter (opens in new window)
+     * [34]click to share on facebook (opens in new window)
+     * [35]click to share on google+ (opens in new window)
+     *
+
+related
+
+   [36]75 comments
+
+75 comments
+
+     * jay
+       june 20, 2016
+       [37]reply
+       could you explain why you only use the last output of the sequence?
+
+     * monik
+       june 20, 2016
+       [38]reply
+       we use the last output of the sequence for calculating the cost
+       because the last output accounts for all the outputs due to
+       previous items in the sequence.
+       for example, given a sequence    10100100110010101101   , the id56 would
+       treat it like this :
+       step 1:
+       input : 1,none (previous output goes here)
+       output : x1
+       step 2:
+       input: 0,x1
+       output : x2
+       step 3:
+       input 1,x2
+       output : x3
+           at the last step ..
+       step 20:
+       input 1,x19
+       output : x20
+       so the final output has accounted for all the input items in the
+       sequence and thus it is enough to only use the last output of the
+       sequence when computing the cost. we want to classify the entire
+       sequence and we only have correct values for entire sequence (class
+       to which it belongs) to be able to compare it with.
+       although, there would be a case where we would be interested in
+       using all the outputs of the sequence. such a problem would be a
+       sequence labelling problem, such as that of tagging nouns in a
+       sentence where you would have an output for each and every word.
+     * msummers
+       june 16, 2017
+       [39]reply
+       looks like she took the sample from aymeric damien like most of the
+       other guys!?!! of course you need to do softmax at several output
+       nodes to predict sequences. @monik, please go through andrej   s id56
+       example and try to update your code.
+
+     danijar hafner
+   june 25, 2016
+   [40]reply
+
+   very comprehensive and well-written tutorial! btw, in `no_of_batches =
+   int(len(train_input)) / batch_size` you probably meant to cast the
+   result rather than the length which is already int.
+     * monik
+       june 25, 2016
+       [41]reply
+       yes, that   s correct. thanks for the correction!
+
+     karanl
+   june 28, 2016
+   [42]reply
+
+   one the est tutorial on tensorflow, id56 for practical application!!
+   amazing
+
+
+
+   pavel
+   august 9, 2016
+   [43]reply
+
+   looks like you are ignoring state that is returned from dynamic_id56..
+   so how is this network learning in such case?
+
+     * monik
+       august 12, 2016
+       [44]reply
+       dynamic_id56 returns a state after the entire input sequence is
+       traversed and not the state after each input bit (which constitutes
+       the sequence) is iterated. thus, it makes sense to discard it
+       because we do not want to pass inter-sequence state over different
+       batches. tensorflow takes care of the back propagation and tuning
+       of the state variables in this case.
+
+
+
+   ankuj
+   august 16, 2016
+   [45]reply
+
+   very nicely compiled and explained article. helped me better understand
+   the lstm implementation on tensorflow.org     
+
+
+
+   shalom
+   september 5, 2016
+   [46]reply
+
+   tensorflow has been updated     `from tensorflow.models.id56 import
+   id56_cell` now throws an importerror.
+
+   instead, `cell = id56_cell.lstmcell(num_hidden)` should be `cell =
+   tf.nn.id56_cell.lstmcell(num_hidden)
+
+     * monik
+       september 6, 2016
+       [47]reply
+       thanks shalom. the post and the code has been updated to be
+       compatible with the newer version of tensorflow.
+
+     * benecoder
+       march 3, 2017
+       [48]reply
+       for the tf 1.0 release tnn_cell got temporarly moved to contrib. so
+       it tf.contrib.id56.basiclstmcell( is the right object now, but that
+       will no last for long. i don   t know wether you bother to change
+       that.
+       mentioned here:
+       [49]https://github.com/tensorflow/tensorflow/issues/7664
+
+
+
+   vishal
+   september 6, 2016
+   [50]reply
+
+   i changed your cell definition as follows:
+
+   num_layers=2
+   cell = tf.nn.id56_cell.lstmcell(num_hidden,state_is_tuple=true)
+   cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers,
+   state_is_tuple=true)
+
+   and the performance for 200 epochs went from 4% to 0.7%
+
+     * monik
+       september 6, 2016
+       [51]reply
+       if you introduce another layer, you are also increasing the number
+       of parameters to be trained to get the certain results. thus the
+       performance may go down as more layers will require more training
+       to do the job.
+
+
+
+   raisa
+   september 7, 2016
+   [52]reply
+
+   very well explained especially helpful for beginners. i recently
+   started learning about id56s. i have one question. is it possible to use
+   more that string as the input? and giving a class label to each string.
+   (something like a sequence of sequences)
+
+     * monik
+       september 11, 2016
+       [53]reply
+       if i get what you   re saying,
+       [54]https://www.tensorflow.org/versions/r0.10/tutorials/id195/ind
+       ex.html which is google   s id195 model might be the answer
+
+
+
+   sukrit gupta
+   september 11, 2016
+   [55]reply
+
+   the tutorial was really helpful. but the doubt that i am having is
+   that, i have an energy load prediction dataset that predicts load on
+   hourly bases. the dataset has the hourly load requirements of a region
+   for 24 hours of a day. the dataset that i am referring is available
+   here:
+   [56]https://www.kaggle.com/c/global-energy-forecasting-competition-2012
+   -load-forecasting/data
+   now in this case will using only the last output of the sequence work?
+   if not, then what should be the desired change in the code snippet?
+
+
+
+   mad wombat
+   september 13, 2016
+   [57]reply
+
+   nice explanation. i wonder, why did you pick tf.nn.dynamic_id56? how is
+   it different from tf.nn.id56 or other variants provided by tf?
+
+     * chirag jain
+       october 7, 2016
+       [58]reply
+       excerpt from
+       [59]http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-gu
+       ide-and-undocumented-features/
+          internally, tf.nn.id56 creates an unrolled graph for a fixed id56
+       length. that means, if you call tf.nn.id56 with inputs having 200
+       time steps you are creating a static graph with 200 id56 steps.
+       first, graph creation is slow. second, you   re unable to pass in
+       longer sequences (> 200) than you   ve originally specified.
+       tf.nn.dynamic_id56 solves this. it uses a tf.while loop to
+       dynamically construct the graph when it is executed. that means
+       graph creation is faster and you can feed batches of variable size   
+
+
+
+   baki
+   september 17, 2016
+   [60]reply
+
+   thanks! very nice explanation. i   m going to try this implementation to
+   predict ranking of movie reviews.
+
+
+
+   kim
+   september 22, 2016
+   [61]reply
+
+   thank you for your great explanation! i   ve been looking for an easy,
+   explanatory, working example. and this is definitely the one. thank you
+   again.
+
+
+
+   eudie
+   october 24, 2016
+   [62]reply
+
+   thanks monik, very helpful for beginners like me. it would be very
+   helpful if you can clarify my couple of doubts :
+   1. what are the dimensions of val(output), and what they are
+   representing?
+   2. are we using state(output), between the sequence(of length 20)?
+
+     * monik
+       november 2, 2016
+       [63]reply
+       hello eudie,
+       1. the dimensions of the output are 1 x class_size+1 which is the
+       maximum no of set bits in our case. they represent the output value
+       till that point in the sequence. we would be interested in these
+       outputs if it were a sequence tagging problem where each item in
+       the sequence is to be trained for a particular output. but we are
+       only interested in the final output of the entire sequence so we
+       discard all the preliminary outputs.
+       2. yes, the state is being used internally by the id56 cell as it
+       unloops itself in time. the state the function returns is at the
+       end of traversing the entire sequence.
+
+
+
+   som
+   november 4, 2016
+   [64]reply
+
+   could you expand on why the following line is necessary:
+   val = tf.transpose(val, [1, 0, 2])
+
+   thanks
+
+     * monik
+       november 13, 2016
+       [65]reply
+       from tensorflow   s docstring here
+       ([66]https://github.com/tensorflow/tensorflow/blob/master/tensorflo
+       w/python/ops/id56.py),
+       the outputs of dynamic_id56 called before the transpose are,
+       if time_major == false (default), this will be a tensor shaped:
+       [batch_size, max_time, cell.output_size].
+       if time_major == true, this will be a tensor shaped: [max_time,
+       batch_size, cell.output_size].
+       we didn   t pass a value for time_major while calling the function so
+       it defaults to false in which case the returned tensor dimensions
+       are [ batch_size, max_time, cell.output_size].
+       tf.transpose transposes the tensor to change to [max_time,
+       batch_size, cell.output_size] ([0 1 2]    > [1 0 2]). for our
+       experiment, we need the last time step of each batch. the next
+       function call, tf.gather simply gets us the last element in the
+       first dimension, which will be the last time step for all the
+       batches. say, if a is transposed 3 dim array, [l x m x n], with
+       gather we get a[l]
+
+     * trideep rath
+       january 30, 2017
+       [67]reply
+       i am unable to understand this. i guess the batch_size is none(n),
+       max_time = 20, output_size = 21. so this makes value of dimension n
+       * 20 * 21 . what i understand is the requirement is that, the last
+       output value of every sequence. can you please elaborate.
+       thanks
+
+     * john skibicki iii
+       june 15, 2017
+       [68]reply
+       that was insanely confusing for me as well. i had to re-read that a
+       few time. from what i understand is that the order of the elements
+       in the array is in the wrong arrangement. the transpose function
+       changes their positions. so if val   s elements are ordered val =
+       [a,b,c] running it through transpose would change val to [b,a,c].
+       any way you slice it i don   t know that i would have understood to
+       do that in any of the tensorflow documentation. regardless, great
+       article!
+
+
+
+   malhar thakkar
+   november 8, 2016
+   [69]reply
+
+   first, i get a warning saying,    userwarning: converting sparse
+   indexedslices to a dense tensor of unknown shape. this may consume a
+   large amount of memory.
+      converting sparse indexedslices to a dense tensor of unknown shape.
+            
+
+   additionally, i am getting an error at the following line in the code:
+   sess.run(minimize,{data: inp, target: out})
+
+   it says,    valueerror: setting an array element with a sequence.   
+
+     * monik
+       november 13, 2016
+       [70]reply
+       the warning is because of the    none    in
+       data = tf.placeholder(tf.float32, [none, 20,1])
+       we don   t indicate the size to allocate and thus make it variable
+       which may slow it down. this is done so that we can vary the batch
+       size during training as we wish. if you are certain about the size,
+       you may replace the none with the size and the warning should
+       disappear.
+       regarding the other error, the dimensions of the inp variable may
+       be incorrect. it is likely that not all elements in inp have the
+       same length which must be the case.
+
+
+
+   xianghu
+   november 18, 2016
+   [71]reply
+
+   is there something wrong about the code in
+   [72]https://gist.github.com/monikkinom/e97d518fe02a79177b081c028a83ec1c
+   ?
+   i just cope it and run it,after a while,it come out that:
+   epoch 4997
+   epoch 4998
+   epoch 4999
+   [[ nan nan nan nan nan nan nan nan nan nan nan nan nan nan
+   nan nan nan nan nan nan nan]]
+   epoch 5000 error 100.0%
+   please let me know what    wrong about it! thanks a lot!
+
+     * xianghu
+       november 18, 2016
+       [73]reply
+       ??
+
+     * monik
+       december 2, 2016
+       [74]reply
+       the error is because of this line :
+       cross_id178 = -tf.reduce_sum(target * tf.log(prediction))
+       because for certain classes the id203 scores may be very
+       small ( <10^-8) so the product function seems to mess up.
+       solution to it is replacing the above line with
+       cross_id178 = -tf.reduce_sum(target *
+       tf.log(tf.clip_by_value(prediction,1e-10,1.0)))
+       a more detailed explanation in this stackoverflow answer:
+       [75]http://stackoverflow.com/a/33713196/2950515
+
+
+
+   david
+   november 24, 2016
+   [76]reply
+
+   great overview, but i   m still not clear on a few things related to
+   actually coding lstms with tensorflow. where it says    the number of
+   units in the lstm cell   , it isn   t clear what a    unit    is. what is the
+   distinction between a    unit    and a    cell   ? are    units    the
+   rolled-across-time instances of an lstm that hold the sequence steps
+   for a given input data item? and a cell is the combination of all those
+   units for 1 data item? if so, why is num_hidden (i.e. number of units)
+   so big (24), given that the sequence length is just 20? it would seem
+   that 20 units should be ample to preserve sufficient state information
+   during presentation of the sequence     in fact, it would seem 5 units
+   would be sufficient to count to 20.
+
+   a diagram following each line of tensorflow code would be also be
+   extremely helpful because it would help clarify what the graph looks
+   like after tf.nn.id56_cell.lstmcell, and after tf.nn.dynamic_id56. (it is
+   almost impossible to find diagrams on the web of lstm architectures
+   that directly correspond to tensorflow code. there are lots of abstract
+   lstm diagrams, and lots of standalone tensorflow code for lstms, but
+   for some reason they never seem to be both shown for the same problem.)
+
+   thanks!
+
+     * monik
+       december 2, 2016
+       [77]reply
+       comparing it to the usual multi layered network, you can say that a
+       cell represents a layer and each unit represents an individual
+       id88. it has nothing to do with rolling across time. the
+       number of units decide the dimensions of the tensors that are used
+       in calculation because it affects the size of the state tensor
+       (more the units, higher the dimension) and the weight tensor. each
+       individual    unit    in a cell performs the same function and each
+       unit is gated similarly.
+       it is difficult to say, what size would be perfect because it is
+       hard to guess where the minima may lie (for different state sizes).
+       if you reduce the state size, the number of epochs required will
+       definitely jump up which is why i   ve kept it sufficiently high to
+       be training it on a normal cpu. it isn   t that obvious to pick a
+       size of 5 because although 5 bit positions are enough to reflect
+       the count, it may not be enough the do the    thinking    or store the
+       intermediate computation that lead to the answer. to put it in a
+       human way, although we see 5 bits to determine what number in
+       decimal it may represent, but internally we will be multiplying
+       bits with powers of two and summing them up so all the intermediate
+       values being generated during the conversion must also be accounted
+       for somewhere.
+       thank you for the suggestion and i   ll definitely try adding the
+       diagrams when i get time. in the mean time, you could try
+       generating it for yourself with some effort of naming the variables
+       and mentioning scope. tensorboard, tensorflow   s visualisation
+       library will come handy :
+       [78]https://www.tensorflow.org/versions/r0.12/how_tos/graph_viz/ind
+       ex.html
+
+     * niklas
+       january 31, 2017
+       [79]reply
+       hey!
+       i have to agree with the common opinon and thank you for a great
+       article!
+       concerning the number of hidden units, as i understand it it can be
+       interpolated as the memory of lstm cells. but i still have a hard
+       time to get my head around why we have a larger memory than
+       sequence. if the memory is larger than the input sequence it should
+       always be possible to store the how sequence in the memory. is this
+       correct?
+
+
+
+   daniel
+   december 1, 2016
+   [80]reply
+
+   hello.
+   great tutorial.
+   i   ve tried it with my own data and it worked great.
+   the problem is when i try to include a validation set.
+   i   m trying to run the trained cell on my validation set and i get the
+   following error:
+      variable id56/basiclstmcell/linear/matrix already exists, disallowed.
+   did you mean to set reuse=true in varscope? originally defined at:   
+   here is my code:
+   # variables.
+   embeddings = tf.variable(
+   tf.random_uniform([aa_num, embedding_size], -1.0, 1.0))
+   cell = tf.nn.id56_cell.basiclstmcell(num_hidden,state_is_tuple=true)
+   weight = tf.get_variable(initializer=tf.truncated_normal([num_hidden,
+   num_labels], stddev=0.1), name =    w   )
+   bias = tf.get_variable(initializer=tf.constant(0.1,
+   shape=[num_labels]), name =    b   )
+
+   #model calculation.
+   def model(data):
+   embed = tf.nn.embedding_lookup(embeddings, data)
+   val, state = tf.nn.dynamic_id56(cell, embed, dtype=tf.float32)
+   val = tf.transpose(val, [1, 0, 2])
+   last = tf.gather(val, int(val.get_shape()[0])     1)
+   return tf.matmul(last, weight) + bias
+
+   # training computation.
+   logits = model(tf_train_dataset)
+   loss = tf.reduce_mean(
+   tf.nn.softmax_cross_id178_with_logits(logits, tf_train_labels)) +
+   beta
+
+   # optimizer.
+   learning_rate = tf.train.exponential_decay(0.001, global_step, 1000,
+   1.0)
+   optimizer =
+   tf.train.gradientdescentoptimizer(learning_rate).minimize(loss)
+
+   # predictions for the training, validation, and test data.
+   train_prediction = tf.nn.softmax(logits)
+   valid_prediction = tf.nn.softmax(model(tf_valid_dataset))
+
+   thanks a lot for any help.
+
+     * monik
+       december 2, 2016
+       [81]reply
+       it is a scope related problem. you are redeclaring the cells where
+       you must not be doing it. the portion of the code dealing the the
+       scope and the session may give a better idea as to what is going
+       wrong.
+
+
+
+   sunny
+   december 7, 2016
+   [82]reply
+
+   seems unable to open the     complete gist of the code   .
+
+
+
+   grant
+   december 7, 2016
+   [83]reply
+
+   thank you so much for this wonderfully illustrated example! two thumbs
+   up!!
+
+   could you please help me understand what would need to change in order
+   to adapt this from classification to time series regression? i am
+   attempting to artificially generate training data from a simple sine
+   wave function and hoping to predict future points of a sine wave when
+   given some sine wave test data.
+
+   later, however, i would need to supply more complex multivariate
+   independent variable inputs (ex: inputs: earth   s temperature historical
+   data per each major city,continent and or oceans     output: earths
+   average temperature).
+
+   i am very noob at machine learning and tensorflow and i apologize that
+   i have to ask. and if this question is outside of the scope for this
+   guide i completely understand. thanks again!
+
+     * amer
+       december 16, 2016
+       [84]reply
+       hi grant,
+       i am looking for something very similar. i haven   t been able to
+       find something useful so far.
+       one of the comments in this issue has a simple example
+       [85]https://github.com/tensorflow/tensorflow/issues/3703
+       let me know please if you come across something interesting.
+       thanks
+
+
+
+   ray
+   december 18, 2016
+   [86]reply
+
+   nice example that demonstrates how neural network figured out the
+   pattern through supervised learning. but isn   t id56 is more on the input
+   that sequence matter? i think the sequence of 1001 and 0011 are both
+   have result = 2 so it is count of 1 but not the sequence that matters.
+   if the example is to like given a sequence and you predict you is next
+   bit will be. it is more fit for id56. am i missing something here?
+   thanks!
+
+
+
+   tien
+   december 22, 2016
+   [87]reply
+
+   thank you for your great post. i have a question.
+   suppose i don   t always use 20 bits for a number then the sequence
+   length may vary. suppose i split the training input into batches having
+   different sizes but the sequence length of items in a batch is the
+   same, how do i customize your code?
+   for example:
+   batch 1: [ [ [ 0 ] ] , [ [ 1 ] ] ]
+   batch 2: [ [ [ 1 ] , [ 0 ] ] , [ [ 1 ] , [ 1 ] ] ]
+   batch 3: [ [[1] , [0], [0]] , [[1] , [0] , [1]] , [ [1 ] , [1 ] , [0 ]
+   ] , [[ 1] , [ 1], [1] ] ]
+
+     * ad
+       march 17, 2017
+       [88]reply
+       for this task you could pad shorter sequences with zeros to make
+       all training input sequences have length 20.
+
+
+
+   vigenesh
+   december 24, 2016
+   [89]reply
+
+   wonderful article     
+
+
+
+   elliott
+   february 2, 2017
+   [90]reply
+
+   thanks for the article! i was struggling with a starting point for id56s
+   using tensorflow and this was really helpful. i appreciate the notes
+   with each code block
+
+
+
+   wasim
+   february 21, 2017
+   [91]reply
+
+   really impressed with your effort. i went through it and found it
+   really helpful. i am a little confused about our output for the test
+   data. once i print the prediction tensor by feeding test data to
+   placeholder inside a session. i get a tensor of 21 values. so can
+   anyone explain these values?? i wonder whether these are probabilities,
+   each index shows the number of 1   s in the string or not?? thank you!
+
+     * divyansh
+       april 16, 2017
+       [92]reply
+       say the output for a particular input is 4, i.e. there are four 1
+       bits in the input string. so, in this case the output will have the
+       4th bit as one, to represent that the input belongs to the 4th
+       class (i.e. input has 4 one digits). if the input has 6 one digits,
+       then only the 6th bit will be one in the output, representing that
+       input belonging to the 6th class. note that there are 21 values in
+       the output because an input string can have 0 ones, 1 ones,    .. ,
+       20 ones. hope this helps !
+
+
+
+   yuan lukito
+   february 24, 2017
+   [93]reply
+
+   thanks a lot for the article. it helped me to implement lstm for my
+   project although i am not familiar with python and tensorflow. i wonder
+   how to display current error rate (let say, every 50 epochs)?
+
+     * wasim
+       february 27, 2017
+       [94]reply
+       add if condition inside the loop of epochs, incase it becomes true,
+       the current error will be calculated and displayed after every 50
+       epochs
+       for i in range(no_of_epochs):
+       if i % 50 == 0:
+       incorrect = sess.run(error,{data: test_input, target: test_output})
+       print(   epoch {:d} error {:3.1f}%   .format(i + 1, 100 * incorrect))
+
+
+
+   brebh
+   march 8, 2017
+   [95]reply
+
+   how can i find variables values after turning tensorflow code.
+
+
+
+   david
+   march 17, 2017
+   [96]reply
+
+   hi, nice post, but im not pretty sure if im reading this code in a
+   proper way.
+   when we split into 10,000 samples, i guess that train_inputs should be
+   10,000 samples and train_output should be 10,000 * 20, since there are
+   20 vectors for each input   .if not, please, forgive me. but imagine
+   training input are:
+   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]
+   [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+   by considering this code, the training out is just:
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   instead of:
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]    > for
+   the 1st vector
+
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]    > for
+   the second vector
+
+   looking forward some help,
+
+   david
+
+
+
+   konuko ii
+   april 12, 2017
+   [97]reply
+
+   great post, just wanted to give you a heads up:
+   the line of code: cell =
+   tf.nn.id56_cell.lstmcell(num_hidden,state_is_tuple=true) will throw an
+   error, it is now moved to cell =
+   tf.contrib.id56.lstmcell(num_hidden,state_is_tuple=true).
+   cheers!
+
+   source:
+   [98]https://www.tensorflow.org/api_docs/python/tf/contrib/id56/lstmcell
+
+
+
+   malti
+   may 14, 2017
+   [99]reply
+
+   good tutorial, but i have one question.
+   what needs to be changed to divide the network with 3 hidden layers of
+   neurons (100, 50, 50)
+   thank you.
+
+
+
+   siddhadev
+   may 24, 2017
+   [100]reply
+
+   first of all, great post, thank you!!!!
+
+   its worth trying with a smaller batch_size like 8 or even 1     this
+   should finish the training in just 10-20 epochs     
+   its also advisable to split the data into three sets     train,
+   validation and test/evaluation. to monitor training you could evaluate
+   the performance on the validation set every few epochs     just to make
+   sure you   re not overfiting or training longer (run for more epochs)
+   than required.
+
+
+
+   a.yulghun
+   may 29, 2017
+   [101]reply
+
+   cell =
+   tf.contrib.id56.core_id56_cell.lstmcell(num_hidden,state_is_tuple=true)
+   is working for me.
+   cell = tf.nn.id56_cell.lstmcell(num_hidden,state_is_tuple=true)
+   give error    model not include id56_cell   .
+
+
+
+   yang
+   june 6, 2017
+   [102]reply
+
+   hi,
+   thank you so much for so comprehensive tutorial. i also would like to
+   apply this to my problem. my problem is i want to classify protein into
+   2 class.
+   my training example:
+   for ex:
+   artmcnlipkhjwenmgfjmsmddj 1 #this mean that this protein sequence is of
+   class 1
+   aaartuttnmlwcsftgh 2 #this means that this protein sequence is of class
+   2
+
+   the problem is the length of the sequences are not equal (not like your
+   example, all input have the same length which is 20)
+   so what should i do?
+   thanks in advance!
+
+     * sroy
+       december 27, 2017
+       [103]reply
+       you can pad 0s and make both sequences equal.
+
+
+
+   sequence modelling using deep learning(id56s)     your data modelling
+   helper
+   july 2, 2017
+   [104]reply
+
+   [   ]
+   [105]http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tenso
+   rflow/ [   ]
+
+
+
+   p. hopkinson
+   august 29, 2017
+   [106]reply
+
+   very interesting example for lots of reasons. have you noticed that it
+   performs poorly in edge case scenarios where there are either very many
+   or very few zeros? presumably this is due to bias in the training set
+   which is binomially distributed rather than uniformly distributed.
+
+   it is particularly poor at detecting    0 zeros    because it has probably
+   never seen a training example containing no zeros (there is only one
+   such number in 2^20). similarly for 20 zeros.
+
+
+
+   jason
+   october 29, 2017
+   [107]reply
+
+   what syntax highlighting theme are you using? i really like it!
+
+
+
+   haleema
+   november 9, 2017
+   [108]reply
+
+   hey monik,
+
+   i am trying to get the error of the test set. when i try to type
+   [error, prediction] in session.run i get an error.
+
+   can you please tell me how i can get the error for test set?
+
+   thanks.
+
+
+
+   mk
+   november 20, 2017
+   [109]reply
+
+   hi, monik.
+
+   would like to ask, how to print out the value of    prediction   ? thanks.
+
+     * sroy
+       december 27, 2017
+       [110]reply
+       this is printing the probabilities i think
+       print(sess.run(prediction,{data:
+       [[[1],[0],[0],[1],[1],[0],[1],[1],[1],[0],[1],[0],[0],[1],[1],[0],[
+       1],[1],[1],[0]]]}))
+
+
+
+   satyajeet
+   december 29, 2017
+   [111]reply
+
+   really nice article      but when i tried to replicate this by making some
+   changes in the way data is generated(my version generates a single list
+   of 20 binary elements).so, i generated my own dataset of the shape
+   100000 x 20. training this for 1 epoch is giving me nearly 100%
+   training accuracy. how is this possible? also test accuracy is 97.54!
+
+
+
+   stuck on format specifier     program faq
+   january 10, 2018
+   [112]reply
+
+   [   ] was going through this tutorial on making a id56 lstm network and i
+   came across this format [   ]
+
+
+
+   stock price prediction using lstm     code diaries
+   january 16, 2018
+   [113]reply
+
+   [   ] reading: a) noob   s guide to implementing id56 b) simple deep
+   learning model for stock price c) understanding [   ]
+
+
+
+   vivwek kumar
+   april 7, 2018
+   [114]reply
+
+   cannot feed value of shape (1000, 20) for tensor    data_2:0   , which has
+   shape    (?, 20, 1)   
+
+
+
+   bhaskar
+   april 7, 2018
+   [115]reply
+
+   hi
+   i would like to suggest using sequence_length argument more liberally
+   so that instead of wasting time doing complex computations:
+
+   val = tf.transpose(val, [1, 0, 2])
+   last = tf.gather(val, int(val.get_shape()[0])     1)
+
+   to get the last valid output state in each sequence we can simply use
+   the last output state state.h as it will automatically stop computation
+   at the sequence length   s end; if it receives the input argument of of
+   sequence_length otherwise it will compute all the output states till
+   the max sequence length. please update the code with the same.
+
+
+
+   learning to implement lstms     handy learning paths
+   april 18, 2018
+   [116]reply
+
+   [   ] easy and fast tutorial to understand a really basic implementation.
+   do it yourself and see it work. [   ]
+
+
+
+   sumeet
+   may 3, 2018
+   [117]reply
+
+   i am trying to do word recognition with this.
+   so i will input an array of 26 mfcc at each timestep.
+   so input dimension will be 26.
+   will that work ?
+
+   nice tutorial btw.
+   thanks.
+
+
+
+   sumeet
+   may 14, 2018
+   [118]reply
+
+   sir , can you suggest a way to get those 20 outputs for each sequence ?
+
+   thanks.
+
+
+
+   heather
+   may 15, 2018
+   [119]reply
+
+   thank you so much for this very helpful guide! i finally have an lstm
+   set up and working.     
+
+   the only thing that didn   t work for me was the last line, printing a
+   prediction for a particular sample. when i try to include that line i
+   get an error     nameerror: name    model    is not defined.
+
+   could you tell me how to solve that error?
+
+
+
+   avijit thawani
+   september 25, 2018
+   [120]reply
+
+   thanks for the tutorial! i had a conceptual query: is it an obvious
+   choice to pose this as a classification problem? what if we tried to
+   learn a regression instead, wherein the output to be learnt is the
+   number of 1s in the string? apart from the fact that the output space
+   will be unbounded in a regression setting, what other problem could we
+   have?
+   as a regression problem, we could have several times more examples with
+   the same amount of training data, by taking subsequences of the string
+   too? that way, the network must not learn to keep computing and only be
+   tested at its 20th state but instead be forced to devise a way to keep
+   counting at every step. suggestions?
+
+     * n satya krishna
+       january 25, 2019
+       [121]reply
+       can you help me? how can we get values of hidden state of lstm
+       after execution of each batch of input while training?
+
+
+
+   tensorflow     minimes id56 exemple dans tensorflow
+   december 18, 2018
+   [122]reply
+
+   [   ] un lstm exemple avec la proc  dure pas    pas: monik.dans/   . le comte
+   bits: gist.github.com/monikkinom/e97d518fe02a79177b081c028a83ec1c. un
+   de plus: [   ]
+
+leave a reply [123]cancel reply
+
+   your email address will not be published. required fields are marked *
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ______________________________
+   ______________________________
+   ______________________________
+   (button) post comment
+
+   [ ] notify me of follow-up comments by email.
+
+   [ ] notify me of new posts by email.
+
+   proudly powered by [124]wordpress
+
+   theme by [125]moyu
+
+references
+
+   1. http://monik.in/feed/
+   2. http://monik.in/comments/feed/
+   3. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/feed/
+   4. http://monik.in/jnana/
+   5. http://monik.in/a-quick-guide-to-getting-a-django-uwsgi-nginx-server-up-on-ubuntu-16-04-aws-ec2/
+   6. http://monik.in/wp-json/oembed/1.0/embed?url=http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/
+   7. http://monik.in/wp-json/oembed/1.0/embed?url=http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/&format=xml
+   8. http://monik.in/
+   9. http://monik.in/
+  10. http://monik.in/about/
+  11. https://github.com/monikkinom
+  12. https://in.linkedin.com/in/monikp
+  13. http://monik.in/contact/
+  14. http://monik.in/category/machine-learning/
+  15. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/
+  16. https://en.wikipedia.org/wiki/recurrent_neural_network
+  17. https://en.wikipedia.org/wiki/long_short-term_memory
+  18. http://karpathy.github.io/2015/05/21/id56-effectiveness/
+  19. http://colah.github.io/posts/2015-08-understanding-lstms/
+  20. https://gist.github.com/monikkinom/e97d518fe02a79177b081c028a83ec1c
+  21. http://deeplearning.net/software/theano/
+  22. http://torch.ch/
+  23. http://pybrain.org/pages/features
+  24. http://danijar.com/structuring-your-tensorflow-models/
+  25. https://www.tensorflow.org/versions/r0.9/get_started/os_setup.html
+  26. https://en.wikipedia.org/wiki/softmax_function
+  27. http://neuralnetworksanddeeplearning.com/chap3.html#softmax
+  28. http://neuralnetworksanddeeplearning.com/chap3.html#the_cross-id178_cost_function
+  29. https://en.wikipedia.org/wiki/stochastic_gradient_descent
+  30. https://gist.github.com/monikkinom/e97d518fe02a79177b081c028a83ec1c
+  31. https://www.tensorflow.org/versions/r0.9/how_tos/variables/index.html
+  32. https://github.com/aymericdamien/tensorflow-examples/blob/master/examples/3_neuralnetworks/recurrent_network.py
+  33. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?share=twitter
+  34. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?share=facebook
+  35. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?share=google-plus-1
+  36. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/#comments
+  37. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56374#respond
+  38. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56375#respond
+  39. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56858#respond
+  40. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56376#respond
+  41. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56377#respond
+  42. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56378#respond
+  43. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56401#respond
+  44. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56405#respond
+  45. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56406#respond
+  46. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56424#respond
+  47. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56426#respond
+  48. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56683#respond
+  49. https://github.com/tensorflow/tensorflow/issues/7664
+  50. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56427#respond
+  51. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56428#respond
+  52. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56433#respond
+  53. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56437#respond
+  54. https://www.tensorflow.org/versions/r0.10/tutorials/id195/index.html
+  55. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56436#respond
+  56. https://www.kaggle.com/c/global-energy-forecasting-competition-2012-load-forecasting/data
+  57. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56438#respond
+  58. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56446#respond
+  59. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+  60. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56440#respond
+  61. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56442#respond
+  62. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56458#respond
+  63. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56466#respond
+  64. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56472#respond
+  65. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56487#respond
+  66. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56.py
+  67. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56604#respond
+  68. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56856#respond
+  69. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56476#respond
+  70. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56488#respond
+  71. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56497#respond
+  72. https://gist.github.com/monikkinom/e97d518fe02a79177b081c028a83ec1c
+  73. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56498#respond
+  74. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56517#respond
+  75. http://stackoverflow.com/a/33713196/2950515
+  76. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56506#respond
+  77. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56518#respond
+  78. https://www.tensorflow.org/versions/r0.12/how_tos/graph_viz/index.html
+  79. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56606#respond
+  80. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56516#respond
+  81. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56519#respond
+  82. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56526#respond
+  83. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56527#respond
+  84. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56539#respond
+  85. https://github.com/tensorflow/tensorflow/issues/3703
+  86. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56541#respond
+  87. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56546#respond
+  88. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56722#respond
+  89. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56548#respond
+  90. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56613#respond
+  91. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56652#respond
+  92. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56781#respond
+  93. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56664#respond
+  94. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56676#respond
+  95. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56694#respond
+  96. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56723#respond
+  97. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56776#respond
+  98. https://www.tensorflow.org/api_docs/python/tf/contrib/id56/lstmcell
+  99. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56824#respond
+ 100. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56840#respond
+ 101. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56842#respond
+ 102. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=56851#respond
+ 103. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58018#respond
+ 104. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=57766#respond
+ 105. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/
+ 106. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=57896#respond
+ 107. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=57963#respond
+ 108. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=57967#respond
+ 109. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=57976#respond
+ 110. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58017#respond
+ 111. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58023#respond
+ 112. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58034#respond
+ 113. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58040#respond
+ 114. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58181#respond
+ 115. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58182#respond
+ 116. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58192#respond
+ 117. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58219#respond
+ 118. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58230#respond
+ 119. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58234#respond
+ 120. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58397#respond
+ 121. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58586#respond
+ 122. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/?replytocom=58494#respond
+ 123. http://monik.in/a-noobs-guide-to-implementing-id56-lstm-using-tensorflow/#respond
+ 124. https://wordpress.org/
+ 125. http://www.liuxinyu.me/

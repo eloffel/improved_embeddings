@@ -1,0 +1,255 @@
+   #[1]alternate
+
+[2]steven miller
+
+   engineering manager at [3]segment
+   [4]twitter [5]github [6]rss
+
+   [7]follow @stevenmiller888
+
+   [8]home
+
+mind: how to build a neural network (part two)
+
+   thursday, 13 august 2015
+
+   in this second part on learning how to build a neural network, we will
+   dive into the implementation of a flexible library in javascript. in
+   case you missed it, here is [9]part one, which goes over what neural
+   networks are and how they operate.
+
+building the mind
+
+   building a complete neural network library requires more than just
+   understanding forward and back propagation. we also need to think about
+   how a user of the network will want to configure it (e.g. set total
+   number of learning iterations) and other api-level design
+   considerations.
+
+   to simplify our explanation of neural networks via code, the code
+   snippets below build a neural network, mind, with a single hidden
+   layer. the actual [10]mind library, however, provides the flexibility
+   to build a network with multiple hidden layers.
+
+initialization
+
+   first, we need to set up our constructor function. let   s give the
+   option to use the sigmoid activation or the hyperbolic tangent
+   activation function. additionally, we   ll allow our users to set the
+   learning rate, number of iterations, and number of units in the hidden
+   layer, while providing sane defaults for each. here   s our constructor:
+function mind(opts) {
+  if (!(this instanceof mind)) return new mind(opts);
+  opts = opts || {};
+
+  opts.activator === 'sigmoid'
+    ? (this.activate = sigmoid, this.activateprime = sigmoidprime)
+    : (this.activate = htan, this.activateprime = htanprime);
+
+  // hyperparameters
+  this.learningrate = opts.learningrate || 0.7;
+  this.iterations = opts.iterations || 10000;
+  this.hiddenunits = opts.hiddenunits || 3;
+}
+
+     note that here we use the [11]sigmoid, [12]sigmoid-prime, [13]htan,
+     and [14]htan-prime npm modules.
+
+forward propagation
+
+   the forward propagation process is a series of sum products and
+   transformations. let   s calculate the first hidden sum with all four
+   input data:
+
+   this can be represented as such:
+
+   to get the result from the sum, we apply the activation function,
+   sigmoid, to each element:
+
+   then, we do this again with the hidden result as the new input to get
+   to the final output result. the entire forward propagation code looks
+   like:
+mind.prototype.forward = function(examples) {
+  var activate = this.activate;
+  var weights = this.weights;
+  var ret = {};
+
+  ret.hiddensum = multiply(weights.inputhidden, examples.input);
+  ret.hiddenresult = ret.hiddensum.transform(activate);
+  ret.outputsum = multiply(weights.hiddenoutput, ret.hiddenresult);
+  ret.outputresult = ret.outputsum.transform(activate);
+
+  return ret;
+};
+
+     note that this.activate and this.weights are set at the
+     initialization of a new mind via [15]passing an opts object.
+     multiply and transform come from an npm [16]module for performing
+     basic matrix operations.
+
+back propagation
+
+   back propagation is a bit more complicated. let   s look at the last
+   layer first. we calculate the output error (same equation as before):
+
+   and the equivalent in code:
+var erroroutputlayer = subtract(examples.output, results.outputresult);
+
+   then, we determine the change in the output layer sum, or delta output
+   sum:
+
+   and the code:
+var deltaoutputlayer = dot(results.outputsum.transform(activateprime), erroroutp
+utlayer);
+
+   then, we figure out the hidden output changes. we use this formula:
+
+   here is the code:
+var hiddenoutputchanges = scalar(multiply(deltaoutputlayer, results.hiddenresult
+.transpose()), learningrate);
+
+   note that we scale the change by a magnitude, learningrate, which is
+   from 0 to 1. the learning rate applies a greater or lesser portion of
+   the respective adjustment to the old weight. if there is a large
+   variability in the input (there is little relationship among the
+   training data) and the rate was set high, then the network may not
+   learn well or at all. setting the rate too high also introduces the
+   risk of [17]   overfitting   , or training the network to generate a
+   relationship from noise instead of the actual underlying function.
+
+   since we   re dealing with matrices, we handle the division by
+   multiplying the delta output sum with the hidden results matrices   
+   transpose.
+
+   then, we do this process [18]again for the input to hidden layer.
+
+   the code for the back propagation function is below. note that we   re
+   passing what is returned by the forward function as the second
+   argument:
+mind.prototype.back = function(examples, results) {
+  var activateprime = this.activateprime;
+  var learningrate = this.learningrate;
+  var weights = this.weights;
+
+  // compute weight adjustments
+  var erroroutputlayer = subtract(examples.output, results.outputresult);
+  var deltaoutputlayer = dot(results.outputsum.transform(activateprime), errorou
+tputlayer);
+  var hiddenoutputchanges = scalar(multiply(deltaoutputlayer, results.hiddenresu
+lt.transpose()), learningrate);
+  var deltahiddenlayer = dot(multiply(weights.hiddenoutput.transpose(), deltaout
+putlayer), results.hiddensum.transform(activateprime));
+  var inputhiddenchanges = scalar(multiply(deltahiddenlayer, examples.input.tran
+spose()), learningrate);
+
+  // adjust weights
+  weights.inputhidden = add(weights.inputhidden, inputhiddenchanges);
+  weights.hiddenoutput = add(weights.hiddenoutput, hiddenoutputchanges);
+
+  return erroroutputlayer;
+};
+
+     note that subtract, dot , scalar, multiply, and add come from the
+     same npm [19]module we used before for performing matrix operations.
+
+putting both together
+
+   now that we have both the forward and back propagation, we can define
+   the function learn that will put them together. the learn function will
+   accept training data (examples) as an array of matrices. then, we
+   assign random samples to the initial weights (via [20]sample). lastly,
+   we use a for loop and repeat this.iterations to do both forward and
+   backward propagation.
+mind.prototype.learn = function(examples) {
+  examples = normalize(examples);
+
+  this.weights = {
+    inputhidden: matrix({
+      columns: this.hiddenunits,
+      rows: examples.input[0].length,
+      values: sample
+    }),
+    hiddenoutput: matrix({
+      columns: examples.output[0].length,
+      rows: this.hiddenunits,
+      values: sample
+    })
+  };
+
+  for (var i = 0; i < this.iterations; i++) {
+    var results = this.forward(examples);
+    var errors = this.back(examples, results);
+  }
+
+  return this;
+};
+
+   more information about the mind api [21]here.
+
+   now you have a basic understanding of how neural networks operate, how
+   to train them, and also how to build your own!
+
+   if you have any questions or comments, don   t hesitate to find me on
+   [22]twitter. shout out to [23]andy for his help on reviewing this.
+
+additional resources
+
+   [24]neural networks demystified, by [25]stephen welch
+
+   [26]neural networks and deep learning, by [27]michael nielsen
+
+   [28]the nature of code, neural networks, by [29]daniel shiffman
+
+   [30]id158s, wikipedia
+
+   [31]basic concepts for neural networks, by ross berteig
+
+   [32]id158s, by [33]saed sayad
+
+   [34]how to decide the number of hidden layers and nodes in a hidden
+   layer
+
+   [35]how to decide size of neural network like number of neurons in a
+   hidden layer & number of hidden layers?
+
+references
+
+   visible links
+   1. http://stevenmiller888.github.io/mind-how-to-build-a-neural-network-part-2/atom.xml
+   2. http://stevenmiller888.github.io/
+   3. https://segment.com/
+   4. https://twitter.com/stevenmiller888
+   5. https://github.com/stevenmiller888
+   6. http://stevenmiller888.github.io/atom.xml
+   7. https://twitter.com/stevenmiller888
+   8. http://stevenmiller888.github.io/
+   9. http://stevenmiller888.github.io/mind-how-to-build-a-neural-network
+  10. https://github.com/stevenmiller888/mind
+  11. https://www.npmjs.com/package/sigmoid
+  12. https://www.npmjs.com/package/sigmoid-prime
+  13. https://www.npmjs.com/package/htan
+  14. https://www.npmjs.com/package/htan-prime
+  15. https://github.com/stevenmiller888/mind/blob/master/lib/index.js#l40
+  16. https://www.npmjs.com/package/node-matrix
+  17. https://en.wikipedia.org/wiki/overfitting
+  18. https://github.com/stevenmiller888/mind/blob/master/lib/index.js#l200
+  19. https://www.npmjs.com/package/node-matrix
+  20. https://github.com/stevenmiller888/sample
+  21. https://github.com/stevenmiller888/mind
+  22. https://www.twitter.com/stevenmiller888
+  23. https://www.twitter.com/andyjiang
+  24. https://www.youtube.com/watch?v=bxe2t-v8xrs
+  25. https://www.twitter.com/stephencwelch
+  26. http://neuralnetworksanddeeplearning.com/chap3.html
+  27. http://michaelnielsen.org/
+  28. http://natureofcode.com/book/chapter-10-neural-networks/
+  29. https://twitter.com/shiffman
+  30. https://en.wikipedia.org/wiki/artificial_neural_network
+  31. http://www.cheshireeng.com/neuralyst/nnbg.htm
+  32. http://www.saedsayad.com/artificial_neural_network.htm
+  33. http://www.saedsayad.com/author.htm
+  34. http://www.researchgate.net/post/how_to_decide_the_number_of_hidden_layers_and_nodes_in_a_hidden_layer
+  35. http://in.mathworks.com/matlabcentral/answers/72654-how-to-decide-size-of-neural-network-like-number-of-neurons-in-a-hidden-layer-number-of-hidden-lay
+
+   hidden links:
+  37. http://stevenmiller888.github.io/

@@ -1,0 +1,337 @@
+   #[1]andrew l. beam
+
+   andrew l. beam
+
+                        machine learning and medicine
+
+   [2]home/ [3]about/ [4]research/
+
+[5]you can probably use deep learning even if your data isn't that big
+
+                                 jun 4, 2017
+
+tl;dr: a hot take on a recent    simply stats    [6]post. you can still use deep
+learning in (some) small data settings, if you train your model carefully.
+
+   over at [7]simply stats jeff leek [8]posted an article entitled    don   t
+   use deep learning your data isn   t that big    that i   ll admit, [9]rustled
+   my jimmies a little bit. to be clear, i don   t think deep learning is a
+   universal panacea and i mostly agree with his central thesis (more on
+   that later), but i think there are several things going on at once, and
+   i   d like to explore a few of those further in this post.
+
+   jeff takes a look at the performance of two approaches to classify
+   handwritten 0s vs. 1s from the well known [10]mnist data set. he
+   compares the performance of a 5-layer neural net with [11]hyperbolic
+   tangent activations to the [12]leekasso, which just uses the 10 pixels
+   with the smallest marginal p-values. he shows, perhaps surprisingly,
+   that the leekasso outperforms the neural net when you only have a dozen
+   or so samples.
+
+   here is the figure of merit: leekasso
+
+   so that   s it right? don   t use deep learning if you have < 100 samples
+   because the model will overfit and you will get bad out of sample
+   performance. well, not so fast. i think there are several things going
+   on here that are worth unpacking. deep learning models are complex and
+   tricky to train, and i had a hunch that lack of model
+   convergence/difficulties training probably explained the poor
+   performance, not overfitting.
+
+deep learning vs. the leekasso redux
+
+   the first thing to do is to build a deep learning model someone would
+   actually use on this data, namely modern versions of [13]multilayer
+   id88s (mlps) and [14]convolutional neural networks (id98s). if the
+   thesis of the original post is correct, these models should overfit
+   badly when we only have a few samples.
+
+   we built a simple mlp with relu activations and a [15]vgg-like
+   convolutional model to see how they perform relative to the leekasso.
+   all of the code is available [16]here. big thanks to my awesome summer
+   intern [17]michael chen who did the heavy lifting and implemented most
+   of this using python and [18]keras.
+
+   the mlp model is pretty standard and looks like this:
+def get_mlp(n_classes):
+    model = sequential()
+    model.add(dense(128, activation='relu',input_shape=(784,)))
+    model.add(dropout(0.5))
+    model.add(dense(128, activation='relu'))
+    model.add(dropout(0.5))
+    model.add(dense(n_classes, activation='softmax'))
+    model.compile(optimizer='adam',
+                  loss='categorical_crossid178',
+                  metrics=['accuracy'])
+    return model
+
+   and the id98 will also look familiar to anyone who has worked with these
+   models before:
+def get_id98(n_classes):
+    model = sequential()
+    model.add(convolution2d(32, 3, 3, activation='relu', input_shape=(28,28,1)))
+    model.add(convolution2d(32, 3, 3, activation='relu'))
+    model.add(maxpooling2d())
+    model.add(convolution2d(64, 3, 3, activation='relu'))
+    model.add(convolution2d(64, 3, 3, activation='relu'))
+    model.add(maxpooling2d())
+    model.add(flatten())
+    model.add(dense(128, activation='relu'))
+    model.add(dropout(0.5))
+    model.add(dense(n_classes, activation='softmax'))
+    model.compile(optimizer='adam',
+                  loss='categorical_crossid178',
+                  metrics=['accuracy'])
+    return model
+
+   for a point of reference, the mlp has about parameters while the id98
+   has nearly ! according to the hypothesis in the original post, we are
+   going to be really screwed when we have this many parameters and only a
+   handful of samples.
+
+   we tried to mirror the original analysis as closely as possible - we
+   did 5-fold cross validation but used the standard mnist test set for
+   evaluation (about validation samples for 0s and 1s). we split the test
+   set into 2 pieces. the first half was used to assess convergence of the
+   training procedure while the second half was used to measure out of
+   sample predictive accuracy. we didn   t really even tune these models,
+   but just went with sensible defaults for most of the parameters.
+
+   we recreated python versions of the leekasso and mlp used in the
+   original post to the best of our ability, and the code is available
+   [19]here. here are the out of sample accuracies for each model. the
+   bottom plot is just a zoom-in of the best performing models to make it
+   easier to read:
+
+   id98
+
+   wow, this looks pretty different than the original analysis! the mlp
+   used in the original analysis still looks pretty bad for small sample
+   sizes, but our neural nets get essentially perfect accuracy for all
+   sample sizes. this all leads to the question   
+
+what   s going on here?
+
+   deep learning models are notoriously finicky to train, and knowing how
+   to    babysit    them is an important skill. a lot of parameters are
+   problem specific (especially the parameters related to sgd) and poor
+   choices will result in misleadingly bad performance. you should always
+   keep this in mind when working on a deep learning model:
+
+   model details are very important and you should be wary of blackbox
+   calls to anything the looks like deeplearning()
+
+   here are my best guesses at what is going on in the original post:
+     * id180 are very important and tanh networks are hard
+       to train. that   s why the field has largely [20]moved to the    relu   
+       family of functions.
+     * make sure that stochastic id119 has converged. in the
+       original comparison, the model was trained for only 20 epochs,
+       which probably isn   t enough. with only samples, epochs results in
+       only total gradient updates. one pass over the full mnist dataset
+       is equivalent to gradient updates, and it   s common to do hundreds
+       or thousands of passes, roughly ~ gradient updates. if you are only
+       going to perform gradient updates, you will probably need to use a
+       very large learning rate or your model will likely not converge.
+       the [21]default learning rate for h2o.deeplearning() is 0.005,
+       which is likely way too small if you are only doing a few updates.
+       the models we used were trained for 200 epochs and we witnessed
+       significant fluctuation in the out of sample accuracy during the
+       first 50 epochs. if i had to guess, i would say lack of model
+       convergence explains most of the difference observed in the
+       original post.
+     * always check default values for parameters. keras is nice because
+       the default parameters are an attempt to reflect current best
+       practices, but you still need to make sure the parameters you   ve
+       selected are good for your problem.
+     * different frameworks can give you very different results. i
+       attempted to go back to the original r code to see if i could get
+       the results to line up. however, i was never able to get the
+       h2o.deeplearning() function to produce good results. if i had to
+       guess, i would say it   s related to the optimization procedure it
+       uses. it looks like it   s using [22]elastic averaging sgd to push
+       the computation onto multiple nodes to speed up training. i don   t
+       know if this breaks down when you only have a few samples, but that
+       would be my best guess. i don   t have a ton of experience using h2o,
+       so maybe someone else can figure this out.
+
+   thankfully, the good folks at rstudio just released an [23]r interface
+   to keras, so i was able to recreate my python code in pure r. the mlp
+   we used before looks like this implemented in r:
+model <- keras_model_sequential()
+model %>%
+  layer_dense(units = 128, input_shape = c(784), activation = 'relu') %>%
+  layer_dropout(0.5) %>%
+  layer_dense(units = 128, activation = 'relu') %>%
+  layer_dropout(0.5) %>%
+  layer_dense(units = 1, activation = 'sigmoid') %>%
+  compile(
+    optimizer = optimizer_adam(lr=0.001),
+    loss = 'binary_crossid178',
+    metrics = c('accuracy')
+  )
+
+model %>% fit(as.matrix(training0[,-1]), as.matrix(training0[,1]),
+              verbose=0, epochs=200, batch_size=1)
+
+score <- model %>% evaluate(as.matrix(testing[,-1]), as.matrix(testing[,1]),batc
+h_size=128,verbose=0)
+deep[b,i] <- score[[2]]
+
+   i dropped this into jeff   s r code and regenerated the original plot. i
+   changed the leekasso a bit too. the original code used lm() (i.e.
+   id75) which i found strange, so i switched it to glm()
+   (e.g. id28). the new plot is shown below:
+
+   leekasso_r
+
+   deep learning redemption! a similar phenomenon probably explains the
+   difference between the python and r versions of the leekasso. the
+   python version of id28 uses liblinear as its solver,
+   which i would would guess is a little more robust than the default
+   solvers in r. this probably matters since the variables selected by the
+   leekasso are highly collinear.
+     * this problem is too easy to say anything meaningful. i reran the
+       leekasso but used only the top predictor and the results are nearly
+       identical to the full leekasso. in fact, i   m sure i could come up
+       with a data-free classifier that has high accuracy. just take the
+       center pixel and if it   s black predict , else predict . as david
+       robinson pointed out:
+
+     my current concern is that distinguishing specifically 0 and 1 is an
+     "embarrassingly linear" problem, using pixels at center/edges:
+     [24]pic.twitter.com/wngakydrpi
+         david robinson (@drob) [25]may 31, 2017
+
+   david also [26]showed (in an aspirational piece of dplyr wizardry) that
+   most pairs of numbers can be classified by a single pixel. so, it   s
+   unlikely that this problem will give us any insight into a    real    small
+   data scenario, and conclusions should be taken with an appropriate
+   grain of salt.
+
+misconceptions on why deep learning works
+
+   finally, i wanted to revisit a point jeff made in the original post,
+   specifically this statement:
+
+     the issue is that only a very few places actually have the data to
+     do deep learning [   ] but i   ve always thought that the major
+     advantage of using deep learning over simpler models is that if you
+     have a massive amount of data you can fit a massive number of
+     parameters.
+
+   this passage, especially the last part, is not the whole story in my
+   opinion. many people seem to think of deep learning as a huge black box
+   with a ton of parameters that can learn any function, provided you have
+   enough data (where enough is some where between a million and
+   [27]graham   s number of samples). it is of course true that neural
+   networks are extremely flexible, and this flexibility is part of the
+   reason for their success. but this can   t be the only reason they work,
+   right?
+
+   after all, there is a 70+ year history of super flexible models in
+   machine learning and statistics. i don   t think neural nets are a priori
+   any more flexible than other algorithms of similar complexity.
+
+   here   s a quick run down of some reasons why i think they   ve been
+   successful:
+     * everything is an exercise in the bias/variance tradeoff. just to be
+       clear, the actual argument i think jeff is making is about model
+       complexity and the bias/variance trade off. if you don   t have a lot
+       of data it   s probably better to go with a simple model (high
+       bias/low variance) than a really complex one (low bias/high
+       variance). i think that this is objectively good advice in most
+       cases, however   
+     * neural nets have a large library of techniques to combat
+       overfitting. neural nets are going to have a lot of parameters, and
+       to jeff   s point, this will result in really high variance if we
+       don   t have enough data to stably estimate values for those
+       parameters. the field is very aware of this problem and has
+       developed a lot of techniques aimed at variance reduction. things
+       like [28]dropout combined with stochastic id119 result
+       in a process that looks an awful lot like [29]id112, but over
+       network parameters instead of input variables. variance reduction
+       techniques like dropout are baked into the training procedure in a
+       manner that is difficult to replicate for other models. this let   s
+       you train really big models (like our mlp with parameters) even if
+       you don   t have a ton of data.
+     * deep learning allows you to easily incorporate problem specific
+       constraints directly into the model to reduce variance. this is the
+       most important point i wanted to make and i think gets overlooked
+       too often. due to their modularity, neural nets let you incorporate
+       really strong constraints (or priors if you prefer) that can
+       drastically reduce the model   s variance. the best example of this
+       is in a convolutional neural network. in a id98, we actually encode
+       properties about images into the model itself. for instance, when
+       we specify a filter size of 3x3, we are directly telling the
+       network that small clusters of locally-connected pixels will
+       contain useful information. additionally, we can encode things like
+       the translation and rotation invariance of images directly into the
+       model. all of this serves to bias the model towards properties of
+       images to drastically reduce variance and improve predictive
+       performance.
+     * you don   t need google-scale data to use deep learning. using all of
+       the above means that even your average person with only a 100-1000
+       samples can see some benefit from deep learning. with all of these
+       techniques you can mitigate the variance issue, while still
+       benefitting from the flexibility. you can even build on others work
+       through things like [30]id21.
+
+   to sum up, i think the above reasons are good explanations for why deep
+   learning works in practice, more so than the lots of parameters and
+   lots of data hypothesis. finally, the point of this post wasn   t to say
+   jeff   s message was wrong, but to offer a different perspective on his
+   main thesis. i hope others will find it useful.
+   please enable javascript to view the [31]comments powered by disqus.
+
+andrew l. beam
+
+     * powered by [32]gravity
+     * made with on [33]{ { jekyll } }
+
+     * [34]beamandrew
+     * [35]andrewlbeam
+
+   machine learning and medicine
+
+references
+
+   visible links
+   1. http://beamandrew.github.io//feed.xml
+   2. http://beamandrew.github.io/index.html
+   3. http://beamandrew.github.io/about/
+   4. http://beamandrew.github.io/research/
+   5. http://beamandrew.github.io/deeplearning/2017/06/04/deep_learning_works.html
+   6. https://simplystatistics.org/2017/05/31/deeplearning-vs-leekasso/
+   7. https://simplystatistics.org/
+   8. https://simplystatistics.org/2017/05/31/deeplearning-vs-leekasso/
+   9. https://www.youtube.com/watch?v=y2silwiq2ga
+  10. https://en.wikipedia.org/wiki/mnist_database
+  11. https://en.wikipedia.org/wiki/activation_function
+  12. https://simplystatistics.org/2012/02/23/prediction-the-lasso-vs-just-using-the-top-10/
+  13. https://en.wikipedia.org/wiki/multilayer_id88
+  14. https://en.wikipedia.org/wiki/convolutional_neural_network
+  15. https://arxiv.org/pdf/1409.1556.pdf
+  16. https://github.com/beamandrew/deep_learning_works/blob/master/mnist.py
+  17. https://twitter.com/mchen16
+  18. https://www.keras.io/
+  19. https://github.com/beamandrew/deep_learning_works/blob/master/mnist.py
+  20. http://cs231n.github.io/neural-networks-1/#actfun
+  21. https://cran.r-project.org/web/packages/h2o/h2o.pdf
+  22. https://arxiv.org/abs/1412.6651
+  23. https://rstudio.github.io/keras/
+  24. https://t.co/wngakydrpi
+  25. https://twitter.com/drob/status/869985084421623809
+  26. https://twitter.com/drob/status/869991240099549185
+  27. https://en.wikipedia.org/wiki/graham's_number
+  28. http://www.jmlr.org/papers/volume15/srivastava14a.old/source/srivastava14a.pdf
+  29. https://en.wikipedia.org/wiki/bootstrap_aggregating
+  30. https://blog.keras.io/building-powerful-image-classification-models-using-very-little-data.html
+  31. https://disqus.com/?ref_noscript
+  32. http://github.com/hemangsk/gravity
+  33. http://beamandrew.github.io/deeplearning/2017/06/04/jekyll.com
+  34. https://github.com/beamandrew
+  35. https://twitter.com/andrewlbeam
+
+   hidden links:
+  37. http://beamandrew.github.io/index.html

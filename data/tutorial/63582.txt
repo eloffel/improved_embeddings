@@ -1,0 +1,1099 @@
+   #[1]google ai blog - atom [2]google ai blog - rss [3]google ai blog -
+   atom
+
+   [4][googleai_logo_horizontal_color_rgb.png] [5]
+
+blog
+
+   the latest news from google ai
+
+[6]eager execution: an imperative, define-by-run interface to tensorflow
+
+   tuesday, october 31, 2017
+   posted by asim shankar and wolff dobson, google brain team
+   update, april 3 2018: please see the [7]official user guide for more
+   up-to-date code examples than are shown in this post.
+   today, we introduce eager execution for tensorflow. eager execution is
+   an imperative, define-by-run interface where operations are executed
+   immediately as they are called from python. this makes it easier to get
+   started with tensorflow, and can make research and development more
+   intuitive.
+   the benefits of eager execution include:
+     * fast debugging with immediate run-time errors and integration with
+       python tools
+     * support for dynamic models using easy-to-use python control flow
+     * strong support for custom and higher-order gradients
+     * almost all of the available tensorflow operations
+
+   eager execution is available now as an experimental feature, so we're
+   looking for feedback from the community to guide our direction.
+   to understand this all better, let's look at some code. this gets
+   pretty technical; familiarity with tensorflow will help.
+
+using eager execution
+
+   when you enable eager execution, operations execute immediately and
+   return their values to python without requiring a session.run(). for
+   example, to multiply two matrices together, we write this:
+import tensorflow as tf
+import tensorflow.contrib.eager as tfe
+tfe.enable_eager_execution()
+x = [[2.]]
+m = tf.matmul(x, x)
+
+   it   s straightforward to inspect intermediate results with print or the
+   python debugger.
+print(m)
+# the 1x1 matrix [[4.]]
+
+   dynamic models can be built with python flow control. here's an example
+   of the [8]collatz conjecture using tensorflow   s arithmetic operations:
+a = tf.constant(12)
+counter = 0
+while not tf.equal(a, 1):
+  if tf.equal(a % 2, 0):
+    a = a / 2
+  else:
+    a = 3 * a + 1
+  print(a)
+
+   here, the use of the tf.constant(12) tensor object will promote all
+   math operations to tensor operations, and as such all return values
+   with be tensors.
+
+gradients
+
+   most tensorflow users are interested in automatic differentiation.
+   because different operations can occur during each call, we record all
+   forward operations to a tape, which is then played backwards when
+   computing gradients. after we've computed the gradients, we discard the
+   tape.
+   if you   re familiar with the [9]autograd package, the api is very
+   similar. for example:
+def square(x):
+  return tf.multiply(x, x)
+grad = tfe.gradients_function(square)
+print(square(3.))    # [9.]
+print(grad(3.))      # [6.]
+
+   the gradients_function call takes a python function square() as an
+   argument and returns a python callable that computes the partial
+   derivatives of square() with respect to its inputs. so, to get the
+   derivative of square() at 3.0, invoke grad(3.0), which is 6.
+   the same gradients_function call can be used to get the second
+   derivative of square:
+gradgrad = tfe.gradients_function(lambda x: grad(x)[0])
+print(gradgrad(3.))  # [2.]
+
+   as we noted, control flow can cause different operations to run, such
+   as in this example.
+def abs(x):
+  return x if x > 0. else -x
+grad = tfe.gradients_function(abs)
+print(grad(2.0))  # [1.]
+print(grad(-2.0)) # [-1.]
+
+custom gradients
+
+   users may want to define custom gradients for an operation, or for a
+   function. this may be useful for multiple reasons, including providing
+   a more efficient or more numerically stable gradient for a sequence of
+   operations.
+   here is an example that illustrates the use of custom gradients. let's
+   start by looking at the function log(1 + e^x), which commonly occurs in
+   the computation of cross id178 and log likelihoods.
+def log1pexp(x):
+  return tf.log(1 + tf.exp(x))
+grad_log1pexp = tfe.gradients_function(log1pexp)
+# the gradient computation works fine at x = 0.
+print(grad_log1pexp(0.))
+# [0.5]
+# however it returns a `nan` at x = 100 due to numerical instability.
+print(grad_log1pexp(100.))
+# [nan]
+
+   we can use a custom gradient for the above function that analytically
+   simplifies the gradient expression. notice how the gradient function
+   implementation below reuses an expression (tf.exp(x)) that was computed
+   during the forward pass, making the gradient computation more efficient
+   by avoiding redundant computation.
+@tfe.custom_gradient
+def log1pexp(x):
+  e = tf.exp(x)
+  def grad(dy):
+    return dy * (1 - 1 / (1 + e))
+  return tf.log(1 + e), grad
+grad_log1pexp = tfe.gradients_function(log1pexp)
+# gradient at x = 0 works as before.
+print(grad_log1pexp(0.))
+# [0.5]
+# and now gradient computation at x=100 works as well.
+print(grad_log1pexp(100.))
+# [1.0]
+
+building models
+
+   models can be organized in classes. here's a model class that creates a
+   (simple) two layer network that can classify the standard mnist
+   handwritten digits.
+class mnistmodel(tfe.network):
+  def __init__(self):
+    super(mnistmodel, self).__init__()
+    self.layer1 = self.track_layer(tf.layers.dense(units=10))
+    self.layer2 = self.track_layer(tf.layers.dense(units=10))
+  def call(self, input):
+    """actually runs the model."""
+    result = self.layer1(input)
+    result = self.layer2(result)
+    return result
+
+   we recommend using the classes (not the functions) in tf.layers since
+   they create and contain model parameters (variables). variable
+   lifetimes are tied to the lifetime of the layer objects, so be sure to
+   keep track of them.
+   why are we using tfe.network? a network is a container for layers and
+   is a tf.layer.layer itself, allowing network objects to be embedded in
+   other network objects. it also contains utilities to assist with
+   inspection, saving, and restoring.
+   even without training the model, we can imperatively call it and
+   inspect the output:
+# let's make up a blank input image
+model = mnistmodel()
+batch = tf.zeros([1, 1, 784])
+print(batch.shape)
+# (1, 1, 784)
+result = model(batch)
+print(result)
+# tf.tensor([[[ 0.  0., ...., 0.]]], shape=(1, 1, 10), dtype=float32)
+
+   note that we do not need any placeholders or sessions. the first time
+   we pass in the input, the sizes of the layers    parameters are set.
+   to train any model, we define a id168 to optimize, calculate
+   gradients, and use an optimizer to update the variables. first, here's
+   a id168:
+def loss_function(model, x, y):
+  y_ = model(x)
+  return tf.nn.softmax_cross_id178_with_logits(labels=y, logits=y_)
+
+   and then, our training loop:
+optimizer = tf.train.gradientdescentoptimizer(learning_rate=0.001)
+for (x, y) in tfe.iterator(dataset):
+  grads = tfe.implicit_gradients(loss_function)(model, x, y)
+  optimizer.apply_gradients(grads)
+
+   implicit_gradients() calculates the derivatives of loss_function with
+   respect to all the tensorflow variables used during its computation.
+   we can move computation to a gpu the same way we   ve always done with
+   tensorflow:
+with tf.device("/gpu:0"):
+  for (x, y) in tfe.iterator(dataset):
+    optimizer.minimize(lambda: loss_function(model, x, y))
+
+   (note: we're shortcutting storing our loss and directly calling the
+   optimizer.minimize, but you could also use the apply_gradients() method
+   above; they are equivalent.)
+
+using eager with graphs
+
+   eager execution makes development and debugging far more interactive,
+   but tensorflow graphs have a lot of advantages with respect to
+   distributed training, performance optimizations, and production
+   deployment.
+   the same code that executes operations when eager execution is enabled
+   will construct a graph describing the computation when it is not. to
+   convert your models to graphs, simply run the same code in a new python
+   session where eager execution hasn   t been enabled, as seen, for
+   example, in the [10]mnist example. the value of model variables can be
+   saved and restored from checkpoints, allowing us to move between eager
+   (imperative) and graph (declarative) programming easily. with this,
+   models developed with eager execution enabled can be easily exported
+   for production deployment.
+   in the near future, we will provide utilities to selectively convert
+   portions of your model to graphs. in this way, you can fuse parts of
+   your computation (such as internals of a custom id56 cell) for
+   high-performance, but also keep the flexibility and readability of
+   eager execution.
+
+how does my code change?
+
+   using eager execution should be intuitive to current tensorflow users.
+   there are only a handful of eager-specific apis; most of the existing
+   apis and operations work with eager enabled. some notes to keep in
+   mind:
+     * as with tensorflow generally, we recommend that if you have not yet
+       switched from queues to using tf.data for input processing, you
+       should. it's easier to use and usually faster. for help, see
+       [11]this blog post and [12]the documentation page.
+     * use object-oriented layers, like tf.layer.conv2d() or keras layers;
+       these have explicit storage for variables.
+     * for most models, you can write code so that it will work the same
+       for both eager execution and graph construction. there are some
+       exceptions, such as dynamic models that use python control flow to
+       alter the computation based on inputs.
+     * once you invoke tfe.enable_eager_execution(), it cannot be turned
+       off. to get graph behavior, start a new python session.
+
+getting started and the future
+
+   this is still a preview release, so you may hit some rough edges. to
+   get started today:
+     * install the [13]nightly build of tensorflow.
+     * check out the [14]readme (including known issues)
+     * get detailed instructions in the eager execution [15]user guide
+     * browse the eager [16]examples in github
+     * follow the [17]changelog for updates.
+
+   there's a lot more to talk about with eager execution and we're
+   excited    or, rather, we're eager for you to try it today! [18]feedback
+   is absolutely welcome.
+   share on twitter share on facebook
+   [19]    [20]    [21]   
+   ____________________
+   [ncccficb87qzqmia5fsjfoui0zmnmrvipu1ormhquxgtxusaccflxjqblbln4uoafglw8b
+   katws5ec6cbebwvcshbiivxbkgqrcvbadii4uktabsesvgwgb9ezht3+tnwyo0qa9soiytv
+   aqyaqdjhawwemecaaaaasuvork5cyii=]
+
+labels
+
+      
+     * [22]2018
+     * [23]accessibility
+     * [24]acl
+     * [25]acm
+     * [26]acoustic modeling
+     * [27]adaptive data analysis
+     * [28]ads
+     * [29]adsense
+     * [30]adwords
+     * [31]africa
+     * [32]ai
+     * [33]algorithms
+     * [34]android
+     * [35]android wear
+     * [36]api
+     * [37]app engine
+     * [38]app inventor
+     * [39]april fools
+     * [40]art
+     * [41]audio
+     * [42]augmented reality
+     * [43]australia
+     * [44]automatic id103
+     * [45]awards
+     * [46]bigquery
+     * [47]cantonese
+     * [48]chemistry
+     * [49]china
+     * [50]chrome
+     * [51]cloud computing
+     * [52]collaboration
+     * [53]compression
+     * [54]computational imaging
+     * [55]computational photography
+     * [56]computer science
+     * [57]id161
+     * [58]conference
+     * [59]conferences
+     * [60]conservation
+     * [61]correlate
+     * [62]course builder
+     * [63]crowd-sourcing
+     * [64]cvpr
+     * [65]data center
+     * [66]data discovery
+     * [67]data science
+     * [68]datasets
+     * [69]deep learning
+     * [70]deepdream
+     * [71]deepmind
+     * [72]distributed systems
+     * [73]diversity
+     * [74]earth engine
+     * [75]economics
+     * [76]education
+     * [77]electronic commerce and algorithms
+     * [78]electronics
+     * [79]emea
+     * [80]emnlp
+     * [81]encryption
+     * [82]entities
+     * [83]entity salience
+     * [84]environment
+     * [85]europe
+     * [86]exacycle
+     * [87]expander
+     * [88]faculty institute
+     * [89]faculty summit
+     * [90]flu trends
+     * [91]fusion tables
+     * [92]gamification
+     * [93]gboard
+     * [94]gmail
+     * [95]google accelerated science
+     * [96]google books
+     * [97]google brain
+     * [98]google cloud platform
+     * [99]google docs
+     * [100]google drive
+     * [101]google genomics
+     * [102]google maps
+     * [103]google photos
+     * [104]google play apps
+     * [105]google science fair
+     * [106]google sheets
+     * [107]google translate
+     * [108]google trips
+     * [109]google voice search
+     * [110]google+
+     * [111]government
+     * [112]grants
+     * [113]graph
+     * [114]graph mining
+     * [115]hardware
+     * [116]hci
+     * [117]health
+     * [118]high dynamic range imaging
+     * [119]iclr
+     * [120]icml
+     * [121]icse
+     * [122]image annotation
+     * [123]image classification
+     * [124]image processing
+     * [125]inbox
+     * [126]india
+     * [127]information retrieval
+     * [128]internationalization
+     * [129]internet of things
+     * [130]interspeech
+     * [131]ipython
+     * [132]journalism
+     * [133]jsm
+     * [134]jsm2011
+     * [135]k-12
+     * [136]kdd
+     * [137]keyboard input
+     * [138]klingon
+     * [139]korean
+     * [140]labs
+     * [141]linear optimization
+     * [142]localization
+     * [143]low-light photography
+     * [144]machine hearing
+     * [145]machine intelligence
+     * [146]machine learning
+     * [147]machine perception
+     * [148]machine translation
+     * [149]magenta
+     * [150]mapreduce
+     * [151]market algorithms
+     * [152]market research
+     * [153]mixed reality
+     * [154]ml
+     * [155]ml fairness
+     * [156]mooc
+     * [157]moore's law
+     * [158]multimodal learning
+     * [159]naacl
+     * [160]natural language processing
+     * [161]natural language understanding
+     * [162]network management
+     * [163]networks
+     * [164]neural networks
+     * [165]neurips
+     * [166]nexus
+     * [167]ngram
+     * [168]nips
+     * [169]nlp
+     * [170]on-device learning
+     * [171]open source
+     * [172]operating systems
+     * [173]id42
+     * [174]optimization
+     * [175]osdi
+     * [176]osdi10
+     * [177]patents
+     * [178]peer review
+     * [179]ph.d. fellowship
+     * [180]phd fellowship
+     * [181]photoscan
+     * [182]physics
+     * [183]pilab
+     * [184]pixel
+     * [185]policy
+     * [186]professional development
+     * [187]proposals
+     * [188]public data explorer
+     * [189]publication
+     * [190]publications
+     * [191]quantum ai
+     * [192]quantum computing
+     * [193]id23
+     * [194]renewable energy
+     * [195]research
+     * [196]research awards
+     * [197]resource optimization
+     * [198]robotics
+     * [199]schema.org
+     * [200]search
+     * [201]search ads
+     * [202]security and privacy
+     * [203]semantic models
+     * [204]semi-supervised learning
+     * [205]sigcomm
+     * [206]sigmod
+     * [207]site reliability engineering
+     * [208]social networks
+     * [209]software
+     * [210]sound search
+     * [211]speech
+     * [212]id103
+     * [213]statistics
+     * [214]structured data
+     * [215]style transfer
+     * [216]supervised learning
+     * [217]systems
+     * [218]tensorboard
+     * [219]tensorflow
+     * [220]tpu
+     * [221]translate
+     * [222]trends
+     * [223]tts
+     * [224]tv
+     * [225]ui
+     * [226]university relations
+     * [227]unix
+     * [228]user experience
+     * [229]video
+     * [230]video analysis
+     * [231]virtual reality
+     * [232]vision research
+     * [233]visiting faculty
+     * [234]visualization
+     * [235]vldb
+     * [236]voice search
+     * [237]wiki
+     * [238]wikipedia
+     * [239]www
+     * [240]year in review
+     * [241]youtube
+
+      
+
+archive
+
+      
+     *     [242]      [243]2019
+          + [244]apr
+          + [245]mar
+          + [246]feb
+          + [247]jan
+
+     *     [248]      [249]2018
+          + [250]dec
+          + [251]nov
+          + [252]oct
+          + [253]sep
+          + [254]aug
+          + [255]jul
+          + [256]jun
+          + [257]may
+          + [258]apr
+          + [259]mar
+          + [260]feb
+          + [261]jan
+
+     *     [262]      [263]2017
+          + [264]dec
+          + [265]nov
+          + [266]oct
+          + [267]sep
+          + [268]aug
+          + [269]jul
+          + [270]jun
+          + [271]may
+          + [272]apr
+          + [273]mar
+          + [274]feb
+          + [275]jan
+
+     *     [276]      [277]2016
+          + [278]dec
+          + [279]nov
+          + [280]oct
+          + [281]sep
+          + [282]aug
+          + [283]jul
+          + [284]jun
+          + [285]may
+          + [286]apr
+          + [287]mar
+          + [288]feb
+          + [289]jan
+
+     *     [290]      [291]2015
+          + [292]dec
+          + [293]nov
+          + [294]oct
+          + [295]sep
+          + [296]aug
+          + [297]jul
+          + [298]jun
+          + [299]may
+          + [300]apr
+          + [301]mar
+          + [302]feb
+          + [303]jan
+
+     *     [304]      [305]2014
+          + [306]dec
+          + [307]nov
+          + [308]oct
+          + [309]sep
+          + [310]aug
+          + [311]jul
+          + [312]jun
+          + [313]may
+          + [314]apr
+          + [315]mar
+          + [316]feb
+          + [317]jan
+
+     *     [318]      [319]2013
+          + [320]dec
+          + [321]nov
+          + [322]oct
+          + [323]sep
+          + [324]aug
+          + [325]jul
+          + [326]jun
+          + [327]may
+          + [328]apr
+          + [329]mar
+          + [330]feb
+          + [331]jan
+
+     *     [332]      [333]2012
+          + [334]dec
+          + [335]oct
+          + [336]sep
+          + [337]aug
+          + [338]jul
+          + [339]jun
+          + [340]may
+          + [341]apr
+          + [342]mar
+          + [343]feb
+          + [344]jan
+
+     *     [345]      [346]2011
+          + [347]dec
+          + [348]nov
+          + [349]sep
+          + [350]aug
+          + [351]jul
+          + [352]jun
+          + [353]may
+          + [354]apr
+          + [355]mar
+          + [356]feb
+          + [357]jan
+
+     *     [358]      [359]2010
+          + [360]dec
+          + [361]nov
+          + [362]oct
+          + [363]sep
+          + [364]aug
+          + [365]jul
+          + [366]jun
+          + [367]may
+          + [368]apr
+          + [369]mar
+          + [370]feb
+          + [371]jan
+
+     *     [372]      [373]2009
+          + [374]dec
+          + [375]nov
+          + [376]aug
+          + [377]jul
+          + [378]jun
+          + [379]may
+          + [380]apr
+          + [381]mar
+          + [382]feb
+          + [383]jan
+
+     *     [384]      [385]2008
+          + [386]dec
+          + [387]nov
+          + [388]oct
+          + [389]sep
+          + [390]jul
+          + [391]may
+          + [392]apr
+          + [393]mar
+          + [394]feb
+
+     *     [395]      [396]2007
+          + [397]oct
+          + [398]sep
+          + [399]aug
+          + [400]jul
+          + [401]jun
+          + [402]feb
+
+     *     [403]      [404]2006
+          + [405]dec
+          + [406]nov
+          + [407]sep
+          + [408]aug
+          + [409]jul
+          + [410]jun
+          + [411]apr
+          + [412]mar
+          + [413]feb
+
+   [414][8lnoxywfhzg4leaaqaaqheayuzhbaaaaabjru5erkjggg==]
+
+feed
+
+   (button) follow @googleai
+   give us feedback in our [415]product forums.
+
+   [416][p2daydaadwwawgawgg8fgmbgmbopbydd2cf8imaddrgoqte+e9aaaaabjru5erkjg
+   gg==]
+     * [417]google
+     * [418]privacy
+     * [419]terms
+
+references
+
+   visible links
+   1. http://ai.googleblog.com/feeds/posts/default
+   2. http://ai.googleblog.com/feeds/posts/default?alt=rss
+   3. http://ai.googleblog.com/feeds/5159644776214857247/comments/default
+   4. http://ai.googleblog.com/
+   5. https://ai.googleblog.com/.
+   6. http://ai.googleblog.com/2017/10/eager-execution-imperative-define-by.html
+   7. https://www.tensorflow.org/programmers_guide/eager
+   8. https://en.wikipedia.org/wiki/collatz_conjecture
+   9. https://github.com/hips/autograd
+  10. https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/python/examples/mnist
+  11. https://developers.googleblog.com/2017/09/introducing-tensorflow-datasets.html
+  12. https://www.tensorflow.org/programmers_guide/datasets
+  13. https://github.com/tensorflow/tensorflow#installation
+  14. https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/readme.md
+  15. https://www.tensorflow.org/programmers_guide/eager
+  16. https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/python/examples
+  17. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/eager/readme.md#changelog
+  18. https://github.com/tensorflow/tensorflow/issues/new
+  19. http://ai.googleblog.com/
+  20. http://ai.googleblog.com/2017/11/latest-innovations-in-tensorflow-serving.html
+  21. http://ai.googleblog.com/2017/10/closing-simulation-to-reality-gap-for.html
+  22. http://ai.googleblog.com/search/label/2018
+  23. http://ai.googleblog.com/search/label/accessibility
+  24. http://ai.googleblog.com/search/label/acl
+  25. http://ai.googleblog.com/search/label/acm
+  26. http://ai.googleblog.com/search/label/acoustic modeling
+  27. http://ai.googleblog.com/search/label/adaptive data analysis
+  28. http://ai.googleblog.com/search/label/ads
+  29. http://ai.googleblog.com/search/label/adsense
+  30. http://ai.googleblog.com/search/label/adwords
+  31. http://ai.googleblog.com/search/label/africa
+  32. http://ai.googleblog.com/search/label/ai
+  33. http://ai.googleblog.com/search/label/algorithms
+  34. http://ai.googleblog.com/search/label/android
+  35. http://ai.googleblog.com/search/label/android wear
+  36. http://ai.googleblog.com/search/label/api
+  37. http://ai.googleblog.com/search/label/app engine
+  38. http://ai.googleblog.com/search/label/app inventor
+  39. http://ai.googleblog.com/search/label/april fools
+  40. http://ai.googleblog.com/search/label/art
+  41. http://ai.googleblog.com/search/label/audio
+  42. http://ai.googleblog.com/search/label/augmented reality
+  43. http://ai.googleblog.com/search/label/australia
+  44. http://ai.googleblog.com/search/label/automatic id103
+  45. http://ai.googleblog.com/search/label/awards
+  46. http://ai.googleblog.com/search/label/bigquery
+  47. http://ai.googleblog.com/search/label/cantonese
+  48. http://ai.googleblog.com/search/label/chemistry
+  49. http://ai.googleblog.com/search/label/china
+  50. http://ai.googleblog.com/search/label/chrome
+  51. http://ai.googleblog.com/search/label/cloud computing
+  52. http://ai.googleblog.com/search/label/collaboration
+  53. http://ai.googleblog.com/search/label/compression
+  54. http://ai.googleblog.com/search/label/computational imaging
+  55. http://ai.googleblog.com/search/label/computational photography
+  56. http://ai.googleblog.com/search/label/computer science
+  57. http://ai.googleblog.com/search/label/id161
+  58. http://ai.googleblog.com/search/label/conference
+  59. http://ai.googleblog.com/search/label/conferences
+  60. http://ai.googleblog.com/search/label/conservation
+  61. http://ai.googleblog.com/search/label/correlate
+  62. http://ai.googleblog.com/search/label/course builder
+  63. http://ai.googleblog.com/search/label/crowd-sourcing
+  64. http://ai.googleblog.com/search/label/cvpr
+  65. http://ai.googleblog.com/search/label/data center
+  66. http://ai.googleblog.com/search/label/data discovery
+  67. http://ai.googleblog.com/search/label/data science
+  68. http://ai.googleblog.com/search/label/datasets
+  69. http://ai.googleblog.com/search/label/deep learning
+  70. http://ai.googleblog.com/search/label/deepdream
+  71. http://ai.googleblog.com/search/label/deepmind
+  72. http://ai.googleblog.com/search/label/distributed systems
+  73. http://ai.googleblog.com/search/label/diversity
+  74. http://ai.googleblog.com/search/label/earth engine
+  75. http://ai.googleblog.com/search/label/economics
+  76. http://ai.googleblog.com/search/label/education
+  77. http://ai.googleblog.com/search/label/electronic commerce and algorithms
+  78. http://ai.googleblog.com/search/label/electronics
+  79. http://ai.googleblog.com/search/label/emea
+  80. http://ai.googleblog.com/search/label/emnlp
+  81. http://ai.googleblog.com/search/label/encryption
+  82. http://ai.googleblog.com/search/label/entities
+  83. http://ai.googleblog.com/search/label/entity salience
+  84. http://ai.googleblog.com/search/label/environment
+  85. http://ai.googleblog.com/search/label/europe
+  86. http://ai.googleblog.com/search/label/exacycle
+  87. http://ai.googleblog.com/search/label/expander
+  88. http://ai.googleblog.com/search/label/faculty institute
+  89. http://ai.googleblog.com/search/label/faculty summit
+  90. http://ai.googleblog.com/search/label/flu trends
+  91. http://ai.googleblog.com/search/label/fusion tables
+  92. http://ai.googleblog.com/search/label/gamification
+  93. http://ai.googleblog.com/search/label/gboard
+  94. http://ai.googleblog.com/search/label/gmail
+  95. http://ai.googleblog.com/search/label/google accelerated science
+  96. http://ai.googleblog.com/search/label/google books
+  97. http://ai.googleblog.com/search/label/google brain
+  98. http://ai.googleblog.com/search/label/google cloud platform
+  99. http://ai.googleblog.com/search/label/google docs
+ 100. http://ai.googleblog.com/search/label/google drive
+ 101. http://ai.googleblog.com/search/label/google genomics
+ 102. http://ai.googleblog.com/search/label/google maps
+ 103. http://ai.googleblog.com/search/label/google photos
+ 104. http://ai.googleblog.com/search/label/google play apps
+ 105. http://ai.googleblog.com/search/label/google science fair
+ 106. http://ai.googleblog.com/search/label/google sheets
+ 107. http://ai.googleblog.com/search/label/google translate
+ 108. http://ai.googleblog.com/search/label/google trips
+ 109. http://ai.googleblog.com/search/label/google voice search
+ 110. http://ai.googleblog.com/search/label/google+
+ 111. http://ai.googleblog.com/search/label/government
+ 112. http://ai.googleblog.com/search/label/grants
+ 113. http://ai.googleblog.com/search/label/graph
+ 114. http://ai.googleblog.com/search/label/graph mining
+ 115. http://ai.googleblog.com/search/label/hardware
+ 116. http://ai.googleblog.com/search/label/hci
+ 117. http://ai.googleblog.com/search/label/health
+ 118. http://ai.googleblog.com/search/label/high dynamic range imaging
+ 119. http://ai.googleblog.com/search/label/iclr
+ 120. http://ai.googleblog.com/search/label/icml
+ 121. http://ai.googleblog.com/search/label/icse
+ 122. http://ai.googleblog.com/search/label/image annotation
+ 123. http://ai.googleblog.com/search/label/image classification
+ 124. http://ai.googleblog.com/search/label/image processing
+ 125. http://ai.googleblog.com/search/label/inbox
+ 126. http://ai.googleblog.com/search/label/india
+ 127. http://ai.googleblog.com/search/label/information retrieval
+ 128. http://ai.googleblog.com/search/label/internationalization
+ 129. http://ai.googleblog.com/search/label/internet of things
+ 130. http://ai.googleblog.com/search/label/interspeech
+ 131. http://ai.googleblog.com/search/label/ipython
+ 132. http://ai.googleblog.com/search/label/journalism
+ 133. http://ai.googleblog.com/search/label/jsm
+ 134. http://ai.googleblog.com/search/label/jsm2011
+ 135. http://ai.googleblog.com/search/label/k-12
+ 136. http://ai.googleblog.com/search/label/kdd
+ 137. http://ai.googleblog.com/search/label/keyboard input
+ 138. http://ai.googleblog.com/search/label/klingon
+ 139. http://ai.googleblog.com/search/label/korean
+ 140. http://ai.googleblog.com/search/label/labs
+ 141. http://ai.googleblog.com/search/label/linear optimization
+ 142. http://ai.googleblog.com/search/label/localization
+ 143. http://ai.googleblog.com/search/label/low-light photography
+ 144. http://ai.googleblog.com/search/label/machine hearing
+ 145. http://ai.googleblog.com/search/label/machine intelligence
+ 146. http://ai.googleblog.com/search/label/machine learning
+ 147. http://ai.googleblog.com/search/label/machine perception
+ 148. http://ai.googleblog.com/search/label/machine translation
+ 149. http://ai.googleblog.com/search/label/magenta
+ 150. http://ai.googleblog.com/search/label/mapreduce
+ 151. http://ai.googleblog.com/search/label/market algorithms
+ 152. http://ai.googleblog.com/search/label/market research
+ 153. http://ai.googleblog.com/search/label/mixed reality
+ 154. http://ai.googleblog.com/search/label/ml
+ 155. http://ai.googleblog.com/search/label/ml fairness
+ 156. http://ai.googleblog.com/search/label/mooc
+ 157. http://ai.googleblog.com/search/label/moore's law
+ 158. http://ai.googleblog.com/search/label/multimodal learning
+ 159. http://ai.googleblog.com/search/label/naacl
+ 160. http://ai.googleblog.com/search/label/natural language processing
+ 161. http://ai.googleblog.com/search/label/natural language understanding
+ 162. http://ai.googleblog.com/search/label/network management
+ 163. http://ai.googleblog.com/search/label/networks
+ 164. http://ai.googleblog.com/search/label/neural networks
+ 165. http://ai.googleblog.com/search/label/neurips
+ 166. http://ai.googleblog.com/search/label/nexus
+ 167. http://ai.googleblog.com/search/label/ngram
+ 168. http://ai.googleblog.com/search/label/nips
+ 169. http://ai.googleblog.com/search/label/nlp
+ 170. http://ai.googleblog.com/search/label/on-device learning
+ 171. http://ai.googleblog.com/search/label/open source
+ 172. http://ai.googleblog.com/search/label/operating systems
+ 173. http://ai.googleblog.com/search/label/id42
+ 174. http://ai.googleblog.com/search/label/optimization
+ 175. http://ai.googleblog.com/search/label/osdi
+ 176. http://ai.googleblog.com/search/label/osdi10
+ 177. http://ai.googleblog.com/search/label/patents
+ 178. http://ai.googleblog.com/search/label/peer review
+ 179. http://ai.googleblog.com/search/label/ph.d. fellowship
+ 180. http://ai.googleblog.com/search/label/phd fellowship
+ 181. http://ai.googleblog.com/search/label/photoscan
+ 182. http://ai.googleblog.com/search/label/physics
+ 183. http://ai.googleblog.com/search/label/pilab
+ 184. http://ai.googleblog.com/search/label/pixel
+ 185. http://ai.googleblog.com/search/label/policy
+ 186. http://ai.googleblog.com/search/label/professional development
+ 187. http://ai.googleblog.com/search/label/proposals
+ 188. http://ai.googleblog.com/search/label/public data explorer
+ 189. http://ai.googleblog.com/search/label/publication
+ 190. http://ai.googleblog.com/search/label/publications
+ 191. http://ai.googleblog.com/search/label/quantum ai
+ 192. http://ai.googleblog.com/search/label/quantum computing
+ 193. http://ai.googleblog.com/search/label/id23
+ 194. http://ai.googleblog.com/search/label/renewable energy
+ 195. http://ai.googleblog.com/search/label/research
+ 196. http://ai.googleblog.com/search/label/research awards
+ 197. http://ai.googleblog.com/search/label/resource optimization
+ 198. http://ai.googleblog.com/search/label/robotics
+ 199. http://ai.googleblog.com/search/label/schema.org
+ 200. http://ai.googleblog.com/search/label/search
+ 201. http://ai.googleblog.com/search/label/search ads
+ 202. http://ai.googleblog.com/search/label/security and privacy
+ 203. http://ai.googleblog.com/search/label/semantic models
+ 204. http://ai.googleblog.com/search/label/semi-supervised learning
+ 205. http://ai.googleblog.com/search/label/sigcomm
+ 206. http://ai.googleblog.com/search/label/sigmod
+ 207. http://ai.googleblog.com/search/label/site reliability engineering
+ 208. http://ai.googleblog.com/search/label/social networks
+ 209. http://ai.googleblog.com/search/label/software
+ 210. http://ai.googleblog.com/search/label/sound search
+ 211. http://ai.googleblog.com/search/label/speech
+ 212. http://ai.googleblog.com/search/label/id103
+ 213. http://ai.googleblog.com/search/label/statistics
+ 214. http://ai.googleblog.com/search/label/structured data
+ 215. http://ai.googleblog.com/search/label/style transfer
+ 216. http://ai.googleblog.com/search/label/supervised learning
+ 217. http://ai.googleblog.com/search/label/systems
+ 218. http://ai.googleblog.com/search/label/tensorboard
+ 219. http://ai.googleblog.com/search/label/tensorflow
+ 220. http://ai.googleblog.com/search/label/tpu
+ 221. http://ai.googleblog.com/search/label/translate
+ 222. http://ai.googleblog.com/search/label/trends
+ 223. http://ai.googleblog.com/search/label/tts
+ 224. http://ai.googleblog.com/search/label/tv
+ 225. http://ai.googleblog.com/search/label/ui
+ 226. http://ai.googleblog.com/search/label/university relations
+ 227. http://ai.googleblog.com/search/label/unix
+ 228. http://ai.googleblog.com/search/label/user experience
+ 229. http://ai.googleblog.com/search/label/video
+ 230. http://ai.googleblog.com/search/label/video analysis
+ 231. http://ai.googleblog.com/search/label/virtual reality
+ 232. http://ai.googleblog.com/search/label/vision research
+ 233. http://ai.googleblog.com/search/label/visiting faculty
+ 234. http://ai.googleblog.com/search/label/visualization
+ 235. http://ai.googleblog.com/search/label/vldb
+ 236. http://ai.googleblog.com/search/label/voice search
+ 237. http://ai.googleblog.com/search/label/wiki
+ 238. http://ai.googleblog.com/search/label/wikipedia
+ 239. http://ai.googleblog.com/search/label/www
+ 240. http://ai.googleblog.com/search/label/year in review
+ 241. http://ai.googleblog.com/search/label/youtube
+ 242. javascript:void(0)
+ 243. http://ai.googleblog.com/2019/
+ 244. http://ai.googleblog.com/2019/04/
+ 245. http://ai.googleblog.com/2019/03/
+ 246. http://ai.googleblog.com/2019/02/
+ 247. http://ai.googleblog.com/2019/01/
+ 248. javascript:void(0)
+ 249. http://ai.googleblog.com/2018/
+ 250. http://ai.googleblog.com/2018/12/
+ 251. http://ai.googleblog.com/2018/11/
+ 252. http://ai.googleblog.com/2018/10/
+ 253. http://ai.googleblog.com/2018/09/
+ 254. http://ai.googleblog.com/2018/08/
+ 255. http://ai.googleblog.com/2018/07/
+ 256. http://ai.googleblog.com/2018/06/
+ 257. http://ai.googleblog.com/2018/05/
+ 258. http://ai.googleblog.com/2018/04/
+ 259. http://ai.googleblog.com/2018/03/
+ 260. http://ai.googleblog.com/2018/02/
+ 261. http://ai.googleblog.com/2018/01/
+ 262. javascript:void(0)
+ 263. http://ai.googleblog.com/2017/
+ 264. http://ai.googleblog.com/2017/12/
+ 265. http://ai.googleblog.com/2017/11/
+ 266. http://ai.googleblog.com/2017/10/
+ 267. http://ai.googleblog.com/2017/09/
+ 268. http://ai.googleblog.com/2017/08/
+ 269. http://ai.googleblog.com/2017/07/
+ 270. http://ai.googleblog.com/2017/06/
+ 271. http://ai.googleblog.com/2017/05/
+ 272. http://ai.googleblog.com/2017/04/
+ 273. http://ai.googleblog.com/2017/03/
+ 274. http://ai.googleblog.com/2017/02/
+ 275. http://ai.googleblog.com/2017/01/
+ 276. javascript:void(0)
+ 277. http://ai.googleblog.com/2016/
+ 278. http://ai.googleblog.com/2016/12/
+ 279. http://ai.googleblog.com/2016/11/
+ 280. http://ai.googleblog.com/2016/10/
+ 281. http://ai.googleblog.com/2016/09/
+ 282. http://ai.googleblog.com/2016/08/
+ 283. http://ai.googleblog.com/2016/07/
+ 284. http://ai.googleblog.com/2016/06/
+ 285. http://ai.googleblog.com/2016/05/
+ 286. http://ai.googleblog.com/2016/04/
+ 287. http://ai.googleblog.com/2016/03/
+ 288. http://ai.googleblog.com/2016/02/
+ 289. http://ai.googleblog.com/2016/01/
+ 290. javascript:void(0)
+ 291. http://ai.googleblog.com/2015/
+ 292. http://ai.googleblog.com/2015/12/
+ 293. http://ai.googleblog.com/2015/11/
+ 294. http://ai.googleblog.com/2015/10/
+ 295. http://ai.googleblog.com/2015/09/
+ 296. http://ai.googleblog.com/2015/08/
+ 297. http://ai.googleblog.com/2015/07/
+ 298. http://ai.googleblog.com/2015/06/
+ 299. http://ai.googleblog.com/2015/05/
+ 300. http://ai.googleblog.com/2015/04/
+ 301. http://ai.googleblog.com/2015/03/
+ 302. http://ai.googleblog.com/2015/02/
+ 303. http://ai.googleblog.com/2015/01/
+ 304. javascript:void(0)
+ 305. http://ai.googleblog.com/2014/
+ 306. http://ai.googleblog.com/2014/12/
+ 307. http://ai.googleblog.com/2014/11/
+ 308. http://ai.googleblog.com/2014/10/
+ 309. http://ai.googleblog.com/2014/09/
+ 310. http://ai.googleblog.com/2014/08/
+ 311. http://ai.googleblog.com/2014/07/
+ 312. http://ai.googleblog.com/2014/06/
+ 313. http://ai.googleblog.com/2014/05/
+ 314. http://ai.googleblog.com/2014/04/
+ 315. http://ai.googleblog.com/2014/03/
+ 316. http://ai.googleblog.com/2014/02/
+ 317. http://ai.googleblog.com/2014/01/
+ 318. javascript:void(0)
+ 319. http://ai.googleblog.com/2013/
+ 320. http://ai.googleblog.com/2013/12/
+ 321. http://ai.googleblog.com/2013/11/
+ 322. http://ai.googleblog.com/2013/10/
+ 323. http://ai.googleblog.com/2013/09/
+ 324. http://ai.googleblog.com/2013/08/
+ 325. http://ai.googleblog.com/2013/07/
+ 326. http://ai.googleblog.com/2013/06/
+ 327. http://ai.googleblog.com/2013/05/
+ 328. http://ai.googleblog.com/2013/04/
+ 329. http://ai.googleblog.com/2013/03/
+ 330. http://ai.googleblog.com/2013/02/
+ 331. http://ai.googleblog.com/2013/01/
+ 332. javascript:void(0)
+ 333. http://ai.googleblog.com/2012/
+ 334. http://ai.googleblog.com/2012/12/
+ 335. http://ai.googleblog.com/2012/10/
+ 336. http://ai.googleblog.com/2012/09/
+ 337. http://ai.googleblog.com/2012/08/
+ 338. http://ai.googleblog.com/2012/07/
+ 339. http://ai.googleblog.com/2012/06/
+ 340. http://ai.googleblog.com/2012/05/
+ 341. http://ai.googleblog.com/2012/04/
+ 342. http://ai.googleblog.com/2012/03/
+ 343. http://ai.googleblog.com/2012/02/
+ 344. http://ai.googleblog.com/2012/01/
+ 345. javascript:void(0)
+ 346. http://ai.googleblog.com/2011/
+ 347. http://ai.googleblog.com/2011/12/
+ 348. http://ai.googleblog.com/2011/11/
+ 349. http://ai.googleblog.com/2011/09/
+ 350. http://ai.googleblog.com/2011/08/
+ 351. http://ai.googleblog.com/2011/07/
+ 352. http://ai.googleblog.com/2011/06/
+ 353. http://ai.googleblog.com/2011/05/
+ 354. http://ai.googleblog.com/2011/04/
+ 355. http://ai.googleblog.com/2011/03/
+ 356. http://ai.googleblog.com/2011/02/
+ 357. http://ai.googleblog.com/2011/01/
+ 358. javascript:void(0)
+ 359. http://ai.googleblog.com/2010/
+ 360. http://ai.googleblog.com/2010/12/
+ 361. http://ai.googleblog.com/2010/11/
+ 362. http://ai.googleblog.com/2010/10/
+ 363. http://ai.googleblog.com/2010/09/
+ 364. http://ai.googleblog.com/2010/08/
+ 365. http://ai.googleblog.com/2010/07/
+ 366. http://ai.googleblog.com/2010/06/
+ 367. http://ai.googleblog.com/2010/05/
+ 368. http://ai.googleblog.com/2010/04/
+ 369. http://ai.googleblog.com/2010/03/
+ 370. http://ai.googleblog.com/2010/02/
+ 371. http://ai.googleblog.com/2010/01/
+ 372. javascript:void(0)
+ 373. http://ai.googleblog.com/2009/
+ 374. http://ai.googleblog.com/2009/12/
+ 375. http://ai.googleblog.com/2009/11/
+ 376. http://ai.googleblog.com/2009/08/
+ 377. http://ai.googleblog.com/2009/07/
+ 378. http://ai.googleblog.com/2009/06/
+ 379. http://ai.googleblog.com/2009/05/
+ 380. http://ai.googleblog.com/2009/04/
+ 381. http://ai.googleblog.com/2009/03/
+ 382. http://ai.googleblog.com/2009/02/
+ 383. http://ai.googleblog.com/2009/01/
+ 384. javascript:void(0)
+ 385. http://ai.googleblog.com/2008/
+ 386. http://ai.googleblog.com/2008/12/
+ 387. http://ai.googleblog.com/2008/11/
+ 388. http://ai.googleblog.com/2008/10/
+ 389. http://ai.googleblog.com/2008/09/
+ 390. http://ai.googleblog.com/2008/07/
+ 391. http://ai.googleblog.com/2008/05/
+ 392. http://ai.googleblog.com/2008/04/
+ 393. http://ai.googleblog.com/2008/03/
+ 394. http://ai.googleblog.com/2008/02/
+ 395. javascript:void(0)
+ 396. http://ai.googleblog.com/2007/
+ 397. http://ai.googleblog.com/2007/10/
+ 398. http://ai.googleblog.com/2007/09/
+ 399. http://ai.googleblog.com/2007/08/
+ 400. http://ai.googleblog.com/2007/07/
+ 401. http://ai.googleblog.com/2007/06/
+ 402. http://ai.googleblog.com/2007/02/
+ 403. javascript:void(0)
+ 404. http://ai.googleblog.com/2006/
+ 405. http://ai.googleblog.com/2006/12/
+ 406. http://ai.googleblog.com/2006/11/
+ 407. http://ai.googleblog.com/2006/09/
+ 408. http://ai.googleblog.com/2006/08/
+ 409. http://ai.googleblog.com/2006/07/
+ 410. http://ai.googleblog.com/2006/06/
+ 411. http://ai.googleblog.com/2006/04/
+ 412. http://ai.googleblog.com/2006/03/
+ 413. http://ai.googleblog.com/2006/02/
+ 414. http://googleaiblog.blogspot.com/atom.xml
+ 415. http://support.google.com/bin/static.py?hl=en&page=portal_groups.cs
+ 416. https://www.google.com/
+ 417. https://www.google.com/
+ 418. https://www.google.com/policies/privacy/
+ 419. https://www.google.com/policies/terms/
+
+   hidden links:
+ 421. https://www.blogger.com/rearrange?blogid=8474926331452026626&widgettype=html&widgetid=html8&action=editwidget&sectionid=sidebar-top
+ 422. https://www.blogger.com/rearrange?blogid=8474926331452026626&widgettype=label&widgetid=label1&action=editwidget&sectionid=sidebar
+ 423. https://www.blogger.com/rearrange?blogid=8474926331452026626&widgettype=blogarchive&widgetid=blogarchive1&action=editwidget&sectionid=sidebar
+ 424. https://www.blogger.com/rearrange?blogid=8474926331452026626&widgettype=html&widgetid=html6&action=editwidget&sectionid=sidebar
+ 425. https://www.blogger.com/rearrange?blogid=8474926331452026626&widgettype=html&widgetid=html5&action=editwidget&sectionid=sidebar-bottom
+ 426. https://www.blogger.com/rearrange?blogid=8474926331452026626&widgettype=html&widgetid=html1&action=editwidget&sectionid=sidebar-bottom

@@ -1,0 +1,832 @@
+6
+1
+0
+2
+
+ 
+
+b
+e
+f
+3
+2
+
+ 
+
+ 
+ 
+]
+l
+m
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+4
+v
+1
+9
+3
+6
+0
+
+.
+
+1
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2016
+
+order matters: sequence to sequence for sets
+
+oriol vinyals, samy bengio, manjunath kudlur
+google brain
+{vinyals, bengio, keveman}@google.com
+
+abstract
+
+sequences have become    rst class citizens in supervised learning thanks to the
+resurgence of recurrent neural networks. many complex tasks that require map-
+ping from or to a sequence of observations can now be formulated with the
+sequence-to-sequence (id195) framework which employs the chain rule to ef-
+   ciently represent the joint id203 of sequences.
+in many cases, however,
+variable sized inputs and/or outputs might not be naturally expressed as sequences.
+for instance, it is not clear how to input a set of numbers into a model where the
+task is to sort them; similarly, we do not know how to organize outputs when
+they correspond to random variables and the task is to model their unknown joint
+id203. in this paper, we    rst show using various examples that the order in
+which we organize input and/or output data matters signi   cantly when learning an
+underlying model. we then discuss an extension of the id195 framework that
+goes beyond sequences and handles input sets in a principled way. in addition,
+we propose a loss which, by searching over possible orders during training, deals
+with the lack of structure of output sets. we show empirical evidence of our claims
+regarding ordering, and on the modi   cations to the id195 framework on bench-
+mark id38 and parsing tasks, as well as two arti   cial tasks     sorting
+numbers and estimating the joint id203 of unknown id114.
+
+1
+
+introduction
+
+deep architectures have shown in the last few years that they often yield state-of-the-art perfor-
+mance on several tasks, ranging from image classi   cation (ioffe & szegedy, 2015) to speech recog-
+nition (hinton et al., 2012). more recently, recurrent neural networks (id56s) and variants such as
+the long short term memory network (lstms) proposed by hochreiter & schmidhuber (1997)
+have shown similar impressive performance on several inherently sequential tasks. such examples
+range from machine translation (sutskever et al., 2014; bahdanau et al., 2015a), to image caption-
+ing (vinyals et al., 2015c; mao et al., 2015; donahue et al., 2015), id103 (chan et al.,
+2015; bahdanau et al., 2015b), constituency parsing (vinyals et al., 2015b) and learning to com-
+pute (zaremba & sutskever, 2014; vinyals et al., 2015a). these approaches all follow a simple
+architecture, dubbed sequence-to-sequence (id195), where the input is read completely using an
+encoder, which is either an lstm when the input is a sequence, or a convolutional network for
+images. the    nal state of the encoder is then fed to a decoder lstm whose purpose is to produce
+the target sequence, one token at a time.
+when the data is naturally organized as a sequence, the sequence-to-sequence framework is well
+suited. for example, the chain rule is used to decompose the joint id203 of sequences of words,
+and can be implemented by an lstm without making any conditional independence assumption.
+but how should we represent data, either inputs or outputs, for problems where an obvious order
+cannot be determined? for instance, how should we encode a set of numbers when the task is to sort
+them? alternatively, how should we output a set of detected objects in an image when there is no
+speci   c known order among them? does the a priori choice of ordering of the data to be presented
+to the model matter?
+the purpose of this paper is two-fold. first, we show that even when no natural order is known
+among input or output objects, there might still be one that yields better performance, hence, order
+matters. second, we propose two approaches to consider sets either as inputs and/or outputs in our
+models and evaluate how they perform on various arti   cial and real datasets.
+
+1
+
+published as a conference paper at iclr 2016
+
+2 related work
+
+since sequence-to-sequence models were proposed for machine translation (sutskever et al., 2014;
+cho et al., 2014; kalchbrenner & blunsom, 2013), the research community has proposed several
+applications in which these models can perform mappings from and/or to sequences. for example,
+image captioning maps from an image to a sentence (vinyals et al., 2015c; mao et al., 2015; donahue
+et al., 2015), parsing maps from a sentence to a (linearized) parse tree (vinyals et al., 2015b), and
+models for computation map from problem statements (e.g. a python program or a set of points
+on the plane) to their solutions (the answer to the program (zaremba & sutskever, 2014), or the
+traveling salesman problem tour for the set of points (vinyals et al., 2015a)). it is out of the scope of
+this paper to review all successful applications of id195, but the list above already includes some
+non-trivial examples of mapping to/from objects that are not necessarily sequences.
+more recently, many related models and key contributions have been proposed, that utilize the con-
+cept of external memories, including id56search (bahdanau et al., 2015a), memory networks (we-
+ston et al., 2015) and id63s (graves et al., 2014). the key element that these
+models utilize is a reading (or attention) mechanism to read these external memories in a fully dif-
+ferentiable way (though there has also been work with discrete reading mechanism, most notably
+rl-ntm (zaremba & sutskever, 2015)).
+unlike traditional id170 algorithms (bakir et al., 2007), our approach relies on the
+chain rule to serialize output random variables through the strong capabilities of id137
+to model long-term correlation. similarly, we do not want to assume a known structured input, as
+is done for instance with id56s (socher et al., 2010) which encode sentences
+recursively as (given) trees.
+
+3 neural networks for sequences and sets
+
+let us consider a generic supervised task with a given training set of n pairs (x i, y i)n
+i=1 where
+(x i, y i) is the ith pair of an input and its corresponding target. the sequence-to-sequence paradigm
+corresponds to tasks where both x i and y i are represented by sequences, of possibly different
+lengths: x i = {xi
+}. in this case, it is reasonable to model
+each example using the id155 p (y |x) and to use the chain rule to decompose it
+as follows (we drop the example index i in the rest of this section for readability):
+
+} and y i = {yi
+
+2, . . . , xi
+si
+
+2, . . . , yi
+ti
+
+1, xi
+
+1, yi
+
+t(cid:89)
+
+p (y |x) =
+
+p (yt|y1, y2, . . . , yt   1, x)
+
+t=1
+
+and implement it as an encoder recurrent neural network (id56) to read sequentially each xs     x
+as follows:
+(1)
+where hs is the state of the encoder at time s, followed by a decoder id56 to produce each yt     y
+one at a time, given the current state gt and the previous yt   1 symbol:
+
+hs = fenc(hs   1, xs)
+
+g1 = hs
+gt = fdec(gt   1, yt   1)
+
+p (yt|y1, y2, . . . , yt   1, x) = softmax(af   ne(gt)) .
+
+(2)
+
+the use of the chain rule makes this approach assumption free, so when the input x corresponds
+to a sequence (like a sentence), it is reasonable to read it sequentially into an id56, as in eq. (1).
+however, how should we encode x if it does not correspond naturally to a sequence? for instance,
+what if it corresponds to an unordered set of elements?
+similarly, when the target y corresponds to a sequence, it is reasonable to produce it sequentially
+with an id56, as in eq. (2), but how should we produce y if it does not correspond naturally to a
+sequence?
+note that sequences can be encoded as sets. indeed, if we associate to each element of a sequence the
+index it occupies in it, forming a tuple, we effectively convert this sequence to a set. for example, the
+
+2
+
+published as a conference paper at iclr 2016
+
+sequence    i like cats    becomes the set {(i,1), (like,2), (cats,3)} (note that we can permute elements
+in the set but still recover the original sequence). although this may be unnecessary in some cases,
+we argue that, even for sequences, inputting and/or outputting them in a different order could be
+bene   cial. for example, in sorting we may want to employ a divide-and-conquer strategy which
+   nds the median element    rst (i.e., we may output the solution in neither increasing nor decreasing
+sequential order).
+in the following two sections we discuss how to extend id195 to handle input sets (section 4)
+and output sets (section 5). we also show the importance of ordering in a variety of tasks in which
+id195 has successfully been applied, and include experimental results to support our claims and
+extensions to the existing models.
+
+4
+
+input sets
+
+we    rst study extensions to encoding (reading) sets. as we discussed in the previous section, se-
+quences can be read with a recurrent neural network which can compress its contents into a vector.
+an important invariance property that must be satis   ed when the input is a set (i.e., the order does
+not matter) is that swapping two elements xi and xj in the set x should not alter its encoding.
+a simple approach which satis   es this, and which in fact has been commonly used for encoding
+sentences, is the bag-of-words approach. in this case, the representation is simply a reduction (e.g.,
+addition) of counts, id27s, or similar embedding functions, and is naturally permutation
+invariant. for language and other domains which are naturally sequential, this is replaced with more
+complex encoders such as recurrent neural networks that take order into account and model higher
+order statistics of the data.
+an unsatisfying property of using a reduction operation (such as addition) is that it makes the rep-
+resentation quite inef   cient: the model operates over a    xed dimensional embedding regardless of
+the length of the set. it is unlikely that such representation will succeed, as the amount of memory
+required to encode a length t set (or sequence, for that matter) should increase as a function of t .
+thus, we argue that even deep convolutional architectures will suffer from this limitation     though
+some modi   cations exist (maas et al., 2012).
+in our work, we largely rely on attention mechanisms to integrate information from a variable length
+structure, which we describe in section 4.2.
+
+4.1
+
+input order matters
+
+in this section, we highlight prior work where we observed that the order of inputs impacted the per-
+formance of id195 models taking sequences as input. in principle, order should not matter when
+using a complex encoder such as a recurrent neural network, as these are universal approximators
+that can encode complex features from the input sequence (e.g., id165s of any order). we believe
+that the reason order seems to matter is due to the underlying non-id76 and more
+suitable prior.
+the    rst example which we experimented with was altering the order of sequences in the context of
+machine translation. in machine translation, the mapping function encodes a sentence in a source
+language (e.g., english), and decodes it to its translation in a target language (e.g., french). by
+reversing the order of the input english sentence, sutskever et al. (2014) got a 5.0 id7 score
+improvement which allowed them to close the gap between their model     a fully end-to-end model
+for machine translation     and state-of-the-art models which were highly engineered. similarly, for
+constituency parsing, in which the mapping is from an english sentence to a    attened version of
+its constituency parse tree, a 0.5% absolute increase in f1 score was observed when reversing the
+english sentence (vinyals et al., 2015b).
+furthermore, if we preprocess the data for, e.g., convex hull computation that was presented in
+vinyals et al. (2015a) by sorting the points by angle, the task becomes simpler (from o(n log n) to
+o(n)), and as a result the models obtained are much faster to train and better (increasing accuracy
+by up to 10% absolute in the most challenging cases).
+
+3
+
+published as a conference paper at iclr 2016
+
+all these empirical    ndings point to the same story: often for optimization purposes, the order in
+which input data is shown to the model has an impact on the learning performance.
+note that we can de   ne an ordering which is independent of the input sequence or set x (e.g., always
+reversing the words in a translation task), but also an ordering which is input dependent (e.g., sorting
+the input points in the convex hull case). this distinction also applies in the discussion about output
+sequences and sets in section 5.1.
+recent approaches which pushed the id195 paradigm further by adding memory and computation
+to these models allowed us to de   ne a model which makes no assumptions about input ordering,
+whilst preserving the right properties which we just discussed: a memory that increases with the
+size of the set, and which is order invariant. in the next sections, we explain such a modi   cation,
+which could also be seen as a special case of a memory network (weston et al., 2015) or neural
+turing machine (graves et al., 2014)     with a computation    ow as depicted in figure 1.
+
+4.2 attention mechanisms
+
+neural models with memories coupled to differentiable addressing mechanism have been success-
+fully applied to handwriting generation and recognition (graves, 2012), machine translation (bah-
+danau et al., 2015a), and more general computation machines (graves et al., 2014; weston et al.,
+2015). since we are interested in associative memories we employed a    content    based attention.
+this has the property that the vector retrieved from our memory would not change if we randomly
+shuf   ed the memory. this is crucial for proper treatment of the input set x as such. in particular,
+our process block based on an attention mechanism uses the following:
+
+qt = lst m (q   
+ei,t = f (mi, qt)
+
+t   1)
+
+ai,t =
+
+exp(ei,t)
+j exp(ej,t)
+
+(cid:80)
+(cid:88)
+
+ai,tmi
+
+rt =
+q   
+t = [qt rt]
+
+i
+
+(3)
+(4)
+
+(5)
+
+(6)
+
+(7)
+
+figure 1: the read-process-and-write model.
+where i indexes through each memory vector mi (typically equal to the cardinality of x), qt is
+a query vector which allows us to read rt from the memories, f is a function that computes a
+single scalar from mi and qt (e.g., a dot product), and lst m is an lstm which computes a
+recurrent state but which takes no inputs. q   
+t is the state which this lstm evolves, and is formed
+by concatenating the query qt with the resulting attention readout rt. t is the index which indicates
+how many    processing steps    are being carried to compute the state to be fed to the decoder. note
+that permuting mi and mi(cid:48) has no effect on the read vector rt.
+
+4.3 read, process, write
+
+our model, which naturally handles input sets, has three components (the exact equations and im-
+plementation will be released in an appendix prior to publication):
+
+    a reading block, which simply embeds each element xi     x using a small neural network
+onto a memory vector mi (the same neural network is used for all i).
+
+    a process block, which is an lstm without inputs or outputs performing t steps of com-
+putation over the memories mi. this lstm keeps updating its state by reading mi repeat-
+edly using the attention mechanism described in the previous section. at the end of this
+block, its hidden state q   
+t is an embedding which is permutation invariant to the inputs. see
+eqs. (3)-(7) for more details.
+
+4
+
+readprocesswritepublished as a conference paper at iclr 2016
+
+    a write block, which is an lstm pointer network (vinyals et al., 2015a) that takes in q   
+
+t (as
+the context it needs from which to produce the output from the input set), and points at ele-
+ments of mi (implicitly, xi), one step at a time. the original work in vinyals et al. (2015a)
+used a pointer mechanism which, instead of issuing a readout of memory by a weighted
+sum with a soft pointer (see eq. 6), it uses the pointer as part of the loss. we extended this
+by adding an extra attention step before the pointer (we called this glimpse). this is related
+to the process block described above, but with the difference that the attention reads happen
+interleaved between each pointer output. as described later in the results, we found these
+two mechanisms to complement each other.
+
+the architecture is depicted in figure 1 and can be seen as a special case of a id63
+or memory network. it satis   es the key property of being invariant to the order of the elements in x,
+thus effectively processing the inputs as a set. also note that the write component could simply be an
+lstm if the outputs were from a    xed dictionary. for this model, though, we study combinatorial
+problems where the outputs are pointers to the inputs, so we use a pointer network.
+
+4.4 sorting experiment
+
+in order to verify if our model handles sets more ef   ciently than the vanilla id195 approach, we
+ran the following experiment on arti   cial data for the task of sorting numbers: given n unordered
+random    oating point numbers between 0 and 1, we return them in a sorted order. note that this
+problem is an instance of set2seq. we used the architecture de   ned in figure 1, where the read
+module is a small multilayer id88 for each number, the process module is an attention mech-
+anism over the read numbers, implemented as t steps over an lstm with no input nor output, but
+attending the input embeddings, followed by an lstm to produce indices in the input numbers with
+a pointer network (vinyals et al., 2015a), in the proper sorted order. we also compared this archi-
+tecture with a vanilla id195 architecture made of an input lstm connected to an output lstm
+which produces indices in the input numbers with a pointer network (ptr-net). note that the only
+difference between these two models is the encoding of the set using either an lstm (as in previ-
+ous work), or with the architecture proposed in the previous section. we ran multiple experiments,
+varying the number n of numbers to sort, as well as the number t of processing steps of the read,
+process, write model.
+the out-of-sample accuracies (whether we succeeded in sorting all numbers or not) of these experi-
+ments are summarized in table 1. we can see that the baseline pointer network lstm input model is
+better than the read-process-and-write model when no processing steps (p = 0 step) are used, but
+as soon as at least one processing step is allowed, the performance of the read-process-and-write
+model gets better, increasing with the number of processing steps. we can also see that, as the size
+of the task (expressed in the number of elements to sort n) grows, the performance gets worse, as
+expected. also note that with 0 processing steps and 0 glimpses, the writing module is effectively
+unconditioned on x and has to    blindly    point at the elements of x. thus, it is unsurprising to see it
+performing worse than any other model considered in table 1. lastly, equipping the writing module
+with glimpses (i.e., adding an attention mechanism prior to    pointing   ) improves both the baseline
+model (ptr-net), and our proposed modi   cation quite signi   cantly (in the most challenging cases, it
+more than doubles accuracy).
+
+table 1: the sorting experiment: out-of-sample sorting accuracy for various problem sizes and
+processing steps, with or without glimpses. all the reported accuracies are shown after reaching
+10000 training iterations, at which point all models had converged but none over   tted. higher is
+better.
+
+length n
+glimpses
+n = 5
+n = 10
+n = 15
+
+ptr-net
+0
+1
+
+p = 0 step
+0
+
+1
+
+p = 1 step
+0
+
+1
+
+p = 5 steps p = 10 steps
+0
+
+1
+
+0
+
+1
+
+81% 90% 65% 84% 84% 92% 88% 94% 90% 94%
+30% 14% 44% 17% 57% 19% 50%
+8%
+0%
+2%
+10%
+
+28% 7%
+4%
+1%
+
+0%
+
+5%
+
+2%
+
+4%
+
+0%
+
+5
+
+published as a conference paper at iclr 2016
+
+5 output sets
+
+so far, we have considered the problem of encoding input sets; let us now turn our attention to out-
+put representations. the chain rule which describes joint probabilities over sets of random variables
+y is, perhaps, the simplest decomposition of the joint id203 which does not incur arbitrary
+restrictions (such as conditional independence). thus, as long as a powerful model that is trainable
+exists (which can cope with long range correlations), any order should work without any prior order
+information of the underlying problem that generated y . despite this, and even when a very pow-
+erful model (in terms of modeling power, and resilience to vanishing long term gradients) like the
+lstm is employed, output ordering still plays a key role in successfully training models.
+in the next subsection, we describe how the order in which we apply the chain rule affects the
+performance on various tasks.
+
+5.1 output order matters
+
+let y be a set (or a sequence). in this section, we will study the effect that ordering has on the per-
+formance of id195 models on several tasks. namely, we will consider arbitrary (and non-arbitrary)
+orders over the variables in y , and model the id155 distribution p (y |x) following
+that order for all training examples. as we will see, order matters (even when considering that the
+formulation through the chain rule works regardless of the ordering of y , at least in principle).
+
+5.1.1 id38
+
+for this experiment, we use the penntree bank, which is a standard id38 bench-
+mark. this dataset is quite small for id38 standards, so most models are data
+starved. we trained medium sized lstms with large amounts of id173 (see medium model
+from zaremba et al. (2014)) to estimate probabilities over sequences of words. we consider three
+version of the dataset with three orderings: natural, reverse, and a    xed, 3-word reversal:
+natural:    this is a sentence .   
+reverse:    . sentence a is this   
+3-word:    a is this <pad> . sentence   
+note that the 3-word reversal destroys the underlying structure of the sentence, and makes modeling
+the joint id203 much more dif   cult since many higher order id165s are scrambled. for each
+ordering we trained a different model. the results for both natural and reverse matched each other
+at 86 perplexity on the development set (using the same setup as zaremba et al. (2014)). surpris-
+ingly, the 3-word reversal degraded only 10 perplexity points, still achieving an impressive result in
+this corpus at 96 perplexity. we note, however, that training perplexities were also 10 points higher,
+which indicates that the model had trouble handling the awkward ordering. thus, even when consid-
+ering that the chain rule still properly models the joint id203, some degradation was observed
+when a confounding ordering was chosen.
+
+5.1.2 parsing
+
+the task of constituency parsing consists in producing a parse tree given a sentence. the model
+proposed by vinyals et al. (2015b) is a sentence encoder lstm followed by a decoder lstm
+trained to generate a depth    rst traversal encoding of the parse tree, using an attention mechanism.
+this approach matched state-of-the-art results on this task.
+even though it seemed more sensible, depth    rst traversal is only one of the many ways one can
+uniquely encode a tree onto a sequence. we thus tried to train a small model using depth    rst
+traversal (which matches the baseline of vinyals et al. (2015b)) and another one using breadth    rst
+traversal (note that these orderings are input dependent). see figure 2 for an example on how the tree
+linearizes under both traversal schemes. the model trained to produce depth    rst traversal linearized
+trees obtained 89.5% f1 score (as reported by vinyals et al. (2015b)), whereas the one producing
+breadth    rst traversal trees had a much lower f1 score at 81.5%,1 showing again the importance of
+picking the right output ordering.
+
+1in fact, in many cases the decoder failed to produce a valid tree, so the real f1 score is likely lower.
+
+6
+
+published as a conference paper at iclr 2016
+
+figure 2: depth    rst and breadth    rst linearizations of a parse tree which shows our different setups
+for output ordering in the parsing task.
+
+5.1.3 combinatorial problems
+
+unlike in the previous two examples, a problem that more commonly comes up as we try to represent
+non-sequential data (like tours, triangulations, etc., discussed by (vinyals et al., 2015a)), is the fact
+that there may exist a large equivalence class of solutions.
+take, as an example, outputting the indices for the sorted inputs of a set of random numbers, x.
+indeed, this is a deterministic function. we can choose to output these indices in some order (e.g.,
+increasing, decreasing, or using any arbitrary    xed permutation), or treat them as a set (a tuple of
+argsort indices with corresponding ranking). as a result, there are n! possible outputs for a given x,
+all of which are perfectly valid. if our training set is generated with any of these permutations picked
+uniformly at random, our mapping (when perfectly trained) will have to place equal id203 on
+n! output con   gurations for the same input x. thus, this formulation is much less statistically
+ef   cient.
+in previous work (vinyals et al., 2015a), it was found that restricting as much as possible the equiv-
+alence class for the outputs was always better. for instance, to output a tour (i.e. a sequence of cities
+one has to visit for the traveling salesman problem), we started from the lower indexed city (i.e.,
+the    rst city that we input), and followed a counter-clockwise ordering. similarly, to output a set
+of triangles (which triangulate the set of input points), we sorted them in lexicographical order and
+moved left to right. in all cases, improvements of 5% absolute accuracy or more were observed.
+failing to restrict the output equivalence class generally implies much slower convergence (and,
+thus, requires much more training data). for instance, for sorting, if considering the outputs as sets
+which we output in any of the possible n! orderings, convergence for n as small as 5 never reached
+the same performance.
+
+5.1.4 id114
+
+let us consider the joint id203 of a set of t random variables p (y1, y2, . . . , yt ). having no
+prior on how these random variables interact with each other, one way to model their joint id203
+is to use the chain rule as follows:
+
+p (y1, y2, . . . , yt ) =
+
+p (yt|y1, y2, . . . , yt   1)
+
+(8)
+
+t=1
+
+and model this using an id56, similar to id56 language models.
+while for sentences the natural order of words gives a good clue of how to order the random variables
+in the model, for other kind of data it might be harder to decide on it. furthermore, in theory, the
+order should not matter, because of bayes rule which lets us reorder all the conditional probabilities
+as needed. in practice however, it might be that one order is easier to model than another, as we have
+shown in this paper.
+the purpose of this experiment is to demonstrate this using a controlled toy experiment. we gen-
+erated star-like id114 over random variables where one variable (the head) follows an
+unconditional distribution, while the others follow a conditional distribution based on the value of
+
+7
+
+t(cid:89)
+
+npvbzis.vpsdtthisnpdtannsentencedepth first traversal: s np dt !dt !np vp vbz !vbz np dt !dt nn !nn !np !vp . !. !sbreadth first traversal: s lev np vp . lev dt par vbz np lev par par dt nn donepublished as a conference paper at iclr 2016
+
+the head variable. we expect that it should be easier to model the joint distribution by choosing any
+ordering which starts with the head variable. we created several arti   cial datasets by varying the
+number of random variables to model (between 10 and 50, each of which was a multinomial over 10
+symbols), the training set size (between 200 and 20000 training samples), and the randomness of the
+marginal distributions, or how deterministic, or peaky, they were. for each problem, we trained two
+lstms for 10,000 mini-batch iterations to model the joint id203, one where the head random
+variable was shown    rst, and one where it was shown last.
+the results were as follows:
+
+    when the training set size is large enough (20000), the lstm is able to learn the joint
+
+id203 in whichever order;
+
+    when the marginal distributions are very peaky (and thus almost deterministic), the lstm
+
+is also able to learn the joint id203 independently of the order;
+
+    in all other cases (small training set size, small or large number of random variables, and
+some amount of randomness in the marginal distributions), it was always easier to learn an
+lstm with the optimal order of random variables than any other order.
+
+5.2 finding optimal orderings while training
+
+recall the model we proposed for dealing with input sets: given an embedding for each of the inputs,
+we have a generic module that is able to process its inputs in any order. this yields an embedding
+satisfying the key property of being invariant to reorderings, whilst being generic in the kinds of
+computations to do over the input set.
+unfortunately, placing a joint id203 over a set of random variables y1, . . . yn when the structure
+of the joint id203 function is unknown is a hard problem. fortunately, and thanks to recurrent
+neural networks, we can apply the chain rule which decomposes this joint id203 sequentially
+(see eq. 8) without independence assumptions.
+in this work, we focus on using the chain rule,
+discarding more naive decompositions that have strong and unrealistic assumptions (e.g., conditional
+independence).
+an obvious drawback of the chain rule which violates the argument of treating y1, . . . yn as a set is
+that we condition these random variables in a particular order. even though, in principle, the order
+should not matter, in the previous section we have shown that this is indeed not the case, and that
+certain orderings are better than others in a variety of tasks     most likely due to the parameterization
+of the joint id203 (using an lstm), and the non-convex nature of the optimization problem.
+our proposed solution to deal with the aforementioned drawback is extremely simple: as we train,
+we let the model decide which is the best ordering in which it will apply the chain rule. more
+formally, assume there exists an ordering which maximally simpli   es the task,   (x) (where x is
+the input sequence or set, which can be empty). we would like to train the model as p(y  (x)|x).
+the number of possible orderings is large     n! where n is the length of the output, and the best order
+is unknown a priori.
+since n! can be very large, we could attempt to do (inexact) search as we train the model. instead of
+maximizing the log id203 of p(y |x) for each training example pair, we also maximize over
+orderings as follows:
+
+  (cid:63) = arg max
+
+  
+
+log p(y  (xi)|xi;   )
+
+max
+  (xi)
+
+(9)
+
+where max  (xi) is computed either naively, or with an inexact search. note that equation (9) may
+not strictly improve the regular maximum likelihood framework due to non-convexity, but we found
+this to not be an issue in practice.
+besides not being scalable, we found that, if done naively and picking the max over ordering as we
+train, the model would pick a random ordering (as a function of the initial parameters), and would
+get stuck on it permanently (since it would reinforce it through learning). we added two ways to
+explore the space of all orderings as follows:
+
+8
+
+(cid:88)
+
+i
+
+published as a conference paper at iclr 2016
+
+replacing the max  (xi) in eq. (9) by a(cid:80)
+
+  (xi).
+
+    we pretrain the model with a uniform prior over   (x) for 1000 steps, which amounts to
+
+    we then pick an ordering by sampling   (x) according to a distribution proportional to
+p(y  (x)|x). this costs o(1) model evaluations (vs. naive search which would be o(n!)).
+crucially, sampling p(y  (x)|x) can be done very ef   ciently as we can use ancestral sampling (left-
+to-right) which requires to evaluate p(.) only once instead of n!.
+
+5.2.1
+
+5-gram modeling
+
+in our initial attempt to solve (9), we considered a simpli   ed version of the id38
+task described in section 5.1.1. the simpli   ed task consists of modeling the joint id203 of 5-
+grams without any further context (i.e., there is no input x). this choice allowed us to have a small
+enough n as initially we were trying to exactly    nd the best ordering out of the n! possible ones.
+thus, we disregarded possible effects of inexact search, and focused on the essential of the training
+dynamics where the model being optimized picks the best ordering    which maximizes p(y  ) under
+its current parameters, and reinforces that ordering by applying updates on the gradient of log p(y  )
+w.r.t. the parameters. eventually, as noted in section 5.2, we found sampling to be superior in terms
+of convergence, whilst simplifying the complexity from o(n!) down to o(1), and is the preferred
+solution which we used in the rest of this section.
+to test this framework, we converted 5-grams (i.e., sequences of words) to a set in the following
+way:
+5-gram (sequence): y1=this, y2=is, y3=a, y4=   ve, y5=gram
+5-gram (set): y1=(this,1), y2=(is,2), y3=(a,3), y4=(   ve,4), y5=(gram,5)
+note that adding the original position alongside the words makes y a set. thus, we can shuf   e
+y in arbitrarily without losing the original structure of the sequence. the    rst experiment, which
+reinforces our result in section 5.1.1, tests the hypothesis once again that order matters. training
+a model which follows the natural order (i.e., produces (this,1), followed by (is,2) conditioned on
+(this,1), etc.), achieves a validation perplexity of 225.2 if, instead of picking (1, 2, 3, 4, 5), we use
+(5, 1, 3, 4, 2), perplexity drops to 280.
+we then test optimization of eq. (9) in two setups:
+easy: the training set contains examples from (1, 2, 3, 4, 5) and (5, 1, 3, 4, 2), uniformly sampled.
+hard: the training set contains examples from the 5! possible orderings, uniformly sampled.
+our results are shown in table 2. note that, in the easy case, we restrict the search space over
+orderings to only 2, where one order is clearly better than the other. we note that, after the pretraining
+phase, we decide which of the two orderings is better to represent the data under the model being
+trained. very quickly, the model settles on the natural (1, 2, 3, 4, 5) ordering, yielding a perplexity
+of 225. in the most dif   cult case, where any order is possible, the model settles to orders such as
+(1, 2, 3, 4, 5), (5, 4, 3, 2, 1), and small variations of them. in all cases, the    nal perplexity is 225.
+thus, the framework we propose is able to    nd good orderings without any prior knowledge. we
+plan to not only recover optimal orderings, but    nd ones that were unknown to us when applying
+the id195 framework naively.
+
+table 2: experiments in which the model    nds the optimal ordering of a set for the 5-gram language
+modeling task. perplexities are reported on the validation set (lower is better).
+
+task
+(1, 2, 3, 4, 5)
+(5, 1, 3, 4, 2)
+easy
+hard
+
+orders considered
+1
+1
+2
+5!
+
+perplexity
+225
+280
+225
+225
+
+2this is much worse than the results reported in section 5.1.1 since modeling 5-grams without context is
+
+much harder than standard id38.
+
+9
+
+published as a conference paper at iclr 2016
+
+6 conclusion
+
+lstms have shown to be powerful models to represent variable length sequential data thanks to
+their ability to handle reasonably long term dependencies and the use of the chain rule to ef   ciently
+decompose joint distributions. on the other hand, some problems are expressed in terms of an
+unordered set of elements, either as input or as outputs; in some other cases, the data is represented
+by some structure that needs to be linearized to be fed to the lstm, and there might be more
+than one way to do so. the    rst goal of this paper was to shed some light on these problems:
+indeed, we show that order matters to obtain the best performance. we then considered the case
+of unordered input data, for which we proposed the read-process-and-write architecture, and the
+case of unordered output data, for which we proposed an ef   cient training algorithm that includes a
+search over possible orders during training and id136. we illustrated our proposed approaches
+for input and output sets through various experiments such as sorting, id114, language
+modeling, and parsing.
+
+acknowledgments
+
+we would like to thank ilya sutskever, navdeep jaitly, rafal jozefowicz, quoc le, lukasz kaiser,
+geoffrey hinton, jeff dean, shane gu and the google brain team for useful discussions on this
+topic. we also thank the anonymous reviewers which helped improving our paper.
+
+references
+bahdanau, d., cho, k., and bengio, y. id4 by jointly learning to align and translate. in
+
+proc. iclr, 2015a.
+
+bahdanau, d., chorowski, j., serdyuk, d., brakel, p., and bengio, y. end-to-end attention-based large vocab-
+
+ulary id103. arxiv preprint arxiv:1508.04395, 2015b.
+
+bakir, g., hofmann, t., scholkopf, b., smola, a. j., taskar, b., and vishwanathan, s.v.n. (eds.). predicting
+
+structured data. mit press, 2007.
+
+chan, w., jaitly, n., le, q. v., and vinyals, o. listen, attend and spell. arxiv, abs/1508.01211, 2015. url
+
+http://arxiv.org/abs/1508.01211.
+
+cho, k., van merrienboer, b., gulcehre, c., bahdanau, d., bougares, f., schwenk, h., and bengio, y. learning
+in proc. emnlp,
+
+phrase representations using id56 encoder-decoder for id151.
+2014.
+
+donahue, j., hendricks, l. a., guadarrama, s., rohrbach, m., venugopalan, s., saenko, k., and darrell, t.
+
+long-term recurrent convolutional networks for visual recognition and description. in proc. cvpr, 2015.
+
+graves, a. supervised sequence labelling with recurrent neural networks. springer, 2012.
+
+graves, a., wayne, g., and danihelka, i. id63s. in arxiv preprint arxiv:1410.5401, 2014.
+
+hinton, g., deng, l., yu, d., dahl, g., mohamed, a., jaitly, n., senior, a., vanhoucke, v., nguyen, p., sainath,
+t. n., and kingsbury, b. deep neural networks for acoustic modeling in id103. ieee signal
+processing magazine, 29:82   97, 2012.
+
+hochreiter, s. and schmidhuber, j. long short-term memory. neural computation, 9(8), 1997.
+
+ioffe, s. and szegedy, c. batch id172: accelerating deep network training by reducing internal covari-
+
+ate shift. in proceedings of the 32nd international conference on machine learning, icml, 2015.
+
+kalchbrenner, n. and blunsom, p. recurrent continuous translation models. in proc. emnlp, 2013.
+
+maas, a. l., miller, s. d., o   neil, t. m., and ng, a. y. word-level acoustic modeling with convolutional
+
+vector regression. in icml 2012 workshop on representation learning, 2012.
+
+mao, j., xu, w., yang, y., wang, j., huang, z., and yuille, a. l. deep captioning with multimodal recurrent
+
+neural networks (m-id56). in international conference on learning representations, 2015.
+
+socher, r., manning, c. d., and ng, a. y. learning continuous phrase representations and syntactic parsing
+
+with id56s. in advances in neural information processing systems, 2010.
+
+10
+
+published as a conference paper at iclr 2016
+
+sutskever, ilya, vinyals, oriol, and le, quoc v. sequence to sequence learning with neural networks. in proc.
+
+nips, 2014.
+
+vinyals, o., fortunato, m., and jaitly, n. id193. in advances in neural information processing
+
+systems, nips, 2015a.
+
+vinyals, o., kaiser, l., koo, t., petrov, s., sutskever, i., and hinton, g. grammar as a foreign language. in
+
+advances in neural information processing systems, 2015b.
+
+vinyals, o., toshev, a., bengio, s., and erhan, d. show and tell: a neural image caption generator. in proc.
+
+cvpr, 2015c.
+
+weston, j., chopra, s., and bordes, a. memory networks. in international conference on learning represen-
+
+tations, iclr, 2015.
+
+zaremba, w. and sutskever, i. learning to execute. arxiv, abs/1410.4615, 2014.
+
+zaremba, w. and sutskever, i. id23 id63s. arxiv, abs/1505.00521, 2015.
+
+zaremba, w., sutskever, i., and vinyals, o. recurrent neural network id173. arxiv, abs/1409.2329,
+
+2014.
+
+11
+
+

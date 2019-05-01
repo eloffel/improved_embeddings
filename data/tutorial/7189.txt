@@ -1,0 +1,1768 @@
+   #[1]articles from distill
+
+                           sequence modeling with ctc
+
+   a visual guide to connectionist temporal classification, an algorithm
+   used to train deep neural networks in id103, handwriting
+   recognition and other sequence problems.
+
+   how ctc collapsing works
+
+   for an input,
+   like speech [speech.svg]
+
+   predict a
+   sequence of
+   tokens
+   use return to
+   input a blank
+   [math:
+   <semantics><mrow><mo>(</mo><mi>  </mi><mo>)</mo></mrow><annotation
+   encoding="application/x-tex">(\epsilon)</annotation></semantics> :math]
+   (  )
+
+   merge repeats,
+   drop
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      final output
+
+authors
+
+affiliations
+
+   [2]awni hannun
+
+   [3]stanford university
+
+published
+
+   nov. 27, 2017
+
+doi
+
+   [4]10.23915/distill.00008
+
+introduction
+
+   consider id103. we have a dataset of audio clips and
+   corresponding transcripts. unfortunately, we don   t know how the
+   characters in the transcript align to the audio. this makes training a
+   speech recognizer harder than it might at first seem.
+
+   without this alignment, the simple approaches aren   t available to us.
+   we could devise a rule like    one character corresponds to ten inputs   .
+   but people   s rates of speech vary, so this type of rule can always be
+   broken. another alternative is to hand-align each character to its
+   location in the audio. from a modeling standpoint this works
+   well         we   d know the ground truth for each input time-step. however,
+   for any reasonably sized dataset this is prohibitively time consuming.
+
+   this problem doesn   t just turn up in id103. we see it in
+   many other places. handwriting recognition from images or sequences of
+   pen strokes is one example. action labelling in videos is another.
+
+   [handwriting_recognition.svg] handwriting recognition: the input can be
+   [math: <semantics><mrow><mo>(</mo><mi>x</mi><mo
+   separator="true">,</mo><mi>y</mi><mo>)</mo></mrow><annotation
+   encoding="application/x-tex">(x,y)</annotation></semantics> :math]
+   (x,y) coordinates of a pen stroke or pixels in an image.
+
+   [speech_recognition.svg] id103: the input can be a
+   spectrogram or some other frequency based feature extractor.
+
+   connectionist temporal classification (ctc) is a way to get around not
+   knowing the alignment between the input and the output. as we   ll see,
+   it   s especially well suited to applications like speech and handwriting
+   recognition.
+     __________________________________________________________________
+
+   to be a bit more formal, let   s consider mapping input sequences
+   [math:
+   <semantics><mrow><mi>x</mi><mo>=</mo><mo>[</mo><msub><mi>x</mi><mn>1</m
+   n></msub><mo
+   separator="true">,</mo><msub><mi>x</mi><mn>2</mn></msub><mo
+   separator="true">,</mo><mo>   </mo><mo
+   separator="true">,</mo><msub><mi>x</mi><mi>t</mi></msub><mo>]</mo></mro
+   w><annotation encoding="application/x-tex">x = [x_1, x_2, \ldots,
+   x_t]</annotation></semantics> :math]
+   x=[x1   ,x2   ,   ,xt   ], such as audio, to corresponding output sequences
+   [math:
+   <semantics><mrow><mi>y</mi><mo>=</mo><mo>[</mo><msub><mi>y</mi><mn>1</m
+   n></msub><mo
+   separator="true">,</mo><msub><mi>y</mi><mn>2</mn></msub><mo
+   separator="true">,</mo><mo>   </mo><mo
+   separator="true">,</mo><msub><mi>y</mi><mi>u</mi></msub><mo>]</mo></mro
+   w><annotation encoding="application/x-tex">y = [y_1, y_2, \ldots,
+   y_u]</annotation></semantics> :math]
+   y=[y1   ,y2   ,   ,yu   ], such as transcripts. we want to find an accurate
+   mapping from
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x   s to
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y   s.
+
+   there are challenges which get in the way of us using simpler
+   supervised learning algorithms. in particular:
+     * both
+       [math: <semantics><mrow><mi>x</mi></mrow><annotation
+       encoding="application/x-tex">x</annotation></semantics> :math]
+       x and
+       [math: <semantics><mrow><mi>y</mi></mrow><annotation
+       encoding="application/x-tex">y</annotation></semantics> :math]
+       y can vary in length.
+     * the ratio of the lengths of
+       [math: <semantics><mrow><mi>x</mi></mrow><annotation
+       encoding="application/x-tex">x</annotation></semantics> :math]
+       x and
+       [math: <semantics><mrow><mi>y</mi></mrow><annotation
+       encoding="application/x-tex">y</annotation></semantics> :math]
+       y can vary.
+     * we don   t have an accurate alignment (correspondence of the
+       elements) of
+       [math: <semantics><mrow><mi>x</mi></mrow><annotation
+       encoding="application/x-tex">x</annotation></semantics> :math]
+       x and
+       [math: <semantics><mrow><mi>y</mi><mi
+       mathvariant="normal">.</mi></mrow><annotation
+       encoding="application/x-tex">y.</annotation></semantics> :math]
+       y.
+
+   the ctc algorithm overcomes these challenges. for a given
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x it gives us an output distribution over all possible
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y   s. we can use this distribution either to infer a likely output or to
+   assess the id203 of a given output.
+
+   not all ways of computing the id168 and performing id136
+   are tractable. we   ll require that ctc do both of these efficiently.
+
+   id168: for a given input, we   d like to train our model to
+   maximize the id203 it assigns to the right answer. to do this,
+   we   ll need to efficiently compute the id155
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">p(y \mid x).</annotation></semantics>
+   :math]
+   p(y   x). the function
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo></mrow><annotation encoding="application/x-tex">p(y \mid
+   x)</annotation></semantics> :math]
+   p(y   x) should also be differentiable, so we can use id119.
+
+   id136: naturally, after we   ve trained the model, we want to use it
+   to infer a likely
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y given an
+   [math: <semantics><mrow><mi>x</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">x.</annotation></semantics> :math]
+   x. this means solving
+   [math: <semantics><mrow><msup><mi>y</mi><mo>   </mo></msup><mspace
+   width="0.5em"></mspace><mo>=</mo><mspace
+   width="0.5em"></mspace><mrow><msub><mo><mtext>argmax</mtext></mo><mi>y<
+   /mi></msub></mrow><mspace
+   width="0.5em"></mspace><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</m
+   i><mo>)</mo><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> y^* \enspace =\enspace
+   {\mathop{\text{argmax}}\limits_{y}} \enspace p(y \mid x).
+   </annotation></semantics> :math]
+   y   =yargmax   p(y   x). ideally
+   [math:
+   <semantics><mrow><msup><mi>y</mi><mo>   </mo></msup></mrow><annotation
+   encoding="application/x-tex">y^*</annotation></semantics> :math]
+   y    can be found efficiently. with ctc we   ll settle for an approximate
+   solution that   s not too expensive to find.
+
+the algorithm
+
+   the ctc algorithm can assign a id203 for any
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y given an
+   [math: <semantics><mrow><mi>x</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">x.</annotation></semantics> :math]
+   x. the key to computing this id203 is how ctc thinks about
+   alignments between inputs and outputs. we   ll start by looking at these
+   alignments and then show how to use them to compute the id168
+   and perform id136.
+
+  alignment
+
+   the ctc algorithm is alignment-free         it doesn   t require an alignment
+   between the input and the output. however, to get the id203 of an
+   output given an input, ctc works by summing over the id203 of all
+   possible alignments between the two. we need to understand what these
+   alignments are in order to understand how the id168 is
+   ultimately calculated.
+
+   to motivate the specific form of the ctc alignments, first consider a
+   naive approach. let   s use an example. assume the input has length six
+   and
+   [math: <semantics><mrow><mi>y</mi><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">y =</annotation></semantics> :math]
+   y= [c, a, t]. one way to align
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x and
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y is to assign an output character to each input step and collapse
+   repeats.
+   [naive_alignment.svg]
+
+   this approach has two problems.
+     * often, it doesn   t make sense to force every input step to align to
+       some output. in id103, for example, the input can have
+       stretches of silence with no corresponding output.
+     * we have no way to produce outputs with multiple characters in a
+       row. consider the alignment [h, h, e, l, l, l, o]. collapsing
+       repeats will produce    helo    instead of    hello   .
+
+   to get around these problems, ctc introduces a new token to the set of
+   allowed outputs. this new token is sometimes called the blank token.
+   we   ll refer to it here as
+   [math: <semantics><mrow><mi>  </mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">\epsilon.</annotation></semantics> :math]
+     . the
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      token doesn   t correspond to anything and is simply removed from the
+   output.
+
+   the alignments allowed by ctc are the same length as the input. we
+   allow any alignment which maps to
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y after merging repeats and removing
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      tokens:
+   [ctc_alignment_steps.svg]
+
+   if
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y has two of the same character in a row, then a valid alignment must
+   have an
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      between them. with this rule in place, we can differentiate between
+   alignments which collapse to    hello    and those which collapse to
+      helo   .
+
+   let   s go back to the output [c, a, t] with an input of length six. here
+   are a few more examples of valid and invalid alignments.
+   [valid_invalid_alignments.svg]
+
+   the ctc alignments have a few notable properties. first, the allowed
+   alignments between
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x and
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y are monotonic. if we advance to the next input, we can keep the
+   corresponding output the same or advance to the next one. a second
+   property is that the alignment of
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x to
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y is many-to-one. one or more input elements can align to a single
+   output element but not vice-versa. this implies a third property: the
+   length of
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y cannot be greater than the length of
+   [math: <semantics><mrow><mi>x</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">x.</annotation></semantics> :math]
+   x.
+
+  id168
+
+   the ctc alignments give us a natural way to go from probabilities at
+   each time-step to the id203 of an output sequence.
+   [full_collapse_from_audio.svg]
+
+   to be precise, the ctc objective for a single
+   [math: <semantics><mrow><mo>(</mo><mi>x</mi><mo
+   separator="true">,</mo><mi>y</mi><mo>)</mo></mrow><annotation
+   encoding="application/x-tex">(x, y)</annotation></semantics> :math]
+   (x,y) pair is:
+
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mspace width="0.277778em"></mspace><mspace
+   width="0.277778em"></mspace><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">p(y \mid x) \;\;
+   =</annotation></semantics> :math]
+   p(y   x)=
+   [math:
+   <semantics><mrow><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><msub><mi
+   mathvariant="script">a</mi><mrow><mi>x</mi><mo
+   separator="true">,</mo><mi>y</mi></mrow></msub></mrow></msub></mrow><an
+   notation encoding="application/x-tex">\sum_{a \in
+   \mathcal{a}_{x,y}}</annotation></semantics> :math]
+   a   ax,y         
+   [math:
+   <semantics><mrow><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo><mn>1<
+   /mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><msub><mi>p</mi><mi>t</mi></msub><mo>(</mo>
+   <msub><mi>a</mi><mi>t</mi></msub><mo>   </mo><mi>x</mi><mo>)</mo></mrow><
+   annotation encoding="application/x-tex">\prod_{t=1}^t \; p_t(a_t \mid
+   x)</annotation></semantics> :math]
+   t=1   t   pt   (at      x)
+   the ctc id155 marginalizes over the set of valid
+   alignments computing the id203 for a single alignment
+   step-by-step.
+
+   models trained with ctc typically use a recurrent neural network (id56)
+   to estimate the per time-step probabilities,
+   [math:
+   <semantics><mrow><msub><mi>p</mi><mi>t</mi></msub><mo>(</mo><msub><mi>a
+   </mi><mi>t</mi></msub><mo>   </mo><mi>x</mi><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">p_t(a_t \mid x).</annotation></semantics>
+   :math]
+   pt   (at      x). an id56 usually works well since it accounts for context in
+   the input, but we   re free to use any learning algorithm which produces
+   a distribution over output classes given a fixed-size slice of the
+   input.
+
+   if we aren   t careful, the ctc loss can be very expensive to compute. we
+   could try the straightforward approach and compute the score for each
+   alignment summing them all up as we go. the problem is there can be a
+   massive number of alignments. for a
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y of length
+   [math: <semantics><mrow><mi>u</mi></mrow><annotation
+   encoding="application/x-tex">u</annotation></semantics> :math]
+   u without any repeat characters and an
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x of length
+   [math: <semantics><mrow><mi>t</mi></mrow><annotation
+   encoding="application/x-tex">t</annotation></semantics> :math]
+   t the size of the set is
+   [math: <semantics><mrow><mrow><mrow><mo fence="true">(</mo><mfrac
+   linethickness="0px"><mrow><mi>t</mi><mo>+</mo><mi>u</mi></mrow><mrow><m
+   i>t</mi><mo>   </mo><mi>u</mi></mrow></mfrac><mo
+   fence="true">)</mo></mrow></mrow><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">{t + u \choose t -
+   u}.</annotation></semantics> :math]
+   (t   ut+u   ). for
+   [math:
+   <semantics><mrow><mi>t</mi><mo>=</mo><mn>1</mn><mn>0</mn><mn>0</mn></mr
+   ow><annotation
+   encoding="application/x-tex">t=100</annotation></semantics> :math]
+   t=100 and
+   [math:
+   <semantics><mrow><mi>u</mi><mo>=</mo><mn>5</mn><mn>0</mn></mrow><annota
+   tion encoding="application/x-tex">u=50</annotation></semantics> :math]
+   u=50 this number is almost
+   [math:
+   <semantics><mrow><mn>1</mn><msup><mn>0</mn><mrow><mn>4</mn><mn>0</mn></
+   mrow></msup><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">10^{40}.</annotation></semantics> :math]
+   1040. for most problems this would be too slow.
+
+   thankfully, we can compute the loss much faster with a dynamic
+   programming algorithm. the key insight is that if two alignments have
+   reached the same output at the same step, then we can merge them.
+
+   [all_alignments.svg] summing over all alignments can be very expensive.
+
+   [merged_alignments.svg] id145 merges alignments, so it   s
+   much faster.
+
+   since we can have an
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      before or after any token in
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y, it   s easier to describe the algorithm using a sequence which
+   includes them. we   ll work with the sequence
+   [math: <semantics><mrow><mi>z</mi><mspace
+   width="0.5em"></mspace><mo>=</mo><mspace
+   width="0.5em"></mspace><mo>[</mo><mi>  </mi><mo
+   separator="true">,</mo><mtext> </mtext><msub><mi>y</mi><mn>1</mn></msub
+   ><mo separator="true">,</mo><mtext> </mtext><mi>  </mi><mo
+   separator="true">,</mo><mtext> </mtext><msub><mi>y</mi><mn>2</mn></msub
+   ><mo separator="true">,</mo><mtext> </mtext><mo>   </mo><mo
+   separator="true">,</mo><mtext> </mtext><mi>  </mi><mo
+   separator="true">,</mo><mtext> </mtext><msub><mi>y</mi><mi>u</mi></msub
+   ><mo
+   separator="true">,</mo><mtext> </mtext><mi>  </mi><mo>]</mo></mrow><anno
+   tation encoding="application/x-tex"> z \enspace =\enspace [\epsilon,
+   ~y_1, ~\epsilon, ~y_2,~ \ldots, ~\epsilon, ~y_u, ~\epsilon]
+   </annotation></semantics> :math]
+   z=[  , y1   ,   , y2   ,    ,   , yu   ,   ] which is
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y with an
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      at the beginning, end, and between every character.
+
+   let   s let
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\alpha</annotation></semantics> :math]
+      be the score of the merged alignments at a given node. more
+   precisely,
+   [math: <semantics><mrow><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi></mrow></msub></mrow><annotation
+   encoding="application/x-tex">\alpha_{s, t}</annotation></semantics>
+   :math]
+     s,t    is the ctc score of the subsequence
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mrow><mn>1</mn><mo>:</mo><mi>s</mi></
+   mrow></msub></mrow><annotation
+   encoding="application/x-tex">z_{1:s}</annotation></semantics> :math]
+   z1:s    after
+   [math: <semantics><mrow><mi>t</mi></mrow><annotation
+   encoding="application/x-tex">t</annotation></semantics> :math]
+   t input steps. as we   ll see, we   ll compute the final ctc score,
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo></mrow><annotation encoding="application/x-tex">p(y \mid
+   x)</annotation></semantics> :math]
+   p(y   x), from the
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\alpha</annotation></semantics> :math]
+        s at the last time-step. as long as we know the values of
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\alpha</annotation></semantics> :math]
+      at the previous time-step, we can compute
+   [math: <semantics><mrow><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi></mrow></msub><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">\alpha_{s, t}.</annotation></semantics>
+   :math]
+     s,t   . there are two cases.
+
+   case 1:
+
+   [cost_no_skip.svg]
+
+   in this case, we can   t jump over
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mrow><mi>s</mi><mo>   </mo><mn>1</mn></
+   mrow></msub></mrow><annotation
+   encoding="application/x-tex">z_{s-1}</annotation></semantics> :math]
+   zs   1   , the previous token in
+   [math: <semantics><mrow><mi>z</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">z.</annotation></semantics> :math]
+   z. the first reason is that the previous token can be an element of
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y, and we can   t skip elements of
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. since every element of
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y in
+   [math: <semantics><mrow><mi>z</mi></mrow><annotation
+   encoding="application/x-tex">z</annotation></semantics> :math]
+   z is followed by an
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+     , we can identify this when
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mi>s</mi></msub><mo>=</mo><mi>  </mi><
+   mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> z_{s} =
+   \epsilon.</annotation></semantics> :math]
+   zs   =  . the second reason is that we must have an
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      between repeat characters in
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. we can identify this when
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mi>s</mi></msub><mo>=</mo><msub><mi>z
+   </mi><mrow><mi>s</mi><mo>   </mo><mn>2</mn></mrow></msub><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">z_s = z_{s-2}.</annotation></semantics>
+   :math]
+   zs   =zs   2   .
+
+   to ensure we don   t skip
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mrow><mi>s</mi><mo>   </mo><mn>1</mn></
+   mrow></msub></mrow><annotation
+   encoding="application/x-tex">z_{s-1}</annotation></semantics> :math]
+   zs   1   , we can either be there at the previous time-step or have already
+   passed through at some earlier time-step. as a result there are two
+   positions we can transition from.
+
+   [math: <semantics><mrow><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi></mrow></msub><mspace
+   width="0.277778em"></mspace><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">\alpha_{s, t} \;
+   =</annotation></semantics> :math]
+     s,t   =
+   [math:
+   <semantics><mrow><mo>(</mo><msub><mi>  </mi><mrow><mi>s</mi><mo>   </mo><m
+   n>1</mn><mo
+   separator="true">,</mo><mi>t</mi><mo>   </mo><mn>1</mn></mrow></msub><mo>
+   +</mo><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi><mo>   </mo><mn>1</mn></mrow></msub><mo>
+   )</mo><mspace width="1em"></mspace><mspace
+   width="1em"></mspace><mo>   </mo></mrow><annotation
+   encoding="application/x-tex">(\alpha_{s-1, t-1} + \alpha_{s, t-1})
+   \quad\quad \cdot</annotation></semantics> :math]
+   (  s   1,t   1   +  s,t   1   )    the ctc id203 of the two valid subsequences
+   after
+   [math:
+   <semantics><mrow><mi>t</mi><mo>   </mo><mn>1</mn></mrow><annotation
+   encoding="application/x-tex">t-1</annotation></semantics> :math]
+   t   1 input steps.
+   [math:
+   <semantics><mrow><msub><mi>p</mi><mi>t</mi></msub><mo>(</mo><msub><mi>z
+   </mi><mi>s</mi></msub><mo>   </mo><mi>x</mi><mo>)</mo></mrow><annotation
+   encoding="application/x-tex">p_t(z_{s} \mid x)</annotation></semantics>
+   :math]
+   pt   (zs      x) the id203 of the current character at input step
+   [math: <semantics><mrow><mi>t</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">t.</annotation></semantics> :math]
+   t.
+
+   [cost_regular.svg]
+
+   case 2:
+
+   in the second case, we   re allowed to skip the previous token in
+   [math: <semantics><mrow><mi>z</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">z.</annotation></semantics> :math]
+   z. we have this case whenever
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mrow><mi>s</mi><mo>   </mo><mn>1</mn></
+   mrow></msub></mrow><annotation
+   encoding="application/x-tex">z_{s-1}</annotation></semantics> :math]
+   zs   1    is an
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      between unique characters. as a result there are three positions we
+   could have come from at the previous step.
+
+   [math: <semantics><mrow><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi></mrow></msub><mspace
+   width="0.277778em"></mspace><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">\alpha_{s, t} \;
+   =</annotation></semantics> :math]
+     s,t   =
+   [math:
+   <semantics><mrow><mo>(</mo><msub><mi>  </mi><mrow><mi>s</mi><mo>   </mo><m
+   n>2</mn><mo
+   separator="true">,</mo><mi>t</mi><mo>   </mo><mn>1</mn></mrow></msub><mo>
+   +</mo><msub><mi>  </mi><mrow><mi>s</mi><mo>   </mo><mn>1</mn><mo
+   separator="true">,</mo><mi>t</mi><mo>   </mo><mn>1</mn></mrow></msub><mo>
+   +</mo><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi><mo>   </mo><mn>1</mn></mrow></msub><mo>
+   )</mo><mspace width="1em"></mspace><mspace
+   width="1em"></mspace><mo>   </mo></mrow><annotation
+   encoding="application/x-tex">(\alpha_{s-2, t-1} + \alpha_{s-1, t-1} +
+   \alpha_{s, t-1}) \quad\quad \cdot</annotation></semantics> :math]
+   (  s   2,t   1   +  s   1,t   1   +  s,t   1   )    the ctc id203 of the three valid
+   subsequences after
+   [math:
+   <semantics><mrow><mi>t</mi><mo>   </mo><mn>1</mn></mrow><annotation
+   encoding="application/x-tex">t-1</annotation></semantics> :math]
+   t   1 input steps.
+   [math:
+   <semantics><mrow><msub><mi>p</mi><mi>t</mi></msub><mo>(</mo><msub><mi>z
+   </mi><mi>s</mi></msub><mo>   </mo><mi>x</mi><mo>)</mo></mrow><annotation
+   encoding="application/x-tex">p_t(z_{s} \mid x)</annotation></semantics>
+   :math]
+   pt   (zs      x) the id203 of the current character at input step
+   [math: <semantics><mrow><mi>t</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">t.</annotation></semantics> :math]
+   t.
+
+   below is an example of the computation performed by the dynamic
+   programming algorithm. every valid alignment has a path in this graph.
+   output
+   [math: <semantics><mrow><mi>y</mi><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">y =</annotation></semantics> :math]
+   y= [a, b] input,
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x
+
+   [ctc_cost.svg] node
+   [math: <semantics><mrow><mo>(</mo><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi><mo>)</mo></mrow><annotation
+   encoding="application/x-tex">(s, t)</annotation></semantics> :math]
+   (s,t) in the diagram represents
+   [math: <semantics><mrow><msub><mi>  </mi><mrow><mi>s</mi><mo
+   separator="true">,</mo><mi>t</mi></mrow></msub></mrow><annotation
+   encoding="application/x-tex">\alpha_{s, t}</annotation></semantics>
+   :math]
+     s,t        the ctc score of the subsequence
+   [math:
+   <semantics><mrow><msub><mi>z</mi><mrow><mn>1</mn><mo>:</mo><mi>s</mi></
+   mrow></msub></mrow><annotation
+   encoding="application/x-tex">z_{1:s}</annotation></semantics> :math]
+   z1:s    after
+   [math: <semantics><mrow><mi>t</mi></mrow><annotation
+   encoding="application/x-tex">t</annotation></semantics> :math]
+   t input steps.
+
+   there are two valid starting nodes and two valid final nodes since the
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      at the beginning and end of the sequence is optional. the complete
+   id203 is the sum of the two final nodes.
+
+   now that we can efficiently compute the id168, the next step is
+   to compute a gradient and train the model. the ctc id168 is
+   differentiable with respect to the per time-step output probabilities
+   since it   s just sums and products of them. given this, we can
+   analytically compute the gradient of the id168 with respect to
+   the (unnormalized) output probabilities and from there run
+   id26 as usual.
+
+   for a training set
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">d</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{d}</annotation></semantics>
+   :math]
+   d, the model   s parameters are tuned to minimize the negative
+   log-likelihood
+   [math: <semantics><mrow><msub><mo>   </mo><mrow><mo>(</mo><mi>x</mi><mo
+   separator="true">,</mo><mi>y</mi><mo>)</mo><mo>   </mo><mrow><mi
+   mathvariant="script">d</mi></mrow></mrow></msub><mo>   </mo><mi>log</mi><
+   mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi
+   >x</mi><mo>)</mo></mrow><annotation encoding="application/x-tex">
+   \sum_{(x, y) \in \mathcal{d}} -\log\; p(y \mid x)
+   </annotation></semantics> :math]
+   (x,y)   d         logp(y   x) instead of maximizing the likelihood directly.
+
+  id136
+
+   after we   ve trained the model, we   d like to use it to find a likely
+   output for a given input. more precisely, we need to solve:
+   [math: <semantics><mrow><msup><mi>y</mi><mo>   </mo></msup><mspace
+   width="0.5em"></mspace><mo>=</mo><mspace
+   width="0.5em"></mspace><mrow><msub><mo><mtext>argmax</mtext></mo><mi>y<
+   /mi></msub></mrow><mspace
+   width="0.5em"></mspace><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</m
+   i><mo>)</mo></mrow><annotation encoding="application/x-tex"> y^*
+   \enspace = \enspace {\mathop{\text{argmax}}\limits_{y}} \enspace p(y
+   \mid x) </annotation></semantics> :math]
+   y   =yargmax   p(y   x)
+
+   one heuristic is to take the most likely output at each time-step. this
+   gives us the alignment with the highest id203:
+   [math: <semantics><mrow><msup><mi>a</mi><mo>   </mo></msup><mspace
+   width="0.5em"></mspace><mo>=</mo><mspace
+   width="0.5em"></mspace><mrow><msub><mo><mtext>argmax</mtext></mo><mi>a<
+   /mi></msub></mrow><mspace
+   width="0.5em"></mspace><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo>
+   <mn>1</mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><msub><mi>p</mi><mi>t</mi></msub><mo>(</mo>
+   <msub><mi>a</mi><mi>t</mi></msub><mo>   </mo><mi>x</mi><mo>)</mo></mrow><
+   annotation encoding="application/x-tex"> a^* \enspace = \enspace
+   {\mathop{\text{argmax}}\limits_{a}} \enspace \prod_{t=1}^{t} \; p_t(a_t
+   \mid x) </annotation></semantics> :math]
+   a   =aargmax   t=1   t   pt   (at      x)
+
+   we can then collapse repeats and remove
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      tokens to get
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y.
+
+   for many applications this heuristic works well, especially when most
+   of the id203 mass is alloted to a single alignment. however, this
+   approach can sometimes miss easy to find outputs with much higher
+   id203. the problem is, it doesn   t take into account the fact that
+   a single output can have many alignments.
+
+   here   s an example. assume the alignments [a, a,
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+     ] and [a, a, a] individually have lower id203 than [b, b, b].
+   but the sum of their probabilities is actually greater than that of [b,
+   b, b]. the naive heuristic will incorrectly propose
+   [math: <semantics><mrow><mi>y</mi><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">y =</annotation></semantics> :math]
+   y= [b] as the most likely hypothesis. it should have chosen
+   [math: <semantics><mrow><mi>y</mi><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">y =</annotation></semantics> :math]
+   y= [a]. to fix this, the algorithm needs to account for the fact that
+   [a, a, a] and [a, a,
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+     ] collapse to the same output.
+
+   we can use a modified id125 to solve this. given limited
+   computation, the modified id125 won   t necessarily find the most
+   likely
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. it does, at least, have the nice property that we can trade-off more
+   computation (a larger beam-size) for an asymptotically better solution.
+
+   a regular id125 computes a new set of hypotheses at each input
+   step. the new set of hypotheses is generated from the previous set by
+   extending each hypothesis with all possible output characters and
+   keeping only the top candidates.
+   [beam_search.svg] a standard id125 algorithm with an alphabet of
+   [math: <semantics><mrow><mo>{</mo><mi>  </mi><mo
+   separator="true">,</mo><mi>a</mi><mo
+   separator="true">,</mo><mi>b</mi><mo>}</mo></mrow><annotation
+   encoding="application/x-tex">\{\epsilon, a,
+   b\}</annotation></semantics> :math]
+   {  ,a,b} and a beam size of three.
+
+   we can modify the vanilla id125 to handle multiple alignments
+   mapping to the same output. in this case instead of keeping a list of
+   alignments in the beam, we store the output prefixes after collapsing
+   repeats and removing
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      characters. at each step of the search we accumulate scores for a
+   given prefix based on all the alignments which map to it.
+   the ctc id125 algorithm with an output alphabet
+   [math: <semantics><mrow><mo>{</mo><mi>  </mi><mo
+   separator="true">,</mo><mi>a</mi><mo
+   separator="true">,</mo><mi>b</mi><mo>}</mo></mrow><annotation
+   encoding="application/x-tex">\{\epsilon, a,
+   b\}</annotation></semantics> :math]
+   {  ,a,b} and a beam size of three.
+
+   a proposed extension can map to two output prefixes if the character is
+   a repeat. this is shown at
+   [math:
+   <semantics><mrow><mi>t</mi><mo>=</mo><mn>3</mn></mrow><annotation
+   encoding="application/x-tex">t=3</annotation></semantics> :math]
+   t=3 in the figure above where    a    is proposed as an extension to the
+   prefix [a]. both [a] and [a, a] are valid outputs for this proposed
+   extension.
+
+   when we extend [a] to produce [a,a], we only want include the part of
+   the previous score for alignments which end in
+   [math: <semantics><mrow><mi>  </mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">\epsilon.</annotation></semantics> :math]
+     . remember, the
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      is required between repeat characters. similarly, when we don   t
+   extend the prefix and produce [a], we should only include the part of
+   the previous score for alignments which don   t end in
+   [math: <semantics><mrow><mi>  </mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">\epsilon.</annotation></semantics> :math]
+     .
+
+   given this, we have to keep track of two probabilities for each prefix
+   in the beam. the id203 of all alignments which end in
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      and the id203 of all alignments which don   t end in
+   [math: <semantics><mrow><mi>  </mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">\epsilon.</annotation></semantics> :math]
+     . when we rank the hypotheses at each step before pruning the beam,
+   we   ll use their combined scores.
+
+   the implementation of this algorithm doesn   t require much code, but it
+   is dense and tricky to get right. checkout this [5]gist for an example
+   implementation in python.
+
+   in some problems, such as id103, incorporating a language
+   model over the outputs significantly improves accuracy. we can include
+   the language model as a factor in the id136 problem.
+
+   [math: <semantics><mrow><msup><mi>y</mi><mo>   </mo></msup><mspace
+   width="0.5em"></mspace><mo>=</mo><mspace
+   width="0.5em"></mspace><mrow><msub><mo><mtext>argmax</mtext></mo><mi>y<
+   /mi></msub></mrow></mrow><annotation encoding="application/x-tex">y^*
+   \enspace = \enspace {\mathop{\text{argmax}}\limits_{y}}
+   </annotation></semantics> :math]
+   y   =yargmax   
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mspace width="1em"></mspace><mo>   </mo></mrow><annotation
+   encoding="application/x-tex">p(y \mid x) \quad
+   \cdot</annotation></semantics> :math]
+   p(y   x)    the ctc id155.
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><msup><mo>)</mo><mi>  </m
+   i></msup><mspace width="1em"></mspace><mo>   </mo></mrow><annotation
+   encoding="application/x-tex">p(y)^\alpha \quad
+   \cdot</annotation></semantics> :math]
+   p(y)      the language model id203.
+   [math:
+   <semantics><mrow><mi>l</mi><mo>(</mo><mi>y</mi><msup><mo>)</mo><mi>  </m
+   i></msup></mrow><annotation
+   encoding="application/x-tex">l(y)^\beta</annotation></semantics> :math]
+   l(y)   the    word    insertion bonus.
+
+   the function
+   [math:
+   <semantics><mrow><mi>l</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow><annota
+   tion encoding="application/x-tex">l(y)</annotation></semantics> :math]
+   l(y) computes the length of
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y in terms of the language model tokens and acts as a word insertion
+   bonus. with a word-based language model
+   [math:
+   <semantics><mrow><mi>l</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow><annota
+   tion encoding="application/x-tex">l(y)</annotation></semantics> :math]
+   l(y) counts the number of words in
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. if we use a character-based language model then
+   [math:
+   <semantics><mrow><mi>l</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow><annota
+   tion encoding="application/x-tex">l(y)</annotation></semantics> :math]
+   l(y) counts the number of characters in
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. the language model scores are only included when a prefix is
+   extended by a character (or word) and not at every step of the
+   algorithm. this causes the search to favor shorter prefixes, as
+   measured by
+   [math:
+   <semantics><mrow><mi>l</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow><annota
+   tion encoding="application/x-tex">l(y)</annotation></semantics> :math]
+   l(y), since they don   t include as many language model updates. the word
+   insertion bonus helps with this. the parameters
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\alpha</annotation></semantics> :math]
+      and
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\beta</annotation></semantics> :math]
+      are usually set by cross-validation.
+
+   the language model scores and word insertion term can be included in
+   the id125. whenever we propose to extend a prefix by a character,
+   we can include the language model score for the new character given the
+   prefix so far.
+
+properties of ctc
+
+   we mentioned a few important properties of ctc so far. here we   ll go
+   into more depth on what these properties are and what trade-offs they
+   offer.
+
+  conditional independence
+
+   one of the most commonly cited shortcomings of ctc is the conditional
+   independence assumption it makes.
+
+   [conditional_independence.svg] graphical model for ctc.
+
+   the model assumes that every output is conditionally independent of the
+   other outputs given the input. this is a bad assumption for many
+   sequence to sequence problems.
+
+   say we had an audio clip of someone saying    triple a   . another valid
+   transcription could be    aaa   . if the first letter of the predicted
+   transcription is    a   , then the next letter should be    a    with high
+   id203 and    r    with low id203. the conditional independence
+   assumption does not allow for this.
+
+   [triple_a.svg] if we predict an    a    as the first letter then the suffix
+      aa    should get much more id203 than    riple a   . if we predict    t   
+   first, the opposite should be true.
+
+   in fact speech recognizers using ctc don   t learn a language model over
+   the output nearly as well as models which are conditionally dependent.
+   however, a separate language model can be included and usually gives a
+   good boost to accuracy.
+
+   the conditional independence assumption made by ctc isn   t always a bad
+   thing. baking in strong beliefs over output interactions makes the
+   model less adaptable to new or altered domains. for example, we might
+   want to use a speech recognizer trained on phone conversations between
+   friends to transcribe customer support calls. the language in the two
+   domains can be quite different even if the acoustic model is similar.
+   with a ctc acoustic model, we can easily swap in a new language model
+   as we change domains.
+
+  alignment properties
+
+   the ctc algorithm is alignment-free. the objective function
+   marginalizes over all alignments. while ctc does make strong
+   assumptions about the form of alignments between
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x and
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y, the model is agnostic as to how id203 is distributed amongst
+   them. in some problems ctc ends up allocating most of the id203
+   to a single alignment. however, this isn   t guaranteed. we could force
+   the model to choose a single alignment by replacing the sum with a max
+   in the objective function,
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mspace width="0.5em"></mspace><mo>=</mo><mspace
+   width="0.5em"></mspace><msub><mi>max</mi><mrow><mi>a</mi><mo>   </mo><msu
+   b><mi mathvariant="script">a</mi><mrow><mi>x</mi><mo
+   separator="true">,</mo><mi>y</mi></mrow></msub></mrow></msub><mspace
+   width="0.5em"></mspace><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo>
+   <mn>1</mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><msub><mi>a</mi><mi>t</
+   mi></msub><mo>   </mo><mi>x</mi><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> p(y \mid x) \enspace = \enspace \max_{a
+   \in \mathcal{a}_{x,y}} \enspace \prod_{t=1}^t \; p(a_t \mid x).
+   </annotation></semantics> :math]
+   p(y   x)=a   ax,y   max   t=1   t   p(at      x).
+
+   as mentioned before, ctc only allows monotonic alignments. in problems
+   such as id103 this may be a valid assumption. for other
+   problems like machine translation where a future word in a target
+   sentence can align to an earlier part of the source sentence, this
+   assumption is a deal-breaker.
+
+   another important property of ctc alignments is that they are
+   many-to-one. multiple inputs can align to at most one output. in some
+   cases this may not be desirable. we might want to enforce a strict
+   one-to-one correspondence between elements of
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x and
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. alternatively, we may want to allow multiple output elements to
+   align to a single input element. for example, the characters    th    might
+   align to a single input step of audio. a character based ctc model
+   would not allow that.
+
+   the many-to-one property implies that the output can   t have more
+   time-steps than the input. if
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y has
+   [math: <semantics><mrow><mi>r</mi></mrow><annotation
+   encoding="application/x-tex">r</annotation></semantics> :math]
+   r consecutive repeats, then the length of
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y must be less than the length of
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x by
+   [math: <semantics><mrow><mn>2</mn><mi>r</mi><mo>   </mo><mn>1</mn><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">2r - 1.</annotation></semantics> :math]
+   2r   1. this is usually not a problem for speech and handwriting
+   recognition since the input is much longer than the output. however,
+   for other problems where
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y is often longer than
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x, ctc just won   t work.
+
+ctc in context
+
+   in this section we   ll discuss how ctc relates to other commonly used
+   algorithms for sequence modeling.
+
+  id48s
+
+   at a first glance, a hidden markov model (id48) seems quite different
+   from ctc. but, the two algorithms are actually quite similar.
+   understanding the relationship between them will help us understand
+   what advantages ctc has over id48 sequence models and give us insight
+   into how ctc could be changed for various use cases.
+
+   let   s use the same notation as before,
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x is the input sequence and
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y is the output sequence with lengths
+   [math: <semantics><mrow><mi>t</mi></mrow><annotation
+   encoding="application/x-tex">t</annotation></semantics> :math]
+   t and
+   [math: <semantics><mrow><mi>u</mi></mrow><annotation
+   encoding="application/x-tex">u</annotation></semantics> :math]
+   u respectively. we   re interested in learning
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">p(y \mid x).</annotation></semantics>
+   :math]
+   p(y   x). one way to simplify the problem is to apply bayes    rule:
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mspace width="0.277778em"></mspace><mo>   </mo><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><mi>x</mi><mo>   </mo><mi
+   >y</mi><mo>)</mo><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><mi>y</mi><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> p(y \mid x) \; \propto \; p(x \mid y) \;
+   p(y). </annotation></semantics> :math]
+   p(y   x)   p(x   y)p(y). the
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>)</mo></mrow><annota
+   tion encoding="application/x-tex">p(y)</annotation></semantics> :math]
+   p(y) term can be any language model, so let   s focus on
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>x</mi><mo>   </mo><mi>y</mi><mo>
+   )</mo><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">p(x \mid y).</annotation></semantics>
+   :math]
+   p(x   y). like before we   ll let
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a be a set of allowed alignments between
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x and
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. members of
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a have length
+   [math: <semantics><mrow><mi>t</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">t.</annotation></semantics> :math]
+   t. let   s otherwise leave
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a unspecified for now. we   ll come back to it later. we can marginalize
+   over alignments to get
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>x</mi><mo>   </mo><mi>y</mi><mo>
+   )</mo><mspace width="0.277778em"></mspace><mo>=</mo><mspace
+   width="0.277778em"></mspace><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><
+   mrow><mi mathvariant="script">a</mi></mrow></mrow></msub><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><mi>x</mi><mo
+   separator="true">,</mo><mi>a</mi><mo>   </mo><mi>y</mi><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> p(x \mid y)\; = \; \sum_{a \in
+   \mathcal{a}} \; p(x, a \mid y). </annotation></semantics> :math]
+   p(x   y)=a   a      p(x,a   y). to simplify notation, let   s remove the
+   conditioning on
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y, it will be present in every
+   [math: <semantics><mrow><mi>p</mi><mo>(</mo><mo>   </mo><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">p(\cdot).</annotation></semantics> :math]
+   p(   ). with two assumptions we can write down the standard id48.
+
+   [math: <semantics><mrow><mi>p</mi><mo>(</mo><mi>x</mi><mo>)</mo><mspace
+   width="1em"></mspace><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">p(x) \quad =</annotation></semantics>
+   :math]
+   p(x)= the id203 of the input
+   [math:
+   <semantics><mrow><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow></msub><mspace
+   width="0.277778em"></mspace><msubsup><mo>   </mo><mrow><mi>t</mi><mo>=</m
+   o><mn>1</mn></mrow><mi>t</mi></msubsup></mrow><annotation
+   encoding="application/x-tex">\sum_{a \in \mathcal{a}} \;
+   \prod_{t=1}^t</annotation></semantics> :math]
+      a   a      t=1t    marginalizes over alignments
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><msub><mi>x</mi><mi>t</mi></msub><
+   mo>   </mo><msub><mi>a</mi><mi>t</mi></msub><mo>)</mo><mspace
+   width="1em"></mspace><mo>   </mo></mrow><annotation
+   encoding="application/x-tex">p(x_t \mid a_t) \quad
+   \cdot</annotation></semantics> :math]
+   p(xt      at   )    the emission id203
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><msub><mi>a</mi><mi>t</mi></msub><
+   mo>   </mo><msub><mi>a</mi><mrow><mi>t</mi><mo>   </mo><mn>1</mn></mrow></m
+   sub><mo>)</mo></mrow><annotation encoding="application/x-tex">p(a_t
+   \mid a_{t-1})</annotation></semantics> :math]
+   p(at      at   1   ) the transition id203
+
+   the first assumption is the usual markov property. the state
+   [math:
+   <semantics><mrow><msub><mi>a</mi><mi>t</mi></msub></mrow><annotation
+   encoding="application/x-tex">a_t</annotation></semantics> :math]
+   at    is conditionally independent of all historic states given the
+   previous state
+   [math:
+   <semantics><mrow><msub><mi>a</mi><mrow><mi>t</mi><mo>   </mo><mn>1</mn></
+   mrow></msub><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">a_{t-1}.</annotation></semantics> :math]
+   at   1   . the second is that the observation
+   [math:
+   <semantics><mrow><msub><mi>x</mi><mi>t</mi></msub></mrow><annotation
+   encoding="application/x-tex">x_t</annotation></semantics> :math]
+   xt    is conditionally independent of everything given the current state
+   [math: <semantics><mrow><msub><mi>a</mi><mi>t</mi></msub><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">a_t.</annotation></semantics> :math]
+   at   .
+   [id48.svg] the graphical model for an id48.
+
+   now we can take just a few steps to transform the id48 into ctc and see
+   how the two models relate. first, let   s assume that the transition
+   probabilities
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><msub><mi>a</mi><mi>t</mi></msub><
+   mo>   </mo><msub><mi>a</mi><mrow><mi>t</mi><mo>   </mo><mn>1</mn></mrow></m
+   sub><mo>)</mo></mrow><annotation encoding="application/x-tex">p(a_t
+   \mid a_{t-1})</annotation></semantics> :math]
+   p(at      at   1   ) are uniform. this gives
+   [math: <semantics><mrow><mi>p</mi><mo>(</mo><mi>x</mi><mo>)</mo><mspace
+   width="0.5em"></mspace><mo>   </mo><mspace
+   width="0.5em"></mspace><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><mrow>
+   <mi mathvariant="script">a</mi></mrow></mrow></msub><mspace
+   width="0.5em"></mspace><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo>
+   <mn>1</mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><msub><mi>x</mi><mi>t</
+   mi></msub><mo>   </mo><msub><mi>a</mi><mi>t</mi></msub><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> p(x) \enspace \propto \enspace \sum_{a
+   \in \mathcal{a}} \enspace \prod_{t=1}^t \; p(x_t \mid a_t).
+   </annotation></semantics> :math]
+   p(x)   a   a      t=1   t   p(xt      at   ). there are only two differences from this
+   equation and the ctc id168. the first is that we are learning a
+   model of
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x given
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y as opposed to
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y given
+   [math: <semantics><mrow><mi>x</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">x.</annotation></semantics> :math]
+   x. the second is how the set
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a is produced. let   s deal with each in turn.
+
+   the id48 can be used with discriminative models which estimate
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>a</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">p(a \mid x).</annotation></semantics>
+   :math]
+   p(a   x). to do this, we apply bayes    rule and rewrite the model as
+   [math: <semantics><mrow><mi>p</mi><mo>(</mo><mi>x</mi><mo>)</mo><mspace
+   width="0.5em"></mspace><mo>   </mo><mspace
+   width="0.5em"></mspace><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><mrow>
+   <mi mathvariant="script">a</mi></mrow></mrow></msub><mspace
+   width="0.5em"></mspace><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo>
+   <mn>1</mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><mfrac><mrow><mi>p</mi><mo>(</mo><msub><mi>
+   a</mi><mi>t</mi></msub><mo>   </mo><msub><mi>x</mi><mi>t</mi></msub><mo>)
+   </mo><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><msub><mi>x</mi><mi>t</
+   mi></msub><mo>)</mo></mrow><mrow><mi>p</mi><mo>(</mo><msub><mi>a</mi><m
+   i>t</mi></msub><mo>)</mo></mrow></mfrac></mrow><annotation
+   encoding="application/x-tex"> p(x) \enspace \propto \enspace \sum_{a
+   \in \mathcal{a}} \enspace \prod_{t=1}^t \; \frac{p(a_t \mid x_t)\;
+   p(x_t)}{p(a_t)} </annotation></semantics> :math]
+   p(x)   a   a      t=1   t   p(at   )p(at      xt   )p(xt   )   
+   [math: <semantics><mrow><mspace width="1em"></mspace><mspace
+   width="1em"></mspace><mspace width="1em"></mspace><mo>   </mo><mspace
+   width="0.5em"></mspace><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><mrow>
+   <mi mathvariant="script">a</mi></mrow></mrow></msub><mspace
+   width="0.5em"></mspace><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo>
+   <mn>1</mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><mfrac><mrow><mi>p</mi><mo>(</mo><msub><mi>
+   a</mi><mi>t</mi></msub><mo>   </mo><msub><mi>x</mi><mi>t</mi></msub><mo>)
+   </mo></mrow><mrow><mi>p</mi><mo>(</mo><msub><mi>a</mi><mi>t</mi></msub>
+   <mo>)</mo></mrow></mfrac><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> \quad\quad\quad\propto \enspace \sum_{a
+   \in \mathcal{a}} \enspace \prod_{t=1}^t \; \frac{p(a_t \mid
+   x_t)}{p(a_t)}. </annotation></semantics> :math]
+      a   a      t=1   t   p(at   )p(at      xt   )   .
+
+   if we assume a uniform prior over the states
+   [math: <semantics><mrow><mi>a</mi></mrow><annotation
+   encoding="application/x-tex">a</annotation></semantics> :math]
+   a and condition on all of
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x instead of a single element at a time, we arrive at
+   [math: <semantics><mrow><mi>p</mi><mo>(</mo><mi>x</mi><mo>)</mo><mspace
+   width="0.5em"></mspace><mo>   </mo><mspace
+   width="0.5em"></mspace><msub><mo>   </mo><mrow><mi>a</mi><mo>   </mo><mrow>
+   <mi mathvariant="script">a</mi></mrow></mrow></msub><mspace
+   width="0.5em"></mspace><munderover><mo>   </mo><mrow><mi>t</mi><mo>=</mo>
+   <mn>1</mn></mrow><mi>t</mi></munderover><mspace
+   width="0.277778em"></mspace><mi>p</mi><mo>(</mo><msub><mi>a</mi><mi>t</
+   mi></msub><mo>   </mo><mi>x</mi><mo>)</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex"> p(x) \enspace \propto \enspace \sum_{a
+   \in \mathcal{a}} \enspace \prod_{t=1}^t \; p(a_t \mid x).
+   </annotation></semantics> :math]
+   p(x)   a   a      t=1   t   p(at      x).
+
+   the above equation is essentially the ctc id168, assuming the
+   set
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a is the same. in fact, the id48 framework does not specify what
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a should consist of. this part of the model can be designed on a
+   per-problem basis. in many cases the model doesn   t condition on
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y and the set
+   [math: <semantics><mrow><mrow><mi
+   mathvariant="script">a</mi></mrow></mrow><annotation
+   encoding="application/x-tex">\mathcal{a}</annotation></semantics>
+   :math]
+   a consists of all possible length
+   [math: <semantics><mrow><mi>t</mi></mrow><annotation
+   encoding="application/x-tex">t</annotation></semantics> :math]
+   t sequences from the output alphabet. in this case, the id48 can be
+   drawn as an ergodic state transition diagram in which every state
+   connects to every other state. the figure below shows this model with
+   the alphabet or set of unique hidden states as
+   [math: <semantics><mrow><mo>{</mo><mi>a</mi><mo
+   separator="true">,</mo><mi>b</mi><mo
+   separator="true">,</mo><mi>c</mi><mo>}</mo><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">\{a, b, c\}.</annotation></semantics>
+   :math]
+   {a,b,c}.
+
+   in our case the transitions allowed by the model are strongly related
+   to
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. we want the id48 to reflect this. one possible model could be a
+   simple linear state transition diagram. the figure below shows this
+   with the same alphabet as before and
+   [math: <semantics><mrow><mi>y</mi><mo>=</mo></mrow><annotation
+   encoding="application/x-tex">y =</annotation></semantics> :math]
+   y= [a, b]. another commonly used model is the bakis or left-right id48.
+   in this model any transition which proceeds from the left to the right
+   is allowed.
+
+   [ergodic_id48.svg] ergodic id48: any node can be either a starting or
+   final state.
+
+   [linear_id48.svg] linear id48: start on the left, end on the right.
+
+   [ctc_id48.svg] ctc id48: the first two nodes are the starting states and
+   the last two nodes are the final states.
+
+   in ctc we augment the alphabet with
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\epsilon</annotation></semantics> :math]
+      and the id48 model allows a subset of the left-right transitions. the
+   ctc id48 has two start states and two accepting states.
+
+   one possible source of confusion is that the id48 model differs for any
+   unique
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. this is in fact standard in applications such as id103.
+   the state diagram changes based on the output
+   [math: <semantics><mrow><mi>y</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">y.</annotation></semantics> :math]
+   y. however, the functions which estimate the observation and transition
+   probabilities are shared.
+
+   let   s discuss how ctc improves on the original id48 model. first, we can
+   think of the ctc state diagram as a special case id48 which works well
+   for many problems of interest. incorporating the blank as a hidden
+   state in the id48 allows us to use the alphabet of
+   [math: <semantics><mrow><mi>y</mi></mrow><annotation
+   encoding="application/x-tex">y</annotation></semantics> :math]
+   y as the other hidden states. this model also gives a set of allowed
+   alignments which may be a good prior for some problems.
+
+   perhaps most importantly, ctc is discriminative. it models
+   [math:
+   <semantics><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x</mi><mo>
+   )</mo></mrow><annotation encoding="application/x-tex">p(y \mid
+   x)</annotation></semantics> :math]
+   p(y   x) directly, an idea that   s been important in the past with other
+   discriminative improvements to id48s. discriminative training let   s us
+   apply powerful learning algorithms like the id56 directly towards
+   solving the problem we care about.
+
+  encoder-decoder models
+
+   the encoder-decoder is perhaps the most commonly used framework for
+   sequence modeling with neural networks. these models have an encoder
+   and a decoder. the encoder maps the input sequence
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x into a hidden representation. the decoder consumes the hidden
+   representation and produces a distribution over the outputs. we can
+   write this as
+   [math: <semantics><mrow><mtable><mtr><mtd><mstyle scriptlevel="0"
+   displaystyle="true"><mrow><mi>h</mi><mspace
+   width="0.5em"></mspace></mrow></mstyle></mtd><mtd><mstyle
+   scriptlevel="0"
+   displaystyle="true"><mrow><mrow></mrow><mo>=</mo><mspace
+   width="0.5em"></mspace><mtext>encode</mtext><mo>(</mo><mi>x</mi><mo>)</
+   mo></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel="0"
+   displaystyle="true"><mrow><mi>p</mi><mo>(</mo><mi>y</mi><mo>   </mo><mi>x
+   </mi><mo>)</mo><mspace
+   width="0.5em"></mspace></mrow></mstyle></mtd><mtd><mstyle
+   scriptlevel="0"
+   displaystyle="true"><mrow><mrow></mrow><mo>=</mo><mspace
+   width="0.5em"></mspace><mtext>decode</mtext><mo>(</mo><mi>h</mi><mo>)</
+   mo><mi
+   mathvariant="normal">.</mi></mrow></mstyle></mtd></mtr></mtable></mrow>
+   <annotation encoding="application/x-tex"> \begin{aligned} h\enspace &=
+   \enspace\textsf{encode}(x) \\[.5em] p(y \mid x)\enspace &= \enspace
+   \textsf{decode}(h). \end{aligned} </annotation></semantics> :math]
+   hp(y   x)   =encode(x)=decode(h).    the
+   [math:
+   <semantics><mrow><mtext>encode</mtext><mo>(</mo><mo>   </mo><mo>)</mo></m
+   row><annotation
+   encoding="application/x-tex">\textsf{encode}(\cdot)</annotation></seman
+   tics> :math]
+   encode(   ) and
+   [math:
+   <semantics><mrow><mtext>decode</mtext><mo>(</mo><mo>   </mo><mo>)</mo></m
+   row><annotation
+   encoding="application/x-tex">\textsf{decode}(\cdot)</annotation></seman
+   tics> :math]
+   decode(   ) functions are typically id56s. the decoder can optionally be
+   equipped with an attention mechanism. the hidden state sequence
+   [math: <semantics><mrow><mi>h</mi></mrow><annotation
+   encoding="application/x-tex">h</annotation></semantics> :math]
+   h has the same number of time-steps as the input,
+   [math: <semantics><mrow><mi>t</mi><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">t.</annotation></semantics> :math]
+   t. sometimes the encoder subsamples the input. if the encoder
+   subsamples the input by a factor
+   [math: <semantics><mrow><mi>s</mi></mrow><annotation
+   encoding="application/x-tex">s</annotation></semantics> :math]
+   s then
+   [math: <semantics><mrow><mi>h</mi></mrow><annotation
+   encoding="application/x-tex">h</annotation></semantics> :math]
+   h will have
+   [math: <semantics><mrow><mi>t</mi><mi
+   mathvariant="normal">/</mi><mi>s</mi></mrow><annotation
+   encoding="application/x-tex">t/s</annotation></semantics> :math]
+   t/s time-steps.
+
+   we can interpret ctc in the encoder-decoder framework. this is helpful
+   to understand the developments in encoder-decoder models that are
+   applicable to ctc and to develop a common language for the properties
+   of these models.
+
+   encoder: the encoder of a ctc model can be just about any encoder we
+   find in commonly used encoder-decoder models. for example the encoder
+   could be a multi-layer bidirectional id56 or a convolutional network.
+   there is a constraint on the ctc encoder that doesn   t apply to the
+   others. the input length cannot be sub-sampled so much that
+   [math: <semantics><mrow><mi>t</mi><mi
+   mathvariant="normal">/</mi><mi>s</mi></mrow><annotation
+   encoding="application/x-tex">t/s</annotation></semantics> :math]
+   t/s is less than the length of the output.
+
+   decoder: we can view the decoder of a ctc model as a simple linear
+   transformation followed by a softmax id172. this layer should
+   project all
+   [math: <semantics><mrow><mi>t</mi></mrow><annotation
+   encoding="application/x-tex">t</annotation></semantics> :math]
+   t steps of the encoder output
+   [math: <semantics><mrow><mi>h</mi></mrow><annotation
+   encoding="application/x-tex">h</annotation></semantics> :math]
+   h into the dimensionality of the output alphabet.
+
+   we mentioned earlier that ctc makes a conditional independence
+   assumption over the characters in the output sequence. this is one of
+   the big advantages that other encoder-decoder models have over
+   ctc         they can model the dependence over the outputs. however in
+   practice, ctc is still more commonly used in tasks like speech
+   recognition as we can partially overcome the conditional independence
+   assumption by including an external language model.
+
+practitioner   s guide
+
+   so far we   ve mostly developed a conceptual understanding of ctc. here
+   we   ll go through a few implementation tips for practitioners.
+
+   software: even with a solid understanding of ctc, the implementation is
+   difficult. the algorithm has several edge cases and a fast
+   implementation should be written in a lower-level programming language.
+   open-source software tools make it much easier to get started:
+     * baidu research has open-sourced [6]warp-ctc. the package is written
+       in c++ and cuda. the ctc id168 runs on either the cpu or
+       the gpu. bindings are available for torch, tensorflow and
+       [7]pytorch.
+     * tensorflow has built in [8]ctc loss and [9]ctc id125
+       functions for the cpu.
+     * nvidia also provides a gpu implementation of ctc in [10]cudnn
+       versions 7 and up.
+
+   numerical stability: computing the ctc loss naively is numerically
+   unstable. one method to avoid this is to normalize the
+   [math: <semantics><mrow><mi>  </mi></mrow><annotation
+   encoding="application/x-tex">\alpha</annotation></semantics> :math]
+        s at each time-step. the original publication has more detail on this
+   including the adjustments to the gradient. in practice this works well
+   enough for medium length sequences but can still underflow for long
+   sequences. a better solution is to compute the id168 in
+   log-space with the log-sum-exp trick. when computing the sum of two
+   probabilities in log space use the identity
+   [math:
+   <semantics><mrow><mi>log</mi><mo>(</mo><msup><mi>e</mi><mi>a</mi></msup
+   ><mo>+</mo><msup><mi>e</mi><mi>b</mi></msup><mo>)</mo><mo>=</mo><mi>max
+   </mi><mo>{</mo><mi>a</mi><mo
+   separator="true">,</mo><mi>b</mi><mo>}</mo><mo>+</mo><mi>log</mi><mo>(<
+   /mo><mn>1</mn><mo>+</mo><msup><mi>e</mi><mrow><mo>   </mo><mi
+   mathvariant="normal">   </mi><mi>a</mi><mo>   </mo><mi>b</mi><mi
+   mathvariant="normal">   </mi></mrow></msup><mo>)</mo></mrow><annotation
+   encoding="application/x-tex"> \log(e^a + e^b) = \max\{a, b\} + \log(1 +
+   e^{-|a-b|}) </annotation></semantics> :math]
+   log(ea+eb)=max{a,b}+log(1+e      a   b   ) most programming languages have a
+   stable function to compute
+   [math:
+   <semantics><mrow><mi>log</mi><mo>(</mo><mn>1</mn><mo>+</mo><mi>x</mi><m
+   o>)</mo></mrow><annotation encoding="application/x-tex">\log(1 +
+   x)</annotation></semantics> :math]
+   log(1+x) when
+   [math: <semantics><mrow><mi>x</mi></mrow><annotation
+   encoding="application/x-tex">x</annotation></semantics> :math]
+   x is close to zero. id136 should also be done in log-space using
+   the log-sum-exp trick.
+
+   id125: there are a couple of good tips to know about when
+   implementing and using the ctc id125.
+
+   the correctness of the id125 can be tested as follows.
+    1. run the id125 algorithm on an arbitrary input.
+    2. save the inferred output
+       [math: <semantics><mrow><mover
+       accent="true"><mrow><mi>y</mi></mrow><mo>  </mo></mover></mrow><anno
+       tation
+       encoding="application/x-tex">\bar{y}</annotation></semantics>
+       :math]
+       y   and the corresponding score
+       [math: <semantics><mrow><mover
+       accent="true"><mrow><mi>c</mi></mrow><mo>  </mo></mover><mi
+       mathvariant="normal">.</mi></mrow><annotation
+       encoding="application/x-tex">\bar{c}.</annotation></semantics>
+       :math]
+       c  .
+    3. compute the actual ctc score
+       [math: <semantics><mrow><mi>c</mi></mrow><annotation
+       encoding="application/x-tex">c</annotation></semantics> :math]
+       c for
+       [math: <semantics><mrow><mover
+       accent="true"><mrow><mi>y</mi></mrow><mo>  </mo></mover><mi
+       mathvariant="normal">.</mi></mrow><annotation
+       encoding="application/x-tex">\bar{y}.</annotation></semantics>
+       :math]
+       y  .
+    4. check that
+       [math: <semantics><mrow><mover
+       accent="true"><mrow><mi>c</mi></mrow><mo>  </mo></mover><mo>   </mo><m
+       i>c</mi></mrow><annotation encoding="application/x-tex">\bar{c}
+       \approx c</annotation></semantics> :math]
+       c     c with the former being no greater than the latter. as the beam
+       size increases the inferred output
+       [math: <semantics><mrow><mover
+       accent="true"><mrow><mi>y</mi></mrow><mo>  </mo></mover></mrow><anno
+       tation
+       encoding="application/x-tex">\bar{y}</annotation></semantics>
+       :math]
+       y   may change, but the two numbers should grow closer.
+
+   a common question when using a id125 decoder is the size of the
+   beam to use. there is a trade-off between accuracy and runtime. we can
+   check if the beam size is in a good range. to do this first compute the
+   ctc score for the inferred output
+   [math: <semantics><mrow><msub><mi>c</mi><mi>i</mi></msub><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">c_i.</annotation></semantics> :math]
+   ci   . then compute the ctc score for the ground truth output
+   [math: <semantics><mrow><msub><mi>c</mi><mi>g</mi></msub><mi
+   mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">c_g.</annotation></semantics> :math]
+   cg   . if the two outputs are not the same, we should have
+   [math:
+   <semantics><mrow><msub><mi>c</mi><mi>g</mi></msub><mo><</mo><msub><mi>c
+   </mi><mi>i</mi></msub><mi mathvariant="normal">.</mi></mrow><annotation
+   encoding="application/x-tex">c_g \lt c_i.</annotation></semantics>
+   :math]
+   cg   <ci   . if
+   [math:
+   <semantics><mrow><msub><mi>c</mi><mi>i</mi></msub><mo><</mo><mo><</mo><
+   msub><mi>c</mi><mi>g</mi></msub></mrow><annotation
+   encoding="application/x-tex">c_i << c_g</annotation></semantics> :math]
+   ci   <<cg    then the ground truth output actually has a higher id203
+   under the model and the id125 failed to find it. in this case a
+   large increase to the beam size may be warranted.
+
+  bibliographic notes
+
+   the ctc algorithm was first published by graves et al. in 2006. the
+   first experiments were on timit, a popular phoneme recognition
+   benchmark. chapter 7 of graves    thesis also gives a detailed treatment
+   of ctc.
+
+   one of the first applications of ctc to large vocabulary speech
+   recognition was by graves et al. in 2014. they combined a hybrid
+   dnn-id48 and a ctc trained model to achieve state-of-the-art results.
+   hannun et al. subsequently demonstrated state-of-the-art ctc based
+   id103 on larger benchmarks. a ctc model outperformed other
+   methods on an online handwriting recognition benchmark in 2007.
+
+   ctc has been used successfully in many other problems. some examples
+   are lip-reading from video, action recognition from video and keyword
+   detection in audio.
+
+   many extensions and improvements to ctc have been proposed. here are a
+   few. the sequence transducer discards the conditional independence
+   assumption made by ctc. as a consequence, the model allows the output
+   to be longer than the input. the gram-ctc model generalizes ctc to
+   marginalize over id165 output classes. other works have generalized
+   ctc or proposed similar algorithms to account for segmental structure
+   in the output.
+
+   the hidden markov model was developed in the 1960   s with the first
+   application to id103 in the 1970   s. for an introduction to
+   the id48 and applications to id103 see rabiner   s canonical
+   tutorial.
+
+   encoder-decoder models were developed in 2014. distill has an in-depth
+   guide to attention in encoder-decoder models.
+
+  acknowledgments
+
+   i   m especially grateful to the distill team for dramatically improving
+   the quality of this article. thanks to chris olah   s suggestions and
+   feedback, both the written and visual content of the article are
+   substantially better. thanks to shan carter for substantial
+   improvements to the figures, and thanks to ludwig schubert for help
+   with the distill template.
+
+   thanks to sanjeev satheesh, chris lengerich, dan jurafsky and the
+   anonymous reviewers for their feedback. i   m also very grateful to
+   andrew ng for feedback on the article and his support.
+
+  discussion and review
+
+   [11]review-1 anonymous
+   [12]review-2 anonymous
+
+  references
+
+    1. listen, attend and spell: a neural network for large vocabulary
+       conversational id103    [13][pdf]
+       chan, w., jaitly, n., le, q.v. and vinyals, o., 2016. icassp.
+    2. exploring neural transducers for end-to-end id103
+          [14][pdf]
+       battenberg, e., chen, j., child, r., coates, a., gaur, y., li, y.,
+       liu, h., satheesh, s., seetapun, d., sriram, a. and zhu, z., 2017.
+    3. large scale discriminative training of id48 for
+       id103
+       woodland, p. and povey, d.. computer speech & language, pp. 25--47.
+       academic press. [15]doi: 10.1006/csla.2001.0182
+    4. connectionist temporal classification : labelling unsegmented
+       sequence data with recurrent neural networks    [16][pdf]
+       graves, a., fernandez, s., gomez, f. and schmidhuber, j., 2006.
+       proceedings of the 23rd international conference on machine
+       learning, pp. 369--376. [17]doi: 10.1145/1143844.1143891
+    5. phone recognition on the timit database    [18][link]
+       lopes, c. and perdig  o, f., 2011. speech technologies, vol 1, pp.
+       285--302. [19]doi: 10.5772/17600
+    6. supervised sequence labelling with recurrent neural networks
+          [20][link]
+       graves, a., 2012. springer, vol 385. [21]doi:
+       10.1007/978-3-642-24797-2
+    7. towards end-to-end id103 with recurrent neural
+       networks    [22][pdf]
+       graves, a. and jaitly, n., 2014. proceedings of the 31st
+       international conference on machine learning (icml-14), vol 32(1),
+       pp. 1764--1772. [23]doi: 10.1145/1143844.1143891
+    8. deep speech: scaling up end-to-end id103    [24][pdf]
+       hannun, a.y., case, c., casper, j., catanzaro, b., diamos, g.,
+       elsen, e., prenger, r., satheesh, s., sengupta, s., coates, a. and
+       ng, a.y., 2014. , vol abs/1412.5.
+    9. a novel approach to on-line handwriting recognition based on
+       bidirectional id137    [25][pdf]
+       liwicki, m., graves, a., bunke, h. and schmidhuber, j., 2007.
+       proceedings - 9th int. conf. on document analysis and recognition,
+       vol 1, pp. 367--371. [26]doi: 10.1.1.139.5852
+   10. lipnet: end-to-end sentence-level lipreading    [27][pdf]
+       assael, y.m., shillingford, b., whiteson, s. and de freitas, n.,
+       2016.
+   11. connectionist temporal modeling for weakly supervised action
+       labeling    [28][pdf]
+       huang, d., fei-fei, l. and niebles, j.c., 2016. european conference
+       on id161, pp. 137--153. [29]doi:
+       10.1007/978-3-319-46493-0
+   12. an application of recurrent neural networks to discriminative
+       keyword spotting    [30][link]
+       fern  ndez, s., graves, a. and schmidhuber, j., 2007. the 17th
+       international conference on id158s, pp.
+       220--229. [31]doi: 10.1007/978-3-540-74695-9_23
+   13. an end-to-end architecture for keyword spotting and voice activity
+       detection    [32][pdf]
+       lengerich, c. and hannun, a., 2016. nips 2016 end-to-end learning
+       for speech and audio processing workshop.
+   14. sequence transduction with recurrent neural networks    [33][pdf]
+       graves, a., 2012. [34]doi: 10.1145/2661829.2661935
+   15. gram-ctc: automatic unit selection and target decomposition for
+       sequence labelling    [35][pdf]
+       liu, h., zhu, z., li, x. and satheesh, s., 2017. proceedings of the
+       34th international conference on machine learning.
+   16. sequence modeling via segmentations    [36][pdf]
+       wang, c., wang, y., huang, p., mohamed, a., zhou, d. and deng, l.,
+       2017.
+   17. segmental recurrent neural networks    [37][pdf]
+       kong, l., dyer, c. and smith, n.a., 2016. iclr. [38]doi:
+       10.21437/interspeech.2016-40
+   18. tutorial on id48 and selected applications in
+       id103    [39][link]
+       rabiner, l.r., 1989. proceedings of the ieee, vol 77(2), pp.
+       p257--286. [40]doi: 10.1109/5.18626
+   19. learning phrase representations using id56 encoder-decoder for
+       id151    [41][pdf]
+       cho, k., van merrienboer, b., gulcehre, c., bahdanau, d., bougares,
+       f., schwenk, h. and bengio, y., 2014. emnlp. [42]doi:
+       10.3115/v1/d14-1179
+   20. sequence to sequence learning with neural networks    [43][pdf]
+       sutskever, i., vinyals, o. and le, q.v., 2014. advances in neural
+       information processing systems.
+   21. attention and augmented recurrent neural networks    [44][link]
+       olah, c. and carter, s., 2016. distill. [45]doi:
+       10.23915/distill.00001
+
+  updates and corrections
+
+   if you see mistakes or want to suggest changes, please [46]create an
+   issue on github.
+
+  reuse
+
+   diagrams and text are licensed under creative commons attribution
+   [47]cc-by 4.0 with the [48]source available on github, unless noted
+   otherwise. the figures that have been reused from other sources don   t
+   fall under this license and can be recognized by a note in their
+   caption:    figure from       .
+
+  citation
+
+   for attribution in academic contexts, please cite this work as
+hannun, "sequence modeling with ctc", distill, 2017.
+
+   bibtex citation
+@article{hannun2017sequence,
+  author = {hannun, awni},
+  title = {sequence modeling with ctc},
+  journal = {distill},
+  year = {2017},
+  note = {https://distill.pub/2017/ctc},
+  doi = {10.23915/distill.00008}
+}
+
+references
+
+   1. https://distill.pub/rss.xml
+   2. http://stanford.edu/~awni/
+   3. http://cs.stanford.edu/
+   4. https://doi.org/10.23915/distill.00008
+   5. https://gist.github.com/awni/56369a90d03953e370f3964c826ed4b0
+   6. https://github.com/baidu-research/warp-ctc
+   7. https://github.com/awni/warp-ctc
+   8. https://www.tensorflow.org/api_docs/python/tf/nn/ctc_loss
+   9. https://www.tensorflow.org/api_docs/python/tf/nn/ctc_beam_search_decoder
+  10. https://developer.nvidia.com/cudnn
+  11. https://github.com/distillpub/post--ctc/issues/13
+  12. https://github.com/distillpub/post--ctc/issues/14
+  13. http://arxiv.org/pdf/1508.01211.pdf
+  14. http://arxiv.org/pdf/1707.07413.pdf
+  15. https://doi.org/10.1006/csla.2001.0182
+  16. ftp://ftp.idsia.ch/pub/juergen/icml2006.pdf
+  17. https://doi.org/10.1145/1143844.1143891
+  18. https://www.intechopen.com/books/speech-technologies/phoneme-recognition-on-the-timit-database/
+  19. https://doi.org/10.5772/17600
+  20. http://link.springer.com/10.1007/978-3-642-24797-2
+  21. https://doi.org/10.1007/978-3-642-24797-2
+  22. http://jmlr.org/proceedings/papers/v32/graves14.pdf
+  23. https://doi.org/10.1145/1143844.1143891
+  24. http://arxiv.org/pdf/1412.5567.pdf
+  25. https://www.cs.toronto.edu/~graves/icdar_2007.pdf
+  26. https://doi.org/10.1.1.139.5852
+  27. http://arxiv.org/pdf/1611.01599.pdf
+  28. http://arxiv.org/pdf/1607.08584.pdf
+  29. https://doi.org/10.1007/978-3-319-46493-0
+  30. http://link.springer.com/10.1007/978-3-540-74695-9_23
+  31. https://doi.org/10.1007/978-3-540-74695-9_23
+  32. http://arxiv.org/pdf/1611.09405.pdf
+  33. http://arxiv.org/pdf/1211.3711.pdf
+  34. https://doi.org/10.1145/2661829.2661935
+  35. http://arxiv.org/pdf/1703.00096.pdf
+  36. http://arxiv.org/pdf/1702.07463.pdf
+  37. http://arxiv.org/pdf/1511.06018.pdf
+  38. https://doi.org/10.21437/interspeech.2016-40
+  39. http://ieeexplore.ieee.org/abstract/document/18626/
+  40. https://doi.org/10.1109/5.18626
+  41. http://arxiv.org/pdf/1406.1078.pdf
+  42. https://doi.org/10.3115/v1/d14-1179
+  43. http://arxiv.org/pdf/1409.3215.pdf
+  44. http://distill.pub/2016/augmented-id56s
+  45. https://doi.org/10.23915/distill.00001
+  46. https://github.com/distillpub/post--ctc/issues/new
+  47. https://creativecommons.org/licenses/by/4.0/
+  48. https://github.com/distillpub/post--ctc

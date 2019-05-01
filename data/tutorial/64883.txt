@@ -1,0 +1,597 @@
+   #[1]han xiao tech blog - deep learning, nlp, ai [2]han xiao tech blog -
+   deep learning, nlp, ai
+
+   [3]logo
+     * [4]blog
+     * [5]about
+     * [6]archive
+     * [7]subscribe
+     * [8]linkedin
+     * [9]twitter
+     * [10]github
+
+building cross-lingual end-to-end product search with tensorflow
+
+   jan 10, 2018 by     logo  [11]han xiao - ex senior research scientist @
+   zalando research
+          29 min read
+
+background
+
+   product search is one of the key components in an online retail store.
+   essentially, you need a system that matches a text query with a set of
+   products in your store. a good product search can understand user   s
+   query in any language, retrieve as many relevant products as possible,
+   and finally present the result as a list, in which the preferred
+   products should be at the top, and the irrelevant products should be at
+   the bottom.
+
+   unlike text retrieval (e.g. google web search), products are structured
+   data. a product is often described by a list of key-value pairs, a set
+   of pictures and some free text. in the developers    world, [12]apache
+   solr and [13]elasticsearch are known as de-facto solutions for
+   full-text search, making them a top contender for building e-commerce
+   product search.
+
+   at the core, solr/elasticsearch is a symbolic information retrieval
+   (ir) system. mapping query and document to a common string space is
+   crucial to the search quality. this mapping process is an nlp pipeline
+   implemented with [14]lucene analyzer. in this post, i will reveal some
+   drawbacks of such a symbolic-pipeline approach, and then present an
+   end-to-end way to build a product search system from query logs using
+   tensorflow. this deep learning based system is less prone to spelling
+   errors, leverages underlying semantics better, and scales out to
+   multiple languages much easier.
+
+table of content
+
+     * [15]recap symbolic approach for product search
+     * [16]pain points of symbolic ir system
+     * [17]neural ir system
+     * [18]symbolic vs. neural ir system
+     * [19]neural network architecture
+     * [20]training and evaluation scheme
+     * [21]qualitative results
+     * [22]summary
+
+recap symbolic approach for product search
+
+   let   s first do a short review of the classic approach. typically, an
+   information retrieval system can be divided into three tasks: indexing,
+   parsing and matching. as an example, the next figure illustrates a
+   simple product search system:
+   [6bc9332f.png]
+    1. indexing: storing products in a database with attributes as keys,
+       e.g. brand, color, category;
+    2. parsing: extracting attribute terms from the input query, e.g. red
+       shirt -> {"color": "red", "category": "shirt"};
+    3. matching: filtering the product database by attributes.
+
+   if there is no attribute found in the query, then the system fallbacks
+   to exact string matching, i.e. searching every possible occurrence in
+   the database. note that, parsing, and matching must be done for each
+   incoming query, whereas indexing can be done less frequently depending
+   on the stock update speed.
+
+   many existing solutions such as apache solr and elasticsearch follow
+   this simple idea, except they employ more sophisticated algorithms
+   (e.g. lucene) for these three tasks. thanks to these open-source
+   projects many e-commerce businesses are able to build product search on
+   their own and serve millions of requests from customers.
+
+symbolic ir system
+
+   note, at the core, solr/elasticsearch is a symbolic ir system that
+   relies on the effective string representation of the query and product.
+   by parsing or indexing, the system knows which tokens in the query or
+   product description are important. these tokens are the primitive
+   building blocks for matching. extracting important tokens from the
+   original text is usually implemented as a nlp pipeline, consisting of
+   id121, lemmatization, id147, acronym/synonym
+   replacement, named-entity recognition and id183.
+
+   formally, given a query $q\in \mathcal{q}$ and a product
+   $p\in\mathcal{p}$, one can think the nlp pipeline as a predefined
+   function that maps from $\mathcal{q}$ or $\mathcal{p}$ to a common
+   string space $\mathcal{s}$, i.e. $f: \mathcal{q}\mapsto \mathcal{s}$ or
+   $g: \mathcal{p}\mapsto \mathcal{s}$, respectively. for the matching
+   task, we just need a metric $m: \mathcal{s} \times \mathcal{s} \mapsto
+   [0, +\infty)$ and then evaluate $m\left(f(q),g(p)\right)$, as
+   illustrated in the figure below.
+   [399488d3.png]
+
+pain points of symbolic ir system
+
+   if you are a machine learning enthusiast who believes everything should
+   be learned from data, you must have tons of questions about the last
+   figure. to name a few:
+     * why are $f$ and $g$ predefined? why can   t we learn $f$ and $g$ from
+       data?
+     * why is $\mathcal{s}$ a string space? why can   t it be a vector
+       space?
+     * why is $m$ a string/key matching function? why can   t we use more
+       well-defined math function, e.g. euclidean distance, cosine
+       function? wait, why don   t we just learn $m$?
+
+   in fact, these questions reveal two pain points of a symbolic ir
+   system.
+
+1. nlp pipeline is fragile and doesn   t scale out to multiple languages
+
+   the nlp pipeline in solr/elasticsearch is based on the lucene analyzer
+   class. a simple analyzer such as standardanalyzer would just split the
+   sequence by whitespace and remove some stopwords. quite often you have
+   to extend it by adding more and more functionalities, which eventually
+   results in a pipeline as illustrated in the figure below.
+   [c37a7fd4.png]
+
+   while it looks legit, my experience is that such nlp pipeline suffers
+   from the following drawbacks:
+     * the system is fragile. as the output of every component is the
+       input of the next, a defect in the upstream component can easily
+       break down the whole system. for-example,can   yourtoken izer split
+       thiscorrectly   
+     * dependencies between components can be complicated. a component can
+       take from and output to multiple components, forming a directed
+       acyclic graph. consequently, you may have to introduce some
+       asynchronous mechanisms to reduce the overall blocking time.
+     * it is not straightforward to improve the overall search quality. an
+       improvement in one or two components does not necessarily improve
+       the end-user search experience.
+     * the system doesn   t scale-out to multiple languages. to enable
+       cross-lingual search, developers have to rewrite those
+       language-dependent components in the pipeline for every language,
+       which increases the maintenance cost.
+
+2. symbolic system does not understand semantics without hard coding
+
+   a good ir system should understand trainer is sneaker by using some
+   semantic knowledge. no one likes hard coding this knowledge, especially
+   you machine learning guys. unfortunately, it is difficult for
+   solr/elasticsearch to understand any acronym/synonym unless you
+   implement [23]synonymfilter class, which is basically a rule-based
+   filter. this severely restricts the generalizability and scalability of
+   the system, as you need someone to maintain a hard-coded
+   language-dependent lexicon. if one can represent query/product by a
+   vector in a space learned from actual data, then synonyms and acronyms
+   could be easily found in the neighborhood without hard coding.
+
+neural ir system
+
+   with aforementioned problems in mind, my motivation is twofold:
+     * eliminate the nlp pipeline to make the system more robust and
+       scalable;
+     * find a space for query and product that can better represent
+       underlying semantics.
+
+   the next figure illustrates a neural information retrieval framework,
+   which looks pretty much the same as its symbolic counterpart, except
+   that the nlp pipeline is replaced by a deep neural network and the
+   matching job is done in a learned common space. now $f$ serves as a
+   query encoder, $g$ serves as a product encoder.
+   [dd4c4faa.png]
+
+end-to-end model training
+
+   there are several ways to train a neural ir system. one of the most
+   straightforward (but not necessarily the most effective) ways is
+   end-to-end learning. namely, your training data is a set of
+   query-product pairs feeding on the top-right and top-left blocks in the
+   last figure. all the other blocks such as $f$, $g$, $m$ and
+   $\mathcal{s}$ are learned from data. depending on the engineering
+   requirements or resource limitations, one can also fix or pre-train
+   some of the components.
+
+where do query-product pairs come from?
+
+   to train a neural ir system in an end-to-end manner, your need some
+   associations between query and product such as the query log. this log
+   should contain what products a user interacted with (click, add to
+   wishlist, purchase) after typing a query. typically, you can fetch this
+   information from the query/event log of your system. after some work on
+   segmenting (by time/session), cleaning and aggregating, you can get
+   pretty accurate associations. in fact, any user-generated text can be
+   good association data. this includes comments, product reviews, and
+   id104 annotations. the next figure shows an example of what
+   german and british users clicked after searching for ananas and
+   pineapple on zalando, respectively.
+   [ecdd3fe7.png]
+
+   increasing the diversity of training data source is beneficial to a
+   neural ir system, as you certainly want the system to generalize more
+   and not to mimic the behavior of the symbolic counterpart. on the
+   contrary, if your only data source is the query log of a symbolic ir
+   system, then your neural ir system is inevitably biased. the
+   performance of your final system highly depends on the ability of the
+   symbolic system. for example, if your current symbolic system doesn   t
+   correct spell mistakes and returns nothing when user types adidaas,
+   then you won   t find any product associated with adidaas from the query
+   log. as a consequence, your neural ir system is unlikely to learn the
+   ability of spell checking.
+
+   in that sense, we are    id64    the symbolic ir system to build a
+   neural ir system. given enough training data, we hope that some
+   previously hard-coded rules or manually coded functions can be picked
+   up and generalized by deep neural networks.
+
+what about negative query-product pairs?
+
+   at some point, you will probably need negative query-product pairs to
+   train a neural ir system more effectively. in general, negative means
+   that a product is irrelevant to the query. a straightforward way is
+   just random sampling all products, hoping that no positive product gets
+   accidentally sampled. it is easy to implement and actually not a bad
+   idea in practice. more sophisticated solutions could be collecting
+   those products that generate impressions on customers yet not receive
+   any clicks as negative ones. this requires some collaborations between
+   you, the frontend team and the logging team, making sure those no-click
+   items are really uninterested to users, not due to screen resolution,
+   lazy loading, etc.
+
+   if you are looking for a more formal and sounding solution, then
+   positive-unlabeled learning (pu learning) could be interesting to you.
+   instead of relying on the heuristics for identifying negative data, pu
+   learning regards unlabeled data as negative data with smaller weights.
+   [24]   positive-unlabeled learning with non-negative risk estimator    is a
+   nice paper about the unbiased pu learning published in nips 2017.
+
+symbolic vs. neural ir system
+
+   before i dive into details, let   s take a short break. as you can see i
+   spent quite some effort on explaining symbolic and neural ir systems.
+   this is because the symbolic system is such a classic way to do ir, and
+   developers get used to it. with the help of apache solr, elasticsearch
+   and lucene, medium and small e-commerce businesses are able to build
+   their own product search in a short time. it is the de-facto solution.
+   on the other hand, neural ir is a new concept emerging just recently.
+   there are not so many off-the-shelf packages available. plus, training
+   a neural ir system requires quite some data. the next table summarizes
+   the pros and cons of two systems.
+   symbolic ir system neural ir system
+   pros efficient in query-time;
+   straightforward to implement;
+   results are interpretable;
+   many off-the-shelf packages. automatic;
+   resilient to noise;
+   scale-out easily;
+   requires little domain knowledge.
+   cons fragile;
+   hard-coded knowledge;
+   high maintenance costs. less efficient in query-time;
+   hard to add business rules;
+   requires a lot of data.
+
+   this is not a team symbol or team neural choice. both systems have
+   their own advantages and can complement each other pretty well.
+   therefore, a better solution would be combining these two systems in a
+   way so that we can enjoy all advantages from both sides.
+
+neural network architecture
+
+   the next figure illustrates the architecture of the neural network. the
+   proposed architecture is composed of multiple encoders, a metric layer,
+   and a loss layer. first, input data is fed to the encoders which
+   generate vector representations. note that, product information is
+   encoded by an image encoder and an attribute encoder. in the metric
+   layer, we compute the similarity of a query vector with an image vector
+   and an attribute vector, respectively. finally, in the loss layer, we
+   compute the difference of similarities between positive and negative
+   pairs, which is used as the feedback to train encoders via
+   id26.
+   [a9cb66d6.png]
+
+   in the last figure, i labeled one possible model for each component,
+   but the choices are quite open. for the sake of clarity, i will keep
+   the model as simple as possible and briefly go through each component.
+
+query encoder
+
+   here we need a model that takes in a sequence and output a vector.
+   besides the content of a sequence, the vector representation should
+   also encode language information and be resilient to misspellings. the
+   character-id56 (e.g lstm, gru, sru) model is a good choice. by feeding
+   id56 character by character, the model becomes resilient to misspelling
+   such as adding/deleting/replacing characters. the misspelled queries
+   would result in a similar vector representation as the genuine one.
+   moreover, as european languages (e.g. german and english) share some
+   unicode characters, one can train queries from different languages in
+   one id56 model. to distinguish the words with the same spelling but
+   different meanings in two languages, such as german rot (color red) and
+   english rot, one can prepend a special character to indicate the
+   language of the sequence, e.g.          rot and          rot.
+
+   using characters instead of words as model input means that your system
+   is unlikely to meet an out-of-vocabulary word. any input will be
+   encoded into a vector representation. consequently, the system has a
+   good recall rate, as it will always return some result regardless the
+   sanity of the input. of course, the result could be meaningless.
+   however, if a customer is kind and patient enough to click on one
+   relevant product, the system could immediately pick up this signal from
+   the query log as a positive association, retrain the model and provide
+   better results in the next round. in that sense, we close the loop
+   between feedback to users and learning from users.
+
+   note that, a query can be compositional. it may contain multiple words
+   and describe multiple attributes, such as nike sneaker (brand +
+   category) and nike air max (brand + product name). unfortunately, it is
+   difficult for a plain character id56 to capture the high-order
+   dependency and concept, as its resolution is limited to a single
+   character. to solve this problem, i stack multiple dilated recurrent
+   layers with hierarchical dilations to construct a [25]dilated recurrent
+   neural networks, which learns temporal dependencies of different scales
+   at different layers. the next figure illustrates a three-layer
+   dilatedid56 with dilation up to 4.
+   [b98f6ef1.png]
+
+   an implementation of dilated id56 using static_id56 api can be found
+   [26]here. the query representation is the last output from dilated id56,
+   which can be obtained via:
+1
+2
+3
+4
+
+num_hidden = 148  # 128+20 dims, this will become clear in the sequel
+dilations = [1,2,4,8]
+encoder_cell = [lstmcell(num_hidden) for _ in range(len(dilations))]
+q_r = get_last_output_did56(input=x_query, cells=encoder_cell, dilations=dilation
+s)
+
+   to speed up training, one can also replace tensorflow   s lstmcell by
+   recently proposed [27]simple recurrent unit (sru). according to the
+   paper, sru is 5-10x faster than an optimized lstm implementation. the
+   code can be found [28]here.
+
+   if you are interested in extending query encoder further, such as
+   adding a more complicated high-order dependency or integrating side
+   information in each recursion step, please read my blog post on
+   [29]   why i use raw_id56 instead of dynamic_id56 in tensorflow and so
+   should you   .
+
+image encoder
+
+   the image encoder rests on purely visual information. the rgb image
+   data of a product is fed into a multi-layer convolutional neural
+   network based on the resnet architecture, resulting in an image vector
+   representation in 128-dimensions.
+
+attribute encoder
+
+   the attributes of a product can be combined into a sparse one-hot
+   encoded vector. it is then supplied to a four-layer, fully connected
+   deep neural network with steadily diminishing layer size. activation
+   was rendered nonlinear by standard relus, and drop-out is applied to
+   address overfitting. the output yields attribute vector representation
+   in 20 dimensions.
+   some readers may question the necessarity of having image and attribute
+   encoders at the same time. isn   t an attribute encoder enough? if you
+   think about search queries in the e-commerce context, especially in the
+   fashion e-commerce i   m working in, queries can be loosely divided into
+   two categories:    attribute    queries e.g. nike red shoes, of which all
+   words are already presented in the product database as attributes; and
+      visual    queries e.g. tshirt logo on back, typical berlin that express
+   more visual or abstract intent from user, and those words never show up
+   in the product database. the former can be trained with attribute
+   encoder only, whereas the latter requires image encoder for effective
+   training. having both encoders allows some knowledge transfer between
+   them during the training time, which improves the overall performance.
+
+metric & loss layer
+
+   after a query-product pair goes through all three encoders, one can
+   obtain a vector representation $q$ of the query, an image
+   representation $u$ and an attribute representation $v$ of the product.
+   it is now the time to squeeze them into a common latent space. in the
+   metric layer, we need a similarity function $m$ which gives higher
+   value to the positive pair than the negative pair, i.e. $m(q, u^+, v^+)
+   > m(q, u^-, v^-)$. the absolute value of $m(q, u^+, v^+)$ does not
+   bother us too much. we only care about the relative distances between
+   positive and negative pairs. in fact, a larger difference is better for
+   us, as a clearer separation between positive and negative pairs can
+   enhance the generalization ability of the system. as a consequence, we
+   need a id168 $\ell$ which is inversely proportional to the
+   difference between $m(q, u^+, v^+)$ and $m(q, u^-, v^-)$. by splitting
+   $q$ (148-dim) into $q^{\mathrm{img}}$ (128-dim) and $q^{\mathrm{attr}}$
+   (20-dim), we end up minimizing the following id168:
+   $${\begin{aligned}&\sum_{\tiny\begin{array}{c} 0<i<n\\ 0<j<|q_{i}^{+}|
+   \\ 0<k<|q_{i}^{-}|\end{array}}\lambda\ell\left(m(q^{\mathrm{img}}_i,
+   u_{i,j}^{+}), m(q^{\mathrm{img}}_i, u_{i,k}^{-})\right) \\ &+
+   (1-\lambda)\ell\left(m(q^{\mathrm{attr}}_i, v_{i,j}^{+}),
+   m(q^{\mathrm{attr}}_i, v_{i,k}^{-})\right),\end{aligned}}$$
+
+   where $n$ is the total number of queries. $|q_{i}^{+}|$ and
+   $|q_{i}^{-}|$ are the number of positive and negative products
+   associated with query $i$, respectively. hyperparameter $\lambda$
+   trades off between image information and attribute information. for
+   functions $\ell$ and $g$, the options are:
+     * id168 $\ell$: logistic, exponential, hinge loss, etc.
+     * metric function $m$: cosine similarity, euclidean distance (i.e.
+       $\ell_2$-norm), mlp, etc.
+
+   to understand how it ends up with the above id168, i strongly
+   recommend you read my other blog post on [30]   optimizing
+   contrastive/rank/triplet loss in tensorflow for neural information
+   retrieval   . it also explains the metric and loss layer implementation
+   in details.
+
+id136
+
+   for a neural ir system, doing id136 means serving search requests
+   from users. since products are updated regularly (say once a day), we
+   can pre-compute the image representation and attribute representation
+   for all products and store them. during the id136 time, we first
+   represent user input as a vector using query encoder; then iterate over
+   all available products and compute the metric between the query vector
+   and each of them; finally, sort the results. depending on the stock
+   size, the metric computation part could take a while. fortunately, this
+   process can be easily parallelized.
+
+training and evaluation scheme
+
+   the query-product dataset is partitioned into four sets as illustrated
+   in the next figure.
+   [6d0746b3.png]
+
+   data in the orange block is used to train the model, and the evaluation
+   is performed on test i set. in this way, the model can   t observe any
+   query or product used for training during the test time. for
+   evaluation, we feed the query to the network and return a sorted list
+   of test products. then we check how groundtruth products are ranked in
+   the results. some widely-used measurements include: mean average
+   precision (map), mean reciprocal rank (mrr), precision@1, precision@1%,
+   negative discounted cumulative gain (ndcg) etc. a comprehensive
+   explanation of these metrics can be found [31]in this slides. with
+   [32]estimator and [33]data api in tensorflow 1.4, you can easily define
+   the training and evaluation procedure as follows:
+1
+2
+3
+4
+
+model = tf.estimator.estimator(model_fn=neural_ir, params=params)
+train_spec = tf.estimator.trainspec(input_fn=lambda: input_data.input_fn(modekey
+s.train))
+eval_spec = tf.estimator.evalspec(input_fn=lambda: input_data.input_fn(modekeys.
+eval))
+tf.estimator.train_and_evaluate(model, train_spec, eval_spec)
+
+   test ii or test iii sets can be also used for evaluation to check how
+   the model generalizes on unseen products or unseen queries,
+   respectively.
+
+qualitative results
+
+   here i will not present any quantitative result. after all, it is a
+   blog, not an academic paper and the goal is mainly to introduce this
+   new idea of neural ir system. so let   s look at some results that are
+   easy to your eyes. this actually poses a good question: how can you
+   tell an ir system is (not) working by visual inspection only?
+
+   personally, i call an ir system    working    if it meets these two basic
+   conditions:
+     * it understands singleton query described by a basic concept, e.g.
+       brand, color, category;
+     * it understands compositional query described by multiple concepts,
+       e.g. brand + color, brand + color + category + product name.
+
+   if it fails to meet these two conditions, then i don   t bother to check
+   fancy features such as spell-checking and cross-lingual. enough said,
+   here are some search results.
+                           query & top-20 results
+            nike
+   [eb31253e.png]
+            schwarz (black)
+   [318f4a85.png]
+            nike schwarz
+   [a7b2ccf7.png]
+            nike schwarz shirts
+   [755d08d2.png]
+            nike schwarz shirts langarm (long-sleeved)
+   [3a30e440.png]
+            addidsa (misspelled brand)
+   [b2fb3a2a.png]
+            addidsa trosers (misspelled brand and category)
+   [c876f756.png]
+            addidsa trosers blue shorrt (misspelled brand and category and
+   property)
+   [3b486353.png]
+            striped shirts woman
+   [559e2c5f.png]
+            striped shirts man
+   [3d7a53b7.png]
+            kleider (dress)
+   [ba08c560.png]
+                     kleider flowers (mix-language)
+   [0c60e120.png]
+                     kleid ofshoulder (mix-language & misspelled off-shoulder)
+   [9d217d91.png]
+
+   here i demonstrated (cherry-picked) some results for different types of
+   query. it seems that the system goes in the right direction. it is also
+   exciting to see that the neural ir system is able to correctly
+   interpret named-entity, spelling errors and multilinguality without any
+   nlp pipeline or hard-coded rule. however, one can also notice that some
+   top ranked products are not relevant to the query, which leaves quite
+   some room for improvement.
+
+   speed-wise, the id136 time is about two seconds per query on a
+   quad-core cpu for 300,000 products. one can further improve the
+   efficiency by using model compression techniques, approximate nearest
+   neighbour search, e.g. [34]faiss (facebook), [35]nmslib (leonid
+   boytsov), and [36]annoy (spotify).
+
+summary
+
+   if you are a search developer who is building a symbolic ir system with
+   solr/elasticsearch/lucene, this post should make you aware of the
+   drawbacks of such a system. it should also answer your what? why? and
+   how? questions regarding a neural ir system. comparing to the symbolic
+   counterpart, the new system is more resilient to the input noise and
+   requires little domain knowledge about the products and languages.
+   nonetheless, one should not take it as a team symbol or team neural
+   kind of choice. both systems have their own advantages and can
+   complement each other pretty well. a better solution would be combining
+   these two systems in a way that we can enjoy all advantages from both
+   sides.
+
+   some implementation details and tricks are omitted here but can be
+   found in my other posts. i strongly recommend readers to continue with
+   the following posts:
+     * [37]   optimizing contrastive/rank/triplet loss in tensorflow for
+       neural information retrieval   
+     * [38]   why i use raw_id56 instead of dynamic_id56 in tensorflow and so
+       should you   
+
+   last but not least, the open-source project [39]matchzoo contains many
+   state-of-the-art neural ir algorithms. in addition to product search,
+   you may find its application in conversational chatbot, question-answer
+   system.
+
+   [40]      teach machine to com...[41]use hparams...     
+
+      2017 - 2019 [42]han xiao. opinions are solely my own.
+
+references
+
+   1. https://hanxiao.github.io/atom.xml
+   2. https://hanxiao.github.io/atom.xml
+   3. https://hanxiao.github.io/
+   4. https://hanxiao.github.io/
+   5. https://hanxiao.github.io/about/
+   6. https://hanxiao.github.io/archives/
+   7. https://hanxiao.github.io/subscribe/
+   8. https://de.linkedin.com/in/hxiao87
+   9. https://twitter.com/hxiao
+  10. https://github.com/hanxiao
+  11. https://research.zalando.com/welcome/team/han-xiao/
+  12. http://lucene.apache.org/solr/
+  13. https://www.elastic.co/
+  14. http://lucene.apache.org/core/6_2_1/core/org/apache/lucene/analysis/analyzer.html
+  15. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#recap-symbolic-approach-for-product-search
+  16. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#pain-points-of-symbolic-ir-system
+  17. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#neural-ir-system
+  18. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#symbolic-vs-neural-ir-system
+  19. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#neural-network-architecture
+  20. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#training-and-evaluation-scheme
+  21. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#qualitative-results
+  22. https://hanxiao.github.io/2018/01/10/build-cross-lingual-end-to-end-product-search-using-tensorflow/#summary
+  23. https://lucene.apache.org/core/6_6_1/analyzers-common/org/apache/lucene/analysis/synonym/synonymfilter.html
+  24. https://arxiv.org/pdf/1703.00593.pdf
+  25. https://papers.nips.cc/paper/6613-dilated-recurrent-neural-networks.pdf
+  26. https://github.com/hanxiao/tf-best-practice/blob/master/utils/dilatedid56.py
+  27. https://arxiv.org/pdf/1709.02755.pdf
+  28. https://github.com/hanxiao/tf-best-practice/blob/master/utils/sru.py
+  29. https://hanxiao.github.io/2017/08/16/why-i-use-raw-id56-instead-of-dynamic-id56-in-tensorflow-so-should-you-0/
+  30. https://hanxiao.github.io/2017/11/08/optimizing-contrastive-rank-triplet-loss-in-tensorflow-for-neural/
+  31. https://people.cs.umass.edu/~jpjiang/cs646/03_eval_basics.pdf
+  32. https://www.tensorflow.org/api_docs/python/tf/estimator
+  33. https://www.tensorflow.org/api_docs/python/tf/keras/datasets
+  34. https://github.com/facebookresearch/faiss
+  35. https://github.com/searchivarius/nmslib
+  36. https://github.com/spotify/annoy
+  37. https://hanxiao.github.io/2017/11/08/optimizing-contrastive-rank-triplet-loss-in-tensorflow-for-neural/
+  38. https://hanxiao.github.io/2017/08/16/why-i-use-raw-id56-instead-of-dynamic-id56-in-tensorflow-so-should-you-0/
+  39. https://github.com/faneshion/matchzoo
+  40. https://hanxiao.github.io/2018/04/21/teach-machine-to-comprehend-text-and-answer-question-with-tensorflow/
+  41. https://hanxiao.github.io/2017/12/21/use-hparams-and-yaml-to-better-manage-hyperparameters-in-tensorflow/
+  42. https://hanxiao.github.io/

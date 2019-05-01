@@ -1,0 +1,357 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]become a member[7]sign in[8]get started
+     __________________________________________________________________
+
+my thoughts on skip-thoughts
+
+   [9]go to the profile of sanyam agarwal
+   [10]sanyam agarwal (button) blockedunblock (button) followfollowing
+   dec 31, 2017
+
+   as part of a project i was working on, i had to read the research paper
+   [11]skip-thought vectors by kiros et. al with a magnifying glass and
+   also [12]implement it in pytorch. in this process, i learnt quite a lot
+   about why skip-thought works so well despite being very straightforward
+   in principle. in this blog, i would like to share what goes behind the
+   scenes in skip-thoughts         small things that actually make it work.
+
+   my github implementation: [13]https://github.com/sanyam5/skip-thoughts
+
+prerequisites
+
+   this blog assumes basic familiarity with neural networks and back
+   propagation. if you are not familiar with these terms i strongly
+   suggest reading about them from online resources         [14]video: neural
+   network , [15]video: back propagation, [16]video: id119,
+   [17]book: deep learning, [18]blog by christopher olah
+
+basics
+
+   if you   ve already read the skip-thoughts paper you may skip this part.
+
+   q. so, what the hell is this skip-thought or thought vector thingy?
+
+      skip-thought vectors    or simply    skip-thoughts    is name given to a
+   simple neural networks model for learning fixed length representations
+   of sentences in any natural language without any labelled data or
+   supervised learning. the only supervision/training signal skip-thoughts
+   uses is the ordering of sentences in a natural language corpus.
+
+   q. why are fixed size representations of sentences needed?
+
+   fixed representations make it easy to replace any sentence with an
+   equivalent vector of numbers. this makes the process of understanding,
+   acting upon or responding to natural language mathematically
+   straightforward. some examples of such tasks are
+     * the task of telling whether two sentences are semantically similar
+       in meaning.
+     * the task of classifying whether a given statement is positive or
+       negative.
+
+   one strategy is to learn fixed length representations of individual
+   words as done in [19]id97. one famous result from id97 is the
+   following:
+
+   [king] -[man] +[woman]     [queen]
+
+   where [x] represents the vector representation of the word x. but the
+   order of words in the sentence matters as well            ram hit shyam    and
+      shyam hit ram    are two different sentences. just having word
+   representations of the constituent words leaves the problem of making
+   sense of the order to the user.
+
+   a better way is to have a neural network also take care of the order of
+   words in a complete sentence which is exactly what skip-thoughts does.
+   but, why stop at sentences? why not parse complete paragraphs or
+   documents? true, parsing complete paragraphs could generate even better
+   representations. but in skip-thoughts we settle for a middle ground
+   between words and paragraphs.
+
+   model
+
+   skip-thoughts model has three parts:-
+   [1*fotfcow7eaapb4r9ge3m1a.png]
+   skip thoughts model overview
+
+   skip-thoughts model has three parts:-
+     * encoder network: takes the sentence x(i) at index i and generates a
+       fixed length representation z(i). this is a recurrent network
+       (generally gru or lstm) that takes the words in a sentence
+       sequentially.
+     * previous decoder network: takes the embedding z(i) and    tries    to
+       generate the sentence x(i-1). this also is a recurrent network
+       (generally gru or lstm) that generates the sentence sequentially.
+     * next decoder network: takes the embedding z(i) and    tries    to
+       generate the sentence x(i+1). again a recurrent network similar to
+       the previous decoder network.
+
+   q. how is it trained?
+
+   skip-thoughts uses the order of the sentences to    self-supervise   
+   itself. the underlying assumption here is that whatever, in the content
+   of a sentence, leads to a better reconstruction of the neighbouring
+   sentences is also the essence of the sentence.
+
+   the decoders are trained to minimise the reconstruction error of the
+   previous and the next sentences given the embedding z(i). this
+   reconstruction error is back-propagated to the encoder which now has a
+      motivation    to pack as much information about sentence x(i) that will
+   help the decoders minimise the error in generating the previous and
+   next sentences.
+
+   q. what does it learn?
+
+   the end product of skip-thoughts is the encoder. the decoders are
+   thrown away after training. the trained encoder can then be used to
+   generate fixed length representations of sentences which can be used
+   for several downstream tasks such as sentiment classification, semantic
+   similarity, etc.
+
+   the representations of semantically similar sentences are closer. for
+   example, the representation of 1)    he ran his hand inside his coat ,
+   double-checking that the unopened letter was still there    and 2)    he
+   slipped his hand between his coat and his shirt , where the folded
+   copies lay in a brown envelope    are very close by.
+
+   seems convincing, right? well, not so fast   
+
+a teeny-tiny problem
+
+   the encoder is just fine but the decoder has been assigned a herculean
+   task. consider this:-
+
+   given any sentence it very hard even for a human to tell the sentences,
+   word for word, that can occur before or after that. try, for example,
+   the sentence    i opened the door   . the possibilities that can precede
+   and succeed this sentence are enormous. also, sentences similar in
+   meaning such as    we went to the market    and    we went for shopping    are
+   not treated same. the skip-thought decoder is tasked with predicting
+   the exact sentence word for word. so, if a human finds this tough, how
+   is it possible for skip-thoughts to predict the neighbouring sentences?
+   how is this even a valid training signal?
+
+   take a moment to convince yourself of difficulty of predicting exactly
+   the neighbouring sentences because understanding what follows depends
+   on it.
+
+taking a closer look at the decoder
+
+   let   s take a closer look at the model and try to understand why
+   skip-thought works.
+
+   again, skip-thoughts encoder is plain and simple. but the decoders are
+   a bit tricky. there are two key factors at play here.
+    1. teacher forcing:- the decoders generate the sentence word-by-word
+       while being fed the words of the true target sentence from the
+       corpus with a delay of one time-step (see figure below). the
+       teacher forcing is done for 100% of the words being predicted.
+    2. the prediction is a id203 distribution over words that could
+       occur at that position given the context z(i) of a neighbouring
+       sentence and the sequence of words that occurred before the current
+       position.
+
+   [1*npo6ftw2dvdua0rwpwzauq.png]
+   unrolling the decoder in time: the input to the decoder at every
+   time-step is the z(i) embedding from the encoder (in green), the actual
+   words in the target sentence (in blue), the previous hidden state. the
+   output is a distribution over the possibilities of words. in the third
+   time-step, it becomes easy for the decoder to output    the    instead of
+      to    as it knows for a fact that the actual word preceding it is
+      approached    and not    went   .
+
+   training now becomes easy. decoding is guided not only by the context
+   of z(i) but also by actual words in the target sentence which convey
+   both the grammatical and semantic cues to the decoder as it generates
+   the target sequentially.
+
+   q. but why 100% teacher forcing? will that not lead to poor
+   generalisation?
+
+   it   s not immediately clear to the reader the reason for supplying true
+   previous words at every time-step. generally when id56s are trained for
+   sequence prediction they are randomly (with some id203 split)
+   given either i) the true previous label and ii) their own predicted
+   label. giving id56s their own predicted labels as feedback helps them
+   generalise better at predicting sequences at id136 time (since
+   there are no    true    labels at id136 time). there are two possible
+   explanations for why skip-thoughts doesn   t used reduced levels of
+   teacher forcing:
+
+   naive explanation: since we are anyways going throw away decoders we
+   don   t care for the performance at id136 time we don   t need to
+   reduce teacher forcing.
+
+   better explanation: teacher forcing was never meant for producing
+   sequences of words. it exists only as a means for facilitating better
+   word-level predictions by providing the information of preceding words
+   from the true sentences. so reducing teacher forcing is not a matter of
+   choice or inconvenience. reducing teacher forcing will reduce accuracy.
+
+   in the next section i will further motivate why the second explanation
+   makes more sense.
+
+comparison with imputation of missing words from sentences
+
+   let   s modify the model a bit. we will predict just one missing word
+   (can be any word) of the next (or previous) sentences given i) the
+   context z(i) of current sentence and ii) the sequence of words and
+   location of the blank (signifying the missing word) in the next (or
+   previous) sentence. see the model architecture below for clarity.
+   [1*kzwv2ornovpj3q6e5zgdaa.png]
+   imputation: guessing the missing words given all other words and the
+   context of a neighbouring sentence
+
+   one sensible way to provide all but one element of sequence is by using
+   a bidirectional id56. the forward id56 captures all words before the
+   blank and a backward id56 captures all words after the blank.
+     * why id56s? because they are well suited for variable length
+       sequences. id98s disregard ordering.
+     * why two id56s? it is possible to use just one id56 and provide the
+       complete sentence with a <fill_this_blank> token at the blank
+       position. but a more natural choice is having a forward and
+       backward id56.
+
+   one possible design of the decoder is as follows.
+   [1*u45-9nshbh9jxgp_8zwrtw.png]
+   imputing the missing word: decoder model
+
+   notice something? if we remove the backward id56 from this model it
+   becomes essentially the same as the decoder of skip-thoughts model.
+   what seemed like 100% teacher forcing in skip-thoughts was actually an
+   half-way measure to what it was truly trying to achieve         imputation of
+   missing words in the neighboring sentences.
+
+alternate designs for decoder
+
+   based on our insight that skip-thoughts is just half-way to the
+   imputation of missing words model, we can claim that whatever works for
+   imputation decoders will also work for skip-thoughts decoders. this
+   means one could easily use id98s (for getting the context for
+   previous/next k words) for decoding.
+
+   q. why does the skip-thoughts not use a backward id56?
+
+   using a backward id56 would clearly increase accuracy and it is unclear
+   to me why it was not used in the first place. i do not know a concrete
+   answer to that but my guess is that using a backward id56 would make
+   generating sentences impossible using the decoders. but there are two
+   counters to this explaination:-
+    1. one can always separately train a one-way decoder (with just a
+       forward id56) after the encoder has been trained using a
+       bidirectional decoder (with both forward and backward id56).
+    2. skip-thought burnt the bridge of generating coherent sentences the
+       moment it used 100% teacher forcing. this means generating
+       sentences was probably not that important. not sure on this one,
+       though.
+
+final thoughts
+
+   q. what do the decoders actually learn then?
+
+   tl;dr: the decoders learn to fill missing words from sentences given
+   neighbouring sentences.
+
+   both decoders learn primarily two things. first, the grammar. for
+   example knowing that    approached    is not followed by    to   . learning
+   grammar helps the decoders avoid grammatical mistakes in an otherwise
+   semantically similar sentence. second, distribution over words at
+   position p given i) the context z(i) of a neighbouring sentence and ii)
+   the words x(i)[0:p] occurring before the position p (0-indexed).
+
+   q. what does the encoder learn?
+
+   the encoder learns to extract and pack the information in a sentence
+   that helps decoder better predict the words of the previous/next
+   sentences.
+
+   it is amazing, at least to me, that this information indeed captures
+   some semantics of the sentences as indicated by admirable accuracy on
+   several downstream nlp tasks such as semantic similarity, sentiment
+   classification, etc.
+
+                      
+
+   thank you!
+
+   do checkout my implementation at github:
+   [20]https://github.com/sanyam5/skip-thoughts
+
+   please leave comments below. i would love to hear your thoughts on why
+   you think skip-thoughts work. also, let me know if i missed something.
+
+   note: i originally published this post at my personal blog
+   [21]http://sanyam5.github.io/my-thoughts-on-skip-thoughts/
+
+     * [22]machine learning
+     * [23]deep learning
+     * [24]naturallanguageprocessing
+     * [25]neural networks
+     * [26]unsupervised learning
+
+   (button)
+   (button)
+   (button) 401 claps
+   (button) (button) (button) 3 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [27]go to the profile of sanyam agarwal
+
+[28]sanyam agarwal
+
+   research assistant at iisc, bangalore. working in semi-supervised
+   learning.
+
+     * (button)
+       (button) 401
+     * (button)
+     *
+     *
+
+   [29]go to the profile of sanyam agarwal
+   never miss a story from sanyam agarwal, when you sign up for medium.
+   [30]learn more
+   never miss a story from sanyam agarwal
+   (button) blockedunblock (button) followget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/a3e773605efa
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/membership?source=upgrade_membership---nav_full
+   7. https://medium.com/m/signin?redirect=https://medium.com/@sanyamagarwal/my-thoughts-on-skip-thoughts-a3e773605efa&source=--------------------------nav_reg&operation=login
+   8. https://medium.com/m/signin?redirect=https://medium.com/@sanyamagarwal/my-thoughts-on-skip-thoughts-a3e773605efa&source=--------------------------nav_reg&operation=register
+   9. https://medium.com/@sanyamagarwal?source=post_header_lockup
+  10. https://medium.com/@sanyamagarwal
+  11. https://arxiv.org/abs/1506.06726
+  12. https://github.com/sanyam5/skip-thoughts
+  13. https://github.com/sanyam5/skip-thoughts
+  14. https://www.youtube.com/watch?v=aircaruvnkk
+  15. https://www.youtube.com/watch?v=ilg3ggewq5u
+  16. https://www.youtube.com/watch?v=ihzwwfhwa-w
+  17. http://www.deeplearningbook.org/
+  18. http://colah.github.io/
+  19. https://arxiv.org/abs/1310.4546
+  20. https://github.com/sanyam5/skip-thoughts
+  21. http://sanyam5.github.io/my-thoughts-on-skip-thoughts/
+  22. https://medium.com/tag/machine-learning?source=post
+  23. https://medium.com/tag/deep-learning?source=post
+  24. https://medium.com/tag/naturallanguageprocessing?source=post
+  25. https://medium.com/tag/neural-networks?source=post
+  26. https://medium.com/tag/unsupervised-learning?source=post
+  27. https://medium.com/@sanyamagarwal?source=footer_card
+  28. https://medium.com/@sanyamagarwal
+  29. https://medium.com/@sanyamagarwal
+  30. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  32. https://medium.com/p/a3e773605efa/share/twitter
+  33. https://medium.com/p/a3e773605efa/share/facebook
+  34. https://medium.com/p/a3e773605efa/share/twitter
+  35. https://medium.com/p/a3e773605efa/share/facebook

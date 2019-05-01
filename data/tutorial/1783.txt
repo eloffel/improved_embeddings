@@ -1,0 +1,355 @@
+   #[1]      uantitative    ourney full atom feed
+
+     * [2]home
+     * [3]about
+     * [4]tags
+     * [5]categories
+     * [6]archives
+
+[7]      uantitative    ourney
+
+    our experiences in learning quantitative applications
+
+sep 29, 2015
+
+[8]beginner tutorial: neural nets in theano
+
+beginner tutorial: neural networks in theano[9]  
+
+what is theano and why should i use it?[10]  
+
+   theano is part framework and part library for evaluating and optimizing
+   mathematical expressions. it's popular in the machine learning world
+   because it allows you to build up optimized symbolic computational
+   graphs and the gradients can be automatically computed. moreover,
+   theano also supports running code on the gpu. automatic gradients + gpu
+   sounds pretty nice. i won't be showing you how to run on the gpu
+   because i'm using a macbook air and as far as i know, theano doesn't
+   support or barely supports opencl at this time. but you can check out
+   their [11]documentation if you have an nvidia gpu ready to go.
+
+summary[12]  
+
+   as the title suggests, i'm going to show how to build a simple neural
+   network (yep, you guessed it, using our favorite xor problem..) using
+   theano. the reason i wrote this post is because i found the existing
+   theano tutorials to be not simple enough. i'm all about reducing things
+   to fundamentals. given that, i will not be using all the
+   bells-and-whistles that theano has to offer and i'm going to be writing
+   code that maximizes for readability. nonetheless, using what i show
+   here, you should be able to scale up to more complex algorithms.
+
+assumptions[13]  
+
+   i assume you know how to write a simple neural network in python
+   (including training it with id119/id26). i also
+   assume you've at least browsed through the theano [14]documentation and
+   have a feel for what it's about (i didn't do it justice in my
+   explanation of "why theano" above).
+
+let's get started[15]  
+
+   first, let's import all the goodies we'll need.
+   in [72]:
+import theano
+import theano.tensor as t
+import theano.tensor.nnet as nnet
+import numpy as np
+
+   before we actually build the neural network, let's just get
+   familiarized with how theano works. let's do something really simple,
+   we'll simply ask theano to give us the derivative of a simple
+   mathematical expression like $$ f(x) = e^{sin{(x^2)}} $$ as you can
+   see, this is an equation of a single variable $x$. so let's use theano
+   to symbolically define our variable $x$. what do i mean by
+   symbolically? well, we're going to be building a theano expression
+   using variables and numbers similar to how we'd write this equation
+   down on paper. we're not actually computing anything yet. since theano
+   is a python library, we define these expression variables as one of
+   many kinds of theano variable types.
+   in [73]:
+x = t.dscalar()
+
+   so dscalar() is a type of theano variable or data type that is
+   computationally represented as a float64. there are many other data
+   types available (see [16]here), but we're interested in just defining a
+   single variable that is a scalar.
+
+   now let's build out the expression.
+   in [74]:
+fx = t.exp(t.sin(x**2))
+
+   here i've defined our expression that is equivalent to the mathematical
+   one above. fx is now a variable itself that depends on the x variable.
+   in [75]:
+type(fx) #just to show you that fx is a theano variable type
+
+   out[75]:
+theano.tensor.var.tensorvariable
+
+   okay, so that's nice. what now? well, now we need to "compile" this
+   expression into a theano function. theano will do some magic behind the
+   scenes including building a computational graph, optimizing operations,
+   and compiling to c code to get this to run fast and allow it to compute
+   gradients.
+   in [76]:
+f = theano.function(inputs=[x], outputs=[fx])
+
+   in [77]:
+f(10)
+
+   out[77]:
+[array(0.602681965908778)]
+
+   we compiled our fx expression into a theano function. as you can see,
+   theano.function has two required arguments, inputs and outputs. our
+   only input is our theano variable x and our output is our fx
+   expression. then we ran the f() function supplying it with the value 10
+   and it accurately spit out the computation. so up until this point we
+   could have easily just np.exp(np.sin(100)) using numpy and get the same
+   result. but that would be an exact, imperative, computation and not a
+   symbolic computational graph. now let's show off theano's
+   autodifferentiation.
+
+   to do that, we'll use t.grad() which will give us a symbolically
+   differentiated expression of our function, then we pass it to
+   theano.function to compile a new function to call it. wrt stands for
+   'with respect to', i.e. we're deriving our expression fx with respect
+   to it's variable x.
+   in [78]:
+fp = t.grad(fx, wrt=x)
+fprime = theano.function([x], fp)
+
+   in [79]:
+fprime(15)
+
+   out[79]:
+array(4.347404090286685)
+
+   4.347 is indeed the derivative of our expression evaluated at $x=15$,
+   don't worry, i checked with wolframalpha. and to be clear, theano can
+   take the derivative of arbitrarily complex expressions. don't be fooled
+   by our extremely simple starter expression here. automatically
+   calculating gradients is a huge help since it saves us the time of
+   having to manually come up with the gradient expressions for whatever
+   neural network we build.
+
+   so there you have it. those are the very basics of theano. we're going
+   to utilize a few other features of theano in the neural net we'll build
+   but not much.
+
+now, for an xor neural network[17]  
+
+   we're going to symbolically define two theano variables called x and y.
+   we're going to build our familiar xor network with 2 input units (+ a
+   bias), 2 hidden units (+ a bias), and 1 output unit. so our x variable
+   will always be a 2-element vector (e.g. [0,1]) and our y variable will
+   always be a scalar and is our expected value for each pair of x values.
+   in [80]:
+x = t.dvector()
+y = t.dscalar()
+
+   now let's define a python function that will be a matrix multiplier and
+   sigmoid function, so it will accept and x vector (and concatenate in a
+   bias value of 1) and a w weight matrix, multiply them, and then run
+   them through a sigmoid function. theano has the sigmoid function built
+   in the nnet class that we imported above. we'll use this function as
+   our basic layer output function.
+   in [81]:
+def layer(x, w):
+    b = np.array([1], dtype=theano.config.floatx)
+    new_x = t.concatenate([x, b])
+    m = t.dot(w.t, new_x) #theta1: 3x3 * x: 3x1 = 3x1 ;;; theta2: 1x4 * 4x1
+    h = nnet.sigmoid(m)
+    return h
+
+   theano can be a bit touchy. in order to concatenate a scalar value of 1
+   to our 1-dimensional vector x, we create a numpy array with a single
+   element (1), and explicitly pass in the dtype parameter to make it a
+   float64 and compatible with our theano vector variable. you'll also
+   notice that theano provides its own version of many numpy functions,
+   such as the dot product that we're using. theano can work with numpy
+   but in the end it all has to get converted to theano types.
+
+   this feels a little bit premature, but let's go ahead and implement our
+   id119 function. don't worry, it's very simple. we're just
+   going to have a function that defines a learning rate alpha and accepts
+   a cost/error expression and a weight matrix. it will use theano's
+   grad() function to compute the gradient of the cost function with
+   respect to the given weight matrix and return an updated weight matrix.
+   in [82]:
+def grad_desc(cost, theta):
+    alpha = 0.1 #learning rate
+    return theta - (alpha * t.grad(cost, wrt=theta))
+
+   we're making good progress. at this point we can define our weight
+   matrices and initialize them to random values. since our weight
+   matrices will take on definite values, they're not going to be
+   represented as theano variables, they're going to be defined as
+   theano's shared variable. a shared variable is what we use for things
+   we want to give a definite value but we also want to update. notice
+   that i didn't define the alpha or b (the bias term) as shared
+   variables, i just hard-coded them as strict values because i am never
+   going to update/modify them.
+   in [83]:
+theta1 = theano.shared(np.array(np.random.rand(3,3), dtype=theano.config.floatx)
+) # randomly initialize
+theta2 = theano.shared(np.array(np.random.rand(4,1), dtype=theano.config.floatx)
+)
+
+   so here we've defined our two weight matrices for our 3 layer network
+   and initialized them using numpy's random class. again we specifically
+   define the dtype parameter so it will be a float64, compatible with our
+   theano dscalar and dvector variable types.
+
+   here's where the fun begins. we can start actually doing our
+   computations for each layer in the network. of course we'll start by
+   computing the hidden layer's output using our previously defined layer
+   function, and pass in the theano x variable we defined above and our
+   theta1 matrix.
+   in [84]:
+hid1 = layer(x, theta1) #hidden layer
+
+   we can do the same for our final output layer. notice i use the t.sum()
+   function on the outside which is the same as numpy's sum(). this is
+   only because theano will complain if you don't make it explicitly clear
+   that our output is returning a scalar and not a matrix. our matrix
+   dimensional analysis is sure to return a 1x1 single element vector but
+   we need to convert it to a scalar since we're substracting out1 from y
+   in our cost expression that follows.
+   in [85]:
+out1 = t.sum(layer(hid1, theta2)) #output layer
+fc = (out1 - y)**2 #cost expression
+
+   ahh, almost done. we're going to compile two theano functions. one will
+   be our cost expression (for training), and the other will be our output
+   layer expression (to run the network forward).
+   in [86]:
+cost = theano.function(inputs=[x, y], outputs=fc, updates=[
+        (theta1, grad_desc(fc, theta1)),
+        (theta2, grad_desc(fc, theta2))])
+run_forward = theano.function(inputs=[x], outputs=out1)
+
+   our theano.function call looks a bit different than in our first
+   example. yeah, we have this additional updates parameter. updates
+   allows us to update our shared variables according to an expression.
+   updates expects a list of 2-tuples:
+updates=[(shared_variable, update_value), ...]
+
+   the second part of each tuple can be an expression or function that
+   returns the new value we want to update the first part to. in our case,
+   we have two shared variables we want to update, theta1 and theta2 and
+   we want to use our grad_desc function to give us the updated data. of
+   course our grad_desc function expects two arguments, a cost function
+   and a weight matrix, so we pass those in. fc is our cost expression. so
+   every time we invoke/call the cost function that we've compiled with
+   theano, it will also update our shared variables according to our
+   grad_desc rule. pretty convenient!
+
+   additionally, we've compiled a run_forward function just so we can run
+   the network forward and make sure it has trained properly. we don't
+   need to update anything there.
+
+   now let's define our training data and setup a for loop to iterate
+   through our training epochs.
+   in [87]:
+inputs = np.array([[0,1],[1,0],[1,1],[0,0]]).reshape(4,2) #training data x
+exp_y = np.array([1, 1, 0, 0]) #training data y
+cur_cost = 0
+for i in range(10000):
+    for k in range(len(inputs)):
+        cur_cost = cost(inputs[k], exp_y[k]) #call our theano-compiled cost func
+tion, it will auto update weights
+    if i % 500 == 0: #only print the cost every 500 epochs/iterations (to save s
+pace)
+        print('cost: %s' % (cur_cost,))
+
+cost: 0.6729492014975456
+cost: 0.23521333773509118
+cost: 0.20385060705569344
+cost: 0.09715044753510742
+cost: 0.039259128265329804
+cost: 0.027491611330928263
+cost: 0.013058140670015577
+cost: 0.007656970860067689
+cost: 0.005215440091514665
+cost: 0.0038843551856147704
+cost: 0.003063599050987251
+cost: 0.002513378114127917
+cost: 0.0021217874358153673
+cost: 0.0018303604198688056
+cost: 0.0016058512119977342
+cost: 0.0014280751222236468
+cost: 0.001284121957016395
+cost: 0.0011653769062277865
+cost: 0.0010658859592106108
+cost: 0.000981410600338758
+
+   in [88]:
+#training done! let's test it out
+print(run_forward([0,1]))
+print(run_forward([1,1]))
+print(run_forward([1,0]))
+print(run_forward([0,0]))
+
+0.9752392598335232
+0.03272599279350485
+0.965279382474992
+0.030138157640063574
+
+   it works!
+
+closing words[18]  
+
+   theano is a pretty robust and complicated library but hopefully this
+   simple introduction helps you get started. i certainly struggled with
+   it before it made sense to me. and clearly using theano for an xor
+   neural network is overkill, but its optimization power and gpu
+   utilization really comes into play for bigger projects. nonetheless,
+   not having to think about manually calculating gradients is nice.
+
+   cheers
+
+references:[19]  
+
+    1. [20]http://deeplearning.net/software/theano/index.html
+    2. [21]https://gist.github.com/honnibal/6a9e5ef2921c0214eeeb
+
+   [22]posted at 00:00 by brandon brown     [23]frameworks      [24]theano
+   [25]frameworks
+   please enable javascript to view the [26]comments powered by disqus.
+
+references
+
+   visible links
+   1. http://outlace.com/feeds/all.atom.xml
+   2. http://outlace.com/
+   3. http://outlace.com/pages/about.html
+   4. http://outlace.com/tags/
+   5. http://outlace.com/categories/
+   6. http://outlace.com/archives/{slug}/
+   7. http://outlace.com/
+   8. http://outlace.com/theano.html
+   9. http://outlace.com/theano.html#beginner-tutorial:-neural-networks-in-theano
+  10. http://outlace.com/theano.html#what-is-theano-and-why-should-i-use-it?
+  11. http://deeplearning.net/software/theano/tutorial/using_gpu.html
+  12. http://outlace.com/theano.html#summary
+  13. http://outlace.com/theano.html#assumptions
+  14. http://deeplearning.net/software/theano/index.html
+  15. http://outlace.com/theano.html#let's-get-started
+  16. http://deeplearning.net/software/theano/library/tensor/basic.html
+  17. http://outlace.com/theano.html#now,-for-an-xor-neural-network
+  18. http://outlace.com/theano.html#closing-words
+  19. http://outlace.com/theano.html#references:
+  20. http://deeplearning.net/software/theano/index.html
+  21. https://gist.github.com/honnibal/6a9e5ef2921c0214eeeb
+  22. http://outlace.com/theano.html
+  23. http://outlace.com/category/frameworks/
+  24. http://outlace.com/tag/theano/
+  25. http://outlace.com/tag/frameworks/
+  26. https://disqus.com/?ref_noscript
+
+   hidden links:
+  28. mailto:outlacedev@gmail.com
+  29. http://github.com/outlace
+  30. http://outlace.com/feeds/all.atom.xml

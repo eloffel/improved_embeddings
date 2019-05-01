@@ -1,0 +1,302 @@
+   #[1]openai
+
+     * [2]about
+     * [3]progress
+     * [4]resources
+     * [5]blog
+
+   (button)
+
+   (button)
+
+     * [6]about
+         ______________________________________________________________
+
+     * [7]progress
+         ______________________________________________________________
+
+     * [8]resources
+         ______________________________________________________________
+
+     * [9]blog
+         ______________________________________________________________
+
+     * [10]jobs
+     __________________________________________________________________
+
+   february 7, 2018     6 minute read
+
+discovering types for entity disambiguation
+     __________________________________________________________________
+
+   we've built a system for automatically figuring out which object is
+   meant by a word by having a neural network decide if the word belongs
+   to each of about 100 automatically-discovered "types" (non-exclusive
+   categories). for example, given a sentence like "the prey saw the
+   jaguar cross the jungle", rather than trying to reason directly whether
+   jaguar means the [11]car, the [12]animal, or something [13]else, the
+   system plays "20 questions" with a pre-chosen set of categories. this
+   approach gives a big boost in state-of-the-art on several [14]entity
+   [15]disambiguation datasets.
+
+   [16]paper[17]code
+
+   in our training data jaguar refers to the car 70% of the time, the
+   animal 29% of the time, and the [18]aircraft 1% of the time. with our
+   types approach, the possible disambiguations in the first example don't
+   change a huge amount     apparently the model is ok with [19]jaguars
+   running down the highway     but change hugely in the second     it's not
+   ok with [20]jaguars taking a cruise through the jungle.
+
+   we achieve 94.88% accuracy on [21]conll (yago) (previous state of the
+   arts: [22]91.50%, [23]91.70%) and 90.85% on [24]tac kbp 2010 challenge
+   (previous state of the arts: [25]87.20%, and [26]87.70%). previous
+   methods used [27]distributed representations. types can go almost all
+   the way on these tasks, as perfect type prediction would give
+   accuracies of 98.6-99%.
+
+high-level overview
+
+   our system uses the following steps:
+    1. extract every wikipedia-internal link to determine, for each word,
+       the set of conceivable entities it can refer to. for example, when
+       encountering the link
+       [jaguar](https://en.wikipedia.org/wiki/jaguar) in a wikipedia page,
+       we conclude that https://en.wikipedia.org/wiki/jaguar is one of the
+       meanings of jaguar.
+    2. walk the wikipedia category tree (using the [28]wikidata knowledge
+       graph) to determine, for each entity, the set of categories it
+       belongs to. for example, at the bottom of
+       https://en.wikipedia.org/wiki/jaguar_cars's wikipedia page, are the
+       following categories (which themselves have their own categories,
+       such as [29]automobiles): [30]jaguar
+    3. pick a list of ~100 categories to be your "type" system, and
+       optimize over this choice of categories so that they compactly
+       express any entity. we know the mapping of entities to categories,
+       so given a type system, we can represent each entity as a
+       ~100-dimensional binary vector indicating membership in each
+       category.
+    4. using every wikipedia-internal link and its surrounding context,
+       produce training data mapping a word plus context to the
+       ~100-dimensional binary representation of the corresponding entity,
+       and train a neural network to predict this mapping. this chains
+       together the previous steps: wikipedia links map a word to an
+       entity, we know the categories for each entity from step 2, and
+       step 3 picked the categories in our type system.
+    5. at test time, given a word and surrounding context, our neural
+       network's output can be interpreted as the id203 that the
+       word belongs to each category. if we knew the exact set of category
+       memberships, we would narrow down to one entity (assuming
+       well-chosen categories). but instead, we must play a probabilistic
+       20 questions: use [31]bayes' theorem to calculate the chance of the
+       word disambiguating to each of its possible entities.
+
+more examples
+
+   here are some other examples of our system in action:
+
+cleaning the data
+
+   wikidata's id13 can be turned into a source of training data
+   for mapping fine-grained entities to types. we apply its [32]instance
+   of relation recursively to determine the set of types for any given
+   entity     for example, any descendent node of the [33]human node has
+   type human. wikipedia can also provide entity-to-type mapping through
+   its [34]category link.
+
+   wikipedia-internal link statistics provide a good estimate of the
+   chance a particular phrase refers to some entity. however, this is
+   noisy since wikipedia will often link to specific instance of a type
+   rather than the type itself ([35]anaphora     e.g. king     charles i of
+   england) or link from a nickname ([36]metonymy). this results in an
+   explosion of associated entities (e.g. king has 974 associated
+   entities) and distorted link frequencies (e.g. queen links to the band
+   [37]queen 4920 times, [38]elizabeth ii 1430 times, and [39]monarch only
+   32 times).
+
+   the easiest approach is to [40]prune [41]rare [42]links, but this loses
+   information. we instead use the wikidata property graph to
+   heuristically turn links into their "generic" meaning, as illustrated
+   below.
+
+   after this process, king goes from 974 to 14 associated entities, while
+   the number of links from queen to [43]monarch increases from 32 to
+   3553.
+
+learning a good type system
+
+   we need to select the best type system and parameters such that
+   disambiguation accuracy is maximized. there's a huge number of possible
+   sets of types, making an exact solution intractable. instead, we use
+   heuristic search or stochastic optimization (evolutionary algorithm) to
+   select a type system, and id119 to train a type classifier
+   to predict the behavior of the type system.
+
+   we need to select types that are discriminating (so quickly whittle
+   down the possible set of entities), while being easy to learn (so
+   surrounding context is informative for a neural network to infer that a
+   type applies). we inform our search with two heuristics: learnability
+   (average of [44]area under the curve [auc] scores of a classifier
+   trained to predict type membership), and oracle accuracy (how well we
+   would disambiguate entities if we predicted all types perfectly).
+
+type system evolution
+
+   we train binary classifiers to predict membership in each of the
+   150,000 most common types in our dataset, given a window of context.
+   the [45]area under the curve (auc) of the classifier becomes the
+   "learnability score" for that type. high auc means it's easy to predict
+   this type from context; poor performance can mean we have little
+   training data or that a word window isn't terribly helpful (this tends
+   to be true for unnatural categories like [46]isbns). our full model
+   takes several days to train, so we instead use a much smaller model as
+   a proxy in our "learnability score", which takes only 2.5s to train.
+
+   we can now use these learnability scores and count statistics to
+   estimate the performance of a given subset of types as our type system.
+   below you can run the [47]cross id178 method to discover types in
+   your browser. note how changing sample size and penalties affects the
+   solution.
+
+   to better visualize what parts of the type system design are easy and
+   hard, we invite you to try your hand at designing your own below. after
+   choosing a high-level domain you can start looking at ambiguous
+   examples. the possible answers are shown as circles on the top row, and
+   the correct answer is the colored circle (hover to see its name). the
+   bottom row contains types you can use. lines connecting the top to the
+   bottom row are inheritance relations. select the relations you want.
+   once you have enough relations to separate the right answer from the
+   rest, the example is disambiguated.
+
+neural type system
+
+   using the top solution from our type system optimization, we can now
+   label data from wikipedia using labels generated by the type system.
+   using this data (in our experiments, 400m tokens for each of english
+   and french), we can now train a [48]bidirectional lstm to independently
+   predict all the type memberships for each word. on the wikipedia source
+   text, we only have supervision on intra-wiki links, however this is
+   sufficient to train a deep neural network to predict type membership
+   with an [49]f1 of over 0.91.
+
+   one of our type systems, discovered by id125, includes types such
+   as aviation, clothing, and games (as well as surprisingly specific ones
+   like 1754 in canada     indicating 1754 was an exciting year in the
+   dataset of 1,000 wikipedia articles it was trained on); you can also
+   view the [50]full type system.
+
+id136
+
+   predicting entities in a document usually relies on a "coherence"
+   metric between different entities, e.g. measuring how well each entity
+   fits with each other, which is o(n^2) in the length of the document.
+   instead, our runtime is o(n) as we need only to look up each phrase in
+   a trie which maps phrases to their possible meanings. we rank each of
+   the possible entities according to the link frequency seen in
+   wikipedia, refined by weighting each entity by its likelihood under the
+   type classifier. new entities can be added just by specifying their
+   type memberships (person, animal, country of origin, time period,
+   etc..).
+
+next steps
+
+   our approach has many differences to previous work on this problem.
+   we're interested in how well end-to-end learning of [51]distributed
+   representations performs in comparison to the type-based id136 we
+   developed here. the type systems here were discovered using a small
+   wikipedia subset; scaling to all of wikipedia could discover a type
+   system with broad application. we hope you find our [52]code useful!
+
+   if you'd like to help push research like this forward, please [53]apply
+   to openai!
+     __________________________________________________________________
+
+   authors
+   [54]jonathan raiman
+     __________________________________________________________________
+
+     * [55]about
+     * [56]progress
+     * [57]resources
+     * [58]blog
+     * [59]charter
+     * [60]jobs
+     * [61]press
+
+     *
+     *
+
+   sign up for our newsletter
+   ____________________ (button)
+   right
+
+references
+
+   visible links
+   1. https://openai.com/blog/rss/
+   2. https://openai.com/about/
+   3. https://openai.com/progress/
+   4. https://openai.com/resources/
+   5. https://openai.com/blog/
+   6. https://openai.com/about/
+   7. https://openai.com/progress/
+   8. https://openai.com/resources/
+   9. https://openai.com/blog/
+  10. https://openai.com/jobs/
+  11. https://en.wikipedia.org/wiki/jaguar_cars
+  12. https://en.wikipedia.org/wiki/jaguar
+  13. https://en.wikipedia.org/wiki/jaguar_(disambiguation)
+  14. https://en.wikipedia.org/wiki/entity_linking
+  15. http://nlp.cs.rpi.edu/kbp/2017/elreading.html
+  16. https://arxiv.org/abs/1802.01021
+  17. https://github.com/openai/deeptype
+  18. https://en.wikipedia.org/wiki/sepecat_jaguar
+  19. https://en.wikipedia.org/wiki/jaguar
+  20. https://en.wikipedia.org/wiki/jaguar_cars
+  21. https://www.mpi-inf.mpg.de/departments/databases-and-information-systems/research/yago-naga/aida/
+  22. https://arxiv.org/abs/1601.01343
+  23. https://research.google.com/pubs/pub45395.html
+  24. https://pdfs.semanticscholar.org/b7fb/11ef06b0dcdc89ef0a5507c6c9ccea4206d8.pdf
+  25. https://research.google.com/pubs/pub45395.html
+  26. https://arxiv.org/abs/1705.02494
+  27. https://en.wikipedia.org/wiki/id97
+  28. https://www.wikidata.org/wiki/wikidata:introduction
+  29. https://en.wikipedia.org/wiki/category:automobiles
+  30. https://en.wikipedia.org/wiki/jaguar_cars#mw-normal-catlinks
+  31. https://en.wikipedia.org/wiki/bayes'_theorem
+  32. https://www.wikidata.org/wiki/property:p31
+  33. https://www.wikidata.org/wiki/q5
+  34. https://en.wikipedia.org/wiki/help:category
+  35. https://en.wikipedia.org/wiki/anaphora_(linguistics)
+  36. http://www.dictionary.com/browse/metonymy
+  37. https://en.wikipedia.org/wiki/queen_(band)
+  38. https://en.wikipedia.org/wiki/elizabeth_ii
+  39. https://en.wikipedia.org/wiki/monarch
+  40. http://www.di.unipi.it/~ferragin/cikm2010.pdf
+  41. https://www.researchgate.net/profile/faegheh_hasibi/publication/299394512_on_the_reproducibility_of_the_tagme_entity_linking_system/links/588fa3f192851c9794c49a71/on-the-reproducibility-of-the-tagme-entity-linking-system.pdf
+  42. https://transacl.org/ojs/index.php/tacl/article/viewfile/528/133
+  43. https://en.wikipedia.org/wiki/monarch
+  44. http://fastml.com/what-you-wanted-to-know-about-auc/
+  45. http://fastml.com/what-you-wanted-to-know-about-auc/
+  46. https://en.wikipedia.org/wiki/international_standard_book_number
+  47. https://en.wikipedia.org/wiki/cross-id178_method
+  48. http://colah.github.io/posts/2015-08-understanding-lstms/
+  49. https://en.wikipedia.org/wiki/f1_score
+  50. https://s3-us-west-2.amazonaws.com/openai-public/blog/2018-01/neural-type-system/greedy.txt
+  51. https://en.wikipedia.org/wiki/id97
+  52. https://github.com/openai/deeptype
+  53. https://openai.com/jobs/
+  54. https://openai.com/blog/authors/jonathan/
+  55. https://openai.com/about/
+  56. https://openai.com/progress/
+  57. https://openai.com/resources/
+  58. https://openai.com/blog/
+  59. https://openai.com/charter/
+  60. https://openai.com/jobs/
+  61. https://openai.com/press/
+
+   hidden links:
+  63. https://openai.com/
+  64. https://openai.com/
+  65. https://twitter.com/openai
+  66. https://www.facebook.com/openai.research

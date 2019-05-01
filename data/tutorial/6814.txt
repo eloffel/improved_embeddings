@@ -1,0 +1,481 @@
+   #[1]rss
+
+     * [2]about
+     * [3]software
+     * [4]demos
+     * [5]blog
+
+   [spacy-pipelines.jpg]    [6]kemal   anl   & freepik
+
+introducing custom pipelines and extensions for spacy v2.0
+
+   october 16, 2017    by ines montani
+
+   as the release candidate for [7]spacy v2.0 gets closer, we've been
+   excited to implement some of the last outstanding features. one of the
+   best improvements is a new system for adding pipeline components and
+   registering extensions to the doc, span and token objects. in this
+   post, we'll introduce you to the new functionality, and finish with an
+   [8]example extension package, spacymoji.spacy v2.0 alphaspacy is an
+   open-source library for advanced natural language processing in python.
+   the new version is available on pip via spacy-nightly. to try out the
+   examples in this post, you need the latest version, 2.0.0a17. see
+   [9]this page for details on the new features. for an overview of the
+   new models, see the [10]models directory.
+
+   previous versions of spacy have been fairly difficult to extend. this
+   has been especially true of the core doc, token and span objects.
+   they're not instantiated directly, so creating a useful subclass would
+   involve a lot of ugly abstraction (think
+   factoryfactoryconfigurationfactory classes). inheritance is also
+   unsatisfying, because it gives no way to compose different
+   customisations. we want to let people develop extensions to spacy, and
+   we want to make sure those extension can be used together. if every
+   extension required spacy to return a different doc subclass, there
+   would be no way to do that. to solve this problem, we're introducing a
+   new dynamic field that allows new attributes, properties and methods to
+   be added at run-time:
+import spacy
+from spacy.tokens import doc
+
+doc.set_attribute('is_greeting', default=false)
+
+nlp = spacy.load('en')
+doc = nlp(u'hello world')
+doc._.is_greeting = true
+
+   we think the ._ attribute strikes a nice balance between readability
+   and explicitness. extensions need to be nice to use, but it should also
+   be obvious what is and isn't built-in     otherwise there's no way to
+   track down the documentation or implementation of the code you're
+   reading. the ._ attribute also makes sure that updates to spacy won't
+   break extension code through namespace conflicts.
+
+   the other thing that's been missing for extension development was a
+   convenient way of modifying the processing pipeline. early versions of
+   spacy hard-coded the pipeline, because only english was supported.
+   spacy v1.0 allowed the pipeline to be changed at run-time, but this has
+   been mostly hidden away from the user: you'd call nlp on a text and
+   stuff happens     but what? if you needed to add a process that should
+   run between tagging and parsing, you'd have to dig into spacy's
+   internals. in spacy v2.0 there's finally an api for that, and it's as
+   simple as:
+nlp = spacy.load('en')
+component = mycomponent()
+nlp.add_pipe(component, after='tagger')
+doc = nlp(u"this is a sentence")
+
+[11]custom pipeline components
+
+   fundamentally, a pipeline is a list of functions called on a doc in
+   order. the pipeline can be set by a model, and modified by the user. a
+   pipeline component can be a complex class that holds state, or a very
+   simple python function that adds something to a doc and returns it.
+   under the hood, spacy performs the following steps when you call nlp on
+   a string of text:
+doc = nlp.make_doc(u'this is a sentence')   # create a doc from raw text
+for name, proc in nlp.pipeline:             # iterate over components in order
+    doc = proc(doc)                         # call each component on the doc
+
+   the nlp object is an instance of language, which contains the data and
+   annotation scheme of the language you're using and a pre-defined
+   pipeline of components, like the tagger, parser and entity recognizer.
+   if you're loading [12]a model, the language instance also has access to
+   the model's binary data. all of this is specific to each model, and
+   defined in the model's meta.json     for example, a spanish ner model
+   requires different weights, language data and pipeline components than
+   an english parsing and tagging model. this is also why the pipeline
+   state is always held by the language class. spacy.load() puts this all
+   together and returns an instance of language with a pipeline set and
+   access to the binary data.
+
+   a [13]spacy pipeline in v2.0 is simply a list of (name, function)
+   tuples, describing the component name and the function to call on the
+   doc object:
+>>> nlp.pipeline
+[('tagger', <spacy.pipeline.tagger>), ('parser', <spacy.pipeline.dependencyparse
+r>),
+ ('ner', <spacy.pipeline.entityrecognizer>)]
+
+   to make it more convenient to modify the pipeline, there are several
+   [14]built-in methods to get, add, replace, rename or remove individual
+   components. spacy's default pipeline components, like the tagger,
+   parser and entity recognizer now all follow the same, [15]consistent
+   api and are subclasses of pipe. if you're developing your own
+   component, using the pipe api will make it fully trainable and
+   serializable. at a minimum, a component needs to be a callable that
+   takes a doc and returns it:
+def my_component(doc):
+    print("the doc is {} characters long and has {} tokens."
+          .format(len(doc.text), len(doc))
+    return doc
+
+   the component can then be added at any position of the pipeline using
+   the nlp.add_pipe() method. the arguments before, after, first, and last
+   let you specify component names to insert the new component before or
+   after, or tell spacy to insert it first (i.e. directly after
+   id121) or last in the pipeline.
+nlp = spacy.load('en')
+nlp.add_pipe(my_component, name='print_length', last=true)
+doc = nlp(u"this is a sentence.")
+
+[16]extension attributes on doc, token and span
+
+   when you implement your own pipeline components that modify the doc,
+   you often want to extend the api, so that the information you're adding
+   is conveniently accessible. spacy v2.0 introduces a [17]new mechanism
+   that lets you register your own attributes, properties and methods that
+   become available in the ._ namespace, for example, doc._.my_attr. there
+   are mostly three types of extensions that can be registered via the
+   set_extension() method:why ._?writing to a ._ attribute instead of to
+   the doc directly keeps a clearer separation and makes it easier to
+   ensure backwards compatibility. for example, if you've implemented your
+   own .coref property and spacy claims it one day, it'll break your code.
+   similarly, just by looking at the code, you'll immediately know what's
+   built-in and what's custom     for example, doc.sentiment is spacy, while
+   doc._.sent_score isn't.
+    1. attribute extensions. set a default value for an attribute, which
+       can be overwritten.
+    2. property extensions. define a getter and an optional setter
+       function.
+    3. method extensions. assign a function that becomes available as an
+       object method.
+
+doc.set_extension('hello_attr', default=true)
+doc.set_extension('hello_property', getter=get_value, setter=set_value)
+doc.set_extension('hello_method', method=lambda doc, name: 'hi {}!'.format(name)
+)
+
+doc._.hello_attr            # true
+doc._.hello_property        # return value of get_value
+doc._.hello_method('ines')  # 'hi ines!'
+
+   being able to easily write custom data to the doc, token and span means
+   that applications using spacy can take full advantage of the built-in
+   data structures and the benefits of doc objects as the single source of
+   truth containing all information:
+     * no information is lost during id121 and parsing, so you can
+       always relate annotations to the original string.
+     * the token and span are views of the doc, so they're always
+       up-to-date and consistent.
+     * efficient c-level access is available to the underlying tokenc*
+       array via doc.c.
+     * apis can standardise on passing around doc objects, reading and
+       writing from them whenever necessary. fewer signatures makes
+       functions more reusable and composable.
+
+   for example, lets say your data contains geographical information like
+   country names, and you're using spacy to extract those names and add
+   more details, like the country's capital or gps coordinates. or maybe
+   your application needs to find names of public figures using spacy's
+   named entity recognizer, and check if a page about them exists on
+   wikipedia.
+
+   before, you'd usually run spacy over your text to get the information
+   you're interested in, save it to a database and add more data to it
+   later. this worked well, but it also meant that you lost all references
+   to the original document. alternatively, you could serialize your
+   document and store the additional data with references to their
+   respective token indices. again, this worked well, but it was a pretty
+   unsatisfying solution overall. in spacy v2.0, you can simply write all
+   this data to custom attributes on a document, token or span, using a
+   name of your choice. for example, token._.country_capital,
+   span._.wikipedia_url or doc._.included_persons.
+
+   the following example shows a simple pipeline component that fetches
+   all countries using the [18]rest countries api, finds the country names
+   in the document, merges the matched spans, assigns the entity label gpe
+   (geopolitical entity) and adds the country's capital,
+   latitude/longitude coordinates and a boolean is_country to the token
+   attributes. you can also find a [19]more detailed version on github.
+countries extensionimport requests
+from spacy.tokens import token, span
+from spacy.matcher import phrasematcher
+
+class countries(object):
+    name = 'countries'  # component name shown in pipeline
+
+    def __init__(self, nlp, label='gpe'):
+        # request all country data from the api
+        r = requests.get('https://restcountries.eu/rest/v2/all')
+        self.countries = {c['name']: c for c in r.json()}  # create dict for eas
+y lookup
+        # initialise the matcher and add patterns for all country names
+        self.matcher = phrasematcher(nlp.vocab)
+        self.matcher.add('countries', none, *[nlp(c) for c in self.countries.key
+s()])
+        self.label = nlp.vocab.strings[label] # get label id from vocab
+        # register extensions on the token
+        token.set_extension('is_country', default=false)
+        token.set_extension('country_capital')
+        token.set_extension('country_latlng')
+
+    def __call__(self, doc):
+        matches = self.matcher(doc)
+        spans = []  # keep the spans for later so we can merge them afterwards
+        for _, start, end in matches:
+            # create span for matched country and assign label
+            entity = span(doc, start, end, label=self.label)
+            spans.append(entity)
+            for token in entity:  # set values of token attributes
+                token._.set('is_country', true)
+                token._.set('country_capital', self.countries[entity.text]['capi
+tal'])
+                token._.set('country_latlng', self.countries[entity.text]['latln
+g'])
+        doc.ents = list(doc.ents) + spans  # overwrite doc.ents and add entities
+     don't replace!
+        for span in spans:
+            span.merge()  # merge all spans at the end to avoid mismatched indic
+es
+        return doc  # don't forget to return the doc!
+
+   the example also uses spacy's phrasematcher, which is another cool
+   feature introduced in v2.0. instead of token patterns, the phrase
+   matcher can take a list of doc objects, letting you match large
+   terminology lists fast and efficiently. when you add the component to
+   the pipeline and process a text, all countries are automatically
+   labelled as gpe entities, and the custom attributes are available on
+   the token:
+nlp = spacy.load('en')
+component = countries(nlp)
+nlp.add_pipe(component, before='tagger')
+doc = nlp(u"some text about colombia and the czech republic")
+
+print([(ent.text, ent.label_) for ent in doc.ents])
+# [('colombia', 'gpe'), ('czech republic', 'gpe')]
+
+print([(token.text, token._.country_capital) for token in doc if token._.is_coun
+try])
+# [('colombia', 'bogot  '), ('czech republic', 'prague')]
+
+   using getters and setters, you can also implement attributes on the doc
+   and span that reference custom token attributes     for example, whether
+   a document contains countries. since the getter is only called when you
+   access the attribute, you can refer to the token's is_country attribute
+   here, which is already set in the processing step. for a complete
+   implementation, see the [20]full example.other ideasin this case, we
+   are able to fetch all data with one request to the rest api. however,
+   you can also implement api requests via getter functions on individual
+   objects, or add a method attribute to pass in additional parameters. or
+   how about a token method that takes another country name or gps
+   coordinates, and computes the distance to the token's country? this is
+   all possible now!
+has_country = lambda tokens: any([token._.is_country for token in tokens])
+doc.set_extension('has_country', getter=has_country)
+span.set_extension('has_country', getter=has_country)
+
+[21]spacy extensions
+
+   having a straightforward api for custom extensions and a clearly
+   defined input/output (doc/doc) also helps making larger code bases more
+   maintainable, and allows developers to share their extensions with
+   others and test them reliably. this is relevant for teams working with
+   spacy, but also for developers looking to publish their own packages,
+   extensions and plugins.
+
+   we're hoping that this new architecture will help encourage a community
+   ecosystem of spacy components to cover any potential use case     no
+   matter how specific. components can range from simple extensions adding
+   fairly trivial attributes for convenience, to complex models making use
+   of external libraries such as [22]pytorch, [23]scikit-learn and
+   [24]tensorflow. there are many components users may want, and we'd love
+   to be able to offer more built-in pipeline components shipped with
+   spacy     for example, better sentence boundary detection, semantic role
+   labelling and id31. but there's also a clear need for
+   making spacy extensible for specific use cases, making it interoperate
+   better with other libraries, and putting all of it together to update
+   and train statistical models.
+
+[25]example: emoji handling with spacymoji
+
+   adding better emoji support to spacy has long been on my list of "cool
+   things to build sometime". emoji are fun, hold a lot of relevant
+   semantic information and, [26]supposedly, are now more common in
+   twitter text than hyphens. over the past two years, they have also
+   become vastly more complex. aside from the regular emoji characters and
+   their unicode representations, you can now also use skin tone modifiers
+   that are placed after a regular emoji, and result in one visible
+   character. for example,      +      =         . in addition, some characters can
+   form "[27]zwj sequences", e.g. two or more emoji joined by a zero width
+   joiner (u+200d) that are merged into one symbol. for example,      + zwj +
+        =             (official title is "man singer", i call it "bowie").
+
+   as of v2.0, spacy's tokenizer splits all emoji and other symbols into
+   individual tokens, making them easier to separate from the rest of your
+   text. however, emoji unicode ranges are fairly arbitrary and updated
+   often. the \p{other_symbol} or \p{so} category, which spacy's tokenizer
+   uses, is a good approximation, but it also includes other icons and
+   dingbats. so if you want to handle only emoji, there's no way around
+   matching against an exact list. luckily, the [28]emoji package has us
+   covered here.
+
+   [29]spacymoji is a spacy extension and pipeline component that detects
+   individual emoji and sequences in your text, merges them into one token
+   and assigns custom attributes to the doc, span and token. for example,
+   you can check if a document or span includes an emoji, check whether a
+   token is an emoji and retrieve its human-readable description.
+import spacy
+from spacymoji import emoji
+
+nlp = spacy.load('en')
+emoji = emoji(nlp)
+nlp.add_pipe(emoji, first=true)
+
+doc  = nlp(u"this is a test              ")
+assert doc._.has_emoji
+assert len(doc._.emoji) == 2
+assert doc[2:5]._.has_emoji
+assert doc[4]._.is_emoji
+assert doc[5]._.emoji_desc == u'thumbs up dark skin tone'
+assert doc._.emoji[1] == (u'        ', 5, u'thumbs up dark skin tone')
+
+   pipeline positionby adding the component as the first in the pipeline,
+   the spans are merged right after id121, and before the document
+   is parsed. if your text contains a lot of emoji, this might even give
+   you a nice boost in parser accuracy, as the parser only gets to see one
+   token per emoji.
+
+   the spacymoji component uses the phrasematcher to find occurences of
+   the exact emoji sequences in the emoji lookup table and generates the
+   respective emoji spans. it also merges them into one token if the emoji
+   consists of more than one character     for example, an emoji with a skin
+   tone modifier or a combined zwj sequence. the emoji shortcut, e.g.
+   :thumbs_up:, is converted to a human-readable description, available as
+   token._.emoji_desc. you can also pass in your own lookup table, mapping
+   emoji to custom descriptions.
+
+[30]next steps
+
+   if you feel inspired and want to build you own extension, see [31]this
+   guide for some tips, tricks and best practices. with the growth of deep
+   learning tools and techniques, there are now lots of models for
+   predicting various types of nlp annotations. models for tasks like
+   coreference resolution, information extraction and summarization can
+   now easily be used to power spacy extensions     all you have to do is
+   add the extension attributes, and hook the model into the pipeline.
+   we're looking forward to seeing what you build!
+
+resources
+
+     * [32]spacy v2.0: what's new in v2.0 (alpha)
+     * [33]custom pipelines: usage guide (alpha)
+     * [34]code examples: components and attributes
+     * [35]spacymoji: extension on github
+
+   ines montani
+   about the author
+
+ines montani
+
+   ines is a developer specialising in applications for ai technology.
+   she's a core developer of the spacy natural language processing library
+   and the prodigy annotation tool. before founding explosion ai, she was
+   a freelance front-end developer and strategist, using her four years
+   executive experience in ad sales and digital marketing.
+
+read more
+
+[36]introducing spacy v2.1
+
+[37]explosion ai in 2017: our year in review
+
+[38]pseudo-rehearsal: a simple solution to catastrophic forgetting for nlp
+
+[39]prodigy: a new tool for radically efficient machine teaching
+
+[40]supervised learning is great     it   s data collection that   s broken
+
+[41]supervised similarity: learning symmetric relations from duplicate
+question data
+
+    about us
+
+   explosion ai is a digital studio specialising in artificial
+   intelligence and natural language processing. we   re the makers of
+   spacy, the leading open-source nlp library.
+
+    navigation
+
+     * [42]home
+     * [43]about
+     * [44]software
+     * [45]demos
+     * [46]blog
+     * [47]legal / imprint
+
+    our software
+
+     * [48]spacy
+       industrial-strength nlp
+     * [49]prodigy
+       radically efficient machine teaching
+
+   [50]see more    
+
+references
+
+   visible links
+   1. https://explosion.ai/feed.xml
+   2. https://explosion.ai/about
+   3. https://explosion.ai/software
+   4. https://explosion.ai/demos
+   5. https://explosion.ai/blog
+   6. http://www.freepik.com/free-vector/multicoloured-water-pipelines_771654.htm
+   7. https://alpha.spacy.io/
+   8. https://explosion.ai/blog/spacy-v2-pipelines-extensions#spacymoji
+   9. https://alpha.spacy.io/usage/v2
+  10. https://alpha.spacy.io/models
+  12. https://alpha.spacy.io/models
+  13. https://alpha.spacy.io/usage/processing-pipelines
+  14. https://alpha.spacy.io/api/language#add_pipe
+  15. https://alpha.spacy.io/api/pipe
+  17. https://alpha.spacy.io/usage/processing-pipelines#custom-components-attributes
+  18. https://restcountries.eu/
+  19. https://github.com/explosion/spacy/blob/develop/examples/pipeline/custom_component_countries_api.py
+  20. https://github.com/explosion/spacy/blob/develop/examples/pipeline/custom_component_countries_api.py
+  22. http://pytorch.org/
+  23. http://scikit-learn.org/
+  24. https://www.tensorflow.org/
+  26. https://luminoso.com/blog/emoji-are-more-common-than-hyphens
+  27. https://blog.emojipedia.org/emoji-zwj-sequences-three-letters-many-possibilities/
+  28. https://github.com/carpedm20/emoji/
+  29. https://github.com/ines/spacymoji
+  31. https://alpha.spacy.io/usage/processing-pipelines#extensions
+  32. https://alpha.spacy.io/usage/v2
+  33. https://alpha.spacy.io/usage/processing-pipelines
+  34. https://github.com/explosion/spacy/blob/master/examples/pipeline
+  35. https://github.com/ines/spacymoji
+  36. https://explosion.ai/blog/spacy-v2-1
+  37. https://explosion.ai/blog/year-in-review-2017
+  38. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  39. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  40. https://explosion.ai/blog/supervised-learning-data-collection
+  41. https://explosion.ai/blog/supervised-similarity-siamese-id98
+  42. https://explosion.ai/
+  43. https://explosion.ai/about
+  44. https://explosion.ai/software
+  45. https://explosion.ai/demos
+  46. https://explosion.ai/blog
+  47. https://explosion.ai/legal
+  48. https://spacy.io/
+  49. https://prodi.gy/
+  50. https://explosion.ai/software
+
+   hidden links:
+  52. https://explosion.ai/
+  53. mailto:ines@explosion.ai
+  54. https://twitter.com/_inesmontani
+  55. https://github.com/ines
+  56. https://ines.io/
+  57. https://explosion.ai/blog/spacy-v2-1
+  58. https://explosion.ai/blog/year-in-review-2017
+  59. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  60. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  61. https://explosion.ai/blog/supervised-learning-data-collection
+  62. https://explosion.ai/blog/supervised-similarity-siamese-id98
+  63. mailto:contact@explosion.ai
+  64. https://twitter.com/explosion_ai
+  65. https://github.com/explosion
+  66. https://youtube.com/c/explosionai
+  67. https://explosion.ai/feed

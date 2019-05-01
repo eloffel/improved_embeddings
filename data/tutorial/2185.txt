@@ -1,0 +1,910 @@
+   #[1]wildml    feed [2]wildml    comments feed [3]wildml    deep learning
+   for chatbots, part 2     implementing a retrieval-based model in
+   tensorflow comments feed [4]deep learning for chatbots, part 1    
+   introduction [5]id56s in tensorflow, a practical guide and undocumented
+   features [6]alternate [7]alternate
+
+   [8]skip to content
+
+   [9]wildml
+
+   artificial intelligence, deep learning, and nlp
+
+   (button) menu
+     * [10]home
+     * [11]ai newsletter
+     * [12]deep learning glossary
+     * [13]contact
+     * [14]about
+
+   posted on [15]july 4, 2016august 18, 2016 by [16]denny britz
+
+deep learning for chatbots, part 2     implementing a retrieval-based model in
+tensorflow
+
+   [17]the code and data for this tutorial is on github.
+
+retrieval-based bots
+
+   in this post we   ll implement a retrieval-based bot. retrieval-based
+   models have a repository of pre-defined responses they can use, which
+   is unlike generative models that can generate responses they   ve never
+   seen before. a bit more formally, the input to a retrieval-based model
+   is a context c (the conversation up to this point) and a potential
+   response r . the model outputs is a score for the response. to find a
+   good response you would calculate the score for multiple responses and
+   choose the one with the highest score.
+
+   but why would you want to build a retrieval-based model if you can
+   build a generative model? generative models seem more flexible because
+   they don   t need this repository of predefined responses, right?
+
+   the problem is that generative models don   t work well in practice. at
+   least not yet. because they have so much freedom in how they can
+   respond, generative models tend to make grammatical mistakes and
+   produce irrelevant, generic or inconsistent responses. they also need
+   huge amounts of training data and are hard to optimize. the vast
+   majority of production systems today are retrieval-based, or a
+   combination of retrieval-based and generative. google   s [18]smart reply
+   is a good example. generative models are an active area of research,
+   but we   re not quite there yet. if you want to build a conversational
+   agent today your best bet is most likely a retrieval-based model.
+
+the ubuntu dialog corpus
+
+   in this post we   ll work with the ubuntu dialog corpus ([19]paper,
+   [20]github). the ubuntu dialog corpus (udc) is one of the largest
+   public dialog datasets available. it   s based on chat logs from the
+   ubuntu channels on a public irc network. the [21]paper goes into detail
+   on how exactly the corpus was created, so i won   t repeat that here.
+   however, it   s important to understand what kind of data we   re working
+   with, so let   s do some exploration first.
+
+   the training data consists of 1,000,000 examples, 50% positive (label
+   1) and 50% negative (label 0). each example consists of a context, the
+   conversation up to this point, and an utterance, a response to the
+   context. a positive label means that an utterance was an actual
+   response to a context, and a negative label means that the utterance
+   wasn   t     it was picked randomly from somewhere in the corpus. here is
+   some sample data.
+
+   [22]head of ubuntu dialog corpus training set
+
+   note that the dataset generation script has already done a bunch of
+   preprocessing for us     it has [23]tokenized, [24]stemmed, and
+   [25]lemmatized the output using the [26]nltk tool. the script also
+   replaced entities like names, locations, organizations, urls, and
+   system paths with special tokens. this preprocessing isn   t strictly
+   necessary, but it   s likely to improve performance by a few percent. the
+   average context is 86 words long and the average utterance is 17 words
+   long. [27]check out the jupyter notebook to see the data analysis.
+
+   the data set comes with test and validations sets. the format of these
+   is different from that of the training data. each record in the
+   test/validation set consists of a context, a ground truth utterance
+   (the real response) and 9 incorrect utterances called distractors. the
+   goal of the model is to assign the highest score to the true utterance,
+   and lower scores to wrong utterances.
+
+   [28]ubuntu dialog corpus test head
+
+   the are various ways to evaluate how well our model does. a commonly
+   used metric is recall@k. recall@id116 that we let the model pick the
+   k best responses out of the 10 possible responses (1 true and 9
+   distractors). if the correct one is among the picked ones we mark that
+   test example as correct. so, a larger id116 that the task becomes
+   easier. if we set k=10 we get a recall of 100% because we only have 10
+   responses to pick from. if we set k=1 the model has only one chance to
+   pick the right response.
+
+   at this point you may be wondering how the 9 distractors were chosen.
+   in this data set the 9 distractors were picked at random. however, in
+   the real world you may have millions of possible responses and you
+   don   t know which one is correct. you can   t possibly evaluate a million
+   potential responses to pick the one with the highest score     that   d be
+   too expensive. google   s [29]smart reply uses id91 techniques to
+   come up with a set of possible responses to choose from first. or, if
+   you only have a few hundred potential responses in total you could just
+   evaluate all of them.
+
+baselines
+
+   before starting with fancy neural network models let   s build some
+   simple baseline models to help us understand what kind of performance
+   we can expect. we   ll use the following function to evaluate our
+   recall@k metric:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   def evaluate_recall(y, y_test, k=1):
+       num_examples = float(len(y))
+       num_correct = 0
+       for predictions, label in zip(y, y_test):
+           if label in predictions[:k]:
+               num_correct += 1
+       return num_correct/num_examples
+
+   here, y is a list of our predictions sorted by score in descending
+   order, and y_test is the actual label. for example, a y of
+   [0,3,1,2,5,6,4,7,8,9] would mean that the utterance number 0 got the
+   highest score, and utterance 9 got the lowest score. remember that we
+   have 10 utterances for each test example, and the first one (index 0)
+   is always the correct one because the utterance column comes before the
+   distractor columns in our data.
+
+   intuitively, a completely random predictor should get a score of 10%
+   for recall@1, a score of 20% for recall@2, and so on. let   s see if
+   that   s the case.
+
+   1
+   2
+   3
+   # random predictor
+   def predict_random(context, utterances):
+       return np.random.choice(len(utterances), 10, replace=false)
+
+   1
+   2
+   3
+   4
+   5
+   # evaluate random predictor
+   y_random = [predict_random(test_df.context[x],
+   test_df.iloc[x,1:].values) for x in range(len(test_df))]
+   y_test = np.zeros(len(y_random))
+   for n in [1, 2, 5, 10]:
+       print(&quot;recall @ ({}, 10): {:g}&quot;.format(n,
+   evaluate_recall(y_random, y_test, n)))
+
+   [text]
+   recall @ (1, 10): 0.0937632
+   recall @ (2, 10): 0.194503
+   recall @ (5, 10): 0.49297
+   recall @ (10, 10): 1
+   [/text]
+
+   great, seems to work. of course we don   t just want a random predictor.
+   another baseline that was discussed in the original paper is a tf-idf
+   predictor. [30]tf-idf stands for    term frequency     inverse document   
+   frequency and it measures how important a word in a document is
+   relative to the whole corpus. without going into too much detail (you
+   can find many tutorials about tf-idf on the web), documents that have
+   similar content will have similar tf-idf vectors. intuitively, if a
+   context and a response have similar words they are more likely to be a
+   correct pair. at least more likely than random. many libraries out
+   there (such as [31]scikit-learn) come with built-in tf-idf functions,
+   so it   s very easy to use. let   s build a tf-idf predictor and see how
+   well it performs.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   class tfidfpredictor:
+       def __init__(self):
+           self.vectorizer = tfidfvectorizer()
+
+       def train(self, data):
+           self.vectorizer.fit(np.append(data.context.values,data.utteranc
+   e.values))
+
+       def predict(self, context, utterances):
+           # convert context and utterances into tfidf vector
+           vector_context = self.vectorizer.transform([context])
+           vector_doc = self.vectorizer.transform(utterances)
+           # the dot product measures the similarity of the resulting
+   vectors
+           result = np.dot(vector_doc, vector_context.t).todense()
+           result = np.asarray(result).flatten()
+           # sort by top results and return the indices in descending
+   order
+           return np.argsort(result, axis=0)[::-1]
+
+   1
+   2
+   3
+   4
+   5
+   6
+   # evaluate tfidf predictor
+   pred = tfidfpredictor()
+   pred.train(train_df)
+   y = [pred.predict(test_df.context[x], test_df.iloc[x,1:].values) for x
+   in range(len(test_df))]
+   for n in [1, 2, 5, 10]:
+       print(&quot;recall @ ({}, 10): {:g}&quot;.format(n,
+   evaluate_recall(y, y_test, n)))
+
+   [text]
+   recall @ (1, 10): 0.495032
+   recall @ (2, 10): 0.596882
+   recall @ (5, 10): 0.766121
+   recall @ (10, 10): 1
+   [/text]
+
+   we can see that the tf-idf model performs significantly better than the
+   random model. it   s far from perfect though. the assumptions we made
+   aren   t that great. first of all, a response doesn   t necessarily need to
+   be similar to the context to be correct. secondly, tf-idf ignores word
+   order, which can be an important signal. with a neural network model we
+   can do a bit better.
+
+dual encoder lstm
+
+   the deep learning model we will build in this post is called a dual
+   encoder lstm network. this type of network is just one of many we could
+   apply to this problem and it   s not necessarily the best one. you can
+   come up with all kinds of deep learning architectures that haven   t been
+   tried yet     it   s an active research area. for example, the [32]id195
+   model often used in machine translation would probably do well on this
+   task. the reason we are going for the dual encoder is because it has
+   been [33]reported to give decent performance on this data set. this
+   means we know what to expect and can be sure that our implementation is
+   correct. applying other models to this problem would be an interesting
+   project.
+
+   the dual encoder lstm we   ll build looks like this ([34]paper):
+
+   [35]dual encoder id56
+
+   it roughly works as follows:
+    1. both the context and the response text are split by words, and each
+       word is [36]embedded into a vector. the id27s are
+       initialized with stanford   s [37]glove vectors and are fine-tuned
+       during training (side note: this is optional and not shown in the
+       picture. i found that initializing the id27s with glove
+       did not make a big difference in terms of model performance).
+    2. both the embedded context and response are fed into the same
+       recurrent neural network word-by-word. the id56 generates a vector
+       representation that, loosely speaking, captures the    meaning    of
+       the context and response (c and r in the picture). we can choose
+       how large these vectors should be, but let   s say we pick 256
+       dimensions.
+    3. we multiply c with a matrix m to    predict    a response r'. if c is a
+       256-dimensional vector, then m is a 256  256 dimensional matrix, and
+       the result is another 256-dimensional vector, which we can
+       interpret as a generated response. the matrix m is learned during
+       training.
+    4. we measure the similarity of the predicted response r' and the
+       actual response r by taking the dot product of these two vectors. a
+       large dot product means the vectors are similar and that the
+       response should receive a high score. we then apply a sigmoid
+       function to convert that score into a id203. note that steps
+       3 and 4 are combined in the figure.
+
+   to train the network, we also need a loss (cost) function. we   ll use
+   the binary cross-id178 loss common for classification problems. let   s
+   call our true label for a context-response pair y. this can be either 1
+   (actual response) or 0 (incorrect response). let   s call our predicted
+   id203 from 4. above y'. then, the cross id178 loss is
+   calculated as l=    y * ln(y')     (1     y) * ln(1   y'). the intuition behind
+   this formula is simple. if y=1 we are left with l = -ln(y'), which
+   penalizes a prediction far away from 1, and if y=0 we are left with l=
+      ln(1   y'), which penalizes a prediction far away from 0.
+
+   for our implementation we   ll use a combination of [38]numpy,
+   [39]pandas, [40]tensorflow and [41]tf learn (a combination of
+   high-level convenience functions for tensorflow).
+
+id174
+
+   the [42]dataset originally comes in csv format. we could work directly
+   with csvs, but it   s better to convert our data into tensorflow   s
+   proprietary [43]example format. (quick side note: there   s also
+   tf.sequenceexample but it doesn   t seem to be supported by tf.learn
+   yet). the main benefit of this format is that it allows us to load
+   tensors directly from the input files and let tensorflow handle all the
+   shuffling, batching and queuing of inputs. as part of the preprocessing
+   we also create a vocabulary. this means we map each word to an integer
+   number, e.g.    cat    may become 2631. the tfrecord files we will generate
+   store these integer numbers instead of the word strings. we will also
+   save the vocabulary so that we can map back from integers to words
+   later on.
+
+   each example contains the following fields:
+     * context: a sequence of word ids representing the context text, e.g.
+       [231, 2190, 737, 0, 912]
+     * context_len: the length of the context, e.g. 5 for the above
+       example
+     * utterance a sequence of word ids representing the utterance
+       (response)
+     * utterance_len: the length of the utterance
+     * label: only in the training data. 0 or 1.
+     * distractor_[n]: only in the test/validation data. n ranges from 0
+       to 8. a sequence of word ids representing the distractor utterance.
+     * distractor_[n]_len: only in the test/validation data. n ranges from
+       0 to 8. the length of the utterance.
+
+   the preprocessing is done by the [44]prepare_data.py python script,
+   which generates 3 files: train.tfrecords, validation.tfrecords and
+   test.tfrecords. you can run the script yourself or [45]download the
+   data files here.
+
+creating an input function
+
+   in order to use tensorflow   s built-in support for training and
+   evaluation we need to create an input function     a function that
+   returns batches of our input data. in fact, because our training and
+   test data have different formats, we need different input functions for
+   them. the input function should return a batch of features and labels
+   (if available). something along the lines of:
+
+   1
+   2
+   3
+   def input_fn():
+     # todo load and preprocess data here
+     return batched_features, labels
+
+   because we need different input functions during training and
+   evaluation and because we hate code duplication we create a wrapper
+   called create_input_fn that creates an input function for the
+   appropriate mode. it also takes a few other parameters. here   s the
+   definition we   re using:
+
+   1
+   2
+   3
+   4
+   5
+   def create_input_fn(mode, input_files, batch_size, num_epochs=none):
+     def input_fn():
+       # todo load and preprocess data here
+       return batched_features, labels
+     return input_fn
+
+   the complete code can be found in [46]udc_inputs.py. on a high level,
+   the function does the following:
+    1. create a feature definition that describes the fields in our
+       example file
+    2. read records from the input_files with tf.tfrecordreader
+    3. parse the records according to the feature definition
+    4. extract the training labels
+    5. batch multiple examples and training labels
+    6. return the batched examples and training labels
+
+defining id74
+
+   we already mentioned that we want to use the recall@k metric to
+   evaluate our model. luckily, tensorflow already comes with many
+   standard id74 that we can use, including recall@k. to use
+   these metrics we need to create a dictionary that maps from a metric
+   name to a function that takes the predictions and label as arguments:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   def create_evaluation_metrics():
+     eval_metrics = {}
+     for k in [1, 2, 5, 10]:
+       eval_metrics[&quot;recall_at_%d&quot; % k] = functools.partial(
+           tf.contrib.metrics.streaming_sparse_recall_at_k,
+           k=k)
+     return eval_metrics
+
+   above, we use [47]functools.partial to convert a function that takes 3
+   arguments to one that only takes 2 arguments. don   t let the name
+   streaming_sparse_recall_at_k confuse you. streaming just means that the
+   metric is accumulated over multiple batches, and sparse refers to the
+   format of our labels.
+
+   this brings is to an important point: what exactly is the format of our
+   predictions during evaluation? during training, we predict the
+   id203 of the example being correct. but during evaluation our
+   goal is to score the utterance and 9 distractors and pick the best one
+       we don   t simply predict correct/incorrect. this means that during
+   evaluation each example should result in a vector of 10 scores, e.g.
+   [0.34, 0.11, 0.22, 0.45, 0.01, 0.02, 0.03, 0.08, 0.33, 0.11], where the
+   scores correspond to the true response and the 9 distractors
+   respectively. each utterance is scored independently, so the
+   probabilities don   t need to add up to 1. because the true response is
+   always element 0 in array, the label for each example is 0. the example
+   above would be counted as classified incorrectly by recall@1 because
+   the third distractor got a id203 of 0.45 while the true response
+   only got 0.34. it would be scored as correct by recall@2 however.
+
+boilerplate training code
+
+   before writing the actual neural network code i like to write the
+   boilerplate code for training and evaluating the model. that   s because,
+   as long as you adhere to the right interfaces, it   s easy to swap out
+   what kind of network you are using. let   s assume we have a model
+   function model_fn that takes as inputs our batched features, labels and
+   mode (train or evaluation) and returns the predictions. then we can
+   write general-purpose code to train our model as follows:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   25
+   26
+   27
+   28
+   29
+   30
+   estimator = tf.contrib.learn.estimator(
+   model_fn=model_fn,
+   model_dir=model_dir,
+   config=tf.contrib.learn.runconfig())
+
+   input_fn_train = udc_inputs.create_input_fn(
+   mode=tf.contrib.learn.modekeys.train,
+   input_files=[train_file],
+   batch_size=hparams.batch_size)
+
+   input_fn_eval = udc_inputs.create_input_fn(
+   mode=tf.contrib.learn.modekeys.eval,
+   input_files=[validation_file],
+   batch_size=hparams.eval_batch_size,
+   num_epochs=1)
+
+   eval_metrics = udc_metrics.create_evaluation_metrics()
+
+   # we need to subclass theis manually for now. the next tf version will
+   # have support validationmonitors with metrics built-in.
+   # it's already on the master branch.
+   class evaluationmonitor(tf.contrib.learn.monitors.everyn):
+   def every_n_step_end(self, step, outputs):
+     self._estimator.evaluate(
+       input_fn=input_fn_eval,
+       metrics=eval_metrics,
+       steps=none)
+
+   eval_monitor = evaluationmonitor(every_n_steps=flags.eval_every)
+   estimator.fit(input_fn=input_fn_train, steps=none,
+   monitors=[eval_monitor])
+
+   here we create an estimator for our model_fn, two input functions for
+   training and evaluation data, and our id74 dictionary. we
+   also define a monitor that evaluates our model every flags.eval_every
+   steps during training. finally, we train the model. the training runs
+   indefinitely, but tensorflow automatically saves checkpoint files in
+   model_dir, so you can stop the training at any time. a more fancy
+   technique would be to use early stopping, which means you automatically
+   stop training when a validation set metric stops improving (i.e. you
+   are starting to overfit). you can see the full code in
+   [48]udc_train.py.
+
+   two things i want to mention briefly is the usage of flags. this is a
+   way to give command line parameters to the program (similar to python   s
+   argparse). hparams is a custom object we create in [49]hparams.py that
+   holds hyperparameters, nobs we can tweak, of our model. this hparams
+   object is given to the model when we instantiate it.
+
+creating the model
+
+   now that we have set up the boilerplate code around inputs, parsing,
+   evaluation and training it   s time to write code for our dual lstm
+   neural network. because we have different formats of training and
+   evaluation data i   ve written a [50]create_model_fn wrapper that takes
+   care of bringing the data into the right format for us. it takes a
+   model_impl argument, which is a function that actually makes
+   predictions. in our case it   s the dual encoder lstm we described above,
+   but we could easily swap it out for some other neural network. let   s
+   see what that looks like:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   25
+   26
+   27
+   28
+   29
+   30
+   31
+   32
+   33
+   34
+   35
+   36
+   37
+   38
+   39
+   40
+   41
+   42
+   43
+   44
+   45
+   46
+   47
+   48
+   49
+   50
+   51
+   52
+   53
+   54
+   55
+   56
+   57
+   58
+   59
+   60
+   def dual_encoder_model(
+       hparams,
+       mode,
+       context,
+       context_len,
+       utterance,
+       utterance_len,
+       targets):
+
+     # initialize embedidngs randomly or with pre-trained vectors if
+   available
+     embeddings_w = get_embeddings(hparams)
+
+     # embed the context and the utterance
+     context_embedded = tf.nn.embedding_lookup(
+         embeddings_w, context, name=&quot;embed_context&quot;)
+     utterance_embedded = tf.nn.embedding_lookup(
+         embeddings_w, utterance, name=&quot;embed_utterance&quot;)
+
+
+     # build the id56
+     with tf.variable_scope(&quot;id56&quot;) as vs:
+       # we use an lstm cell
+       cell = tf.nn.id56_cell.lstmcell(
+           hparams.id56_dim,
+           forget_bias=2.0,
+           use_peepholes=true,
+           state_is_tuple=true)
+
+       # run the utterance and context through the id56
+       id56_outputs, id56_states = tf.nn.dynamic_id56(
+           cell,
+           tf.concat(0, [context_embedded, utterance_embedded]),
+           sequence_length=tf.concat(0, [context_len, utterance_len]),
+           dtype=tf.float32)
+       encoding_context, encoding_utterance = tf.split(0, 2, id56_states.h)
+
+     with tf.variable_scope(&quot;prediction&quot;) as vs:
+       m = tf.get_variable(&quot;m&quot;,
+         shape=[hparams.id56_dim, hparams.id56_dim],
+         initializer=tf.truncated_normal_initializer())
+
+       # &quot;predict&quot; a  response: c * m
+       generated_response = tf.matmul(encoding_context, m)
+       generated_response = tf.expand_dims(generated_response, 2)
+       encoding_utterance = tf.expand_dims(encoding_utterance, 2)
+
+       # dot product between generated response and actual response
+       # (c * m) * r
+       logits = tf.batch_matmul(generated_response, encoding_utterance,
+   true)
+       logits = tf.squeeze(logits, [2])
+
+       # apply sigmoid to convert logits to probabilities
+       probs = tf.sigmoid(logits)
+
+       # calculate the binary cross-id178 loss
+       losses = tf.nn.sigmoid_cross_id178_with_logits(logits,
+   tf.to_float(targets))
+
+     # mean loss across the batch of examples
+     mean_loss = tf.reduce_mean(losses, name=&quot;mean_loss&quot;)
+     return probs, mean_loss
+
+   the full code is in [51]dual_encoder.py. given this, we can now
+   instantiate our model function in the main routine in [52]udc_train.py
+   that we defined earlier.
+
+   1
+   2
+   3
+   model_fn = udc_model.create_model_fn(
+     hparams=hparams,
+     model_impl=dual_encoder_model)
+
+   that   s it! we can now run python udc_train.py and it should start
+   training our networks, occasionally evaluating recall on our validation
+   data (you can choose how often you want to evaluate using the
+   --eval_every switch). to get a complete list of all available command
+   line flags that we defined using tf.flags and hparams you can run
+   python udc_train.py --help.
+
+   [text]
+   info:tensorflow:training step 20200, loss = 0.36895 (0.330 sec/batch).
+   info:tensorflow:step 20201: mean_loss:0 = 0.385877
+   info:tensorflow:training step 20300, loss = 0.25251 (0.338 sec/batch).
+   info:tensorflow:step 20301: mean_loss:0 = 0.405653
+      
+   info:tensorflow:results after 270 steps (0.248 sec/batch): recall_at_1
+   = 0.507581018519, recall_at_2 = 0.689699074074, recall_at_5 =
+   0.913020833333, recall_at_10 = 1.0, loss = 0.5383
+      
+   [/text]
+
+evaluating the model
+
+   after you   ve trained the model you can evaluate it on the test set
+   using python udc_test.py --model_dir=$model_dir_from_training, e.g.
+   python udc_test.py
+   --model_dir=~/github/chatbot-retrieval/runs/1467389151. this will run
+   the recall@k id74 on the test set instead of the
+   validation set. note that you must call udc_test.py with the same
+   parameters you used during training. so, if you trained with
+   --embedding_size=128 you need to call the test script with the same.
+
+   after training for about 20,000 steps (around an hour on a fast gpu)
+   our model gets the following results on the test set:
+
+   [text]
+   recall_at_1 = 0.507581018519
+   recall_at_2 = 0.689699074074
+   recall_at_5 = 0.913020833333
+   [/text]
+
+   while recall@1 is close to our tfidf model, recall@2 and recall@5 are
+   significantly better, suggesting that our neural network assigns higher
+   scores to the correct answers. the original paper reported 0.55, 0.72
+   and 0.92 for recall@1, recall@2, and recall@5 respectively, but i
+   haven   t been able to reproduce scores quite as high. perhaps additional
+   id174 or hyperparameter optimization may bump scores up a
+   bit more.
+
+making predictions
+
+   you can modify and run [53]udc_predict.py to get id203 scores for
+   unseen data. for example python udc_predict.py
+   --model_dir=./runs/1467576365/ outputs:
+
+   [text]
+   context: example context
+   response 1: 0.44806
+   response 2: 0.481638
+   [/text]
+
+   you could imagine feeding in 100 potential responses to a context and
+   then picking the one with the highest score.
+
+conclusion
+
+   in this post we   ve implemented a retrieval-based neural network model
+   that can assign scores to potential responses given a conversation
+   context. there is still a lot of room for improvement, however. one can
+   imagine that other neural networks do better on this task than a dual
+   lstm encoder. there is also a lot of room for hyperparameter
+   optimization, or improvements to the preprocessing step. [54]the code
+   and data for this tutorial is on github, so check it out.
+
+   categories[55]conversational agents, [56]neural networks, [57]nlp,
+   [58]recurrent neural networks
+
+post navigation
+
+   [59]previous postprevious deep learning for chatbots, part 1    
+   introduction
+   [60]next postnext id56s in tensorflow, a practical guide and
+   undocumented features
+
+subscribe to blog via email
+
+   enter your email address to subscribe to this blog and receive
+   notifications of new posts by email.
+
+   email address ____________________
+
+   (button) subscribe
+
+recent posts
+
+     * [61]introduction to learning to trade with id23
+     * [62]ai and deep learning in 2017     a year in review
+     * [63]hype or not? some perspective on openai   s dota 2 bot
+     * [64]learning id23 (with code, exercises and
+       solutions)
+     * [65]id56s in tensorflow, a practical guide and undocumented features
+     * [66]deep learning for chatbots, part 2     implementing a
+       retrieval-based model in tensorflow
+     * [67]deep learning for chatbots, part 1     introduction
+     * [68]attention and memory in deep learning and nlp
+
+archives
+
+     * [69]february 2018
+     * [70]december 2017
+     * [71]august 2017
+     * [72]october 2016
+     * [73]august 2016
+     * [74]july 2016
+     * [75]april 2016
+     * [76]january 2016
+     * [77]december 2015
+     * [78]november 2015
+     * [79]october 2015
+     * [80]september 2015
+
+categories
+
+     * [81]conversational agents
+     * [82]convolutional neural networks
+     * [83]deep learning
+     * [84]gpu
+     * [85]id38
+     * [86]memory
+     * [87]neural networks
+     * [88]news
+     * [89]nlp
+     * [90]recurrent neural networks
+     * [91]id23
+     * [92]id56s
+     * [93]tensorflow
+     * [94]trading
+     * [95]uncategorized
+
+meta
+
+     * [96]log in
+     * [97]entries rss
+     * [98]comments rss
+     * [99]wordpress.org
+
+   [100]proudly powered by wordpress
+
+references
+
+   1. http://www.wildml.com/feed/
+   2. http://www.wildml.com/comments/feed/
+   3. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/feed/
+   4. http://www.wildml.com/2016/04/deep-learning-for-chatbots-part-1-introduction/
+   5. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+   6. http://www.wildml.com/wp-json/oembed/1.0/embed?url=http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+   7. http://www.wildml.com/wp-json/oembed/1.0/embed?url=http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/&format=xml
+   8. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/#content
+   9. http://www.wildml.com/
+  10. http://www.wildml.com/
+  11. https://www.getrevue.co/profile/wildml
+  12. http://www.wildml.com/deep-learning-glossary/
+  13. mailto:dennybritz@gmail.com
+  14. http://www.wildml.com/about/
+  15. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+  16. http://www.wildml.com/author/dennybritz/
+  17. https://github.com/dennybritz/chatbot-retrieval/
+  18. http://arxiv.org/abs/1606.04870
+  19. http://arxiv.org/abs/1506.08909
+  20. https://github.com/rkadlec/ubuntu-ranking-dataset-creator
+  21. http://arxiv.org/abs/1506.08909
+  22. http://www.wildml.com/wp-content/uploads/2016/04/screen-shot-2016-04-20-at-12.29.42-pm.png
+  23. http://www.nltk.org/api/nltk.tokenize.html#module-nltk.tokenize
+  24. http://www.nltk.org/api/nltk.stem.html#module-nltk.stem.snowball
+  25. http://www.nltk.org/api/nltk.stem.html#module-nltk.stem.id138
+  26. http://www.nltk.org/
+  27. https://github.com/dennybritz/chatbot-retrieval/blob/master/notebooks/data exploration.ipynb
+  28. http://www.wildml.com/wp-content/uploads/2016/04/screen-shot-2016-04-20-at-12.43.09-pm.png
+  29. http://arxiv.org/abs/1606.04870
+  30. https://en.wikipedia.org/wiki/tf   idf
+  31. http://scikit-learn.org/
+  32. https://www.tensorflow.org/versions/r0.9/tutorials/id195/index.html
+  33. http://arxiv.org/abs/1510.03753
+  34. http://arxiv.org/abs/1506.08909
+  35. http://www.wildml.com/wp-content/uploads/2016/04/screen-shot-2016-04-21-at-10.51.18-am.png
+  36. https://en.wikipedia.org/wiki/word_embedding
+  37. http://nlp.stanford.edu/projects/glove/
+  38. http://www.numpy.org/
+  39. http://pandas.pydata.org/
+  40. http://www.tensorflow.org/
+  41. https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/learn/python/learn
+  42. https://github.com/rkadlec/ubuntu-ranking-dataset-creator
+  43. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/example/example.proto
+  44. https://github.com/dennybritz/chatbot-retrieval/blob/master/scripts/prepare_data.py
+  45. https://drive.google.com/open?id=0b_bzck-ksdkpvetvc1r6y01hmwm
+  46. https://github.com/dennybritz/chatbot-retrieval/blob/master/udc_inputs.py
+  47. https://docs.python.org/2/library/functools.html#functools.partial
+  48. https://github.com/dennybritz/chatbot-retrieval/blob/master/udc_train.py
+  49. https://github.com/dennybritz/chatbot-retrieval/blob/master/udc_hparams.py
+  50. https://github.com/dennybritz/chatbot-retrieval/blob/master/udc_model.py
+  51. https://github.com/dennybritz/chatbot-retrieval/blob/master/models/dual_encoder.py
+  52. https://github.com/dennybritz/chatbot-retrieval/blob/master/udc_train.py
+  53. https://github.com/dennybritz/chatbot-retrieval/blob/master/udc_predict.py
+  54. https://github.com/dennybritz/chatbot-retrieval/
+  55. http://www.wildml.com/category/conversational-agents/
+  56. http://www.wildml.com/category/neural-networks/
+  57. http://www.wildml.com/category/nlp/
+  58. http://www.wildml.com/category/neural-networks/recurrent-neural-networks/
+  59. http://www.wildml.com/2016/04/deep-learning-for-chatbots-part-1-introduction/
+  60. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+  61. http://www.wildml.com/2018/02/introduction-to-learning-to-trade-with-reinforcement-learning/
+  62. http://www.wildml.com/2017/12/ai-and-deep-learning-in-2017-a-year-in-review/
+  63. http://www.wildml.com/2017/08/hype-or-not-some-perspective-on-openais-dota-2-bot/
+  64. http://www.wildml.com/2016/10/learning-reinforcement-learning/
+  65. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+  66. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+  67. http://www.wildml.com/2016/04/deep-learning-for-chatbots-part-1-introduction/
+  68. http://www.wildml.com/2016/01/attention-and-memory-in-deep-learning-and-nlp/
+  69. http://www.wildml.com/2018/02/
+  70. http://www.wildml.com/2017/12/
+  71. http://www.wildml.com/2017/08/
+  72. http://www.wildml.com/2016/10/
+  73. http://www.wildml.com/2016/08/
+  74. http://www.wildml.com/2016/07/
+  75. http://www.wildml.com/2016/04/
+  76. http://www.wildml.com/2016/01/
+  77. http://www.wildml.com/2015/12/
+  78. http://www.wildml.com/2015/11/
+  79. http://www.wildml.com/2015/10/
+  80. http://www.wildml.com/2015/09/
+  81. http://www.wildml.com/category/conversational-agents/
+  82. http://www.wildml.com/category/neural-networks/convolutional-neural-networks/
+  83. http://www.wildml.com/category/deep-learning/
+  84. http://www.wildml.com/category/gpu/
+  85. http://www.wildml.com/category/language-modeling/
+  86. http://www.wildml.com/category/memory/
+  87. http://www.wildml.com/category/neural-networks/
+  88. http://www.wildml.com/category/news/
+  89. http://www.wildml.com/category/nlp/
+  90. http://www.wildml.com/category/neural-networks/recurrent-neural-networks/
+  91. http://www.wildml.com/category/reinforcement-learning/
+  92. http://www.wildml.com/category/id56s/
+  93. http://www.wildml.com/category/tensorflow/
+  94. http://www.wildml.com/category/trading/
+  95. http://www.wildml.com/category/uncategorized/
+  96. http://www.wildml.com/wp-login.php
+  97. http://www.wildml.com/feed/
+  98. http://www.wildml.com/comments/feed/
+  99. https://wordpress.org/
+ 100. https://wordpress.org/

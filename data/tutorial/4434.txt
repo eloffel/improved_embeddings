@@ -1,0 +1,401 @@
+   #[1]graduate descent atom feed
+
+                              [2]graduate descent
+
+     * [3]atom
+
+     * [4]about
+     * [5]archive
+
+backprop is not just the chain rule
+
+   aug 18, 2017
+
+   almost everyone i know says that "backprop is just the chain rule."
+   although that's basically true, there are some subtle and beautiful
+   things about automatic differentiation techniques (including backprop)
+   that will not be appreciated with this dismissive attitude.
+
+   this leads to a poor understanding. as [6]i have ranted before: people
+   do not understand basic facts about autodiff.
+     * evaluating \(\nabla f(x)\) is provably as fast as evaluating
+       \(f(x)\).
+
+     * code for \(\nabla f(x)\) can be derived by a rote program
+       transformation, even if the code has control flow structures like
+       loops and intermediate variables (as long as the control flow is
+       independent of \(x\)). you can even do this "automatic"
+       transformation by hand!
+
+autodiff \(\ne\) what you learned in calculus
+
+   let's try to understand the difference between autodiff and the type of
+   differentiation that you learned in calculus, which is called symbolic
+   differentiation.
+
+   i'm going to use an example from [7]justin domke's notes,
+   $$ f(x) = \exp(\exp(x) + \exp(x)^2) + \sin(\exp(x) + \exp(x)^2). $$
+
+   if we were writing a program (e.g., in python) to compute \(f\), we'd
+   definitely take advantage of the fact that it has a lot of repeated
+   evaluations for efficiency.
+def f(x):
+    a = exp(x)
+    b = a**2
+    c = a + b
+    d = exp(c)
+    e = sin(c)
+    return d + e
+
+   symbolic differentiation would have to use the "flat" version of this
+   function, so no intermediate variable \(\rightarrow\) slow.
+
+   automatic differentiation lets us differentiate a program with
+   intermediate variables.
+     * the rules for transforming the code for a function into code for
+       the gradient are really minimal (fewer things to memorize!).
+       additionally, the rules are more general than in symbolic case
+       because they handle as superset of programs.
+     * quite [8]beautifully, the program for the gradient has exactly the
+       same structure as the function, which implies that we get the same
+       runtime (up to some constants factors).
+
+   i won't give the details of how to execute the id26
+   transform to the program. you can get that from [9]justin domke's notes
+   and many other good resources. [10]here's some code that i wrote that
+   accompanies to the f(x) example, which has a bunch of comments
+   describing the manual "automatic" differentiation process on f(x).
+
+autodiff by the method of lagrange multipliers
+
+   let's view the intermediate variables in our optimization problem as
+   simple equality constraints in an equivalent constrained optimization
+   problem. it turns out that the de facto method for handling
+   constraints, the method lagrange multipliers, recovers exactly the
+   adjoints (intermediate derivatives) in the backprop algorithm!
+
+   here's our example from earlier written in this constraint form:
+   $$ \begin{align*} \underset{x}{\text{argmax}}\ & f \\ \text{s.t.} \quad
+   a &= \exp(x) \\ b &= a^2 \\ c &= a + b \\ d &= \exp(c) \\ e &= \sin(c)
+   \\ f &= d + e \end{align*} $$
+
+the general formulation
+
+   \begin{align*} & \underset{\boldsymbol{x}}{\text{argmax}}\ z_n & \\ &
+   \text{s.t.}\quad z_i = x_i &\text{ for $1 \le i \le d$} \\ &
+   \phantom{\text{s.t.}}\quad z_i = f_i(z_{\alpha(i)}) &\text{ for $d < i
+   \le n$} \\ \end{align*}
+
+   the first set of constraint (\(1, \ldots, d\)) are a little silly. they
+   are only there to keep our formulation tidy. the variables in the
+   program fall into three categories:
+     * input variables (\(\boldsymbol{x}\)): \(x_1, \ldots, x_d\)
+     * intermediate variables: (\(\boldsymbol{z}\)): \(z_i =
+       f_i(z_{\alpha(i)})\) for \(1 \le i \le n\), where \(\alpha(i)\) is
+       a list of indices from \(\{1, \ldots, n-1\}\) and \(z_{\alpha(i)}\)
+       is the subvector of variables needed to evaluate \(f_i(\cdot)\).
+       minor detail: take \(f_{1:d}\) to be the identity function.
+     * output variable (\(z_n\)): we assume that our programs has a
+       singled scalar output variable, \(z_n\), which represents the
+       quantity we'd like to maximize.
+
+   the relation \(\alpha\) is a [11]dependency graph among variables.
+   thus, \(\alpha(i)\) is the list of incoming edges to node \(i\) and
+   \(\beta(j) = \{ i: j \in \alpha(i) \}\) is the set of outgoing edges.
+   for now, we'll assume that the dependency graph given by \(\alpha\) is
+       acyclic: no \(z_i\) can transitively depend on itself.    
+   single-assignment: each \(z_i\) appears on the left-hand side of
+   exactly one equation. we'll discuss relaxing these assumptions in [12]  
+   generalizations.
+
+   the standard way to solve a constrained optimization is to use the
+   method lagrange multipliers, which converts a constrained optimization
+   problem into an unconstrained problem with a few more variables
+   \(\boldsymbol{\lambda}\) (one per \(x_i\) constraint), called lagrange
+   multipliers.
+
+the lagrangian
+
+   to handle constraints, let's dig up a tool from our calculus class,
+   [13]the method of lagrange multipliers, which converts a constrained
+   optimization problem into an unconstrained one. the unconstrained
+   version is called "the lagrangian" of the constrained problem. here is
+   its form for our task,
+   $$ \mathcal{l}\left(\boldsymbol{x}, \boldsymbol{z},
+   \boldsymbol{\lambda}\right) = z_n - \sum_{i=1}^n \lambda_i \cdot \left(
+   z_i - f_i(z_{\alpha(i)}) \right). $$
+
+   optimizing the lagrangian amounts to solving the following nonlinear
+   system of equations, which give necessary, but not sufficient,
+   conditions for optimality,
+   $$ \nabla \mathcal{l}\left(\boldsymbol{x}, \boldsymbol{z},
+   \boldsymbol{\lambda}\right) = 0. $$
+
+   let's look a little closer at the lagrangian conditions by breaking up
+   the system of equations into salient parts, corresponding to which
+   variable types are affected.
+
+   intermediate variables (\(\boldsymbol{z}\)): optimizing the
+   multipliers   i.e., setting the gradient of lagrangian w.r.t.
+   \(\boldsymbol{\lambda}\) to zero   ensures that the constraints on
+   intermediate variables are satisfied.
+   $$ \begin{eqnarray*} \nabla_{\! \lambda_i} \mathcal{l} = z_i -
+   f_i(z_{\alpha(i)}) = 0 \quad\leftrightarrow\quad z_i =
+   f_i(z_{\alpha(i)}) \end{eqnarray*} $$
+
+   we can use forward propagation to satisfy these equations, which we may
+   regard as a block-coordinate step in the context of optimizing the
+   \(\mathcal{l}\).
+
+   lagrange multipliers (\(\boldsymbol{\lambda}\), excluding
+   \(\lambda_n\)): setting the gradient of the \(\mathcal{l}\) w.r.t. the
+   intermediate variables equal to zeros tells us what to do with the
+   intermediate multipliers.
+   \begin{eqnarray*} 0 &=& \nabla_{\! z_j} \mathcal{l} \\ &=& \nabla_{\!
+   z_j}\! \left[ z_n - \sum_{i=1}^n \lambda_i \cdot \left( z_i -
+   f_i(z_{\alpha(i)}) \right) \right] \\ &=& - \sum_{i=1}^n \lambda_i
+   \nabla_{\! z_j}\! \left[ \left( z_i - f_i(z_{\alpha(i)}) \right)
+   \right] \\ &=& - \left( \sum_{i=1}^n \lambda_i \nabla_{\! z_j}\! \left[
+   z_i \right] \right) + \left( \sum_{i=1}^n \lambda_i \nabla_{\! z_j}\!
+   \left[ f_i(z_{\alpha(i)}) \right] \right) \\ &=& - \lambda_j + \sum_{i
+   \in \beta(j)} \lambda_i \frac{\partial f_i(z_{\alpha(i)})}{\partial
+   z_j} \\ &\updownarrow& \\ \lambda_j &=& \sum_{i \in \beta(j)} \lambda_i
+   \frac{\partial f_i(z_{\alpha(i)})}{\partial z_j} \\ \end{eqnarray*}
+
+   clearly, \(\frac{\partial f_i(z_{\alpha(i)})}{\partial z_j} = 0\) for
+   \(j \notin \alpha(i)\), which is why the \(\beta(j)\) notation came in
+   handy. by assumption, the local derivatives, \(\frac{\partial
+   f_i(z_{\alpha(i)})}{\partial z_j}\) for \(j \in \alpha(i)\), are easy
+   to calculate   we don't even need the chain rule to compute them because
+   they are simple function applications without composition. similar to
+   the equations for \(\boldsymbol{z}\), solving this linear system is
+   another block-coordinate step.
+
+   key observation: the last equation for \(\lambda_j\) should look very
+   familiar: it is exactly the equation used in id26! it says
+   that we sum \(\lambda_i\) of nodes that immediately depend on \(j\)
+   where we scaled each \(\lambda_i\) by the derivative of the function
+   that directly relates \(i\) and \(j\). you should think of the scaling
+   as a "unit conversion" from derivatives of type \(i\) to derivatives of
+   type \(j\).
+
+   output multiplier (\(\lambda_n\)): here we follow the same pattern as
+   for intermediate multipliers.
+   $$ \begin{eqnarray*} 0 &=& \nabla_{\! z_n}\! \left[ z_n - \sum_{i=1}^n
+   \lambda_i \cdot \left( z_i - f_i(z_{\alpha(i)}) \right) \right] &=& 1 -
+   \lambda_n \\ &\updownarrow& \\ \lambda_n &=& 1 \end{eqnarray*} $$
+
+   input multipliers \((\boldsymbol{\lambda}_{1:d})\): our dummy
+   constraints gives us \(\boldsymbol{\lambda}_{1:d}\), which are
+   conveniently equal to the gradient of the function we're optimizing:
+   $$ \nabla_{\!\boldsymbol{x}} f(\boldsymbol{x}) =
+   \boldsymbol{\lambda}_{1:d}. $$
+
+   of course, this interpretation is only precise when     the constraints
+   are satisfied (\(\boldsymbol{z}\) equations) and     the linear system on
+   multipliers is satisfied (\(\boldsymbol{\lambda}\) equations).
+
+   input variables (\(\boldsymbol{x}\)): unfortunately, the there is no
+   closed-form solution to how to set \(\boldsymbol{x}\). for this we
+   resort to something like gradient ascent. conveniently,
+   \(\nabla_{\!\boldsymbol{x}} f(\boldsymbol{x}) =
+   \boldsymbol{\lambda}_{1:d}\), which we can use to optimize
+   \(\boldsymbol{x}\)!
+
+generalizations
+
+   we can think of these equations for \(\boldsymbol{\lambda}\) as a
+   simple linear system of equations, which we are solving by
+   back-substitution when we use the id26 method. the reason
+   why back-substitution is sufficient for the linear system (i.e., we
+   don't need a full linear system solver) is that the dependency graph
+   induced by the \(\alpha\) relation is acyclic. if we had needed a full
+   linear system solver, the solution would take \(\mathcal{o}(n^3)\) time
+   instead of linear time, seriously blowing-up our nice runtime!
+
+   this connection to linear systems is interesting: it tells us that we
+   can compute global gradients in cyclic graphs. all we'd need is to run
+   a linear system solver to stitch together local gradients! that is
+   exactly what the [14]implicit function theorem says!
+
+   cyclic constraints add some expressive powerful to our "constraint
+   language" and it's interesting that we can still efficiently compute
+   gradients in this setting. an example of what a general type of cyclic
+   constraint looks like is
+   $$ \begin{align*} & \underset{\boldsymbol{x}}{\text{argmax}}\, z_n \\ &
+   \text{s.t.}\quad g(\boldsymbol{z}) = \boldsymbol{0} \\ &
+   \text{and}\quad \boldsymbol{z}_{1:d} = \boldsymbol{x} \end{align*} $$
+
+   where \(g\) can be an any smooth multivariate function of the
+   intermediate variables! of course, allowing cyclic constraints comes at
+   the cost of a more-difficult analogue of "the forward pass" to satisfy
+   the \(\boldsymbol{z}\) equations (if we want to keep it a
+   block-coordinate step). the \(\boldsymbol{\lambda}\) equations are now
+   a linear system that requires a linear solver (e.g., gaussian
+   elimination).
+
+   example use cases:
+     * bi-level optimization: solving an optimization problem with another
+       one inside it. for example, [15]gradient-based hyperparameter
+       optimization in machine learning. the implicit function theorem
+       manages to get gradients of hyperparameters without needing to
+       store any of intermediate states of the optimization algorithm used
+       in the inner optimization! this is a huge memory saver since direct
+       backprop on the inner gradient decent algorithm would require
+       caching all intermediate states. yikes!
+     * cyclic constraints are useful in many graph algorithms. for
+       example, computing gradients of edge weights in a general
+       finite-state machine or, similarly, computing the value function in
+       a markov decision process.
+
+other methods for optimization?
+
+   the connection to lagrangians brings tons of algorithms for constrained
+   optimization into the mix! we can imagine using more general algorithms
+   for optimizing our function and other ways of enforcing the
+   constraints. we see immediately that we could run optimization with
+   adjoints set to values other than those that backprop would set them to
+   (i.e., we can optimize them like we'd do in other algorithms for
+   optimizing general lagrangians).
+
+summary
+
+   backprop is does not directly fall out of the the rules for
+   differentiation that you learned in calculus (e.g., the chain rule).
+     * this is because it operates on a more general family of functions:
+       programs which have intermediate variables. supporting intermediate
+       variables is crucial for implementing both functions and their
+       gradients efficiently.
+
+   i described how we could use something we did learn from calculus 101,
+   the method of lagrange multipliers, to support optimization with
+   intermediate variables.
+     * it turned out that backprop is a particular instantiation of the
+       method of lagrange multipliers, involving block-coordinate steps
+       for solving for the intermediates and multipliers.
+     * i also described a neat generalization to support cyclic programs
+       and i hinted at ideas for doing optimization a little differently,
+       deviating from the de facto block-coordinate strategy.
+
+                           levels of enlightenment
+
+further reading
+
+   after working out the connection between backprop and the method of
+   lagrange multipliers, i discovered following paper, which beat me to
+   it. i don't think my version is too redundant.
+
+     yann lecun. (1988) [16]a theoretical framework from
+     back-propagation.
+
+   ben recht has great blog post that uses the implicit function theorem
+   to derive the method of lagrange multipliers. he also touches on the
+   connection to id26.
+
+     ben recht. (2016) [17]mechanics of lagrangians.
+
+   tom goldstein's group took the lagrangian view of backprop and used it
+   to design an admm approach for optimizing neural nets. the admm
+   approach operates massively parallel and leverages lots of highly
+   optimized solvers for subproblems. this work nicely demonstrates that
+   understanding automatic differentiation   in the broader sense that i
+   described in this post   facilitates the development of novel
+   optimization algorithms.
+
+     gavin taylor, ryan burmeister, zheng xu, bharat singh, ankit patel,
+     tom goldstein. (2018) [18]training neural networks without
+     gradients: a scalable admm approach.
+
+   the id26 algorithm can be cleanly generalized from values to
+   functionals!
+
+     alexander grubb and j. andrew bagnell. (2010) [19]boosted
+     id26 learning for training deep modular networks.
+
+code
+
+   i have coded up and tested the lagrangian perspective on automatic
+   differentiation that i presented in this article. the code is available
+   in this [20]gist.
+
+   posted by tim vieira aug 18, 2017 [21]misc [22]calculus,
+   [23]automatic-differentiation
+
+comments
+
+   please enable javascript to view the [24]comments powered by disqus.
+
+recent posts
+
+     * [25]black-box optimization
+     * [26]backprop is not just the chain rule
+     * [27]estimating means in a finite universe
+     * [28]how to test gradient implementations
+     * [29]counterfactual reasoning and learning from logged data
+
+tags
+
+   [30]optimization, [31]calculus, [32]automatic-differentiation,
+   [33]sampling, [34]statistics, [35]reservoir-sampling, [36]testing,
+   [37]counterfactual-reasoning, [38]importance-sampling,
+   [39]machine-learning, [40]datastructures, [41]algorithms, [42]rant,
+   [43]gumbel, [44]decision-making, [45]hyperparameter-optimization,
+   [46]misc, [47]numerical, [48]crf, [49]deep-learning,
+   [50]structured-prediction, [51]visualization
+
+   copyright    2014   2018 tim vieira     powered by [52]pelican
+
+references
+
+   1. http://timvieira.github.io/blog/atom.xml
+   2. http://timvieira.github.io/blog/
+   3. http://timvieira.github.io/blog/atom.xml
+   4. http://timvieira.github.io/
+   5. http://timvieira.github.io/blog/archives.html
+   6. http://timvieira.github.io/blog/post/2016/09/25/evaluating-fx-is-as-fast-as-fx/
+   7. https://people.cs.umass.edu/~domke/courses/sml2011/08autodiff_nnets.pdf
+   8. http://conal.net/papers/beautiful-differentiation/
+   9. https://people.cs.umass.edu/~domke/courses/sml2011/08autodiff_nnets.pdf
+  10. https://gist.github.com/timvieira/39e27756e1226c2dbd6c36e83b648ec2
+  11. https://en.wikipedia.org/wiki/dependency_graph
+  12. http://timvieira.github.io/blog/post/2017/08/18/backprop-is-not-just-the-chain-rule/#lagrange-backprop-generalization
+  13. https://en.wikipedia.org/wiki/lagrange_multiplier
+  14. https://en.wikipedia.org/wiki/implicit_function_theorem
+  15. http://timvieira.github.io/blog/post/2016/03/05/gradient-based-hyperparameter-optimization-and-the-implicit-function-theorem/
+  16. http://yann.lecun.com/exdb/publis/pdf/lecun-88.pdf
+  17. http://www.argmin.net/2016/05/31/mechanics-of-lagrangians/
+  18. https://arxiv.org/abs/1605.02026
+  19. https://t.co/5ow5xbt4y1
+  20. https://gist.github.com/timvieira/8addcb81dd622b0108e0e7e06af74185
+  21. http://timvieira.github.io/blog/category/misc.html
+  22. http://timvieira.github.io/blog/tag/calculus.html
+  23. http://timvieira.github.io/blog/tag/automatic-differentiation.html
+  24. http://disqus.com/?ref_noscript
+  25. http://timvieira.github.io/blog/post/2018/03/16/black-box-optimization/
+  26. http://timvieira.github.io/blog/post/2017/08/18/backprop-is-not-just-the-chain-rule/
+  27. http://timvieira.github.io/blog/post/2017/07/03/estimating-means-in-a-finite-universe/
+  28. http://timvieira.github.io/blog/post/2017/04/21/how-to-test-gradient-implementations/
+  29. http://timvieira.github.io/blog/post/2016/12/19/counterfactual-reasoning-and-learning-from-logged-data/
+  30. http://timvieira.github.io/blog/tag/optimization.html
+  31. http://timvieira.github.io/blog/tag/calculus.html
+  32. http://timvieira.github.io/blog/tag/automatic-differentiation.html
+  33. http://timvieira.github.io/blog/tag/sampling.html
+  34. http://timvieira.github.io/blog/tag/statistics.html
+  35. http://timvieira.github.io/blog/tag/reservoir-sampling.html
+  36. http://timvieira.github.io/blog/tag/testing.html
+  37. http://timvieira.github.io/blog/tag/counterfactual-reasoning.html
+  38. http://timvieira.github.io/blog/tag/importance-sampling.html
+  39. http://timvieira.github.io/blog/tag/machine-learning.html
+  40. http://timvieira.github.io/blog/tag/datastructures.html
+  41. http://timvieira.github.io/blog/tag/algorithms.html
+  42. http://timvieira.github.io/blog/tag/rant.html
+  43. http://timvieira.github.io/blog/tag/gumbel.html
+  44. http://timvieira.github.io/blog/tag/decision-making.html
+  45. http://timvieira.github.io/blog/tag/hyperparameter-optimization.html
+  46. http://timvieira.github.io/blog/tag/misc.html
+  47. http://timvieira.github.io/blog/tag/numerical.html
+  48. http://timvieira.github.io/blog/tag/crf.html
+  49. http://timvieira.github.io/blog/tag/deep-learning.html
+  50. http://timvieira.github.io/blog/tag/structured-prediction.html
+  51. http://timvieira.github.io/blog/tag/visualization.html
+  52. http://getpelican.com/

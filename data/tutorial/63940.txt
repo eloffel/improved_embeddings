@@ -1,0 +1,396 @@
+nathan rooy
+     __________________________________________________________________
+
+   [1]about [2]contact [3]home
+
+evolving simple organisms using a genetic algorithm and deep learning from
+scratch with python
+
+   november 30, 2017
+
+   tl;dr - learn how to evolve a population of simple organisms each
+   containing a unique neural network using a genetic algorithm.
+
+introduction
+
+   a few weeks ago i got pretty deep into a late night [4]youtube rabbit
+   hole, and somewhere around [5]evolving soft body robots, i came across
+   this video ([6]here). i   m not sure what if it was the peaceful
+   background music or the hypnotizing motion of the dragonflies but i
+   wanted to try and run the simulation on my local computer. after
+   failing to find a github repo for this, i decided to spend a few hours
+   coding my own version in python. i was pretty happy with the end
+   results so i decided to turn it into a tutorial.
+
+   during this post, well code from scratch a simulation environment that
+   contains organisms that must consume as much as food as possible in
+   order to survive (click [7]here to see the final results). if these
+   organisms were people, they would be competitive eaters.
+
+                        [hot-dog-eating-contest.gif]
+
+neural network and navigation
+
+   starting off with the basics, the organisms will be controlled by a
+   simple, fully connected [8]neural network. the input for the neural
+   network will be a normalized value ranging from [-1, +1], representing
+   the direction to the nearest food particle. this heading is calculated
+   by taking the direction to the nearest food particle (which ranges from
+   +/- 180 degrees) and dividing it by 180. below are two navigation
+   examples.
+
+                        organism heading calculation
+
+   because our single input ranges from [-1, +1] and our desired outputs
+   also range from [-1, +1], the [9]tanh will make the ideal
+   [10]activation function. below is a diagram of the neural network with
+   its inputs and outputs as well as its hidden layer. there exists many
+   excellent tutorials on neural networks online so i wont go into great
+   detail here. i recommend the following to those that are interested:
+   [11]here, [12]here, [13]here, and [14]here.
+
+                        [organism-neural-network.png]
+
+   since the neural network is nothing more than simple matrix
+   multiplication, it only takes up a few lines of code thanks to
+   [15]numpy. during the evolution process, it   s these weights that will
+   be optimized. lastly, i have set the default number of hidden nodes to
+   five, but this can be increased or decreased to your liking.
+
+organism
+
+   the organism class is the star of the show here. it contains the neural
+   network, as well as functions for updating its heading, velocity, and
+   position. when an organism is initialized for the first time, its
+   position, heading, velocity, acceleration, and neural network weights
+   are all randomly generated.
+class organism():
+    def __init__(self, settings, wih=none, who=none, name=none):
+
+        self.x = uniform(settings['x_min'], settings['x_max'])  # position (x)
+        self.y = uniform(settings['y_min'], settings['y_max'])  # position (y)
+
+        self.r = uniform(0,360)                 # orientation   [0, 360]
+        self.v = uniform(0,settings['v_max'])   # velocity      [0, v_max]
+        self.dv = uniform(-settings['dv_max'], settings['dv_max'])   # dv
+
+        self.d_food = 100   # distance to nearest food
+        self.r_food = 0     # orientation to nearest food
+        self.fitness = 0    # fitness (food count)
+
+        self.wih = wih
+        self.who = who
+
+        self.name = name
+
+
+    # neural network
+    def think(self):
+
+        # simple mlp
+        af = lambda x: np.tanh(x)               # activation function
+        h1 = af(np.dot(self.wih, self.r_food))  # hidden layer
+        out = af(np.dot(self.who, h1))          # output layer
+
+        # update dv and dr with mlp response
+        self.nn_dv = float(out[0])   # [-1, 1]  (accelerate=1, deaccelerate=-1)
+        self.nn_dr = float(out[1])   # [-1, 1]  (left=1, right=-1)
+
+
+    # update heading
+    def update_r(self, settings):
+        self.r += self.nn_dr * settings['dr_max'] * settings['dt']
+        self.r = self.r % 360
+
+
+    # update velocity
+    def update_vel(self, settings):
+        self.v += self.nn_dv * settings['dv_max'] * settings['dt']
+        if self.v < 0: self.v = 0
+        if self.v > settings['v_max']: self.v = settings['v_max']
+
+
+    # update position
+    def update_pos(self, settings):
+        dx = self.v * cos(radians(self.r)) * settings['dt']
+        dy = self.v * sin(radians(self.r)) * settings['dt']
+        self.x += dx
+        self.y += dy
+
+food
+
+   the only other class we need to create is the food class. this is a
+   simple object that contains an x/y location and an energy value. this
+   energy value will directly impact the organisms fitness. for now, this
+   energy value remains constant and set at one, but it can be randomized
+   or changed to anything if you feel like modifying it to. additionally,
+   a respawn function is present to regenerate the location of the food
+   particle once it as been consumed by an organism. this keeps the total
+   number of food particles within each simulation time step constant.
+class food():
+    def __init__(self, settings):
+        self.x = uniform(settings['x_min'], settings['x_max'])
+        self.y = uniform(settings['y_min'], settings['y_max'])
+        self.energy = 1
+
+    def respawn(self,settings):
+        self.x = uniform(settings['x_min'], settings['x_max'])
+        self.y = uniform(settings['y_min'], settings['y_max'])
+        self.energy = 1
+
+evolution
+
+   the organism will be optimized using a [16]genetic algorithm (ga) which
+   falls under the larger umbrella of [17]evolutionaty algorithms (ea).
+   id107 work by imitating the natural biological process of
+   evolution by starting off with an initial population, and through
+   [18]selection, [19]crossover, and [20]mutation over many generations,
+   an optimal solution emerges. with that said, eas are not numerically
+   guaranteed to find the global optimum but given proper initial
+   conditions they are exceptionally good at searching through the design
+   space and finding optimal or near optimal solutions. for this tutorial,
+   the ea scheme will be as follows:
+     * selection - the simplest form of selection is called elitism, this
+       is where the top n% of the current generations fittest individuals
+       are selected and carried over to the next generation.
+     * crossover - using the same pool of individuals selected during the
+       elitism step previously, pairs of individuals will be randomly
+       selected as parents and a new offspring will be generated. because
+       we   re dealing with the weights of the neural network, the following
+       equation will be used to crossover traits between the two parents
+       to the resulting offspring: $$ offspring=parent_1(a) +
+       parent_2(1-a) $$ where \( a \) is a randomly generated value
+       between zero and one, and \( parent_1 \), and \( parent_2 \)
+       represent the weights of the neural network. because there are two
+       matrices that are being blending together (wih and who), the
+       implementation will actually be as follows: $$
+       offspring\_wih=parent\_wih_1(a) + parent\_wih_2(1-a) $$ $$
+       offspring\_who=parent\_who_1(a) + parent\_who_2(1-a) $$
+     * mutation - lastly, once the new offspring has been generated, a
+       random number between zero and one will be generated. if this value
+       is below the user initialized mutation threshold, mutation will
+       occur. in the event that mutation does occur, a random weight from
+       one of the two neural network weight matrices will be replaced with
+       a random value that is within +/- 10% of the original value. this
+       will create just a slight variation within the organism that could
+       potentially lead to a fitter organism. the mutation effect is
+       limited to +/- 10% of the original value because we want to avoid
+       causing catastrophic failure within the neural network and
+       potentially paralyzing the organism.
+
+   the diagram below shows just how simple this ea scheme is.
+
+                             organism evolution
+
+   and finally, the codified ea routine can be seen below:
+def evolve(settings, organisms_old, gen):
+
+    elitism_num = int(floor(settings['elitism'] * settings['pop_size']))
+    new_orgs = settings['pop_size'] - elitism_num
+
+    #--- get stats from current generation ----------------+
+    stats = defaultdict(int)
+    for org in organisms_old:
+        if org.fitness > stats['best'] or stats['best'] == 0:
+            stats['best'] = org.fitness
+
+        if org.fitness < stats['worst'] or stats['worst'] == 0:
+            stats['worst'] = org.fitness
+
+        stats['sum'] += org.fitness
+        stats['count'] += 1
+
+    stats['avg'] = stats['sum'] / stats['count']
+
+
+    #--- elitism (keep best performing organisms) ---------+
+    orgs_sorted = sorted(organisms_old, key=operator.attrgetter('fitness'), reve
+rse=true)
+    organisms_new = []
+    for i in range(0, elitism_num):
+        organisms_new.append(organism(settings, wih=orgs_sorted[i].wih, who=orgs
+_sorted[i].who, name=orgs_sorted[i].name))
+
+
+    #--- generate new organisms ---------------------------+
+    for w in range(0, new_orgs):
+
+        # selection (truncation selection)
+        canidates = range(0, elitism_num)
+        random_index = sample(canidates, 2)
+        org_1 = orgs_sorted[random_index[0]]
+        org_2 = orgs_sorted[random_index[1]]
+
+        # crossover
+        crossover_weight = random()
+        wih_new = (crossover_weight * org_1.wih) + ((1 - crossover_weight) * org
+_2.wih)
+        who_new = (crossover_weight * org_1.who) + ((1 - crossover_weight) * org
+_2.who)
+
+        # mutation
+        mutate = random()
+        if mutate <= settings['mutate']:
+
+            # pick which weight matrix to mutate
+            mat_pick = randint(0,1)
+
+            # mutate: wih weights
+            if mat_pick == 0:
+                index_row = randint(0,settings['hnodes']-1)
+                wih_new[index_row] = wih_new[index_row] * uniform(0.9, 1.1)
+                if wih_new[index_row] >  1: wih_new[index_row] = 1
+                if wih_new[index_row] < -1: wih_new[index_row] = -1
+
+            # mutate: who weights
+            if mat_pick == 1:
+                index_row = randint(0,settings['onodes']-1)
+                index_col = randint(0,settings['hnodes']-1)
+                who_new[index_row][index_col] = who_new[index_row][index_col] *
+uniform(0.9, 1.1)
+                if who_new[index_row][index_col] >  1: who_new[index_row][index_
+col] = 1
+                if who_new[index_row][index_col] < -1: who_new[index_row][index_
+col] = -1
+
+        organisms_new.append(organism(settings, wih=wih_new, who=who_new, name='
+gen['+str(gen)+']-org['+str(w)+']'))
+
+    return organisms_new, stats
+
+simulation
+
+   the last critical piece of coding that   s needed is something to
+   actually run the simulation. this simulate function will effectively
+   represent the [21]cost function for our optimization problem and will
+   be called once every generation. the duration of each simulation is
+   determined by dividing the total simulation time gen_time (in seconds)
+   by the duration of the time step; dt. as an example, if the simulation
+   length is set at 100 seconds, and dt is equal to 1/25th of a second,
+   then there will be a total of 2500 timesteps that need to be simulated.
+   during each time step, several key values will be updated:
+     * collision detection - here we are checking for collisions between
+       organisms and food particles. when a collision is detected, that
+       organism will get its fitness function updated and the food
+       particle will respawn at a new random location.
+     * determine closest food particle - this one is fairly self
+       explanitory. for every organism, the closest food particle must be
+       determined.
+     * determine direction to nearest food particle - once the nearest
+       food particle has been determined for each organism, the direction
+       to that particle must be calculated.
+     * query neural network - using the updated (and normalized) direction
+       value, the neural network in each organism is quaried.
+     * update organism - based on the respone from the neural network, the
+       heading, velocity, and position are all updated.
+
+   below is the simulation function:
+def simulate(settings, organisms, foods, gen):
+
+    total_time_steps = int(settings['gen_time'] / settings['dt'])
+
+    #--- cycle through each time step ---------------------+
+    for t_step in range(0, total_time_steps, 1):
+
+        # plot simulation frame
+        #if gen == settings['gens'] - 1 and settings['plot']==true:
+        if gen==49:
+            plot_frame(settings, organisms, foods, gen, t_step)
+
+
+        # update fitness function
+        for food in foods:
+            for org in organisms:
+                food_org_dist = dist(org.x, org.y, food.x, food.y)
+
+                # update fitness function
+                if food_org_dist <= 0.075:
+                    org.fitness += food.energy
+                    food.respawn(settings)
+
+                # reset distance and heading to nearest food source
+                org.d_food = 100
+                org.r_food = 0
+
+        # calculate heading to nearest food source
+        for food in foods:
+            for org in organisms:
+
+                # calculate distance to selected food particle
+                food_org_dist = dist(org.x, org.y, food.x, food.y)
+
+                # determine if this is the closest food particle
+                if food_org_dist < org.d_food:
+                    org.d_food = food_org_dist
+                    org.r_food = calc_heading(org, food)
+
+        # get organism response
+        for org in organisms:
+            org.think()
+
+        # update organisms position and velocity
+        for org in organisms:
+            org.update_r(settings)
+            org.update_vel(settings)
+            org.update_pos(settings)
+
+    return organisms
+
+putting it all together
+
+   with all the major components having been created the final code can
+   now be assembled. there are a few smaller functions i neglected to
+   include in the above writeup because they   re so simple reading about
+   them would take longer than just reading the code directly. i ended up
+   using [22]matplotlib for displaying the simulation. this is far from
+   the most efficient or elligant solution so by default the visualization
+   is turned off. lastly, pasting the entire code would be a bit redundent
+   at this point so download/fork it from the github repo ([23]here).
+
+results
+
+   when you run the entire code, the output should be something similar to
+   this:
+
+                                [results.gif]
+
+   i hope this was helpful. if anything seems unclear, please let me know.
+   thanks for reading!
+     __________________________________________________________________
+
+   tags: [24]#python [25]#evolutionary optimization [26]#machine learning
+
+                            2019 [27]nathan a. rooy.
+                built with [28]jekyll. powered by [29]github
+
+references
+
+   1. https://nathanrooy.github.io/about/
+   2. mailto:nathanrooy@gmail.com?subject=githubpage
+   3. https://nathanrooy.github.io/
+   4. http://youtube-rabbit-hole.urbanup.com/9025238
+   5. https://youtu.be/hgwq-gpivt4
+   6. https://youtu.be/tc5jzw05mno
+   7. https://nathanrooy.github.io/posts/2017-11-30/evolving-simple-organisms-using-a-genetic-algorithm-and-deep-learning/#results
+   8. https://en.wikipedia.org/wiki/artificial_neural_network
+   9. https://en.wikipedia.org/wiki/hyperbolic_function
+  10. https://en.wikipedia.org/wiki/activation_function
+  11. https://youtu.be/aircaruvnkk
+  12. https://gormanalysis.com/introduction-to-neural-networks/
+  13. https://gormanalysis.com/neural-networks-a-worked-example/
+  14. http://neuralnetworksanddeeplearning.com/
+  15. http://www.numpy.org/
+  16. https://en.wikipedia.org/wiki/genetic_algorithm
+  17. https://en.wikipedia.org/wiki/evolutionary_algorithm
+  18. https://en.wikipedia.org/wiki/selection_(genetic_algorithm)
+  19. https://en.wikipedia.org/wiki/crossover_(genetic_algorithm)
+  20. https://en.wikipedia.org/wiki/mutation_(genetic_algorithm)
+  21. https://en.wikipedia.org/wiki/loss_function
+  22. https://matplotlib.org/
+  23. https://github.com/nathanrooy/evolving-simple-organisms/blob/master/organism_v1.py
+  24. https://nathanrooy.github.io/tags/#python
+  25. https://nathanrooy.github.io/tags/#evolutionary optimization
+  26. https://nathanrooy.github.io/tags/#machine learning
+  27. https://nathanrooy.github.io/about
+  28. http://jekyllrb.com/
+  29. http://www.github.com/

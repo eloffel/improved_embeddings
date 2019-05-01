@@ -1,0 +1,486 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]towards data science
+     * [9]data science
+     * [10]machine learning
+     * [11]programming
+     * [12]visualization
+     * [13]ai
+     * [14]data journalism
+     * [15]contribute
+     __________________________________________________________________
+
+how to do text classification with id98s, tensorflow and id27
+
+   [16]go to the profile of lak lakshmanan
+   [17]lak lakshmanan (button) blockedunblock (button) followfollowing
+   jul 5, 2017
+
+   suppose i gave you the title of an article    amazing flat version of
+   twitter bootstrap    and asked you which publication that article
+   appeared in: the new york times, techcrunch, or github. what would be
+   your guess? how about an article titled    supreme court to hear major
+   case on partisan districts   ?
+
+   did you guess github and new york times? why? words like twitter and
+   major are likely to occur in any of the publications, but word
+   sequences like twitter bootstrap and supreme court are more likely in
+   github and the new york times respectively. can we train a neural
+   network to learn this?
+
+     note: estimators have now moved into core tensorflow. [18]updated
+     code that uses tf.estimator instead of tf.contrib.learn.estimator is
+     now on github         use the updated code as a starting point.
+
+creating dataset
+
+   machine learning means to learn from examples. to learn which
+   publication is the likely source of an article given its title, we need
+   lots of examples of article titles along with their source. although it
+   suffers from severe selection bias (since only articles of interest to
+   the nerdy membership of hn are included), the [19]bigquery public
+   dataset of hacker news articles is a reasonable source of this
+   information.
+query="""
+select source, regexp_replace(title, '[^a-za-z0-9 $.-]', ' ') as title from
+(select
+  array_reverse(split(regexp_extract(url, '.*://(.[^/]+)/'), '.'))[offset(1)] as
+ source,
+  title
+from
+  `bigquery-public-data.hacker_news.stories`
+where
+  regexp_contains(regexp_extract(url, '.*://(.[^/]+)/'), '.com$')
+  and length(title) > 10
+)
+where (source = 'github' or source = 'nytimes' or source = 'techcrunch')
+"""
+traindf = bq.query(query + " and mod(abs(farm_fingerprint(title)),4) > 0").execu
+te().result().to_dataframe()
+evaldf  = bq.query(query + " and mod(abs(farm_fingerprint(title)),4) = 0").execu
+te().result().to_dataframe()
+
+   essentially, i pull the url and the title from the hacker news stories
+   dataset in bigquery and separate it into a training and evaluation
+   dataset (see [20]datalab notebook for complete code). the possible
+   labels are github, nytimes, or techcrunch. here   s what the resulting
+   dataset looks like:
+   [1*nvaegfgxvbu1tutnf21wpq.png]
+   training dataset
+
+   i wrote the two pandas dataframes out to csv files (a total of 72,000
+   training examples approximately equally distributed between nytimes,
+   github, and techcrunch).
+
+creating a vocabulary
+
+   my training dataset consists of the label (   source   ) and a single input
+   column (   title   ). however, the title is not numeric and neural networks
+   need numeric inputs. so, we need to convert the text input column to be
+   numeric. how?
+
+   the simplest approach would be to one-hot encode the titles. assuming
+   that there are 72,000 unique titles in the dataset, we will end up with
+   72,000 columns. if we then train a neural network on this, the neural
+   network will essentially have to memorize the titles         no further
+   generalization is possible.
+
+   in order for the network to generalize, we need to convert the titles
+   into numbers in such a way that similar titles end up with similar
+   numbers. one way is to find the individual words in the title and map
+   the words to unique numbers. then, titles with words in common will
+   have similar numbers for that part of the sequence. the set of unique
+   words in the training dataset is called the vocabulary.
+
+   assume that we have four titles:
+lines = ['some title',
+         'a longer title',
+         'an even longer title',
+         'this is longer than doc length']
+
+   because the titles are all of varying length, i will pad out short
+   titles with a dummy word and truncate very long titles. this way, i
+   will get to deal with titles that all have the same length.
+
+   i can create the vocabulary using the following code (this is not
+   ideal, since the vocabulary processor stores everything in memory; for
+   larger datasets and more sophisticated preprocessing such as
+   incorporating stop words and case-insensitivity, [21]tf.transform is a
+   better solution         that   s a topic for another blog post):
+import tensorflow as tf
+from tensorflow.contrib import lookup
+from tensorflow.python.platform import gfile
+max_document_length = 5
+padword = 'zyxw'
+# create vocabulary
+vocab_processor = tf.contrib.learn.preprocessing.vocabularyprocessor(max_documen
+t_length)
+vocab_processor.fit(lines)
+with gfile.open('vocab.tsv', 'wb') as f:
+    f.write("{}\n".format(padword))
+    for word, index in vocab_processor.vocabulary_._mapping.iteritems():
+      f.write("{}\n".format(word))
+n_words = len(vocab_processor.vocabulary_)
+
+   in the code above, i will pad short titles with a padword which i
+   expect will never occur in actual text. the titles will be padded or
+   truncated to a length of 5 words. i pass in the training dataset
+   (   lines    in the above sample) and then write out the resulting
+   vocabulary. the vocabulary turns out to be:
+zyxw
+a
+even
+longer
+title
+this
+doc
+is
+some
+an
+length
+than
+<unk>
+
+   note that i added the padword and that the vocabulary processor found
+   all the unique words in the set of lines. finally, words that are
+   encountered during evaluation/prediction that were not in the training
+   dataset will be replaced by <unk>, so that is also part of the
+   vocabulary.
+
+   given the vocabulary above, we can convert any title to a set of
+   numbers:
+table = lookup.index_table_from_file(
+  vocabulary_file='vocab.tsv', num_oov_buckets=1, vocab_size=none, default_value
+=-1)
+numbers = table.lookup(tf.constant('some title'.split()))
+with tf.session() as sess:
+  tf.tables_initializer().run()
+  print "{} --> {}".format(lines[0], numbers.eval())
+
+   the code above will look up the words    some    and    title    and return the
+   indexes [8, 4] based on the vocabulary. of course, in the actual
+   training/prediction graph, we will need to make sure to pad/truncate as
+   well. let   s see how to do that next.
+
+word processing
+
+   first, we start with the lines (each line is a title) and split the
+   titles into words:
+# string operations
+titles = tf.constant(lines)
+words = tf.string_split(titles)
+
+   this results in:
+titles= ['some title' 'a longer title' 'an even longer title'
+ 'this is longer than doc length']
+words= sparsetensorvalue(indices=array([[0, 0],
+       [0, 1],
+       [1, 0],
+       [1, 1],
+       [1, 2],
+       [2, 0],
+       [2, 1],
+       [2, 2],
+       [2, 3],
+       [3, 0],
+       [3, 1],
+       [3, 2],
+       [3, 3],
+       [3, 4],
+       [3, 5]]), values=array(['some', 'title', 'a', 'longer', 'title', 'an', 'e
+ven', 'longer',
+       'title', 'this', 'is', 'longer', 'than', 'doc', 'length'], dtype=object),
+ dense_shape=array([4, 6]))
+
+   tensorflow   s string_split() function ends up creating a sparsetensor.
+   talk about an overly helpful api. i don   t want that automatically
+   created mapping though, so i will convert the sparse tensor to a dense
+   one and then lookup the index from my own vocabulary:
+# string operations
+titles = tf.constant(lines)
+words = tf.string_split(titles)
+densewords = tf.sparse_tensor_to_dense(words, default_value=padword)
+numbers = table.lookup(densewords)
+
+   now, the densewords and numbers are as expected (note the padding with
+   the padword:
+dense= [['some' 'title' 'zyxw' 'zyxw' 'zyxw' 'zyxw']
+ ['a' 'longer' 'title' 'zyxw' 'zyxw' 'zyxw']
+ ['an' 'even' 'longer' 'title' 'zyxw' 'zyxw']
+ ['this' 'is' 'longer' 'than' 'doc' 'length']]
+numbers= [[ 8  4  0  0  0  0]
+ [ 1  3  4  0  0  0]
+ [ 9  2  3  4  0  0]
+ [ 5  7  3 11  6 10]]
+
+   note also that the numbers matrix has the width of the longest title in
+   the dataset. because this width will change with each batch that is
+   processed, it is not ideal. for consistency, let   s pad it out to
+   max_document_length and then truncate it:
+padding = tf.constant([[0,0],[0,max_document_length]])
+padded = tf.pad(numbers, padding)
+sliced = tf.slice(padded, [0,0], [-1, max_document_length])
+
+   this creates a batchsize x 5 matrix where shorter titles are padded
+   with zero:
+padding= [[0 0]
+ [0 5]]
+padded= [[ 8  4  0  0  0  0  0  0  0  0  0]
+ [ 1  3  4  0  0  0  0  0  0  0  0]
+ [ 9  2  3  4  0  0  0  0  0  0  0]
+ [ 5  7  3 11  6 10  0  0  0  0  0]]
+sliced= [[ 8  4  0  0  0]
+ [ 1  3  4  0  0]
+ [ 9  2  3  4  0]
+ [ 5  7  3 11  6]]
+
+   i used a max_document_length of 5 in the examples above so that i could
+   show you what is happening. in the real dataset, titles are longer than
+   5 words. so, in i   ll use
+max_document_length = 20
+
+   the shape of the sliced matrix will be batchsize x max_document_length,
+   i.e. batchsize x 20.
+
+embedding
+
+   now that our words have been replaced by numbers, we could simply do
+   one-hot encoding but that would result in an extremely wide
+   input         there are thousands of unique words in the titles dataset. a
+   better approach is to reduce the dimensionality of the input         this is
+   done through an embedding layer (see [22]full code here):
+embedding_size = 10
+embeds = tf.contrib.layers.embed_sequence(sliced,
+                 vocab_size=n_words, embed_dim=embedding_size)
+
+   once we have the embedding, we now have a representation for each word
+   in the title. the result of embedding is a batchsize x
+   max_document_length x embedding_size tensor because a title consists of
+   max_document_length words, and each word is now represented by
+   embedding_size numbers. (get into the habit of figuring out tensor
+   shapes at each step of your tensorflow code         this will help you
+   understand what the code is doing, and what the dimensions mean).
+
+   we could, if we wanted, simply wire the embedded words through a deep
+   neural network, train it, and go our merry way. but just using words by
+   themselves does not take advantage of the fact that word sequences have
+   specific meanings. after all,    supreme    could appear in a number of
+   contexts, but    supreme court    has a much more specific connotation. how
+   do we learn word sequences?
+
+convolution
+
+   one way to learn sequences is to embed not just unique words, but also
+   digrams (word pairs), trigrams (word triplets), etc. however, with a
+   relatively small dataset, this starts becoming akin to one-hot encoding
+   each unique word in the dataset.
+
+   a better approach is to add a convolutional layer. convolution is
+   simply a way of applying a moving window to your input data and letting
+   the neural network learn the weights to apply to adjacent words.
+   although more common when working with image data, it is a handy way to
+   help any neural network learn about the correlations between nearby
+   inputs:
+window_size = embedding_size
+stride = int(window_size/2)
+conv = tf.contrib.layers.conv2d(embeds, 1, window_size,
+                stride=stride, padding='same') # (?, 4, 1)
+conv = tf.nn.relu(conv) # (?, 4, 1)
+words = tf.squeeze(conv, [2]) # (?, 4)
+
+   recall that the result of embedding is a 20 x 10 tensor (let   s
+   disregard the batchsize for now; all operations here are carried out on
+   a single title at a time). i am now applying a weighted average in a
+   10x10 window to the embedded representation of the title, moving the
+   window by 5 words (stride=5), and applying it again. so, i will have 4
+   such convolution results. i then apply a non-linear transform (relu) to
+   the convolution results.
+
+   i have four results now. i can simply wire them through a dense layer
+   to the output layer:
+n_classes = len(targets)
+logits = tf.contrib.layers.fully_connected(words, n_classes,
+                                    activation_fn=none)
+
+   if you are used to image models, you might be surprised that i used a
+   convolutional layer, but no maxpool layer. the reason to use a maxpool
+   layer is to add spatial invariance to the network         intuitively
+   speaking, you want to find a cat regardless of where in the image the
+   cat is. however, the spatial location within the title is quite
+   important. it is quite possible that new york times articles    titles
+   tend to start with different words than github ones. hence, i didn   t
+   use a maxpool layer for this task.
+
+   given the logits, we can figure out the source by essentially doing
+   targets[max(logits)]. in tensorflow, this is doing using tf.gather:
+predictions_dict = {
+'source': tf.gather(targets, tf.argmax(logits, 1)),
+'class': tf.argmax(logits, 1),
+'prob': tf.nn.softmax(logits)
+}
+
+   just to be complete, i also send along the actual class index and
+   probabilities of each class.
+
+training and deploying
+
+   with the code all written (see [23]full code here), i can train it on
+   cloud ml engine:
+outdir=gs://${bucket}/txtcls1/trained_model
+jobname=txtcls_$(date -u +%y%m%d_%h%m%s)
+echo $outdir $region $jobname
+gsutil -m rm -rf $outdir
+gsutil cp txtcls1/trainer/*.py $outdir
+gcloud ml-engine jobs submit training $jobname \
+   --region=$region \
+   --module-name=trainer.task \
+   --package-path=$(pwd)/txtcls1/trainer \
+   --job-dir=$outdir \
+   --staging-bucket=gs://$bucket \
+   --scale-tier=basic --runtime-version=1.2 \
+   -- \
+   --bucket=${bucket} \
+   --output_dir=${outdir} \
+   --train_steps=36000
+
+   the dataset is quite small, so training finished in less than five
+   minutes and i got an accuracy on the evaluation dataset of 73%.
+
+   i can then deploy the model as a microservice to cloud ml engine:
+model_name="txtcls"
+model_version="v1"
+model_location=$(gsutil ls \
+     gs://${bucket}/txtcls1/trained_model/export/servo/ | tail -1)
+gcloud ml-engine models create ${model_name} --regions $region
+gcloud ml-engine versions create ${model_version} --model \
+     ${model_name} --origin ${model_location}
+
+prediction
+
+   to get the model to predict, we can send it a json request:
+from googleapiclient import discovery
+from oauth2client.client import googlecredentials
+import json
+credentials = googlecredentials.get_application_default()
+api = discovery.build('ml', 'v1beta1', credentials=credentials,
+            discoveryserviceurl='https://storage.googleapis.com/cloud-ml/discove
+ry/ml_v1beta1_discovery.json')
+request_data = {'instances':
+  [
+      {
+        'title': 'supreme court to hear major case on partisan districts'
+      },
+      {
+        'title': 'furan -- build and push docker images from github to target'
+      },
+      {
+        'title': 'time warner will spend $100m on snapchat original shows and ad
+s'
+      },
+  ]
+}
+parent = 'projects/%s/models/%s/versions/%s' % (project, 'txtcls', 'v1')
+response = api.projects().predict(body=request_data, name=parent).execute()
+print "response={0}".format(response)
+
+   this results in a json response:
+response={u'predictions': [{u'source': u'nytimes', u'prob': [0.7775614857673645,
+ 5.86951500736177e-05, 0.22237983345985413], u'class': 0}, {u'source': u'github'
+, u'prob': [0.1087314561009407, 0.8909648656845093, 0.0003036781563423574], u'cl
+ass': 1}, {u'source': u'techcrunch', u'prob': [0.0021869686897844076, 1.56310576
+9264439e-07, 0.9978128671646118], u'class': 2}]}
+
+   the trained model predicts that the supreme court article is 78% likely
+   to come from new york times. the docker article is 89% likely to be
+   from github according to the service and the time warner one is 100%
+   likely to be from techcrunch. that   s 3/3.
+
+   resources: all the code is on github here:
+   [24]https://github.com/googlecloudplatform/training-data-analyst/tree/m
+   aster/blogs/textclassification
+
+     * [25]machine learning
+     * [26]tensorflow
+     * [27]neural network
+     * [28]google cloud platform
+     * [29]towards data science
+
+   (button)
+   (button)
+   (button) 917 claps
+   (button) (button) (button) 14 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [30]go to the profile of lak lakshmanan
+
+[31]lak lakshmanan
+
+   professional services @ google
+
+     (button) follow
+   [32]towards data science
+
+[33]towards data science
+
+   sharing concepts, ideas, and codes.
+
+     * (button)
+       (button) 917
+     * (button)
+     *
+     *
+
+   [34]towards data science
+   never miss a story from towards data science, when you sign up for
+   medium. [35]learn more
+   never miss a story from towards data science
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://towardsdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/edae13b3e575
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://towardsdatascience.com/how-to-do-text-classification-using-tensorflow-word-embeddings-and-id98-edae13b3e575&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://towardsdatascience.com/how-to-do-text-classification-using-tensorflow-word-embeddings-and-id98-edae13b3e575&source=--------------------------nav_reg&operation=register
+   8. https://towardsdatascience.com/?source=logo-lo_xqzd4spfnbaa---7f60cf5620c9
+   9. https://towardsdatascience.com/data-science/home
+  10. https://towardsdatascience.com/machine-learning/home
+  11. https://towardsdatascience.com/programming/home
+  12. https://towardsdatascience.com/data-visualization/home
+  13. https://towardsdatascience.com/artificial-intelligence/home
+  14. https://towardsdatascience.com/data-journalism/home
+  15. https://towardsdatascience.com/contribute/home
+  16. https://towardsdatascience.com/@lakshmanok?source=post_header_lockup
+  17. https://towardsdatascience.com/@lakshmanok
+  18. https://github.com/googlecloudplatform/training-data-analyst/tree/master/courses/machine_learning/deepdive/09_sequence/txtclsmodel/trainer
+  19. https://cloud.google.com/bigquery/public-data/hacker-news
+  20. https://github.com/googlecloudplatform/training-data-analyst/blob/master/blogs/textclassification/txtcls.ipynb
+  21. https://github.com/tensorflow/transform
+  22. https://github.com/googlecloudplatform/training-data-analyst/blob/master/blogs/textclassification/txtcls1/trainer/model.py
+  23. https://github.com/googlecloudplatform/training-data-analyst/tree/master/blogs/textclassification
+  24. https://github.com/googlecloudplatform/training-data-analyst/tree/master/blogs/textclassification
+  25. https://towardsdatascience.com/tagged/machine-learning?source=post
+  26. https://towardsdatascience.com/tagged/tensorflow?source=post
+  27. https://towardsdatascience.com/tagged/neural-networks?source=post
+  28. https://towardsdatascience.com/tagged/google-cloud-platform?source=post
+  29. https://towardsdatascience.com/tagged/towards-data-science?source=post
+  30. https://towardsdatascience.com/@lakshmanok?source=footer_card
+  31. https://towardsdatascience.com/@lakshmanok
+  32. https://towardsdatascience.com/?source=footer_card
+  33. https://towardsdatascience.com/?source=footer_card
+  34. https://towardsdatascience.com/
+  35. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  37. https://medium.com/p/edae13b3e575/share/twitter
+  38. https://medium.com/p/edae13b3e575/share/facebook
+  39. https://medium.com/p/edae13b3e575/share/twitter
+  40. https://medium.com/p/edae13b3e575/share/facebook

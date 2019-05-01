@@ -1,0 +1,319 @@
+   #[1]quora
+
+   [2]quora
+   ____________________
+
+   sign in
+   [3]how does id97 work? can someone walk through a specific example?
+   [4]ajit rajasekharan
+   [5]ajit rajasekharan, just another biped primate...
+   [6]updated 89w ago    upvoted by
+   [7]ignatius ezeani, phd computer science & natural language processing,
+   university of sheffield (2018)    author has 655 answers and 1.2m answer
+   views
+
+   there are already detailed answers here on how id97 works from a
+   model description perspective; focussing, in this answer, on what
+   id97 source code actually does (for those like me who are not
+   endowed with the mathematical prowess to gain intuition from just
+   reading the paper or the model description; on first glance, the
+   relationship of id97 model [as described in [8]mikholov   s paper of
+   learning word representations that can predict surrounding context
+   words] to the source code implementation, is not apparent).
+
+   regardless of the model (skip gram/continuous bag of word) or sampling
+   (hierarchical/negative sampling) code path, one chunk of code pattern
+   is largely similar for all the four code paths in ~700 lines of
+   id97 c source code (the snippet below is skipgram-negative sampling
+   case).
+   [main-qimg-66cacc4ed009fadf6b70d038adb87553]
+
+   in those few lines above (largely similar for all four code paths) lies
+   the essence of id97 unsupervised training.
+     * if we take any two vectors, both of say, 300 dimensions, that are
+       randomly initialized with some values, and if we add just a tiny
+       bit of one vector to the other, the vectors get    closer    to each
+       other (the cosine similarity increases), simply by virtue of vector
+       addition. figure below shows this for 2 dimensions.
+
+   [main-qimg-f67c1f75768f7475382e28994723d0b6]
+     * if we subtract a tiny bit of one vector from the other - the
+       vectors will move    apart    (cosine similarity decreases) by a tiny
+       bit (in the boundary case of both vectors being exact opposite
+       direction of each other, one vector will be nudged to eventually
+       flip from opposite to same direction, as its magnitude
+       decreases/increases with each positive nudge).
+     * so during id97 training , in each step, every word is either
+       (1)    nudged    (as stephan mentions in his response) or pulled closer
+       to words that it co-occurs with, within a specified window or (2)
+       nudged/pushed away from all the other words that it does not appear
+       with. since typical neighborhood window is small (e.g. 5   15)
+       pulling operations when a word is tugged by its neighbors is
+       bounded by this window size; however for a large corpus, pushing
+       away non-neighborhood words is an expensive operation to do. so
+       id97 has two schemes (hierarchical and negative sampling),
+       where nudging away of all other words not in neighborhood of a word
+       is avoided; instead just a sample of words are nudged.(pushing and
+       pulling effectively alter the id203 of occurrence of a word,
+       given its neighborhood words; the reason to both pull vectors
+       closer[ increase id203] and push vectors apart[ decrease
+       id203] is tantamount to computing the denominator in the
+       softmax function - equation 2 in [9]mikholov   s paper - the
+       id203 of occurrence of a word given its neighborhood. the
+       probabilities themselves are not explicitly calculated in source
+       code since the objective is only to find the vectors that maximizes
+       the probabilities as given in equation 1 in the paper mentioned
+       above).
+
+     * in the negative sampling method, every time a word is brought
+       closer to its neighbors, a small number of other words (randomly
+       chosen from a unigram distribution of all words in the corpus) are
+       nudged/pushed away.
+     * in the hierarchical sampling method, every neighboring word is
+       pulled closer or further apart from a subset of words (log2(corpus
+       size)), where the word subset for each word is chosen from a tree
+       structure (binary huffman tree is used in id97 where short
+       binary codes are assigned to frequent words).
+
+     in the source code snippet above two words indexed by l1 and l2 are
+   either brought together or pushed apart depending on whether they
+   co-occur or not in corpus (label = 1 is co-occurring case; label = 0 is
+   negative sampling case). when they co-occur (label = 1 case in lines
+   522   524 above) the nudge is positive. in the negative sampling case
+   (label = 0 case in lines 522   524 above), the nudge is negative.
+
+     so the training process is essentially a tug of war of vectors (as
+   xin rong mentions) that are being pulled closer or pushed further
+   apart. the end of the training (sufficient iterations) produces as
+   output, the magic, of words that are not only co-occurring in corpus to
+   come closer, but also instances of words coming closer to each other
+   even if they don   t co-occur (an example illustrated below) in corpus.
+   the other non-intuitive consequence of this training is similar
+   orientation of vectors between analogous words enabling simple vector
+   algebra to discover analogous words, popularly illustrated everywhere
+   (king - man + woman yielding queen).
+
+     walking through each line of source above.
+     * lines 521   524 compute the tiny scale factor for nudging vectors
+       closer/further apart. in the case of nudging vectors closer, the
+       scale factor is
+
+     * zero when the vectors are already pointing in the same direction,
+     * or a tiny positive value (a scale factor is stored in a
+       pre-computed table of sigmoid function 1/(1 + e^-x) for the region
+       -6 to 6 where slope is non-zero. this scale factor is multiplied
+       with a learning rate to yield a small positive value).
+
+     line 525 computes the scaled version of word l2 (ignoring the
+   description of line 526 for now)
+
+     line 529 adds the tiny scaled version of l2 computed in line 525 to
+   l1. in the negative sampling case, the added value is the negative of
+   l2, which is effectively a subtraction. so, in essence, l1 gets a
+   little closer to words l2 that co-occur in corpus and further apart
+   from those words that it does not co-occur with (since the words to be
+   pushed away are chosen from a unigram distribution of all words in
+   corpus, there is a small possibility of a neighbor being picked too and
+   nudged away during training).
+
+   walking through a specific example for the toy corpus below trained
+   with each word being represented by 300(should have been a sixth of it
+   or lesser - 300 is an overkill for this toy corpus; results are same
+   for a dimension of 10 for this corpus) dimensions, skipgram model , and
+   negative sampling (1 sample):
+   [main-qimg-06acc5259a27b2af5fc96c9f11ea9c0d]
+
+   the top 10 closest neighbors words to the word    dogs    are    wolves   ,
+      variety   ,    large   ,    mammals   ,    humans   ,    largely   ,    are   ,    genetic   ,
+      roots   ,    in   . the top 10 closest to the word    dogs    for skipgram,
+   hierarchical sampling are    mammals   ,    large   ,    humans   ,
+      wolves   ,   largely   ,   variety   ,   are   ,   genetic   ,   days   ,    tigers   .
+
+   id97 training only brings together words that are in the same line
+   of a word and within the specified window context. so    dogs    will not
+   be trained with    humans   , with a context window of size 5, even though
+   that window size straddles across to include    humans    as within context
+   for    dogs   . in other words,the code stub above will never be invoked
+   with    human    and    dogs    being l1/l2 and label=1( however the code stub,
+   above may be invoked, in negative sampling case, for    humans    and
+      dogs   , i.e. with label=0). so, in essence,    humans    and    dogs   , that
+   do not co-occur, are never explicitly nudged closer together ( but may
+   be pushed apart in negative sampling case). one can only observe words
+   like    cats    and    dogs    nudged closer by the above code stub during
+   training.
+
+   the top 3 neighbors to the word    dogs    -    wolves   ,    variety   and    large   
+   are apparent from the toy corpus - those words co-occur and get closer
+   by the simple training process described above.
+
+   the word    mammals    and    humans    don   t co-occur with    dogs    and yet they
+   are closer to    dogs    than other words like    largely   ,   are   , that
+   actually co-occur with    dogs   . the intuition for this is that,    cats   
+   occur with    mammals   ; so    mammals    are pulled closer to    dogs   .
+   similarly,    pets    co-occur with    humans    and bring    humans    close to
+      dogs   . it is interesting to note, that even though    cats    bring
+      mammals    closer to    dogs   ,    cats    itself does not occur in the top 10
+   neighbors of    dogs    - it falls down beyond the top 10 list in the    tug
+   of war    with other words. similarly for    pets    -    pets    doesn   t make it
+   into the top 10 words close to    dogs    though it brings    humans    closer
+   to    dogs    (one can see how    pets    brings    humans    close to    dogs    by
+   just replacing    pets    in the first line with    animals    and retraining
+   on modified corpus -    humans    will fall off the top 10 words close to
+      dogs   ).
+
+   the net effect of the tug of war of word vectors pulling/pushing each
+   other closer/apart is:
+     * entities (e.g. dogs, cats, humans) that appear together get pulled
+       closer to each other, with all the frequently occurring glue words
+       like    the, are, in    removed (explained below).
+     * entities that do not even appear together in sentences, but are
+       transitively linked by neighbor entities, by their occurrences in
+       training corpus, get pulled closer (e.g. dogs and mammals in above
+       toy corpus linked by    pets   ).
+     * glue words (or stop words) like    the   ,    are   ,   in    pull each other
+       closer and away from the entities they occur with. this fact is not
+       evident from the toy corpus given its small size - it is evident in
+       larger corpus. for example, in a corpus of 6.4 billion words with
+       20 million unique words, the top neighbors of the word    the    are:
+          of   ,    in   ,    and   ,    which   ,    a   . conversely, one will not find
+       frequently occurring glue words like    in    appear in the top 10
+       nearest neighbors list of an entity like    dogs    (    in    appears in
+       the    dogs    neighbor list above because it is a very small corpus) -
+       they will all be other entities (e.g. cats etc).
+     * the    tug of war    on words has an impact on the magnitude on word
+       vectors
+
+     * the vector magnitude of words that occur the most or the least in
+       the corpus have lower magnitudes than those in the middle. for
+       instance, in a 20 million unique word corpus, a word like    the   
+       that occurs ~780,000 times has a vector magnitude of 2.39. a word
+       that occurs just once in the corpus has a magnitude of .606; a word
+       that occurs 64,00 times has a magnitude of 4.7. words in the middle
+       of the occurrence frequency scale, 2000   70,000 occurrences, range
+       in magnitude from 4 to 12.
+     * this may be just a consequence of the fact that a frequently
+       occurring word like    the    gets pulled closer in all directions,
+       leading to the overall reduction in its magnitude - since its
+       context spans nearly the whole corpus, for every neighbor word that
+       nudges it in a certain direction, there is likely to be another
+       neighbor word vector that nudges it closer to itself, in the exact
+       opposite direction cancelling the effect of the previous nudge.
+       however, despite this,    the    along with its high frequency cohorts
+       like    in   , manage to huddle together, given their large numbers
+       (   in    would pull    the    many more times than any entity like
+          dogs   ,   cats    etc. in a large corpus). for words that occur very
+       rarely, the nudges are few relative to the other words anyway (e.g.
+       for 5 full iterations over the corpus, the vector for the word
+          the    will be pulled, or updated in 780,000*5 iterations, whereas
+       the vector for a word that occurs just once in corpus will be
+       updated a meagre 5 iterations) - hence their magnitudes are also
+       low. (the hyperparameter for subsampling is assumed to be zero in
+       the discussion above).
+     * the vector magnitudes are a relevance measure for the    important
+       words    in a corpus. high frequency and low frequency words have low
+       magnitudes, while those in the middle have high magnitudes - like a
+          goldilocks zone   . for instance, in a 11 billion word, 66 million
+       unique word corpus, just 2% of terms have magnitudes above 4 - all
+       high frequency stop words and low frequency words have magnitudes
+       less than 4. while low frequency words may show up like    needle in
+       a haystack    in the neighborhood of some terms , and may prove
+       insightful in some applications (unlike their high frequency word
+       counterparts who seem to have no utility at all in most cases -
+       they can even be burdensome; for instance when trying to generate
+       phrases - they blow up phrase combinations when using word2phrase
+       to generate phrases ; section 4 in [10]mikholov   s paper ), they are
+       often not reliable since they are nudged so few times, as mentioned
+       above (though according to [11]mikholov   s paper subsampling
+       improves vector representations of low frequency words).
+
+     in the    tug of war    on words, even though pulling a word in different
+   directions may seem tantamount to    pushing    apart, the explicit
+   operation of pushing apart (in both sampling schemes) has a direct
+   impact on vector neighborhood quality (this is of course ignoring the
+   fact that softmax calculation requires all words to be considered in
+   predicting their occurrence with a word). for instance, even in the
+   small toy corpus, (where negative sampling value was as low as 1 in the
+   neighborhood examples shown earlier) the neighborhood for    dogs    in
+   skipgram, with negative sampling set explicitly to zero (needs simple
+   code change in id97 c source) - the quality deterioration is
+   apparent - the top 10 neighbors of    dogs    become    and   ,    of   ,    humans   ,
+      breeding   ,    large   ,    largely   ,    performing   ,    the   .
+
+   in the implementation, two words that co-occur are not directly trained
+   to get closer to each other - instead they are brought together by a
+      level of indirection   . for instance, in the negative sampling case,
+   each word vector(in syn0), say    dogs    has an image(or context) vector
+   (captured in syn1neg in line 526 above) that captures the context of
+   words around that word - it is that context vector of dogs that is
+   trained to get closer to the words    dogs    co-occurs with (e.g. cats,
+   and, are, pets). the context vector of    dogs    brings together all words
+   adjacent to    dogs   , and by doing so, indirectly bring the    dogs    word
+   vector close to them - i.e. word vectors for cats, pets etc., get close
+   to dogs through their context vectors (in code stub, syn0 contains the
+   word vectors, and syn1neg contains the context vectors).
+   [main-qimg-6acb9ab108d14630537082809696e259]
+
+   the image above shows the training for the sentence    cats and dogs are
+   pets   . the word vectors (in syn0 array in code) are trained to get
+   closer to the image(context) vectors (syn1neg) of words in
+   neighborhood. so the    cats    word vector influences, and is influenced
+   by, the image vectors of its neighboring words, bringing them closer to
+   each other. the word    humans    (not shown in above figure) gets close to
+      dogs    because the context vector for    pets    that co-occurs with
+      humans    in second line in toy corpus, brings    humans    close to    dogs   .
+
+   as an aside, this working of id97 - starting with randomly pointing
+   vectors, and generating clusters of related words by pulling and
+   pushing vectors apart, which in essence is just vector addition and
+   subtraction, is reminiscent, even if perhaps only superficially, of the
+   path integral formalism for explaining light ([12]qed: the strange
+   theory of light and matter richard p. feynman). for example, add
+   amplitude vectors of all possible virtual paths light can travel - the
+   virtual paths all neatly add and cancel, and magically, one gets the
+   path that light will indeed travel through a lens, or the path light
+   will traverse across regions of different types of matter ( land to
+   water - refraction) or same matter type but with differing densities (
+   hot/cold air - mirages)   
+   32.3k views    [13]view 161 upvoters    [14]view sharers
+
+   view 10 other answers to this question
+
+about the author
+
+   [15]ajit rajasekharan
+
+[16]ajit rajasekharan
+
+   just another biped primate...
+   1.2m answer views45.5k this month
+   top writer2018
+
+   [17]about    [18]careers    [19]privacy    [20]terms    [21]contact
+
+references
+
+   visible links
+   1. https://www.quora.com/opensearch/description.xml
+   2. https://www.quora.com/
+   3. https://www.quora.com/how-does-id97-work-can-someone-walk-through-a-specific-example
+   4. https://www.quora.com/profile/ajit-rajasekharan
+   5. https://www.quora.com/profile/ajit-rajasekharan
+   6. https://www.quora.com/how-does-id97-work-can-someone-walk-through-a-specific-example/answer/ajit-rajasekharan
+   7. https://www.quora.com/profile/ignatius-ezeani
+   8. https://papers.nips.cc/paper/5021-distributed-representations-of-words-and-phrases-and-their-compositionality.pdf
+   9. https://papers.nips.cc/paper/5021-distributed-representations-of-words-and-phrases-and-their-compositionality.pdf
+  10. https://papers.nips.cc/paper/5021-distributed-representations-of-words-and-phrases-and-their-compositionality.pdf
+  11. https://papers.nips.cc/paper/5021-distributed-representations-of-words-and-phrases-and-their-compositionality.pdf
+  12. https://www.amazon.com/qed-strange-princeton-science-library/dp/0691164096/ref=sr_1_1?ie=utf8&keywords=qed&qid=1476911048&sr=8-1
+  13. https://www.quora.com/how-does-id97-work-can-someone-walk-through-a-specific-example/answer/ajit-rajasekharan
+  14. https://www.quora.com/how-does-id97-work-can-someone-walk-through-a-specific-example/answer/ajit-rajasekharan
+  15. https://www.quora.com/profile/ajit-rajasekharan
+  16. https://www.quora.com/profile/ajit-rajasekharan
+  17. https://www.quora.com/about
+  18. https://www.quora.com/careers
+  19. https://www.quora.com/about/privacy
+  20. https://www.quora.com/about/tos
+  21. https://www.quora.com/contact
+
+   hidden links:
+  23. https://www.quora.com/how-does-id97-work-can-someone-walk-through-a-specific-example

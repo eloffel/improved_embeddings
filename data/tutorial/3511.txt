@@ -1,0 +1,476 @@
+   #[1]the keras blog atom feed
+
+                               [2]the keras blog
+
+   [3]keras is a deep learning library for python, that is simple,
+   modular, and extensible.
+
+     * [4]archives
+     * [5]github
+     * [6]documentation
+     * [7]google group
+
+           [8]keras as a simplified interface to tensorflow: tutorial
+
+   sun 24 april 2016
+
+
+    by [9]francois chollet
+
+   in [10]tutorials.
+
+a complete guide to using keras as part of a tensorflow workflow
+
+   if tensorflow is your primary framework, and you are looking for a
+   simple & high-level model definition interface to make your life
+   easier, this tutorial is for you.
+
+   keras layers and models are fully compatible with pure-tensorflow
+   tensors, and as a result, keras makes a great model definition add-on
+   for tensorflow, and can even be used alongside other tensorflow
+   libraries. let's see how.
+
+   note that this tutorial assumes that you have configured keras to use
+   the tensorflow backend (instead of theano). [11]here are instructions
+   on how to do this.
+
+   we will cover the following points:
+
+   [12]i: calling keras layers on tensorflow tensors
+
+   [13]ii: using keras models with tensorflow
+
+   [14]iii: multi-gpu and distributed training
+
+   [15]iv: exporting a model with tensorflow-serving
+
+   keras+tensorflow
+     __________________________________________________________________
+
+i: calling keras layers on tensorflow tensors
+
+   let's start with a simple example: mnist digits classification. we will
+   build a tensorflow digits classifier using a stack of keras dense
+   layers (fully-connected layers).
+
+   we should start by creating a tensorflow session and registering it
+   with keras. this means that keras will use the session we registered to
+   initialize all variables that it creates internally.
+import tensorflow as tf
+sess = tf.session()
+
+from keras import backend as k
+k.set_session(sess)
+
+   now let's get started with our mnist model. we can start building a
+   classifier exactly as you would do in tensorflow:
+# this placeholder will contain our input digits, as flat vectors
+img = tf.placeholder(tf.float32, shape=(none, 784))
+
+   we can then use keras layers to speed up the model definition process:
+from keras.layers import dense
+
+# keras layers can be called on tensorflow tensors:
+x = dense(128, activation='relu')(img)  # fully-connected layer with 128 units a
+nd relu activation
+x = dense(128, activation='relu')(x)
+preds = dense(10, activation='softmax')(x)  # output layer with 10 units and a s
+oftmax activation
+
+   we define the placeholder for the labels, and the id168 we will
+   use:
+labels = tf.placeholder(tf.float32, shape=(none, 10))
+
+from keras.objectives import categorical_crossid178
+loss = tf.reduce_mean(categorical_crossid178(labels, preds))
+
+   let's train the model with a tensorflow optimizer:
+from tensorflow.examples.tutorials.mnist import input_data
+mnist_data = input_data.read_data_sets('mnist_data', one_hot=true)
+
+train_step = tf.train.gradientdescentoptimizer(0.5).minimize(loss)
+
+# initialize all variables
+init_op = tf.global_variables_initializer()
+sess.run(init_op)
+
+# run training loop
+with sess.as_default():
+    for i in range(100):
+        batch = mnist_data.train.next_batch(50)
+        train_step.run(feed_dict={img: batch[0],
+                                  labels: batch[1]})
+
+   we can now evaluate the model:
+from keras.metrics import categorical_accuracy as accuracy
+
+acc_value = accuracy(labels, preds)
+with sess.as_default():
+    print acc_value.eval(feed_dict={img: mnist_data.test.images,
+                                    labels: mnist_data.test.labels})
+
+   in this case, we use keras only as a syntactical shortcut to generate
+   an op that maps some tensor(s) input to some tensor(s) output, and
+   that's it. the optimization is done via a native tensorflow optimizer
+   rather than a keras optimizer. we don't even use any keras model at
+   all!
+
+   a note on the relative performance of native tensorflow optimizers and
+   keras optimizers: there are slight speed differences when optimizing a
+   model "the keras way" vs. with a tensorflow optimizer. somewhat
+   counter-intuitively, keras seems faster most of the time, by 5-10%.
+   however these differences are small enough that it doesn't really
+   matter, at the end of the day, whether you optimize your models via
+   keras optimizers or native tf optimizers.
+
+different behaviors during training and testing
+
+   some keras layers (e.g. dropout, batchid172) behave differently
+   at training time and testing time. you can tell whether a layer uses
+   the "learning phase" (train/test) by printing
+   layer.uses_learning_phase, a boolean: true if the layer has a different
+   behavior in training mode and test mode, false otherwise.
+
+   if your model includes such layers, then you need to specify the value
+   of the learning phase as part of feed_dict, so that your model knows
+   whether to apply dropout/etc or not.
+
+   the keras learning phase (a scalar tensorflow tensor) is accessible via
+   the keras backend:
+from keras import backend as k
+print k.learning_phase()
+
+   to make use of the learning phase, simply pass the value "1" (training
+   mode) or "0" (test mode) to feed_dict:
+# train mode
+train_step.run(feed_dict={x: batch[0], labels: batch[1], k.learning_phase(): 1})
+
+   for instance, here's how to add dropout layers to our previous mnist
+   example:
+from keras.layers import dropout
+from keras import backend as k
+
+img = tf.placeholder(tf.float32, shape=(none, 784))
+labels = tf.placeholder(tf.float32, shape=(none, 10))
+
+x = dense(128, activation='relu')(img)
+x = dropout(0.5)(x)
+x = dense(128, activation='relu')(x)
+x = dropout(0.5)(x)
+preds = dense(10, activation='softmax')(x)
+
+loss = tf.reduce_mean(categorical_crossid178(labels, preds))
+
+train_step = tf.train.gradientdescentoptimizer(0.5).minimize(loss)
+with sess.as_default():
+    for i in range(100):
+        batch = mnist_data.train.next_batch(50)
+        train_step.run(feed_dict={img: batch[0],
+                                  labels: batch[1],
+                                  k.learning_phase(): 1})
+
+acc_value = accuracy(labels, preds)
+with sess.as_default():
+    print acc_value.eval(feed_dict={img: mnist_data.test.images,
+                                    labels: mnist_data.test.labels,
+                                    k.learning_phase(): 0})
+
+compatibility with name scopes, device scopes
+
+   keras layers and models are fully compatible with tensorflow name
+   scopes. for instance, consider the following code snippet:
+x = tf.placeholder(tf.float32, shape=(none, 20, 64))
+with tf.name_scope('block1'):
+    y = lstm(32, name='mylstm')(x)
+
+   the weights of our lstm layer will then be named block1/mylstm_w_i,
+   block1/mylstm_u_i, etc...
+
+   similarly, device scopes work as you would expect:
+with tf.device('/gpu:0'):
+    x = tf.placeholder(tf.float32, shape=(none, 20, 64))
+    y = lstm(32)(x)  # all ops / variables in the lstm layer will live on gpu:0
+
+compatibility with graph scopes
+
+   any keras layer or model that you define inside a tensorflow graph
+   scope will have all of its variables and operations created as part of
+   the specified graph. for instance, the following works as you would
+   expect:
+from keras.layers import lstm
+import tensorflow as tf
+
+my_graph = tf.graph()
+with my_graph.as_default():
+    x = tf.placeholder(tf.float32, shape=(none, 20, 64))
+    y = lstm(32)(x)  # all ops / variables in the lstm layer are created as part
+ of our graph
+
+compatibility with variable scopes
+
+   variable sharing should be done via calling a same keras layer (or
+   model) instance multiple times, not via tensorflow variable scopes. a
+   tensorflow variable scope will have no effect on a keras layer or
+   model. for more information about weight sharing with keras, please see
+   [16]the "weight sharing" section in the functional api guide.
+
+   to summarize quickly how weight sharing works in keras: by reusing the
+   same layer instance or model instance, you are sharing its weights.
+   here's a simple example:
+# instantiate a keras layer
+lstm = lstm(32)
+
+# instantiate two tf placeholders
+x = tf.placeholder(tf.float32, shape=(none, 20, 64))
+y = tf.placeholder(tf.float32, shape=(none, 20, 64))
+
+# encode the two tensors with the *same* lstm weights
+x_encoded = lstm(x)
+y_encoded = lstm(y)
+
+collecting trainable weights and state updates
+
+   some keras layers (stateful id56s and batchid172 layers) have
+   internal updates that need to be run as part of each training step.
+   there are stored as a list of tensor tuples, layer.updates. you should
+   generate assign ops for those, to be run at each training step. here's
+   an example:
+from keras.layers import batchid172
+
+layer = batchid172()(x)
+
+update_ops = []
+for old_value, new_value in layer.updates:
+    update_ops.append(tf.assign(old_value, new_value))
+
+   note that if you are using a keras model (model instance or sequential
+   instance), model.udpates behaves in the same way (and collects the
+   updates of all underlying layers in the model).
+
+   in addition, in case you need to explicitly collect a layer's trainable
+   weights, you can do so via layer.trainable_weights (or
+   model.trainable_weights), a list of tensorflow variable instances:
+from keras.layers import dense
+
+layer = dense(32)(x)  # instantiate and call a layer
+print layer.trainable_weights  # list of tensorflow variables
+
+   knowing this allows you to implement your own training routine based on
+   a tensorflow optimizer.
+     __________________________________________________________________
+
+ii: using keras models with tensorflow
+
+converting a keras sequential model for use in a tensorflow workflow
+
+   you have found a keras sequential model that you want to reuse in your
+   tensorflow project (consider, for instance, [17]this vgg16 image
+   classifier with pre-trained weights). how to proceed?
+
+   first of all, note that if your pre-trained weights include
+   convolutions (layers convolution2d or convolution1d) that were trained
+   with theano, you need to flip the convolution kernels when loading the
+   weights. this is due theano and tensorflow implementing convolution in
+   different ways (tensorflow actually implements correlation, much like
+   caffe). [18]here's a short guide on what you need to do in this case.
+
+   let's say that you are starting from the following keras model, and
+   that you want to modify so that it takes as input a specific tensorflow
+   tensor, my_input_tensor. this input tensor could be a data feeder op,
+   for instance, or the output of a previous tensorflow model.
+# this is our initial keras model
+model = sequential()
+model.add(dense(32, activation='relu', input_dim=784))
+model.add(dense(10, activation='softmax'))
+
+   you just need to use keras.layers.inputlayer to start building your
+   sequential model on top of a custom tensorflow placeholder, then build
+   the rest of the model on top:
+from keras.layers import inputlayer
+
+# this is our modified keras model
+model = sequential()
+model.add(inputlayer(input_tensor=custom_input_tensor,
+                     input_shape=(none, 784)))
+
+# build the rest of the model as before
+model.add(dense(32, activation='relu'))
+model.add(dense(10, activation='softmax'))
+
+   at this stage, you can call model.load_weights(weights_file) to load
+   your pre-trained weights.
+
+   then you will probably want to collect the sequential model's output
+   tensor:
+output_tensor = model.output
+
+   you can now add new tensorflow ops on top of output_tensor, etc.
+
+calling a keras model on a tensorflow tensor
+
+   a keras model acts the same as a layer, and thus can be called on
+   tensorflow tensors:
+from keras.models import sequential
+
+model = sequential()
+model.add(dense(32, activation='relu', input_dim=784))
+model.add(dense(10, activation='softmax'))
+
+# this works!
+x = tf.placeholder(tf.float32, shape=(none, 784))
+y = model(x)
+
+   note: by calling a keras model, your are reusing both its architecture
+   and its weights. when you are calling a model on a tensor, you are
+   creating new tf ops on top of the input tensor, and these ops are
+   reusing the tf variable instances already present in the model.
+     __________________________________________________________________
+
+iii: multi-gpu and distributed training
+
+assigning part of a keras model to different gpus
+
+   tensorflow device scopes are fully compatible with keras layers and
+   models, hence you can use them to assign specific parts of a graph to
+   different gpus. here's a simple example:
+with tf.device('/gpu:0'):
+    x = tf.placeholder(tf.float32, shape=(none, 20, 64))
+    y = lstm(32)(x)  # all ops in the lstm layer will live on gpu:0
+
+with tf.device('/gpu:1'):
+    x = tf.placeholder(tf.float32, shape=(none, 20, 64))
+    y = lstm(32)(x)  # all ops in the lstm layer will live on gpu:1
+
+   note that the variables created by the lstm layers will not live on
+   gpu: all tensorflow variables always live on cpu independently from the
+   device scope where they were created. tensorflow handles
+   device-to-device variable transfer behind the scenes.
+
+   if you want to train multiple replicas of a same model on different
+   gpus, while sharing the same weights across the different replicas, you
+   should first instantiate your model (or layers) under one device scope,
+   then call the same model instance multiple times in different gpu
+   device scopes, such as:
+with tf.device('/cpu:0'):
+    x = tf.placeholder(tf.float32, shape=(none, 784))
+
+    # shared model living on cpu:0
+    # it won't actually be run during training; it acts as an op template
+    # and as a repository for shared variables
+    model = sequential()
+    model.add(dense(32, activation='relu', input_dim=784))
+    model.add(dense(10, activation='softmax'))
+
+# replica 0
+with tf.device('/gpu:0'):
+    output_0 = model(x)  # all ops in the replica will live on gpu:0
+
+# replica 1
+with tf.device('/gpu:1'):
+    output_1 = model(x)  # all ops in the replica will live on gpu:1
+
+# merge outputs on cpu
+with tf.device('/cpu:0'):
+    preds = 0.5 * (output_0 + output_1)
+
+# we only run the `preds` tensor, so that only the two
+# replicas on gpu get run (plus the merge op on cpu)
+output_value = sess.run([preds], feed_dict={x: data})
+
+distributed training
+
+   you can trivially make use of tensorflow distributed training by
+   registering with keras a tf session linked to a cluster:
+server = tf.train.server.create_local_server()
+sess = tf.session(server.target)
+
+from keras import backend as k
+k.set_session(sess)
+
+   for more information about using tensorflow in a distributed setting,
+   see [19]this tutorial.
+     __________________________________________________________________
+
+iv: exporting a model with tensorflow-serving
+
+   [20]tensorflow serving is a library for serving tensorflow models in a
+   production setting, developed by google.
+
+   any keras model can be exported with tensorflow-serving (as long as it
+   only has one input and one output, which is a limitation of
+   tf-serving), whether or not it was training as part of a tensorflow
+   workflow. in fact you could even train your keras model with theano
+   then switch to the tensorflow keras backend and export your model.
+
+   here's how it works.
+
+   if your graph makes use of the keras learning phase (different behavior
+   at training time and test time), the very first thing to do before
+   exporting your model is to hard-code the value of the learning phase
+   (as 0, presumably, i.e. test mode) into your graph. this is done by 1)
+   registering a constant learning phase with the keras backend, and 2)
+   re-building your model afterwards.
+
+   here are these two simple steps in action:
+from keras import backend as k
+
+k.set_learning_phase(0)  # all new operations will be in test mode from now on
+
+# serialize the model and get its weights, for quick re-building
+config = previous_model.get_config()
+weights = previous_model.get_weights()
+
+# re-build a model where the learning phase is now hard-coded to 0
+from keras.models import model_from_config
+new_model = model_from_config(config)
+new_model.set_weights(weights)
+
+   we can now use tensorflow-serving to export the model, following the
+   instructions found in [21]the official tutorial:
+from tensorflow_serving.session_bundle import exporter
+
+export_path = ... # where to save the exported graph
+export_version = ... # version number (integer)
+
+saver = tf.train.saver(sharded=true)
+model_exporter = exporter.exporter(saver)
+signature = exporter.classification_signature(input_tensor=model.input,
+                                              scores_tensor=model.output)
+model_exporter.init(sess.graph.as_graph_def(),
+                    default_graph_signature=signature)
+model_exporter.export(export_path, tf.constant(export_version), sess)
+     __________________________________________________________________
+
+   want to see a new topic covered in this guide? [22]reach out on
+   twitter.
+     __________________________________________________________________
+
+
+    powered by [23]pelican, which takes great advantages of [24]python.
+
+references
+
+   1. https://blog.keras.io/
+   2. https://blog.keras.io/index.html
+   3. https://github.com/fchollet/keras
+   4. https://blog.keras.io/
+   5. https://github.com/fchollet/keras
+   6. http://keras.io/
+   7. https://groups.google.com/forum/#!forum/keras-users
+   8. https://blog.keras.io/keras-as-a-simplified-interface-to-tensorflow-tutorial.html
+   9. https://twitter.com/fchollet
+  10. https://blog.keras.io/category/tutorials.html
+  11. http://keras.io/backend/#switching-from-one-backend-to-another
+  12. https://blog.keras.io/keras-as-a-simplified-interface-to-tensorflow-tutorial.html#calling-keras-layers-on-tensorflow-tensors
+  13. https://blog.keras.io/keras-as-a-simplified-interface-to-tensorflow-tutorial.html#using-keras-models-with-tensorflow
+  14. https://blog.keras.io/keras-as-a-simplified-interface-to-tensorflow-tutorial.html#multi-gpu-and-distributed-training
+  15. https://blog.keras.io/keras-as-a-simplified-interface-to-tensorflow-tutorial.html#exporting-a-model-with-tensorflow-serving
+  16. http://keras.io/getting-started/functional-api-guide/#shared-layers
+  17. https://gist.github.com/baraldilorenzo/07d7802847aaad0a35d3
+  18. https://github.com/fchollet/keras/wiki/converting-convolution-kernels-from-theano-to-tensorflow-and-vice-versa
+  19. https://www.tensorflow.org/versions/r0.8/how_tos/distributed/index.html
+  20. https://github.com/tensorflow/serving
+  21. https://github.com/tensorflow/serving/blob/master/tensorflow_serving/g3doc/serving_basic.md
+  22. https://twitter.com/fchollet
+  23. http://alexis.notmyidea.org/pelican/
+  24. http://python.org/

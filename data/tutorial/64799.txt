@@ -1,0 +1,540 @@
+     *
+     *
+     *
+     *
+     *
+
+     * [1]home
+     * [2]news
+     * [3]publications
+     * [4]cv
+     * [5]blog
+     * [6]contact
+
+tim rockt  schel
+
+   machine learning, deep learning, id23, natural
+   language processing
+
+einsum is all you need - einstein summation in deep learning
+
+       tim rockt  schel, 30/04/2018     updated 02/05/2018
+
+   when talking to colleagues i realized that not everyone knows about
+   einsum, my favorite function for developing deep learning models. this
+   post is trying to change that once and for all! :) einstein summation
+   (einsum) is implemented in [7]numpy, as well as deep learning libraries
+   such as [8]tensorflow and, thanks to [9]thomas viehmann, recently also
+   [10]pytorch. for background reading on einsum, i recommend the
+   excellent blog posts by [11]olexa bilaniuk and [12]alex riley. while
+   their posts discuss einsum in the context of numpy, i am going to
+   illustrate how einsum is extremely useful for writing elegant
+   pytorch/tensorflow models.^[13]1
+
+1 einsum notation^[14]2
+
+   if you are anything like me, you find it difficult to remember the
+   names and signatures of all the different functions in
+   pytorch/tensorflow for calculating dot products, outer products,
+   transposes and matrix-vector or matrix-id127s. einsum
+   notation is an elegant way to express all of these, as well as complex
+   operations on tensors, using essentially a domain-specific language.
+   this has benefits beyond not having to memorize or regularly looking up
+   specific library functions. once you understand and make use of einsum,
+   you will be able to write more concise and efficient code more quickly.
+   when not using einsum it is easy to introduce unnecessary reshaping and
+   transposing of tensors, as well as intermediate tensors that could be
+   omitted. furthermore, domain-specific languages like einsum can
+   sometimes be compiled to high-performing code, and an einsum-like
+   domain-specific language is in fact the basis for the recently
+   introduced [15]tensor comprehensions^[16]3 in pytorch which
+   automatically generate gpu code and auto-tune that code for specific
+   input sizes. in addition, projects like [17]opt einsum and [18]tf
+   einsum opt can be used to optimize tensor contraction order of einsum
+   expressions.^[19]4
+
+   let's say we want to multiply two matrices
+   \({\color{red}\mathbf{a}}\in\mathbb{r}^{i\,\times\,k}\) and
+   \({\color{blue}\mathbf{b}}\in\mathbb{r}^{k\,\times\,j}\) followed by
+   calculating the sum of each column resulting in a vector
+   \({\color{green}\mathbf{c}}\in\mathbb{r}^{j}\). using einstein
+   summation notation, we can write this as \[ {\color{green}c_j} =
+   \sum_i\sum_k {\color{red}a_{ik}}{\color{blue}b_{kj}} =
+   {\color{red}a_{ik}}{\color{blue}b_{kj}} \] which specifies how all
+   individual elements \({\color{green}c_i}\) in
+   \(\color{green}\mathbf{c}\) are calculated from multiplying values in
+   the column vectors \(\color{red}\mathbf{a}_{i:}\) and row vectors
+   \(\color{blue}\mathbf{b}_{:j}\) and summing them up. note that for
+   einstein notation, the summation sigmas can be dropped as we implicitly
+   sum over repeated indices (\(k\) in this example) and indices not
+   mentioned in the output specification (\(i\) in this example). so far
+   so good, but we can also express more basic operations using einsum.
+   for instance, calculating the dot product of two vectors
+   \({\color{red}\mathbf{a}},{\color{blue}\mathbf{b}}\in\mathbb{r}^i\) can
+   be written as \[ {\color{green}c} = \sum_i
+   {\color{red}a_i}{\color{blue}b_i} = {\color{red}a_i}{\color{blue}b_i}.
+   \] a problem that i encounter often in deep learning is applying a
+   transformation to vectors in a higher-order tensor. for example, i
+   might have a tensor that contains $t$-long sequences of $k$-dimensional
+   word vectors for \(n\) training examples in a batch and i want to
+   project the word vectors to a different dimension \(q\). let
+   \({\color{red}\mathcal{t}}\in\mathbb{r}^{n\,\times\,t\times\,k}\) be an
+   order-3 tensor where the first dimension corresponds to the batch, the
+   second dimension to the sequence length, and the last dimension to the
+   word vectors. in addition, let
+   \({\color{blue}\mathbf{w}}\in\mathbb{r}^{k\,\times\,q}\) be a
+   projection matrix. the desired computation can be expressed using
+   einsum \[ {\color{green}c_{ntq}} = \sum_k
+   {\color{red}t_{ntk}}{\color{blue}w_{kq}} =
+   {\color{red}t_{ntk}}{\color{blue}w_{kq}}. \] as a final example, say
+   you are given an order-4 tensor
+   \({\color{red}\mathcal{t}}\in\mathbb{r}^{n\,\times\,t\times\,k\,\times\
+   ,m}\) and you are supposed to project vectors in the 3rd dimension to
+   \(q\) using the projection matrix from before. however, let's say i
+   also ask you to sum over the 2nd dimension and transpose the first and
+   last dimension in the result, yielding a tensor
+   \({\color{green}\mathcal{c}}\in\mathbb{r}^{m\,\times,q\times\,n}\).^[20
+   ]5 einsum to the rescue! \[ {\color{green}c_{mqn}} = \sum_t\sum_k
+   {\color{red}t_{ntkm}}{\color{blue}w_{kq}} =
+   {\color{red}t_{ntkm}}{\color{blue}w_{kq}}. \] note that transposing the
+   result of the tensor contraction is achieved by swapping \(n\) with
+   \(m\) (\({\color{green}c_{mqn}}\) instead of
+   \({\color{green}c_{nqm}}\)).
+
+2 all you need: einsum in numpy, pytorch, and tensorflow
+
+   einsum is implemented in [21]numpy via np.einsum, in [22]pytorch via
+   torch.einsum, and in [23]tensorflow via tf.einsum.^[24]6 all three
+   einsum functions share the same signature einsum(equation,operands)
+   where equation is a string representing the einstein summation and
+   operands is a sequence of tensors.^[25]7 the examples above can all be
+   written using an equation string. for instance, our first example
+   \({\color{green}c_j} = \sum_i\sum_k
+   {\color{red}a_{ik}}{\color{blue}b_{kj}}\) can be written as the
+   equation string "\({\color{red}ik},{\color{blue}kj}\) ->
+   \({\color{green}j}\)". note that the naming of the indices (\(i\),
+   \(j\), \(k\)) is arbitrary but it needs to be used consistently.
+
+   what's great about having einsum not only in numpy but also in pytorch
+   and tensorflow is that it can be used in arbitrary computation graphs
+   for neural network architectures and that we can backpropagate through
+   it. a typical call to einsum has the following form \[
+   {\color{green}\textbf{result}} =
+   \text{einsum}("{\color{red}\square\square},{\color{purple}\square\squar
+   e\square},{\color{blue}\square\square}\,\text{->}\,{\color{green}\squar
+   e\square}", {\color{red}\text{arg1}}, {\color{purple}\text{arg2}},
+   {\color{blue}\text{arg3}}) \] where \(\square\) is a placeholder for a
+   character identifying a tensor dimension. from this equation string we
+   can infer that \({\color{red}\text{arg1}}\) and
+   \({\color{blue}\text{arg3}}\) are matrices,
+   \({\color{purple}\text{arg2}}\) is an order-3 tensor, and that the
+   \({\color{green}\textbf{result}}\) of this einsum operation is a
+   matrix. note that einsum works with a variable number of inputs. in the
+   example above, einsum specifies an operation on three arguments, but it
+   can also be used for operations involving one, two or more than three
+   arguments. einsum is best learned by studying examples, so let's go
+   through some examples for einsum in pytorch that correspond to library
+   functions which are used in many deep learning models.
+
+2.1 matrix transpose
+
+   \[{\color{green}b_{ji}} = {\color{red}a_{ij}}\]
+import torch
+a = torch.arange(6).reshape(2, 3)
+torch.einsum('ij->ji', [a])
+
+tensor([[ 0.,  3.],
+        [ 1.,  4.],
+        [ 2.,  5.]])
+
+
+2.2 sum
+
+   \[{\color{green}b} = \sum_i\sum_j {\color{red}a_{ij}} =
+   {\color{red}a_{ij}}\]
+a = torch.arange(6).reshape(2, 3)
+torch.einsum('ij->', [a])
+
+tensor(15.)
+
+
+2.3 column sum
+
+   \[{\color{green}b_j} = \sum_i {\color{red}a_{ij}} =
+   {\color{red}a_{ij}}\]
+a = torch.arange(6).reshape(2, 3)
+torch.einsum('ij->j', [a])
+
+tensor([ 3.,  5.,  7.])
+
+
+2.4 row sum
+
+   \[{\color{green}b_i} = \sum_j {\color{red}a_{ij}} =
+   {\color{red}a_{ij}}\]
+a = torch.arange(6).reshape(2, 3)
+torch.einsum('ij->i', [a])
+
+tensor([  3.,  12.])
+
+
+2.5 matrix-vector multiplication
+
+   \[{\color{green}c_i} = \sum_k {\color{red}a_{ik}}{\color{blue}b_k} =
+   {\color{red}a_{ik}}{\color{blue}b_k}\]
+a = torch.arange(6).reshape(2, 3)
+b = torch.arange(3)
+torch.einsum('ik,k->i', [a, b])
+
+tensor([  5.,  14.])
+
+
+2.6 matrix-id127
+
+   \[{\color{green}c_{ij}} = \sum_k
+   {\color{red}a_{ik}}{\color{blue}b_{kj}} =
+   {\color{red}a_{ik}}{\color{blue}b_{kj}}\]
+a = torch.arange(6).reshape(2, 3)
+b = torch.arange(15).reshape(3, 5)
+torch.einsum('ik,kj->ij', [a, b])
+
+tensor([[  25.,   28.,   31.,   34.,   37.],
+        [  70.,   82.,   94.,  106.,  118.]])
+
+
+2.7 dot product
+
+   vector: \[{\color{green}c} = \sum_i {\color{red}a_i\color{blue}b_i} =
+   {\color{red}a_i\color{blue}b_i}\]
+a = torch.arange(3)
+b = torch.arange(3,6)  # -- a vector of length 3 containing [3, 4, 5]
+torch.einsum('i,i->', [a, b])
+
+tensor(14.)
+
+
+   matrix: \[{\color{green}c} = \sum_i\sum_j
+   {\color{red}a_{ij}\color{blue}b_{ij}} =
+   {\color{red}a_{ij}\color{blue}b_{ij}}\]
+a = torch.arange(6).reshape(2, 3)
+b = torch.arange(6,12).reshape(2, 3)
+torch.einsum('ij,ij->', [a, b])
+
+tensor(145.)
+
+
+2.8 hadamard product
+
+   \[{\color{green}c_{ij}} = {\color{red}a_{ij}\color{blue}b_{ij}}\]
+a = torch.arange(6).reshape(2, 3)
+b = torch.arange(6,12).reshape(2, 3)
+torch.einsum('ij,ij->ij', [a, b])
+
+tensor([[  0.,   7.,  16.],
+        [ 27.,  40.,  55.]])
+
+
+2.9 outer product
+
+   \[{\color{green}c_{ij}} = {\color{red}a_i\color{blue}b_j}\]
+a = torch.arange(3)
+b = torch.arange(3,7)  # -- a vector of length 4 containing [3, 4, 5, 6]
+torch.einsum('i,j->ij', [a, b])
+
+tensor([[  0.,   0.,   0.,   0.],
+        [  3.,   4.,   5.,   6.],
+        [  6.,   8.,  10.,  12.]])
+
+
+2.10 batch id127
+
+   \[{\color{green}c_{ijl}} =
+   \sum_k{\color{red}a_{ijk}\color{blue}b_{ikl}} =
+   {\color{red}a_{ijk}\color{blue}b_{ikl}}\]
+a = torch.randn(3,2,5)
+b = torch.randn(3,5,3)
+torch.einsum('ijk,ikl->ijl', [a, b])
+
+tensor([[[ 1.0886,  0.0214,  1.0690],
+         [ 2.0626,  3.2655, -0.1465]],
+
+        [[-6.9294,  0.7499,  1.2976],
+         [ 4.2226, -4.5774, -4.8947]],
+
+        [[-2.4289, -0.7804,  5.1385],
+         [ 0.8003,  2.9425,  1.7338]]])
+
+
+2.11 tensor contraction
+
+   batch id127 is a special case of a [26]tensor
+   contraction. let's say we have two tensors, an order-\(n\) tensor
+   \({\color{red}\mathcal{a}}\in\mathbb{r}^{i_1\,\times\,\cdots\,\times\,i
+   _n}\) and an order-\(m\) tensor
+   \({\color{blue}\mathcal{b}}\in\mathbb{r}^{j_1\,\times\,\cdots\,\times\,
+   i_m}\). as an example, take \(n=4\), \(m=5\) and assume that \(i_2 =
+   j_3\) and \(i_3=j_5\). we can multiply the two tensors in these two
+   dimensions (\(2\) and \(3\) for \(\color{red}\mathcal{a}\) and \(3\)
+   and \(5\) for \(\color{blue}\mathcal{b}\)) resulting in a new tensor
+   \({\color{green}\mathcal{c}}\in\mathbb{r}^{i_1\,\times\,i_4\,\times\,j_
+   1\,\times\,j_2\,\times\,j_4}\) as follows \[{\color{green}c_{pstuv}} =
+   \sum_q\sum_r{\color{red}a_{pqrs}\color{blue}b_{tuqvr}} =
+   {\color{red}a_{pqrs}\color{blue}b_{tuqvr}}\]
+a = torch.randn(2,3,5,7)
+b = torch.randn(11,13,3,17,5)
+torch.einsum('pqrs,tuqvr->pstuv', [a, b]).shape
+
+torch.size([2, 7, 11, 13, 17])
+
+
+2.12 bilinear transformation
+
+   as mentioned earlier, einsum can operate on more than two tensors. one
+   example where this is used is [27]bilinear transformation.
+   \[{\color{green}d_{ij}} =
+   \sum_k\sum_l{\color{red}a_{ik}}{\color{purple}b_{jkl}}{\color{blue}c_{i
+   l}} = {\color{red}a_{ik}}{\color{purple}b_{jkl}}{\color{blue}c_{il}}\]
+a = torch.randn(2,3)
+b = torch.randn(5,3,7)
+c = torch.randn(2,7)
+torch.einsum('ik,jkl,il->ij', [a, b, c])
+
+tensor([[ 3.8471,  4.7059, -3.0674, -3.2075, -5.2435],
+        [-3.5961, -5.2622, -4.1195,  5.5899,  0.4632]])
+
+
+3 case studies
+
+3.1 treeqn
+
+   an example where i used einsum in the past is implementing equation 6
+   in ^[28]8. given a low-dimensional state representation
+   \(\mathbf{z}_l\) at layer \(l\) and a transition function
+   \(\mathbf{w}^a\) per action \(a\), we want to calculate all next-state
+   representations \(\mathbf{z}^a_{l+1}\) using a residual
+   connection.^[29]9 \[ \mathbf{z}^a_{l+1} = \mathbf{z}_l +
+   \tanh(\mathbf{w}^a\mathbf{z}_l) \] in practice, we want to do this
+   efficiently for a batch \(b\) of $k$-dimensional state representations
+   \(\mathbf{z}\in\mathbb{r}^{b\,\times\,k}\) and for all transition
+   functions (i.e. for all actions \(a\)) at the same time. we can arrange
+   these transition functions in a tensor
+   \(\mathcal{w}\in\mathbb{r}^{a\,\times\,k\,\times\,k}\) and calculate
+   the next-state representations efficiently using einsum.
+import torch.nn.functional as f
+
+def random_tensors(shape, num=1, requires_grad=false):
+  tensors = [torch.randn(shape, requires_grad=requires_grad) for i in range(0, n
+um)]
+  return tensors[0] if num == 1 else tensors
+
+# parameters
+# -- [num_actions x hidden_dimension]
+b = random_tensors([5, 3], requires_grad=true)
+# -- [num_actions x hidden_dimension x hidden_dimension]
+w = random_tensors([5, 3, 3], requires_grad=true)
+
+def transition(zl):
+  # -- [batch_size x num_actions x hidden_dimension]
+  return zl.unsqueeze(1) + f.tanh(torch.einsum("bk,aki->bai", [zl, w]) + b)
+
+# sampled dummy inputs
+# -- [batch_size x hidden_dimension]
+zl = random_tensors([2, 3])
+
+transition(zl)
+
+tensor([[[ 0.9986,  1.9339,  1.4650],
+         [-0.6965,  0.2384, -0.3514],
+         [-0.8682,  1.8449,  1.5787],
+         [-0.8050,  0.7277,  0.1155],
+         [ 1.0204,  1.7439, -0.1679]],
+
+        [[ 0.2334,  0.6767,  0.5646],
+         [-0.1398,  0.7524, -0.9820],
+         [-0.8377,  0.4516, -0.3306],
+         [ 0.4742,  1.1055,  0.1824],
+         [ 0.8868,  0.2930,  0.1579]]])
+
+3.2 attention
+
+   another real-world example for using einsum is the word-by-word
+   attention mechanism defined in equations 11 to 13 in ^[30]10.
+   \begin{align*} \mathbf{m}_t &=
+   \tanh(\mathbf{w}^y\mathbf{y}+(\mathbf{w}^h\mathbf{h}_t+\mathbf{w}^r\mat
+   hbf{r}_{t-1})\otimes \mathbf{e}_l) & \mathbf{m}_t
+   &\in\mathbb{r}^{k\times l}\\ \alpha_t &=
+   \text{softmax}(\mathbf{w}^t\mathbf{m}_t)&\alpha_t&\in\mathbb{r}^l\\
+   \mathbf{r}_t &= \mathbf{y}\alpha^t_t +
+   \tanh(\mathbf{w}^t\mathbf{r}_{t-1})&\mathbf{r}_t&\in\mathbb{r}^k
+   \end{align*}
+
+   this is not trivial to implement, particularly if we care about a
+   batched implementation. einsum to the rescue!
+# parameters
+# -- [hidden_dimension]
+bm, br, w = random_tensors([7], num=3, requires_grad=true)
+# -- [hidden_dimension x hidden_dimension]
+wy, wh, wr, wt = random_tensors([7, 7], num=4, requires_grad=true)
+
+# single application of attention mechanism
+def attention(y, ht, rt1):
+  # -- [batch_size x hidden_dimension]
+  tmp = torch.einsum("ik,kl->il", [ht, wh]) + torch.einsum("ik,kl->il", [rt1, wr
+])
+  mt = f.tanh(torch.einsum("ijk,kl->ijl", [y, wy]) + tmp.unsqueeze(1).expand_as(
+y) + bm)
+  # -- [batch_size x sequence_length]
+  at = f.softmax(torch.einsum("ijk,k->ij", [mt, w]))
+  # -- [batch_size x hidden_dimension]
+  rt = torch.einsum("ijk,ij->ik", [y, at]) + f.tanh(torch.einsum("ij,jk->ik", [r
+t1, wt]) + br)
+  # -- [batch_size x hidden_dimension], [batch_size x sequence_dimension]
+  return rt, at
+
+# sampled dummy inputs
+# -- [batch_size x sequence_length x hidden_dimension]
+y = random_tensors([3, 5, 7])
+# -- [batch_size x hidden_dimension]
+ht, rt1 = random_tensors([3, 7], num=2)
+
+rt, at = attention(y, ht, rt1)
+at  # -- print attention weights
+
+tensor([[ 0.1150,  0.0971,  0.5670,  0.1149,  0.1060],
+        [ 0.0496,  0.0470,  0.3465,  0.1513,  0.4057],
+        [ 0.0483,  0.5700,  0.0524,  0.2481,  0.0813]])
+
+
+4 summary
+
+   einsum is one function to rule them all. it's your swiss army knife for
+   all kinds of tensor operations. that said, "einsum is all you need" is
+   obviously an overstatement. if you look at the case studies above, we
+   still need to apply non-linearities and construct extra dimensions
+   (unsqueeze). similarly, for splitting, concatenating or indexing of
+   tensors you still have to employ other library functions. moreover,
+   einsum in pytorch currently does not support diagonal elements, so the
+   following throws an error: torch.einsum('ii->i', [torch.randn(3, 3)]).
+
+   one thing that can become annoying when working with einsum is that you
+   have to instantiate parameters manually, take care of their
+   initialization, and registering them with modules. still, i strongly
+   encourage you to look out for situations where you can use einsum in
+   your models.
+
+footnotes:
+
+   ^[31]1
+   my examples use pytorch, but translating them to tensorflow is trivial.
+   ^[32]2
+   the first version of this post was incorrectly using a summation sigma
+   which is not einstein notation but classical notation. thanks to
+   [33]christian wolf and [34]reddit/ml for pointing this out.
+   ^[35]3
+   vasilache, zinenko, theodoridis, goyal, devito, moses, verdoolaege,
+   adams and cohen. tensor comprehensions: framework-agnostic
+   high-performance machine learning abstractions. arxiv preprint
+   arxiv:1802.04730. 2018
+   ^[36]4
+   thanks to [37]stephan hoyer and [38]alexander novikov for the pointers.
+   ^[39]5
+   thanks to [40]blammar for pointing out a previous error.
+   ^[41]6
+   thanks to [42]martin trapp for pointing out that there is also a
+   [43]julia implementation.
+   ^[44]7
+   in numpy and tensorflow, operands can be a variable-length argument
+   list whereas in pytorch it needs to be a list.
+   ^[45]8
+   farquhar, rockt  schel, igl and whiteson. treeqn and atreec:
+   differentiable tree-structured models for deep id23.
+   in: international conference on learning representations (iclr). 2018
+   ^[46]9
+   he, zhang, ren and sun. deep residual learning for image recognition.
+   in: 2016 ieee conference on id161 and pattern recognition,
+   cvpr. 2016
+   ^[47]10
+   rockt  schel, grefenstette, hermann, kocisky and blunsom. reasoning
+   about entailment with neural attention. in: international conference on
+   learning representations (iclr). 2016
+     __________________________________________________________________
+
+   please enable javascript to view the [48]comments powered by disqus.
+   [49]blog comments powered by disqus
+
+     *
+     *
+     *
+     *
+     *
+     *
+
+     * copyright    tim rockt  schel
+     * html5
+     * design: [50]templated
+
+references
+
+   visible links
+   1. https://rockt.github.io/index.html
+   2. https://rockt.github.io/index.html#two
+   3. https://rockt.github.io/publications.html
+   4. https://rockt.github.io/cv.html
+   5. https://rockt.github.io/blog.html
+   6. https://rockt.github.io/index.html#four
+   7. https://docs.scipy.org/doc/numpy/reference/generated/numpy.einsum.html
+   8. https://www.tensorflow.org/api_docs/python/tf/einsum
+   9. https://github.com/pytorch/pytorch/pull/6307
+  10. http://pytorch.org/docs/master/torch.html?highlight=torch max#torch.einsum
+  11. https://obilaniu6266h16.wordpress.com/2016/02/04/einstein-summation-in-numpy/
+  12. http://ajcr.net/basic-guide-to-einsum/
+  13. https://rockt.github.io/2018/04/30/einsum#fn.1
+  14. https://rockt.github.io/2018/04/30/einsum#fn.2
+  15. http://pytorch.org/2018/03/05/tensor-comprehensions.html
+  16. https://rockt.github.io/2018/04/30/einsum#fn.3
+  17. https://github.com/dgasmith/opt_einsum
+  18. https://github.com/bihaqo/tf_einsum_opt
+  19. https://rockt.github.io/2018/04/30/einsum#fn.4
+  20. https://rockt.github.io/2018/04/30/einsum#fn.5
+  21. https://docs.scipy.org/doc/numpy/reference/generated/numpy.einsum.html
+  22. http://pytorch.org/docs/master/torch.html?highlight=torch max#torch.einsum
+  23. https://www.tensorflow.org/api_docs/python/tf/einsum
+  24. https://rockt.github.io/2018/04/30/einsum#fn.6
+  25. https://rockt.github.io/2018/04/30/einsum#fn.7
+  26. https://en.wikipedia.org/wiki/tensor_contraction
+  27. http://pytorch.org/docs/master/nn.html#torch.nn.bilinear
+  28. https://rockt.github.io/2018/04/30/einsum#fn.8
+  29. https://rockt.github.io/2018/04/30/einsum#fn.9
+  30. https://rockt.github.io/2018/04/30/einsum#fn.10
+  31. https://rockt.github.io/2018/04/30/einsum#fnr.1
+  32. https://rockt.github.io/2018/04/30/einsum#fnr.2
+  33. https://twitter.com/chriswolfvision/status/990967989473300481
+  34. https://www.reddit.com/r/machinelearning/comments/8g1q4n/d_einsum_is_all_you_need_einstein_summation_in/dy89k1e/
+  35. https://rockt.github.io/2018/04/30/einsum#fnr.3
+  36. https://rockt.github.io/2018/04/30/einsum#fnr.4
+  37. https://twitter.com/shoyer/status/990990806419881984
+  38. https://twitter.com/sashavnovikov/status/991034793533075457
+  39. https://rockt.github.io/2018/04/30/einsum#fnr.5
+  40. https://www.reddit.com/r/machinelearning/comments/8g1q4n/d_einsum_is_all_you_need_einstein_summation_in/dy89k1e/
+  41. https://rockt.github.io/2018/04/30/einsum#fnr.6
+  42. https://twitter.com/martin_trapp/status/990983285022117888
+  43. https://github.com/ahwillia/einsum.jl
+  44. https://rockt.github.io/2018/04/30/einsum#fnr.7
+  45. https://rockt.github.io/2018/04/30/einsum#fnr.8
+  46. https://rockt.github.io/2018/04/30/einsum#fnr.9
+  47. https://rockt.github.io/2018/04/30/einsum#fnr.10
+  48. https://disqus.com/?ref_noscript
+  49. https://disqus.com/
+  50. http://templated.co/
+
+   hidden links:
+  52. https://scholar.google.co.uk/citations?user=mwby8aiaaaaj&hl=en
+  53. https://twitter.com/_rockt
+  54. https://github.com/rockt
+  55. https://uk.linkedin.com/in/rockt
+  56. https://scholar.google.co.uk/citations?user=mwby8aiaaaaj&hl=en
+  57. https://twitter.com/_rockt
+  58. https://github.com/rockt
+  59. https://uk.linkedin.com/in/rockt
+  60. https://www.facebook.com/trockta
+  61. http://www.flickriver.com/photos/gwionas/popular-interesting

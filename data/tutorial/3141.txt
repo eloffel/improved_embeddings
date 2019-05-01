@@ -1,0 +1,267 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]become a member[7]sign in[8]get started
+     __________________________________________________________________
+
+yes you should understand backprop
+
+   [9]go to the profile of andrej karpathy
+   [10]andrej karpathy (button) blockedunblock (button) followfollowing
+   dec 19, 2016
+
+   when we offered [11]cs231n (deep learning class) at stanford, we
+   intentionally designed the programming assignments to include explicit
+   calculations involved in id26 on the lowest level. the
+   students had to implement the forward and the backward pass of each
+   layer in raw numpy. inevitably, some students complained on the class
+   message boards:
+
+        why do we have to write the backward pass when frameworks in the
+     real world, such as tensorflow, compute them for you automatically?   
+
+   this is seemingly a perfectly sensible appeal - if you   re never going
+   to write backward passes once the class is over, why practice writing
+   them? are we just torturing the students for our own amusement? some
+   easy answers could make arguments along the lines of    it   s worth
+   knowing what   s under the hood as an intellectual curiosity   , or perhaps
+      you might want to improve on the core algorithm later   , but there is a
+   much stronger and practical argument, which i wanted to devote a whole
+   post to:
+
+   > the problem with id26 is that it is a [12]leaky
+   abstraction.
+
+   in other words, it is easy to fall into the trap of abstracting away
+   the learning process         believing that you can simply stack arbitrary
+   layers together and backprop will    magically make them work    on your
+   data. so lets look at a few explicit examples where this is not the
+   case in quite unintuitive ways.
+   [1*ms0ggcgj2gzqjjly16wq4w.png]
+   some eye candy: a computational graph of a batch norm layer with a
+   forward pass (black) and backward pass (red). (borrowed from
+   [13]this post)
+
+vanishing gradients on sigmoids
+
+   we   re starting off easy here. at one point it was fashionable to use
+   sigmoid (or tanh) non-linearities in the fully connected layers. the
+   tricky part people might not realize until they think about the
+   backward pass is that if you are sloppy with the weight initialization
+   or id174 these non-linearities can    saturate    and entirely
+   stop learning         your training loss will be flat and refuse to go down.
+   for example, a fully connected layer with sigmoid non-linearity
+   computes (using raw numpy):
+z = 1/(1 + np.exp(-np.dot(w, x))) # forward pass
+dx = np.dot(w.t, z*(1-z)) # backward pass: local gradient for x
+dw = np.outer(z*(1-z), x) # backward pass: local gradient for w
+
+   if your weight matrix w is initialized too large, the output of the
+   matrix multiply could have a very large range (e.g. numbers between
+   -400 and 400), which will make all outputs in the vector z almost
+   binary: either 1 or 0. but if that is the case, z*(1-z), which is local
+   gradient of the sigmoid non-linearity, will in both cases become zero
+   (   vanish   ), making the gradient for both x and w be zero. the rest of
+   the backward pass will come out all zero from this point on due to
+   multiplication in the chain rule.
+   [1*gkxi7lywygplu5dn6jb6bg.png]
+
+   another non-obvious fun fact about sigmoid is that its local gradient
+   (z*(1-z)) achieves a maximum at 0.25, when z = 0.5. that means that
+   every time the gradient signal flows through a sigmoid gate, its
+   magnitude always diminishes by one quarter (or more). if you   re using
+   basic sgd, this would make the lower layers of a network train much
+   slower than the higher ones.
+
+   tldr: if you   re using sigmoids or tanh non-linearities in your network
+   and you understand id26 you should always be nervous about
+   making sure that the initialization doesn   t cause them to be fully
+   saturated. see a longer explanation in this [14]cs231n lecture video.
+
+dying relus
+
+   another fun non-linearity is the relu, which thresholds neurons at zero
+   from below. the forward and backward pass for a fully connected layer
+   that uses relu would at the core include:
+z = np.maximum(0, np.dot(w, x)) # forward pass
+dw = np.outer(z > 0, x) # backward pass: local gradient for w
+
+   if you stare at this for a while you   ll see that if a neuron gets
+   clamped to zero in the forward pass (i.e. z=0, it doesn   t    fire   ), then
+   its weights will get zero gradient. this can lead to what is called the
+      dead relu    problem, where if a relu neuron is unfortunately
+   initialized such that it never fires, or if a neuron   s weights ever get
+   knocked off with a large update during training into this regime, then
+   this neuron will remain permanently dead. it   s like permanent,
+   irrecoverable brain damage. sometimes you can forward the entire
+   training set through a trained network and find that a large fraction
+   (e.g. 40%) of your neurons were zero the entire time.
+   [1*g0yxlk8kebw8ua1f82xqda.png]
+
+   tldr: if you understand id26 and your network has relus,
+   you   re always nervous about dead relus. these are neurons that never
+   turn on for any example in your entire training set, and will remain
+   permanently dead. neurons can also die during training, usually as a
+   symptom of aggressive learning rates. see a longer explanation in
+   [15]cs231n lecture video.
+
+exploding gradients in id56s
+
+   vanilla id56s feature another good example of unintuitive effects of
+   id26. i   ll copy paste a slide from cs231n that has a
+   simplified id56 that does not take any input x, and only computes the
+   recurrence on the hidden state (equivalently, the input x could always
+   be zero):
+   [1*dqlx0ixpk1o3225bz1lgna.png]
+
+   this id56 is unrolled for t time steps. when you stare at what the
+   backward pass is doing, you   ll see that the gradient signal going
+   backwards in time through all the hidden states is always being
+   multiplied by the same matrix (the recurrence matrix whh), interspersed
+   with non-linearity backprop.
+
+   what happens when you take one number a and start multiplying it by
+   some other number b (i.e. a*b*b*b*b*b*b   )? this sequence either goes to
+   zero if |b| < 1, or explodes to infinity when |b|>1. the same thing
+   happens in the backward pass of an id56, except b is a matrix and not
+   just a number, so we have to reason about its largest eigenvalue
+   instead.
+
+   tldr: if you understand id26 and you   re using id56s you are
+   nervous about having to do gradient clipping, or you prefer to use an
+   lstm. see a longer explanation in this [16]cs231n lecture video.
+
+spotted in the wild: id25 clipping
+
+   lets look at one more         the one that actually inspired this post.
+   yesterday i was browsing for a deep id24 implementation in
+   tensorflow (to see how others deal with computing the numpy equivalent
+   of q[:, a], where a is an integer vector         turns out this trivial
+   operation is not supported in tf). anyway, i searched    id25 tensorflow   ,
+   clicked the first link, and found the core code. here is an excerpt:
+   [1*pyz5lhfdho07cfzia6twmq.png]
+
+   if you   re familiar with id25, you can see that there is the target_q_t,
+   which is just [reward * \gamma \argmax_a q(s   ,a)], and then there is
+   q_acted, which is q(s,a) of the action that was taken. the authors here
+   subtract the two into variable delta, which they then want to minimize
+   on line 295 with the l2 loss with tf.reduce_mean(tf.square()). so far
+   so good.
+
+   the problem is on line 291. the authors are trying to be robust to
+   outliers, so if the delta is too large, they clip it with
+   tf.clip_by_value. this is well-intentioned and looks sensible from the
+   perspective of the forward pass, but it introduces a major bug if you
+   think about the backward pass.
+
+   the clip_by_value function has a local gradient of zero outside of the
+   range min_delta to max_delta, so whenever the delta is above
+   min/max_delta, the gradient becomes exactly zero during backprop. the
+   authors are clipping the raw q delta, when they are likely trying to
+   clip the gradient for added robustness. in that case the correct thing
+   to do is to use the huber loss in place of tf.square:
+def clipped_error(x):
+  return tf.select(tf.abs(x) < 1.0,
+                   0.5 * tf.square(x),
+                   tf.abs(x) - 0.5) # condition, true, false
+
+   it   s a bit gross in tensorflow because all we want to do is clip the
+   gradient if it is above a threshold, but since we can   t meddle with the
+   gradients directly we have to do it in this round-about way of defining
+   the huber loss. in torch this would be much more simple.
+
+   i submitted an [17]issue on the id25 repo and this was promptly fixed.
+
+in conclusion
+
+   id26 is a leaky abstraction; it is a credit assignment
+   scheme with non-trivial consequences. if you try to ignore how it works
+   under the hood because    tensorflow automagically makes my networks
+   learn   , you will not be ready to wrestle with the dangers it presents,
+   and you will be much less effective at building and debugging neural
+   networks.
+
+   the good news is that id26 is not that difficult to
+   understand, if presented properly. i have relatively strong feelings on
+   this topic because it seems to me that 95% of id26 materials
+   out there present it all wrong, filling pages with mechanical math.
+   instead, i would recommend the [18]cs231n lecture on backprop which
+   emphasizes intuition (yay for shameless self-advertising). and if you
+   can spare the time, as a bonus, work through the [19]cs231n
+   assignments, which get you to write backprop manually and help you
+   solidify your understanding.
+
+   that   s it for now! i hope you   ll be much more suspicious of
+   id26 going forward and think carefully through what the
+   backward pass is doing. also, i   m aware that this post has
+   (unintentionally!) turned into several cs231n ads. apologies for
+   that :)
+
+     * [20]machine learning
+     * [21]neural networks
+     * [22]deep learning
+     * [23]artificial intelligence
+
+   (button)
+   (button)
+   (button) 12.9k claps
+   (button) (button) (button) 45 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [24]go to the profile of andrej karpathy
+
+[25]andrej karpathy
+
+   director of ai at tesla. previously research scientist at openai and
+   phd student at stanford. i like to train deep neural nets on large
+   datasets.
+
+     * (button)
+       (button) 12.9k
+     * (button)
+     *
+     *
+
+   [26]go to the profile of andrej karpathy
+   never miss a story from andrej karpathy, when you sign up for medium.
+   [27]learn more
+   never miss a story from andrej karpathy
+   (button) blockedunblock (button) followget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/e2f06eab496b
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/membership?source=upgrade_membership---nav_full
+   7. https://medium.com/m/signin?redirect=https://medium.com/@karpathy/yes-you-should-understand-backprop-e2f06eab496b&source=--------------------------nav_reg&operation=login
+   8. https://medium.com/m/signin?redirect=https://medium.com/@karpathy/yes-you-should-understand-backprop-e2f06eab496b&source=--------------------------nav_reg&operation=register
+   9. https://medium.com/@karpathy?source=post_header_lockup
+  10. https://medium.com/@karpathy
+  11. http://cs231n.stanford.edu/
+  12. https://en.wikipedia.org/wiki/leaky_abstraction
+  13. https://kratzert.github.io/2016/02/12/understanding-the-gradient-flow-through-the-batch-id172-layer.html
+  14. https://youtu.be/gypojmlgyxa?t=14m14s
+  15. https://youtu.be/gypojmlgyxa?t=20m54s
+  16. https://www.youtube.com/watch?v=ycc09vchzf8
+  17. https://github.com/devsisters/id25-tensorflow/issues/16
+  18. https://www.youtube.com/watch?v=i94ovyb6noo
+  19. https://cs231n.github.io/
+  20. https://medium.com/tag/machine-learning?source=post
+  21. https://medium.com/tag/neural-networks?source=post
+  22. https://medium.com/tag/deep-learning?source=post
+  23. https://medium.com/tag/artificial-intelligence?source=post
+  24. https://medium.com/@karpathy?source=footer_card
+  25. https://medium.com/@karpathy
+  26. https://medium.com/@karpathy
+  27. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  29. https://medium.com/p/e2f06eab496b/share/twitter
+  30. https://medium.com/p/e2f06eab496b/share/facebook
+  31. https://medium.com/p/e2f06eab496b/share/twitter
+  32. https://medium.com/p/e2f06eab496b/share/facebook

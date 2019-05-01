@@ -1,0 +1,591 @@
+   [1]ideas [2]learning platform [3]conferences [4]shop
+   search ____________________ submit
+   [5]sign in
+
+on our radar
+
+   [6]ai
+   [7]data
+   [8]economy
+   [9]operations
+   [10]software architecture
+   [11]software engineering
+   [12]web programming
+   [13]see all
+
+   [14]ideas [15]learning platform [16]conferences [17]shop search
+   ____________________ submit
+
+on our radar
+
+   [18]ai
+   [19]data
+   [20]economy
+   [21]operations
+   [22]software architecture
+   [23]software engineering
+   [24]web programming
+   [25]see all
+
+   [26]data science
+
+comparing production-grade nlp libraries: running spark-nlp and spacy pipelines
+
+   a step-by-step guide to building and running a natural language
+   processing pipeline.
+
+   by [27]saif addin ellafi
+
+   february 28, 2018
+
+   fractal piping fractal piping (source: [28]pixabay)
+
+   [29]check out the "natural language understanding at scale with spacy
+   and spark nlp" tutorial session at the strata data conference in
+   london, may 21-24, 2018.
+
+   in part one of [30]this blog series, we introduced and then trained
+   models for id121 and part-of-speech tagging using two
+   libraries   [31]john snow labs    nlp for apache spark and [32]explosion
+   ai   s spacy. in this part, we'll go over building and running a natural
+   language processing (nlp) pipeline that applies these models to new
+   free-text data.
+
+   plugging in our data is a challenging step since our data is made of
+   unformatted, non-sentence-bounded text that is raw and heterogeneous. i
+   am working with a folder full of .txt files, and need to save the
+   results in word-tag format, by filename so i can compare it to the
+   correct answers later. let   s work it out:
+
+spacy
+
+start = time.time()
+path = "./target/testing/"
+files = sorted([path + f for f in os.listdir(path) if os.path.isfile(os.path.joi
+n(path, f))])
+
+prediction = {}
+for file in files:
+    fo = io.open(file, mode='r', encoding='utf-8')
+    content = []
+    for doc in nlp_model(re.sub("\\s+", ' ', fo.read())):
+        content.append((doc.text, doc.tag_))
+    prediction[file] = content
+    fo.close()
+
+print (time.time() - start)
+
+   another way of computing this, in parallel, would be using generators
+   and spacy   s language pipe. something like this could work out:
+
+spacy
+
+from spacy.language import language
+import itertools
+
+def genf():
+    path = "./target/testing/"
+    files = sorted([path + f for f in os.listdir(path) if os.path.isfile(os.path
+.join(path, f))])
+    for file in files:
+        fo = io.open(file, mode='r', encoding='utf-8')
+        t = re.sub("\\s+", ' ', fo.read())
+        fo.close()
+        yield (file, t)
+
+gen1, gen2 = itertools.tee(genf())
+files = (file for (file, text) in gen1)
+texts = (text for (file, text) in gen2)
+
+start = time.time()
+prediction = {}
+for file, doc in zip(files, nlp_model.pipe(texts, batch_size=10, n_threads=12)):
+    content = []
+    for d in doc:
+        content.append((d.text, d.tag_))
+    prediction[file] = content
+print (time.time() - start)
+
+spark-nlp
+
+var data = spark.read.textfile("./target/testing").as[string]
+    .map(_.trim()).filter(_.nonempty)
+    .withcolumnrenamed("value", "text")
+    .withcolumn("filename", regexp_replace(input_file_name(), "file://", ""))
+
+data = data.groupby("filename").agg(concat_ws(" ", collect_list(data("text"))).a
+s("text"))
+    .repartition(12)
+    .cache
+
+val files = data.select("filename").distinct.as[string].collect
+
+val result = model.transform(data)
+
+val prediction = benchmark.time("time to collect predictions") {
+    result
+        .select("finished_token", "finished_pos", "filename").as[(array[string],
+ array[string], string)]
+        .map(wt => (wt._3, wt._1.zip(wt._2)))
+        .collect.tomap
+}
+
+   as in apache spark, i can read a folder of text files with just
+   textfile(), although it reads line by line. i need to identify the
+   filenames per line, so i can combine them back again. luckily for me,
+   input_file_name() does exactly that. i then proceed to group by and
+   concatenate the lines with a whitespace.
+
+   note that neither of the two code snippets above use code that is
+   unique to the nlp libraries. spacy relies on python   s file operations,
+   and spark-nlp relies on spark   s native data set loading and processing
+   primitives. note that the spark code above will work just the same on
+   an input file of 10 kilobytes, 10 gigabytes, or 10 terabytes, if the
+   spark cluster is correctly configured. also, your learning curve for
+   each library depends on your familiarity with its library ecosystem.
+
+measuring the results
+
+   if what we did so far seems hard, then this one is super difficult. how
+   can we measure the pos accuracy when the answers we have are tokenized
+   differently? i had to pull off some magic here, and i am sure it will
+   be controversial. there was no easy way to objectively compute the
+   results and match them fairly, so here is what i came up with.
+
+spacy
+
+   first, i need to process the answers folder, which is a folder full of
+   .txt files that look exactly like the training data, with the same
+   filenames of the testing data we used in the previous step.
+answers = {}
+total_words = 0
+for file in result_files:
+    fo = io.open(file, mode='r', encoding='utf-8')
+    file_tags = []
+    for pair in re.split("\\s+", re.sub("\\s+", ' ', fo.read())):
+        total_words += 1
+        tag = pair.strip().split("|")
+        file_tags.append((tag[0], tag[-1]))
+    answers[file] = file_tags
+    fo.close()
+print(total_words)
+
+spark-nlp
+
+   for this one, i pulled off the same function that parses the tuples of
+   the pos annotator. it belongs to a helper object called resourcehelper,
+   which has a lot of similar functions to help with data.
+var total_words = 0
+val answer = files.map(_.replace("testing", "answer")).map(file => {
+    val content = resourcehelper
+        .parsetuplesentences(file, "txt", '|', 500).flatmap(_.tuplewords)
+        .flatmap(_.tuplewords)
+    total_words += content.length
+    (file, content)
+}).tomap
+println()
+println(total_words)
+
+   and here is where the magic happens. i have the answers, which both in
+   spacy and in spark-nlp look like a dictionary of (filename,
+   array((word, tag)). and this is the same format we have in the
+   prediction step.
+
+   so, for this, i have created a small algorithm in which i run through
+   every pair of prediction and answer, and compare the words in it. for
+   every matched word, i count a matched token, and for every matched tag
+   on them, i count for a success.
+
+   but, since words are tokenized differently than in the anc results, i
+   need to open up a small window into which a word is given a chance to
+   match a specific number of rolling tokens in anc, or else let me know
+   where to continue my search in the file.
+
+   if the predicted word is sub-tokenized (fewer tokens than in anc), then
+   the word will never match and is ignored   e.g., two-legged|jj where in
+   anc it's two|nn     legged|jj, then it will collect anc tokens until it
+   confirms it   s sub-tokenized and ignore it (construct is the collection
+   of sub-tokens).
+
+   then, the index is placed at the latest match, so, if the predicted
+   word appears later (due to the previous word being sub-tokenized), it
+   will eventually find it in range, and count it.
+
+   here   s how it looks in code:
+
+spacy
+
+start = time.time()
+word_matches = 0
+tag_matches = 0
+
+for file in list(prediction.keys()):
+    last_match = 0
+    print("analyzing: " + file)
+    for pword, ptag in answers[file.replace('testing', 'answer')]:
+        print("target word is: " + pword)
+        last_attempt = 0
+        construct = ''
+        for word, tag in prediction[file][last_match:]:
+            if word.strip() == '':
+                last_match += 1
+                continue
+            construct += word
+            print("against: " + word + " or completion of construct " + pword)
+            last_attempt += 1
+            if pword == word:
+                print("word found: " + word)
+                if ptag == tag:
+                    print("match found: " + word + " as " + tag)
+                    tag_matches += 1
+                word_matches += 1
+                last_match += last_attempt
+                break
+            elif pword == construct:
+                print(pword + " construct complete. no point in keeping the sear
+ch")
+                last_match += last_attempt
+                break
+            elif len(pword) <= len(construct):
+                print(pword + " construct larger than target. no point in keepin
+g the search")
+                if (pword in construct):
+                    last_match += last_attempt
+                break
+print (time.time() - start)
+
+runtime
+
+analyzing: ./target/testing/20000424_nyt-new.txt
+target word is: iraq-poverty
+against: iraq-poverty or completion of construct iraq-poverty
+word found: iraq-poverty
+target word is: (
+against: ( or completion of construct (
+word found: (
+match found: ( as (
+target word is: washington
+against: washington or completion of construct washington
+word found: washington
+match found: washington as nnp
+target word is: )
+against: ) or completion of construct )
+word found: )
+match found: ) as )
+target word is: rep.
+against: rep or completion of construct rep.
+against: . or completion of construct rep.
+rep. construct complete. no point in keeping the search
+
+   as we can see, it will give tokens a chance to find a mate; this
+   algorithm basically keeps tokens synchronized, nothing more.
+print("total words: " + str(total_words))
+print("total token matches: " + str(word_matches))
+print("total tag matches: " + str(tag_matches))
+print("simple accuracy: " + str(tag_matches / word_matches))
+
+runtime
+
+total words: 21381
+total token matches: 20491
+total tag matches: 17056
+simple accuracy: 0.832365428724806
+
+spark-nlp
+
+   we see similar behavior in spark-nlp, perhaps just a little bit more of
+   mixed imperative and functional programming:
+var misses = 0
+var token_matches = 0
+var tag_matches = 0
+for (file <- prediction.keys) {
+    var current = 0
+    for ((pword, ptag) <- prediction(file)) {
+        println(s"analyzing: ${pword}")
+        var found = false
+        val tags = answer(file.replace("testing", "answer"))
+        var construct = ""
+        var attempt = 0
+        tags.takeright(tags.length - current).iterator.takewhile(_ => !found &&
+construct != pword).foreach { case (word, tag) => {
+            construct += word
+            println(s"against: $word or if matches construct $construct")
+            if (word == pword) {
+                println(s"word match: $pword")
+                token_matches += 1
+                if (tag == ptag) {
+                    println(s"tag match: $tag")
+                    tag_matches += 1
+                }
+                found = true
+            }
+            else if (pword.length < construct.length) {
+                if (attempt > 0) {
+                    println(s"construct $construct too long for word $pword agai
+nst $word")
+                    attempt -= attempt
+                    misses += 1
+                    println(s"failed match our $pword against their $word or $co
+nstruct")
+                    found = true
+                }
+            }
+            attempt += 1
+        }}
+        current += attempt
+    }
+}
+
+runtime
+
+analyzing: nyt20020731.0371
+against: nyt20020731.0371 or if matches construct nyt20020731.0371
+word match: nyt20020731.0371
+analyzing: 2002-07-31
+against: 2002-07-31 or if matches construct 2002-07-31
+word match: 2002-07-31
+analyzing: 23:38
+against: 23:38 or if matches construct 23:38
+word match: 23:38
+analyzing: a4917
+against: a4917 or if matches construct a4917
+word match: a4917
+analyzing: &
+against: & or if matches construct &
+word match: &
+tag match: cc
+
+   we then compute the measures:
+println("total words: " + (total_words))
+println("total token matches: " + (token_matches))
+println("total tag matches: " + (tag_matches))
+println("simple accuracy: " + (tag_matches * 1.0 / token_matches))
+
+runtime
+
+total words: 21362
+total token matches: 18201
+total tag matches: 15318
+simple accuracy: 0.8416021097741883
+
+spark-nlp, but where   s spark?
+
+   i haven   t made many notes regarding where spark fits in all this. but,
+   without boring you too much further, i   ll put everything in
+   easy-to-read bullets:
+     * you guessed it! this is an overkill for spark. you don   t need four
+       hammers for a single small nail. with this i mean, spark works in
+       distributed fashion by default, and defaults are meant for quite
+       big data (e.g., spark.sql.shuffle.partitions is 200). in this
+       example, i   ve made the attempt to control the data i work with, and
+       not expand too much.    big data    can become an enemy, memory issues,
+       bad parallelism or a slow algorithm might slap you back.
+     * you can easily plug hdfs into this same exact pipeline. increase
+       the number of files or size, and the process will be able to take
+       it. you can even take advantage of proper partitioning and putting
+       data in memory.
+     * it is equally possible to plug this algorithm into a distributed
+       cluster, submit it to wherever the driver is and the workload is
+       automatically distributed for you.
+     * this specific nlp program shown here, is not really good for
+       scalable solutions. basically, collecting with collect() all words
+       and tags down to the driver will blast your driver memory if you
+       apply this into a few hundred megabytes of text files. measuring
+       performance in such a scenario will require proper map reduce tasks
+       to count the number of pos matches. this explains why it takes
+       longer in spark-nlp than in spacy to bring back a small number of
+       predictions to the driver, but this will revert for larger inputs.
+
+what   s next?
+
+   in this post, we compare the work for running and evaluating our
+   benchmark nlp pipeline on both libraries. in general, your personal
+   preference or experience may tilt you toward preferring the core python
+   libraries and imperative programming style with spacy, or core spark
+   and functional programming style with spark-nlp.
+
+   for the small data set we tested on here, runtime was below one second
+   on both libraries, and accuracy was comparable. in [33]part three of
+   the blog series, we   ll evaluate on additional data sizes and
+   parameters.
+
+   [34]check out the "natural language understanding at scale with spacy
+   and spark nlp" tutorial session at the strata data conference in
+   london, may 21-24, 2018.
+   article image: fractal piping (source: [35]pixabay).
+   tags: [36]nlp libraries
+
+   share
+    1. [37]tweet
+    2.
+    3.
+     __________________________________________________________________
+
+   [38]saif addin ellafi
+
+[39]saif addin ellafi
+
+   saif addin ellafi is a software developer, analyst, data scientist, and
+   forever a student while being an extreme sports and gaming enthusiast.
+   having wide experience in problem solving and quality assurance in the
+   data fields in banking and finance industry, he is now the main
+   contributor in spark-nlp at john snow labs.
+   [40]more
+     __________________________________________________________________
+
+   video
+   [41]logstash ui
+
+   [42]data science
+
+[43]revealing the uncommonly common with elasticsearch
+
+   by [44]mark harwood
+
+   this webcast looks at how elasticsearch is taking search engine
+   technology and branching it out to provide insightful analysis of large
+   datasets.
+
+   [45]marina bay and the skyline of the central business district of
+   singapore at dusk, by william cho.
+
+   [46]data science
+
+[47]how intelligent data platforms are powering smart cities
+
+   by [48]ben lorica
+
+   smart cities and smart nations run on data.
+
+   [49]a woman posed with a hollerith pantograph: the keyboard is for the
+   1920 population card, and a 1940 census form.
+
+   [50]data science
+
+[51]beyond algorithms: optimizing the search experience
+
+   by [52]daniel tunkelang
+
+   making search smarter through better human-computer interaction.
+
+   runnable code
+   [53]pandas table
+
+   [54]data science
+
+[55]introducing pandas objects
+
+   by [56]jake vanderplas
+
+   python data science handbook: early release
+
+about us
+
+     * [57]our company
+     * [58]teach/speak/write
+     * [59]careers
+     * [60]customer service
+     * [61]contact us
+
+site map
+
+     * [62]ideas
+     * [63]learning
+     * [64]topics
+     * [65]all
+
+     *
+     *
+     *
+     *
+     *
+
+      2019 o'reilly media, inc. all trademarks and registered trademarks
+   appearing on oreilly.com are the property of their respective owners.
+   [66]terms of service     [67]privacy policy     [68]editorial independence
+
+   animal
+
+   iframe: [69]https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+references
+
+   visible links
+   1. https://www.oreilly.com/ideas
+   2. https://learning.oreilly.com/
+   3. http://www.oreilly.com/conferences/
+   4. http://shop.oreilly.com/
+   5. https://www.oreilly.com/sign-in.html
+   6. https://www.oreilly.com/topics/ai
+   7. https://www.oreilly.com/topics/data
+   8. https://www.oreilly.com/topics/economy
+   9. https://www.oreilly.com/topics/operations
+  10. https://www.oreilly.com/topics/software-architecture
+  11. https://www.oreilly.com/topics/software-engineering
+  12. https://www.oreilly.com/topics/web-programming
+  13. https://www.oreilly.com/topics
+  14. https://www.oreilly.com/ideas
+  15. https://learning.oreilly.com/
+  16. http://www.oreilly.com/conferences/
+  17. http://shop.oreilly.com/
+  18. https://www.oreilly.com/topics/ai
+  19. https://www.oreilly.com/topics/data
+  20. https://www.oreilly.com/topics/economy
+  21. https://www.oreilly.com/topics/operations
+  22. https://www.oreilly.com/topics/software-architecture
+  23. https://www.oreilly.com/topics/software-engineering
+  24. https://www.oreilly.com/topics/web-programming
+  25. https://www.oreilly.com/topics
+  26. https://www.oreilly.com/topics/data-science
+  27. https://www.oreilly.com/people/saif-addin-ellafi
+  28. https://pixabay.com/en/fractal-render-3d-quantum-computer-1240809/
+  29. https://conferences.oreilly.com/strata/strata-eu/public/schedule/detail/64514?intcmp=il-data-confreg-lp-steu18_new_site_saif_ellafi_blog_series_part_two_training_pipelines_top_cta
+  30. https://www.oreilly.com/tags/nlp-libraries
+  31. http://nlp.johnsnowlabs.com/
+  32. https://spacy.io/
+  33. https://preview.oreilly.com/ideas/comparing-production-grade-nlp-libraries-accuracy-performance-and-scalability
+  34. https://conferences.oreilly.com/strata/strata-eu/public/schedule/detail/64514?intcmp=il-data-confreg-lp-steu18_new_site_saif_ellafi_blog_series_part_two_training_pipelines_end_cta
+  35. https://pixabay.com/en/fractal-render-3d-quantum-computer-1240809/
+  36. https://www.oreilly.com/tags/nlp-libraries
+  37. https://twitter.com/share
+  38. https://www.oreilly.com/people/saif-addin-ellafi
+  39. https://www.oreilly.com/people/saif-addin-ellafi
+  40. https://www.oreilly.com/people/saif-addin-ellafi
+  41. https://www.oreilly.com/learning/revealing-the-uncommonly-common-with-elasticsearch
+  42. https://www.oreilly.com/topics/data-science
+  43. https://www.oreilly.com/learning/revealing-the-uncommonly-common-with-elasticsearch
+  44. https://www.oreilly.com/people/d9f55-mark-harwood
+  45. https://www.oreilly.com/ideas/how-intelligent-data-platforms-are-powering-smart-cities
+  46. https://www.oreilly.com/topics/data-science
+  47. https://www.oreilly.com/ideas/how-intelligent-data-platforms-are-powering-smart-cities
+  48. https://www.oreilly.com/people/4e7ad-ben-lorica
+  49. https://www.oreilly.com/ideas/beyond-algorithms-optimizing-the-search-experience
+  50. https://www.oreilly.com/topics/data-science
+  51. https://www.oreilly.com/ideas/beyond-algorithms-optimizing-the-search-experience
+  52. https://www.oreilly.com/people/e9a1c-daniel-tunkelang
+  53. https://www.oreilly.com/learning/introducing-pandas-objects
+  54. https://www.oreilly.com/topics/data-science
+  55. https://www.oreilly.com/learning/introducing-pandas-objects
+  56. https://www.oreilly.com/people/89c9c-jake-vanderplas
+  57. http://oreilly.com/about/
+  58. http://oreilly.com/work-with-us.html
+  59. http://oreilly.com/careers/
+  60. http://shop.oreilly.com/category/customer-service.do
+  61. http://shop.oreilly.com/category/customer-service.do
+  62. https://www.oreilly.com/ideas
+  63. https://www.oreilly.com/topics/oreilly-learning
+  64. https://www.oreilly.com/topics
+  65. https://www.oreilly.com/all
+  66. http://oreilly.com/terms/
+  67. http://oreilly.com/privacy.html
+  68. http://www.oreilly.com/about/editorial_independence.html
+  69. https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+   hidden links:
+  71. https://www.oreilly.com/
+  72. https://www.facebook.com/oreilly/
+  73. https://twitter.com/oreillymedia
+  74. https://www.youtube.com/user/oreillymedia
+  75. https://plus.google.com/+oreillymedia
+  76. https://www.linkedin.com/company/oreilly-media
+  77. https://www.oreilly.com/

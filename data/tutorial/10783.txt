@@ -1,0 +1,874 @@
+7
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+m
+0
+1
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+4
+3
+7
+1
+0
+
+.
+
+1
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2017
+
+deep biaffine attention for neural
+id33
+
+timothy dozat
+stanford university
+tdozat@stanford.edu
+
+christopher d. manning
+stanford university
+manning@stanford.edu
+
+abstract
+
+this paper builds off recent work from kiperwasser & goldberg (2016) using neu-
+ral attention in a simple graph-based dependency parser. we use a larger but more
+thoroughly regularized parser than other recent bilstm-based approaches, with
+biaf   ne classi   ers to predict arcs and labels. our parser gets state of the art or
+near state of the art performance on standard treebanks for six different languages,
+achieving 95.7% uas and 94.1% las on the most popular english ptb dataset.
+this makes it the highest-performing graph-based parser on this benchmark   
+outperforming kiperwasser & goldberg (2016) by 1.8% and 2.2%   and com-
+parable to the highest performing transition-based parser (kuncoro et al., 2016),
+which achieves 95.8% uas and 94.6% las. we also show which hyperparameter
+choices had a signi   cant effect on parsing accuracy, allowing us to achieve large
+gains over other graph-based approaches.
+
+1
+
+introduction
+
+dependency parsers   which annotate sentences in a way designed to be easy for humans and com-
+puters alike to understand   have been found to be extremely useful for a sizable number of nlp
+tasks, especially those involving natural language understanding in some way (bowman et al., 2016;
+angeli et al., 2015; levy & goldberg, 2014; toutanova et al., 2016; parikh et al., 2015). however,
+frequent incorrect parses can severely inhibit    nal performance, so improving the quality of depen-
+dency parsers is needed for the improvement and success of these downstream tasks.
+
+the current state-of-the-art transition-based neural dependency parser (kuncoro et al., 2016) sub-
+stantially outperforms many much simpler neural graph-based parsers. we modify the neural graph-
+based approach    rst proposed by kiperwasser & goldberg (2016) in a few ways to achieve com-
+petitive performance: we build a network that   s larger but uses more id173; we replace the
+traditional mlp-based attention mechanism and af   ne label classi   er with biaf   ne ones; and rather
+than using the top recurrent states of the lstm in the biaf   ne transformations, we    rst put them
+through mlp operations that reduce their dimensionality. furthermore, we compare models trained
+with different architectures and hyperparameters to motivate our approach empirically. the result-
+ing parser maintains most of the simplicity of neural graph-based approaches while approaching the
+performance of the sota transition-based one.
+
+2 background and related work
+
+transition-based parsers   such as shift-reduce parsers   parse sentences from left to right, main-
+taining a    buffer    of words that have not yet been parsed and a    stack    of words whose head has not
+been seen or whose dependents have not all been fully parsed. at each step, transition-based parsers
+can access and manipulate the stack and buffer and assign arcs from one word to another. one can
+then train any multi-class machine learning classi   er on features extracted from the stack, buffer,
+and previous arc actions in order to predict the next action.
+
+chen & manning (2014) make the    rst successful attempt at incorporating deep learning into a
+transition-based dependency parser. at each step, the (feedforward) network assigns a id203
+to each action the parser can take based on word, tag, and label embeddings from certain words
+
+1
+
+published as a conference paper at iclr 2017
+
+root
+
+nsubj
+
+dobj
+
+root/root casey/nnp hugged/vbd kim/nnp
+
+figure 1: a dependency tree parse for casey hugged kim, including part-of-speech tags and a special
+root token. directed edges (or arcs) with labels (or relations) connect the verb to the root and the
+arguments to the verb head.
+
+on the stack and buffer. a number of other researchers have attempted to address some limita-
+tions of chen & manning   s chen & manning parser by augmenting it with additional complexity:
+weiss et al. (2015) and andor et al. (2016) augment it with a id125 and a conditional random
+   eld loss objective to allow the parser to    undo    previous actions once it    nds evidence that they may
+have been incorrect; and dyer et al. (2015) and (kuncoro et al., 2016) instead use lstms to rep-
+resent the stack and buffer, getting state-of-the-art performance by building in a way of composing
+parsed phrases together.
+
+transition-based parsing processes a sentence sequentially to build up a parse tree one arc at a
+time. consequently, these parsers don   t use machine learning for directly predicting edges; they
+use it for predicting the operations of the transition algorithm. graph-based parsers, by contrast,
+use machine learning to assign a weight or id203 to each possible edge and then construct a
+maximum spaning tree (mst) from these weighted edges. kiperwasser & goldberg (2016) present
+a neural graph-based parser (in addition to a transition-based one) that uses the same kind of attention
+mechanism as bahdanau et al. (2014) for machine translation. in kiperwasser & goldberg   s 2016
+model, the (bidirectional) lstm   s recurrent output vector for each word is concatenated with each
+possible head   s recurrent vector, and the result is used as input to an mlp that scores each resulting
+arc. the predicted tree structure at training time is the one where each word depends on its highest-
+scoring head. labels are generated analogously, with each word   s recurrent output vector and its
+gold or predicted head word   s recurrent vector being used in a multi-class mlp.
+
+similarly, hashimoto et al. (2016) include a graph-based dependency parser in their multi-task neu-
+ral model. in addition to training the model with multiple distinct objectives, they replace the tra-
+ditional mlp-based attention mechanism that kiperwasser & goldberg (2016) use with a bilinear
+one (but still using an mlp label classi   er). this makes it analogous to luong et al.   s 2015 pro-
+posed attention mechanism for id4. cheng et al. (2016) likewise propose a
+graph-based neural dependency parser, but in a way that attempts to circumvent the limitation of
+other neural graph-based parsers being unable to condition the scores of each possible arc on pre-
+vious parsing decisions. in addition to having one bidirectional recurrent network that computes a
+recurrent hidden vector for each word, they have additional, unidirectional recurrent networks (left-
+to-right and right-to-left) that keep track of the probabilities of each previous arc, and use these
+together to predict the scores for the next arc.
+
+3 proposed dependency parser
+
+3.1 deep biaffine attention
+
+we make a few modi   cations to the graph-based architectures of kiperwasser & goldberg (2016),
+hashimoto et al. (2016), and cheng et al. (2016), shown in figure 2: we use biaf   ne attention in-
+stead of bilinear or traditional mlp-based attention; we use a biaf   ne dependency label classi   er;
+and we apply dimension-reducing mlps to each recurrent output vector ri before applying the bi-
+af   ne transformation.1 the choice of biaf   ne rather than bilinear or mlp mechanisms makes the
+classi   ers in our model analogous to traditional af   ne classi   ers, which use an af   ne transformation
+over a single lstm output state ri (or other vector input) to predict the vector of scores si for all
+classes (1). we can think of the proposed biaf   ne attention mechanism as being a traditional af   ne
+
+1in this paper we follow the convention of using lowercase italic letters for scalars and indices, lowercase
+bold letters for vectors, uppercase italic letters for matrices, uppercase bold letters for higher order tensors. we
+also maintain this notation when indexing; so row i of matrix r would be represented as ri.
+
+2
+
+published as a conference paper at iclr 2017
+
+h (arc-dep)     1
+
+u (arc)
+
+h (arc-head)
+
+s(arc)
+
+1
+
+1
+
+1
+
+1
+
+  
+
+  
+
+   
+
+=
+
+mlp: h(arc-dep)
+
+i
+
+, h(arc-head)
+
+i
+
+bilstm: ri
+
+embeddings: xi
+
+. . .
+
+root root
+
+kim nnp
+
+figure 2: bilstm with deep biaf   ne attention to score each possible head for each dependent,
+applied to the sentence    casey hugged kim   . we reverse the order of the biaf   ne transformation
+here for clarity.
+
+classi   er, but using a (d    d) linear transformation of the stacked lstm output ru (1) in place of
+the weight matrix w and a (d    1) transformation ru(2) for the bias term b (2).
+
+si = w ri + b
+
+s(arc)
+i
+
+= (cid:16)ru (1)(cid:17) ri + (cid:16)ru(2)(cid:17)
+
+fixed-class af   ne classi   er
+
+variable-class biaf   ne classi   er
+
+(1)
+
+(2)
+
+in addition to being arguably simpler than the mlp-based approach (involving one bilinear layer
+rather than two linear layers and a nonlinearity), this has the conceptual advantage of directly mod-
+u(2) and the
+eling both the prior id203 of a word j receiving any dependents in the term r   
+j
+j u (1)ri. analogously, we also use a
+likelihood of j receiving a speci   c dependent i in the term r   
+biaf   ne classi   er to predict dependency labels given the gold or predicted head yi (3).
+
+s(label)
+i
+
+= r   
+yi
+
+u(1)ri + (ryi     ri)   u (2) + b
+
+fixed-class biaf   ne classi   er
+
+(3)
+
+this likewise directly models each of the prior id203 of each class, the likelihood of a class
+given just word i (how probable a word is to take a particular label), the likelihood of a class given
+just the head word yi (how probable a word is to take dependents with a particular label), and the
+likelihood of a class given both word i and its head (how probable a word is to take a particular label
+given that word   s head).
+
+applying smaller mlps to the recurrent output states before the biaf   ne classi   er has the advantage
+of stripping away information not relevant to the current decision. that is, every top recurrent state
+ri will need to carry enough information to identify word i   s head,    nd all its dependents, exclude all
+its non-dependents, assign itself the correct label, and assign all its dependents their correct labels, as
+well as transfer any relevant information to the recurrent states of words before and after it. thus ri
+necessarily contains signi   cantly more information than is needed to compute any individual score,
+and training on this super   uous information needlessly reduces parsing speed and increases the risk
+of over   tting. reducing dimensionality and applying a nonlinearity (4 - 6) addresses both of these
+problems. we call this a deep bilinear attention mechanism, as opposed to shallow bilinear attention,
+which uses the recurrent states directly.
+h(arc-dep)
+
+i
+
+h(arc-head)
+
+j
+
+s(arc)
+i
+
+= mlp(arc-dep)(ri)
+= mlp(arc-head)(rj)
+= h (arc-head)u (1)h(arc-dep)
+
+i
++ h (arc-head)u(2)
+
+(4)
+
+(5)
+
+(6)
+
+we apply mlps to the recurrent states before using them in the label classi   er as well. as with other
+graph-based models, the predicted tree at training time is the one where each word is a dependent of
+its highest scoring head (although at test time we ensure that the parse is a well-formed tree via the
+mst algorithm).
+
+3
+
+published as a conference paper at iclr 2017
+
+3.2 hyperparameter configuration
+
+param
+embedding size
+lstm size
+arc mlp size
+label mlp size
+lstm depth
+  
+
+annealing
+
+value
+100
+400
+500
+100
+3
+2e   3
+.75
+
+t
+
+5000
+
+param
+embedding dropout
+lstm dropout
+arc mlp dropout
+label mlp dropout
+mlp depth
+  1,  2
+tmax
+
+value
+33%
+33%
+33%
+33%
+1
+.9
+50,000
+
+table 1: model hyperparameters
+
+aside from architectural differences between ours and the other graph-based parsers, we make a
+number of hyperparameter choices that allow us to outperform theirs, laid out in table 1. we use
+100-dimensional uncased word vectors2 and pos tag vectors; three bilstm layers (400 dimensions
+in each direction); and 500- and 100-dimensional relu mlp layers. we also apply dropout at every
+stage of the model: we drop words and tags (independently); we drop nodes in the lstm layers
+(input and recurrent connections), applying the same dropout mask at every recurrent timestep (cf.
+the bayesian dropout of gal & ghahramani (2015)); and we drop nodes in the mlp layers and
+classi   ers, likewise applying the same dropout mask at every timestep. we optimize the network
+with annealed adam (kingma & ba, 2014) for about 50,000 steps, rounded up to the nearest epoch.
+
+4 experiments & results
+
+4.1 datasets
+
+we show test results for the proposed model on the english id32, converted into stanford
+dependencies using both version 3.3.0 and version 3.5.0 of the stanford dependency converter
+(ptb-sd 3.3.0 and ptb-sd 3.5.0); the chinese id32; and the conll 09 shared task
+dataset,3 following standard practices for each dataset. we omit punctuation from evaluation only
+for the ptb-sd and ctb. for the english ptb-sd datasets, we use pos tags generated from the
+stanford pos tagger (toutanova et al., 2003); for the chinese ptb dataset we use gold tags; and for
+the conll 09 dataset we use the provided predicted tags. our hyperparameter search was done with
+the ptb-sd 3.5.0 validation dataset in order to minimize over   tting to the more popular ptb-sd
+3.3.0 benchmark, and in our hyperparameter analysis in the following section we report performance
+on the ptb-sd 3.5.0 test set, shown in tables 2 and 3.
+
+4.2 hyperparameter choices
+
+4.2.1 attention mechanism
+
+we examined the effect of different classi   er architectures on accuracy and performance. what we
+see is that the deep bilinear model outperforms the others with respect to both speed and accuracy.
+the model with shallow bilinear arc and label classi   ers gets the same unlabeled performance as the
+deep model with the same settings, but because the label classi   er is much larger ((801    c    801) as
+opposed to (101    c    101)), it runs much slower and over   ts. one way to decrease this over   tting
+is by increasing the mlp dropout, but that of course doesn   t change parsing speed; another way is
+to decrease the recurrent size to 300, but this hinders unlabeled accuracy without increasing parsing
+speed up to the same levels as our deeper model. we also implemented the mlp-based approach
+to attention and classi   cation used in kiperwasser & goldberg (2016).4 we found this version to
+
+2we compute a    trained    embedding matrix composed of words that occur at least twice in the training
+dataset and add these embeddings to their corresponding pretrained embeddings. any words that don   t occur
+in either embedding matrix are replaced with a separate oov token.
+
+3we exclude the japanese dataset from our evaluation because we do not have access to it.
+4in the version of tensorflow we used, the model   s memory requirements during training exceeded the
+available memory on a single gpu when default settings were used, so we reduced the mlp hidden size to 200
+
+4
+
+published as a conference paper at iclr 2017
+
+model
+deep
+shallow
+shallow, 50% drop
+shallow, 300d
+mlp
+
+classi   er
+uas
+95.75
+95.74
+95.73
+95.63*
+95.53*
+
+las
+94.22
+94.00*
+94.05*
+93.86*
+93.91*
+
+size
+
+sents/sec
+410.91
+298.99
+300.04
+373.24
+367.44
+
+model
+3 layers, 400d
+3 layers, 300d
+3 layers, 200d
+2 layers, 400d
+4 layers, 400d
+
+uas
+95.75
+95.82
+95.55*
+95.62*
+95.83
+
+las
+94.22
+94.24
+93.89*
+93.98*
+94.22
+
+sents/sec
+410.91
+460.01
+469.45
+497.99
+362.09
+
+model
+lstm
+gru
+cif-lstm
+
+recurrent cell
+
+uas
+95.75
+93.18*
+95.67
+
+las
+94.22
+91.08*
+94.06*
+
+sents/sec
+410.91
+435.32
+463.25
+
+table 2: test accuracy and speed on ptb-sd 3.5.0. statistically signi   cant differences are marked
+with an asterisk.
+
+input dropout
+
+model
+default
+no word dropout
+no tag dropout
+no tags
+
+uas
+95.75
+95.74
+95.28*
+95.77
+
+las
+94.22
+94.08*
+93.60*
+93.91*
+
+model
+  2 = .9
+  2 = .999
+
+adam
+uas
+95.75
+95.53*
+
+las
+94.22
+93.91*
+
+table 3: test accuracy on ptb-sd 3.5.0. statistically signi   cant differences are marked with an
+asterisk.
+
+likewise be somewhat slower and signi   cantly underperform the deep biaf   ne approach in both
+labeled and unlabeled accuracy.
+
+4.2.2 network size
+
+we also examine more closely how network size in   uences speed and accuracy.
+in
+kiperwasser & goldberg   s 2016 model, the network uses 2 layers of 125-dimensional bidirectional
+lstms; in hashimoto et al.   s 2016 model, it has one layer of 100-dimensional bidirectional lstms
+dedicated to parsing (two lower layers are also trained on other objectives); and cheng et al.   s 2016
+model has one layer of 368-dimensional gru cells. we    nd that using three or four layers gets
+signi   cantly better performance than two layers, and increasing the lstm sizes from 200 to 300 or
+400 dimensions likewise sign   cantly improves performance.5
+
+4.2.3 recurrent cell
+
+gru cells have been promoted as a faster and simpler alternative to lstm cells, and are used in
+the approach of cheng et al. (2016); however, in our model they drastically underperformed lstm
+cells. we also implemented the coupled input-forget gate lstm cells (cif-lstm) suggested by
+greff et al. (2015),6    nding that while the resulting model still slightly underperforms the more
+popular lstm cells, the difference between the two is much smaller. additionally, because the
+gate and candidate cell activations can be computed simultaneously with one id127,
+the cif-lstm model is faster than the gru version even though they have the same number of
+parameters. we hypothesize that the output gate in the cif-lstm model allows it to maintain a
+sparse recurrent output state, which helps it adapt to the high levels of dropout needed to prevent
+over   tting in a way that gru cells are unable to do.
+
+5the model with 400-dimensional recurrent states signi   cantly outperforms the 300-dimensional one on
+
+the validation set, but not on the test set
+
+6in addition to using a coupled input-forget gate, we remove the    rst tanh nonlinearity, which is no longer
+
+needed when using a coupled gate
+
+5
+
+published as a conference paper at iclr 2017
+
+type
+
+model
+
+transition
+
+ballesteros et al. (2016)
+andor et al. (2016)
+kuncoro et al. (2016)
+
+graph
+
+kiperwasser & goldberg (2016)
+cheng et al. (2016)
+hashimoto et al. (2016)
+deep biaf   ne
+
+english ptb-sd 3.3.0 chinese ptb 5.1
+uas
+
+las
+
+las
+
+uas
+
+93.56
+94.61
+95.8
+
+93.9
+94.10
+94.67
+95.74
+
+91.42
+92.79
+94.6
+
+91.9
+91.49
+92.90
+94.08
+
+87.65
+   
+   
+
+87.6
+88.1
+   
+89.30
+
+86.21
+   
+   
+
+86.1
+85.7
+   
+88.23
+
+table 4: results on the english ptb and chinese ptb parsing datasets
+
+model
+
+uas
+
+las
+
+uas
+
+las
+
+uas
+
+las
+
+catalan
+
+chinese
+
+czech
+
+andor et al.
+deep biaf   ne
+
+92.67
+94.69
+
+89.83
+92.02
+
+84.72
+88.90
+
+80.85
+85.38
+
+88.94
+92.08
+
+84.56
+87.38
+
+model
+
+uas
+
+las
+
+uas
+
+las
+
+uas
+
+las
+
+english
+
+german
+
+spanish
+
+andor et al.
+deep biaf   ne
+
+93.22
+95.21
+
+91.23
+93.20
+
+90.91
+93.46
+
+89.15
+91.44
+
+92.62
+94.34
+
+89.95
+91.65
+
+table 5: results on the conll    09 shared task datasets
+
+4.2.4 embedding dropout
+
+because we increase the parser   s power, we also have to increase its id173. in addition to
+using relatively extreme dropout in the recurrent and mlp layers mentioned in table 1, we also
+regularize the input layer. we drop 33% of words and 33% of tags during training: when one is
+dropped the other is scaled by a factor of two to compensate, and when both are dropped together,
+the model simply gets an input of zeros. models trained with only word or tag dropout but not
+both wind up sign   cantly over   tting, hindering label accuracy and   in the latter case   attachment
+accuracy. interestingly, not using any tags at all actually results in better performance than using
+tags without dropout.
+
+4.2.5 optimizer
+
+we choose to optimize with adam (kingma & ba, 2014), which (among other things) keeps a mov-
+ing average of the l2 norm of the gradient for each parameter throughout training and divides the
+gradient for each parameter by this moving average, ensuring that the magnitude of the gradients will
+on average be close to one. however, we    nd that the value for   2 recommended by kingma & ba   
+which controls the decay rate for this moving average   is too high for this task (and we suspect more
+generally). when this value is very large, the magnitude of the current update is heavily in   uenced
+by the larger magnitude of gradients very far in the past, with the effect that the optimizer can   t adapt
+quickly to recent changes in the model. thus we    nd that setting   2 to .9 instead of .999 makes a
+large positive impact on    nal performance.
+
+4.3 results
+
+our model gets nearly the same uas performance on ptb-sd 3.3.0 as the current sota model
+from kuncoro et al. (2016) in spite of its substantially simpler architecture, and gets sota uas
+performance on ctb 5.17 as well as sota performance on all conll 09 languages. it is worth
+noting that the conll 09 datasets contain many non-projective dependencies, which are dif   cult
+or impossible for transition-based   but not graph-based   parsers to predict. this may account for
+some of the large, consistent difference between our model and andor et al.   s 2016 transition-based
+model applied to these datasets.
+
+7we   d like to thank zhiyang teng for    nding a bug in the original code that affected the ctb 5.1 dataset
+
+6
+
+published as a conference paper at iclr 2017
+
+where our model appears to lag behind the sota model is in las, indicating one of a few possibil-
+ities. firstly, it may be the result of inef   ciencies or errors in the glove embeddings or pos tagger,
+in which case using alternative pretrained embeddings or a more accurate tagger might improve
+label classi   cation. secondly, the sota model is speci   cally designed to capture phrasal composi-
+tionality; so another possibility is that ours doesn   t capture this compositionality as effectively, and
+that this results in a worse label score. similarly, it may be the result of a more general limitation of
+graph-based parsers, which have access to less explicit syntactic information than transition-based
+parsers when making decisions. addressing these latter two limitations would require a more inno-
+vative architecture than the relatively simple one used in current neural graph-based parsers.
+
+5 conclusion
+
+in this paper we proposed using a modi   ed version of bilinear attention in a neural dependency
+parser that increases parsing speed without hurting performance. we showed that our larger but more
+regularized network outperforms other neural graph-based parsers and gets comparable performance
+to the current sota transition-based parser. we also provided empirical motivation for the proposed
+architecture and con   guration over similar ones in the existing literature. future work will involve
+exploring ways of bridging the gap between labeled and unlabeled accuracy and augment the parser
+with a smarter way of handling out-of-vocabulary tokens for morphologically richer languages.
+
+references
+
+daniel andor, chris alberti, david weiss, aliaksei severyn, alessandro presta, kuz-
+globally normalized transition-
+url
+
+in association for computational linguistics, 2016.
+
+man ganchev, slav petrov,
+based neural networks.
+https://arxiv.org/abs/1603.06042.
+
+and michael collins.
+
+gabor angeli, melvin johnson premkumar, and christopher d manning. leveraging linguistic
+structure for open domain information extraction. in proceedings of the 53rd annual meeting of
+the association for computational linguistics (acl 2015), 2015.
+
+dzmitry bahdanau, kyunghyun cho, and yoshua bengio. id4 by jointly
+
+learning to align and translate. international conference on learning representations, 2014.
+
+miguel ballesteros, yoav goldberg, chris dyer, and noah a smith. training with exploration
+improves a greedy stack-lstm parser. proceedings of the conference on empirical methods in
+natural language processing, 2016.
+
+samuel r bowman, jon gauthier, abhinav rastogi, raghav gupta, christopher d manning, and
+christopher potts. a fast uni   ed model for parsing and sentence understanding. acl 2016, 2016.
+
+danqi chen and christopher d manning. a fast and accurate dependency parser using neural
+networks. in proceedings of the conference on empirical methods in natural language processing,
+pp. 740   750, 2014.
+
+hao cheng, hao fang, xiaodong he, jianfeng gao, and li deng. bi-directional attention with
+
+agreement for id33. arxiv preprint arxiv:1608.02076, 2016.
+
+chris dyer, miguel ballesteros, wang ling, austin matthews, and noah a smith. transition-
+based id33 with stack long short-term memory. proceedings of the conference on
+empirical methods in natural language processing, 2015.
+
+yarin gal and zoubin ghahramani. dropout as a bayesian approximation: representing model
+
+uncertainty in deep learning. international conference on machine learning, 2015.
+
+klaus greff, rupesh kumar srivastava, jan koutn    k, bas r steunebrink, and j  urgen schmidhuber.
+lstm: a search space odyssey. ieee transactions on neural networks and learning systems,
+2015.
+
+7
+
+published as a conference paper at iclr 2017
+
+kazuma hashimoto, caiming xiong, yoshimasa tsuruoka, and richard socher. a joint many-task
+model: growing a neural network for multiple nlp tasks. arxiv preprint arxiv:1611.01587, 2016.
+
+diederik kingma and jimmy ba. adam: a method for stochastic optimization.
+
+international
+
+conference on learning representations, 2014.
+
+eliyahu kiperwasser and yoav goldberg. simple and accurate id33 using bidirec-
+tional lstm feature representations. transactions of the association for computational linguis-
+tics, 4:313   327, 2016.
+
+adhiguna kuncoro, miguel ballesteros, lingpeng kong, chris dyer, graham neubig, and noah a.
+smith. what do recurrent neural network grammars learn about syntax? corr, abs/1611.05774,
+2016. url http://arxiv.org/abs/1611.05774.
+
+omer levy and yoav goldberg. dependency-based id27s. in acl 2014, pp. 302   308,
+
+2014.
+
+minh-thang luong, hieu pham, and christopher d manning. effective approaches to attention-
+
+based id4. empirical methods in natural language processing, 2015.
+
+ankur p parikh, hoifung poon, and kristina toutanova. grounded id29 for complex
+knowledge extraction. in proceedings of north american chapter of the association for compu-
+tational linguistics, pp. 756   766, 2015.
+
+kristina toutanova, dan klein, christopher d manning, and yoram singer. feature-rich part-of-
+speech tagging with a cyclic dependency network. in proceedings of the 2003 conference of the
+north american chapter of the association for computational linguistics on human language
+technology-volume 1, pp. 173   180. association for computational linguistics, 2003.
+
+kristina toutanova, xi victoria lin, and wen-tau yih. compositional learning of embeddings for
+
+relation paths in knowledge bases and text. in acl, 2016.
+
+david weiss, chris alberti, michael collins, and slav petrov. structured training for neural network
+transition-based parsing. annual meeting of the association for computational linguistics, 2015.
+
+8
+
+

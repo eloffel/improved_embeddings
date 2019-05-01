@@ -1,0 +1,3186 @@
+6
+1
+0
+2
+
+ 
+
+n
+u
+j
+ 
+
+0
+2
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+1
+6
+3
+6
+0
+
+.
+
+6
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+a probabilistic generative grammar for
+id29
+
+abulhair saparov   
+carnegie mellon university
+
+tom m. mitchell   
+carnegie mellon university
+
+we present a framework that couples the syntax and semantics of natural language sentences in
+a generative model, in order to develop a semantic parser that jointly infers the syntactic, mor-
+phological, and semantic representations of a given sentence under the guidance of background
+knowledge. to generate a sentence in our framework, a semantic statement is    rst sampled from
+a prior, such as from a set of beliefs in a knowledge base. given this semantic statement, a
+grammar probabilistically generates the output sentence. a joint semantic-syntactic parser is
+derived that returns the k-best semantic and syntactic parses for a given sentence. the semantic
+prior is    exible, and can be used to incorporate background knowledge during parsing, in ways
+unlike previous id29 approaches. for example, semantic statements corresponding
+to beliefs in a knowledge base can be given higher prior id203, type-correct statements can
+be given somewhat lower id203, and beliefs outside the knowledge base can be given lower
+id203. the construction of our grammar invokes a novel application of hierarchical dirichlet
+processes (hdps), which in turn, requires a novel and ef   cient id136 approach. we present
+experimental results showing, for a simple grammar, that our parser outperforms a state-of-the-
+art id35 semantic parser and scales to knowledge bases with millions of beliefs.
+
+1. introduction
+
+accurate and ef   cient id29 is a long-standing goal in natural language
+processing. there are countless applications for methods that provide deep semantic
+analyses of sentences. leveraging semantic information in text may provide improved
+algorithms for many problems in nlp, such as id39 (finkel and
+manning 2009, 2010; kazama and torisawa 2007), id51 (tanaka
+et al. 2007; bordes et al. 2012), id14 (merlo and musillo 2008), co-
+reference resolution (ponzetto and strube 2006; ng 2007), etc. a suf   ciently expressive
+semantic parser may directly provide the solutions to many of these problems. lower-
+level language processing tasks, such as those mentioned, may even bene   t by incorpo-
+rating semantic information, especially if the task can be solved jointly during semantic
+parsing.
+
+knowledge plays a critical role in natural language understanding. the formalisms
+used by most id29 approaches require an ontology of entities and predi-
+cates, with which the semantic content of sentences can be represented. moreover, even
+seemingly trivial sentences may have a large number of ambiguous interpretations.
+consider the sentence    she started the machine with the gpu,    for example. without
+additional knowledge, such as the fact that    machine    can refer to computing devices
+
+    machine learning department, 5000 forbes avenue, pittsburgh, pa 15213.
+
+e-mails: asaparov@cs.cmu.edu and tom.mitchell@cmu.edu
+
+   2005 association for computational linguistics
+
+computational linguistics
+
+volume xx, number xx
+
+kb
+
+semantic statement
+
+turn_on_device(person:ada,device:gpu_cluster)
+
+generative semantic grammar
+
+parser
+
+np
+
+s
+
+v
+
+vp
+
+np
+
+np
+
+p
+
+np
+
+   she started the machine with the gpu   
+   she started the machine with the gpu   
+
+figure 1
+high-level illustration of the setting in which our grammar is applied. during parsing, the input
+is the observed sentence and knowledge base, and we want to    nd the k most probable
+semantic-syntactic parses given this input and the training data.
+
+that contain gpus, or that computers generally contain devices such as gpus, the reader
+cannot determine whether the gpu is part of the machine or if the gpu is a device that
+is used to start machines.
+
+the thesis underlying our research is that natural language understanding requires
+a belief system; that is, a large set of pre-existing beliefs related to the domain of dis-
+course. clearly, young children have many beliefs about the world when they learn lan-
+guage, and in fact, the process of learning language is largely one of learning to ground
+the meanings of words and sentences in these non-linguistically acquired beliefs. in
+some ways, the idea that language understanding requires a belief system is not new,
+as natural language researchers have been saying for years that background knowledge
+is essential to reducing ambiguity in sentence meanings (bloom 2000; anderson and
+pearson 1984; fincher-kiefer 1992; adams, bell, and perfetti 1995). but despite this
+general acknowledgement of the importance of background knowledge, we see very
+few natural language understanding systems that actually employ a large belief system
+as the basis for comprehending sentence meanings, and for determining whether the
+meaning of a new sentence contradicts, extends, or is already present in its belief system.
+we present here a step in this direction: a probabilistic semantic parser that uses a
+large knowledge base (nell) to form a prior id203 distribution on the meanings
+of sentences it parses, and that "understands" each sentence either by identifying its
+existing beliefs that correspond to the sentence   s meaning, or by creating new beliefs.
+more precisely, our semantic parser corresponds to a probabilistic generative model
+that assigns high id203 to sentence semantic parses resulting in beliefs it already
+holds, lower prior id203 to parses resulting in beliefs it does not hold but which
+are consistent with its more abstract knowledge about semantic types of arguments to
+different relations, and still lower prior id203 to parses that contradict its beliefs
+about which entity types can participate in which relations.
+
+this work is only a    rst step. it is limited in that we currently use it to parse
+sentences with a simple noun-verb-noun syntax (e.g. "horses eat hay."), and considers
+only factual assertions in declarative sentences. its importance is that it introduces a
+novel approach in which the semantic parser (a) prefers sentence semantic parses that
+
+2
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+yield assertions it already believes, while (b) still allowing with lower prior id203
+sentence interpretations that yield new beliefs involving novel words, and (c) even
+allowing beliefs inconsistent with its background knowledge about semantic typing
+of different relations. we introduce algorithms for training the probabilistic grammar
+and producing parses with high posterior id203, given its prior beliefs and a
+new sentence. we present experimental evidence of the success and tractability of this
+approach for sentences with simple syntax, and evidence showing that the incorporated
+belief system, containing millions of beliefs, allows it to outperform state-of-the-art
+semantic parsers that do not hold such beliefs. thus, we provide a principled, prob-
+abilistic approach to using a current belief system to guide semantic interpretation of
+new sentences which, in turn, can be used to augment and extend the belief system. we
+also argue that our approach can be extended to use the document-level context of a
+sentence as an additional source of background beliefs.
+
+for reasons including but not limited to performance and complexity, most modern
+parsers operate over tokens, such as words. while this has worked suf   ciently well
+for many applications, this approach assumes that a id121 preprocessing step
+produces the correct output. this is nontrivial in many languages, such as chinese, thai,
+japanese, and tibetic languages. in addition, a large portion of the english vocabulary is
+created from the combination of simpler morphemes, such as the words    build-er,       in-
+describ-able,       anti-modern-ist.    moreover, language can be very noisy. text messages,
+communication in social media, and real-world speech are but a few examples of noise
+obfuscating language. standard algorithms for id121, lemmatization, and other
+preprocessing are oblivious to the underlying semantics, much less any background
+knowledge. incorporating these components into a    joint parsing    framework will
+enable semantics and background knowledge to jointly inform lower-level processing
+of language. our method couples semantics with syntax and other lower-level aspects
+of language, and can be guided by background knowledge via the semantic prior. we
+will demonstrate how this can be leveraged in our framework to model the morphology
+of individual verbs in a temporally-scoped id36 task.
+
+semantic statements are the logical expressions that represent meaning in sentences.
+for example, the semantic statement turn_on_device(person:ada, device:gpu_cluster) may
+be used to express the meaning of the sentence example given earlier. there are many
+languages or semantic formalisms that can be used to encode these logical forms:    rst-
+order logic with id198 (church 1932), frame semantics (baker, fillmore, and
+lowe 1998), id15 (banarescu et al. 2013), dependency-based
+id152 (liang, jordan, and klein 2013), vector-space semantics (salton
+1971; turney and pantel 2010), for example. our approach is    exible and does not
+require the use of a speci   c semantic formalism.
+
+in section 3, we review hdps and describe the setting that we require to de   ne our
+grammar. we present our approach in section 3.1.1 to perform hdp id136 in this
+new setting. in section 4, we present the main generative process in our framework,
+and detail our application of the hdp. although we present our model from a gen-
+erative perspective, we show in the description of the framework that discriminative
+techniques can be integrated. id136 in our model is described in section 5. there, we
+present a chart-driven agenda parser that can leverage the semantic prior to guide its
+search. finally, in section 6, we evaluate our parser on two relation-extraction tasks: the
+   rst is a task to extract simple predicate-argument representations from svo sentences,
+and the second is a temporally-scoped id36 task that demonstrates our
+parser   s ability to model the morphology of individual words, leading to improved
+generalization performance over words. moreover, we demonstrate that the inclusion
+
+3
+
+computational linguistics
+
+volume xx, number xx
+
+of background knowledge from a knowledge base improves parsing performance on
+these tasks. the key contributions of this article are:
+1. a framework to de   ne grammars with coupled semantics, syntax, morphology, etc.,
+2. the use of a prior on the semantic statement to incorporate prior knowledge,
+3. and an ef   cient and exact k-best parsing algorithm guided by a belief system.
+
+2. background
+
+our model is an extension of context-free grammars (id18s) (chomsky 1956) that
+couples syntax and semantics. to generate a sentence in our framework, the semantic
+statement is    rst drawn from a prior. a grammar then recursively constructs a syntax
+tree top-down, randomly selecting production rules from distributions that depend
+on the semantic statement. we present a particular incarnation of a grammar in this
+framework, where hierarchical dirichlet processes (hdps) (teh et al. 2006) are used
+to select production rules randomly. the application of hdps in our setting is novel,
+requiring a new id136 technique.
+
+the use of the term    generative    does not refer to the chomskian tradition of gen-
+erative grammar (chomsky 1957), although our approach does fall broadly within that
+framework. rather, it refers to the fact that our model posits a probabilistic mechanism
+by which sentences are generated (by the speaker). performing probabilistic id136
+under this model yields a parsing algorithm (the listener). this generative approach to
+modeling grammar underscores the duality between language generation and language
+understanding.
+
+our grammar can be related to synchronous id18s (sid18s) (aho and ullman 1972),
+which have been extended to perform id29 (li et al. 2015; wong and
+mooney 2007, 2006). however, in established use, sid18s describe the generation of
+the syntactic and semantic components of sentences simultaneously, which makes the
+assumption that the induced id203 distributions of the semantic and syntactic
+components factorize in a    parallel    manner. our model instead describes the gener-
+ation of the semantic component as a step with occurs prior to the syntactic component.
+this can be captured in sid18s as a prior on the semantic start symbol, making no
+factorization assumptions on this prior. this is particularly useful when employing
+richer prior distributions on the semantics, such as a model of context or a knowledge
+base.
+
+adaptor grammars (johnson, grif   ths, and goldwater 2007) provide a framework
+that can jointly model the syntactic structure of sentences in addition to the mor-
+phologies of individual words (johnson and demuth 2010). unlike previous work with
+adaptor grammars, our method couples syntax with semantics, and can be guided
+by background knowledge via the semantic prior. we will demonstrate how this can
+be leveraged in our framework to model the morphology of individual verbs in a
+temporally-scoped id36 task. cohen, blei, and smith (2010) show how
+to perform dependency grammar induction using adaptor grammars. while grammar
+induction in our framework constitutes an interesting research problem, we do not
+address it in this work.
+
+as in other parsing approaches, an equivalence can be drawn between our parsing
+problem and the problem of    nding shortest paths in hypergraphs (klein and manning
+2001, 2003a; pauls and klein 2009; pauls, klein, and quirk 2010; gallo, longo, and
+pallottino 1993). our algorithm can then be understood as an application of a    search
+for the k-best paths in a very large hypergraph.
+
+4
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+our parser incorporates prior knowledge to guide its search, such as from an
+ontology and the set of beliefs in a knowledge base. using this kind of approach,
+the parser can be biased to    nd context-appropriate interpretations in otherwise
+ambiguous or terse utterances. while systems such as durrett and klein (2014),
+nakashole and mitchell (2015), kim and moldovan (1995), and salloum (2009) use
+background knowledge about the semantic types of different noun phrases to improve
+their ability to perform entity linking, co-reference resolution, prepositional phrase
+attachment, information extraction, and id53, and systems such as rati-
+nov and roth (2012), durrett and klein (2014), and prokofyev et al. (2015) link noun
+phrases to wikipedia entries to improve their ability to resolve co-references, these
+uses of background knowledge remain fragmentary. krishnamurthy and mitchell (2014)
+developed a id35 parser that incorporates background knowledge from a knowledge
+base during training through distant supervision, but their method is not able to do so
+during parsing. our parser can be trained once, and then applied to a variety of settings,
+each with a different context or semantic prior.
+
+3. hierarchical dirichlet processes
+
+a core component of our statistical model is the dirichlet process (dp) (ferguson 1973),
+which can be understood as a distribution over id203 distributions. if a distribu-
+tion g is drawn from a dp, we can write g     dp(  , h), where the dp is characterized
+by two parameters: a concentration parameter    > 0 and a base distribution h. the dp
+has the useful property that e[g] = h, and the concentration parameter    describes the
+   closeness    of g to the base distribution h. in typical use, a number of parameters   i
+are drawn from a discrete distribution g, which is itself drawn from a dirichlet process.
+the observations yi are drawn using the parameters   i from another distribution f . this
+may be written as:
+
+g     dp(  , h),
+
+  1, . . . ,   n     g,
+
+yi     f (  i),
+
+(1)
+(2)
+(3)
+
+for i = 1, . . . , n. in our application, we will de   ne h to be a    nite dirichlet distribution
+and f is a categorical distribution. g can be marginalized out in the model above,
+resulting in the chinese restaurant process representation (aldous 1985):
+
+  1,   2, . . .     h,
+
+(cid:40)
+
+zi =
+
+with id203 #{k<i:zk=j}
+
+j
+jnew with id203
+
+  +i   1
+  
+
+  +i   1 ,
+
+,
+
+(4)
+
+(5)
+
+  i =   zi for i = 1, . . . , n,
+yi     f (  i),
+
+(6)
+(7)
+where z1 = 1, jnew = max{z1, . . . , zi   1} + 1 is the indicator of a new table, and the
+quantity #{k < i : zk = j} is the number of observations that were assigned to table
+j. the analogy is to imagine a restaurant where customers enter one at a time. each
+customer chooses to sit at table j with id203 proportional to the number of people
+
+5
+
+computational linguistics
+
+volume xx, number xx
+
+currently sitting at table j, or at a new table jnew with id203 proportional to   . the
+ith customer   s choice is represented as zi. as shown in later sections, this representation
+of the dp is amenable to id136 using id115 (mcmc) methods
+(gelfand and smith 1990; robert and casella 2010).
+
+the hierarchical dirichlet process (hdp) is an extension of the dirichlet process for
+use in hierarchical modeling (teh et al. 2006). an advantage of this approach is that
+statistical strength can be shared across nodes that belong to the same subtree. in an
+hdp, every node n in a    xed tree t is associated with a distribution gn, and:
+
+g0     dp(  0, h),
+gn     dp(  n, g  (n)),
+
+(8)
+
+(9)
+
+where   (n) is the parent node of n, and 0 is the root of t . in our application, the base
+distribution at the root h is dirichlet. we can draw observations y1, . . . , yn from the
+hdp, given a sequence x1, . . . , xn of n paths from the root 0 to a leaf:
+
+  i     gxi,
+yi     f (  i),
+
+(10)
+(11)
+
+for i = 1, . . . , n. for notational brevity, we write this equivalently as yi     hdp(xi, t ).
+
+just as marginalizing the dirichlet process yields the chinese restaurant process,
+marginalizing the hdp yields the chinese restaurant franchise (crf). for every node in
+the hdp tree n     t , there is a    chinese restaurant    consisting of an in   nite number
+of tables. every table i in this restaurant at node n is assigned to a table in the parent
+restaurant. the assignment variable zn
+i is the index of the parent table to which table i in
+node n is assigned.
+
+1,   0
+  0
+for every node n     t,
+
+(cid:40)
+2, . . .     h,
+with id203     n  (n)
+j
+,
+jnew with id203         (n),
+
+zn
+i =
+
+j
+
+i =     (n)
+  n
+
+zn
+i
+
+,
+
+(12)
+
+(13)
+
+(14)
+
+where   (n) is the parent of node n, and n  (n)
+is the current number of customers at node
+  (n) sitting at table j. we are mildly abusing notation here, since n  (n)
+and n  (n) refer
+to the number of customers at the time zn
+i are
+drawn). to draw the observation yi, we start with the leaf node at the end of the path
+xi:
+
+i is drawn (which increases as additional zn
+
+j
+
+j
+
+  i =   xi
+k ,
+yi     f (  i),
+
+(15)
+(16)
+
+where k     1 = #{j < i : xj = xi} is the number of previous observations drawn from
+node xi.
+
+6
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+3.1 id136
+
+in this section, we describe our method for performing posterior id136 in the hdp.
+let z = {zn
+i : n     t, i = 1, 2, . . .} be the set of table assignment variables in the hdp. if
+the distributions h and f are conditionally conjugate, as they are in our application,
+the    variables can be integrated out in closed form:
+
+(cid:90)
+
+p(z|x, y) = p(x)p(z)
+
+p(y|x, z,   )d  .
+
+(17)
+
+the posterior p(z|x, y) is intractable to compute exactly, and so we approximate it by
+sampling. we obtain samples from z|x, y by performing collapsed id150 as
+described in section 5.1 of teh et al. (2006): we repeatedly sample z from its conditional
+distribution, with    integrated out:
+
+i |x, y, zn   i =
+zn
+
+with prob.     #{k (cid:54)= i : zn
+
+j
+jnew with prob.       n    p(yn
+
+k = j}    p(yn
+i |x, yn   i, zn   i, zn
+
+i |x, yn   i, zn   i, zn
+i = jnew),
+
+i = j),
+
+(18)
+
+(cid:40)
+
+where yn
+is the set of    descendant    observations of table i in node n (this includes
+i
+observations assigned directly to the table, in addition to those assigned to tables further
+down in the hierarchy which themselves are assigned to this table), yn   i = y \ yn
+i is the
+set of all other observations, and zn   i = z \ zn
+is the set of all other table assignment
+variables. computing p(yn
+i = j) is straightforward since we can follow the
+chain of table assignments to the root. let rn
+i be the root cluster assignment of the table i
+at node n. in fact, we found it advantageous for performance to keep track of the root
+cluster assignments r for every table in the hierarchy. thus, when zn
+i = j, it must be the
+case that yn
+
+i were drawn from f with parameter   0
+
+i |x, yn   i, zn   i, zn
+
+.
+
+i
+
+r  (n)
+j
+
+i = jnew) requires marginalizing over the assignment
+
+i |x, yn   i, zn   i, zn
+computing p(yn
+of the new table z  (n)
+jnew:
+m  (n)(cid:88)
+
+i |x, yn   i, zn   i, zn
+
+i = jnew) =
+
+p(yn
+
+n  (n)
+k
+
+n  (n) +     (n)
+
+p(yn
+
+i |x, yn   i, zn   i, z  (n)
+
+jnew = k)
+
+k=1
+
++
+
+    (n)
+
+n  (n) +     (n)
+
+p(yn
+
+i |x, yn   i, zn   i, z  (n)
+
+jnew = knew),
+
+(19)
+
+where m  (n) is the number of occupied tables at the node   (n). at the root node   (n) =
+0, the above id203 is just the prior of yn
+i . we observe that the above probabilities
+i |x, yn   i, zn   i, rn
+are linear functions of the likelihoods p(yn
+i = k) for various root cluster
+assignments rn
+i = k. implemented naively, generating a single sample from equation
+18 can take time linear in the number of clusters at the root, which would result in a
+quadratic-time algorithm for a single gibbs iteration over all z. however, we can exploit
+sparsity in the root cluster assignment likelihoods to improve performance. when h =
+dir(  ) is a dirichlet distribution and f is a categorical, then the collapsed root cluster
+
+7
+
+computational linguistics
+
+volume xx, number xx
+
+assignment likelihood is:
+
+p(yn
+
+i |x, yn   i, zn   i, rn
+
+i = k) =
+
+(cid:81)
+
+t
+
+(cid:0)  t + #{t     y0
+(cid:0)(cid:80)
+
+t   t + #y0
+
+k
+
+k}(cid:1)(#{t   yn
+(cid:1)(#yn
+
+i )
+
+i})
+
+.
+
+(20)
+
+  (a) , and #{t     yn
+
+here, a(b) is the rising factorial a(a + 1)(a + 2) . . . (a + b     1) =   (a+b)
+i } is
+the number of elements in yn
+i with value t. notice that the denominator depends only
+on the sizes and not on the contents of yn
+k. caching the denominator values for
+common sizes of yn
+k can allow the sampler to avoid needless recomputation.
+this is especially useful in our application since many of the tables at the root tend to be
+small. similarly, observe that the numerator factor is 1 for values of t where #{t     yn
+i } =
+0. thus, the time required to compute the above id203 is linear in the number of
+unique elements of yn
+i , which can improve the scalability of our sampler. we perform
+the above computations in log space to avoid numerical over   ow.
+
+i and y0
+
+i and y0
+
+3.1.1 computing probabilities of paths. in previous uses of the hdp, the paths xi
+are assumed to be    xed. for instance, in document modeling, the paths correspond
+to documents or prede   ned categories of documents. in our application, however, the
+paths may be random. in fact, we will later show that our parser heavily relies on the
+posterior predictive distribution over paths, where the paths correspond to semantic
+parses. more precisely, given a collection of training observations y = {y1, . . . , yn} with
+their paths x = {x1, . . . , xn}, we want to compute the id203 of a new path xnew
+given a new observation ynew:
+
+p(xnew|ynew, x, y)     p(xnew)
+
+p(ynew|z, xnew)p(z|x, y)dz,
+
+    p(xnew)
+nsamples
+
+p(ynew|z   , xnew).
+
+(21)
+
+(22)
+
+(cid:90)
+
+(cid:88)
+
+z      z|x,y
+
+once we have the posterior samples z   , we can compute the quantity p(ynew|z   , xnew)
+by marginalizing over the table assignment for the new observation y:
+
+mxnew(cid:88)
+
+p(ynew|z   , xnew) =
+
+j=1
+
+nxnew
+j
+
+nxnew +   xnew p(ynew|z   ,   new =   xnew
+  xnew
+
+nxnew +   xnew p(ynew|z   ,   new =   xnew
+
+jnew ).
+
+j
+
++
+
+)
+
+(23)
+
+here, mxnew is the number of occupied tables at node xnew, nxnew
+is the number of
+customers sitting at table j at node xnew, and nxnew is the total number of customers at
+node xnew. the    rst term p(ynew|z   ,   new =   xnew
+) can be computed since the jth table
+exists and is assigned to a table in its parent node, which in turn is assigned to a table
+in its parent node, and so on. we can follow the chain of table assignments to the root.
+in the second term, the observation is assigned to a new table, whose assignment is
+unknown, and so we marginalize again over the assignment in the parent node for this
+
+j
+
+j
+
+8
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+new table:
+
+p(ynew|z   ,   new =   xnew
+
+jnew ) =
+
+m  (xnew )(cid:88)
+
+j=1
+
+n  (xnew)
+j
+
+n  (xnew) +     (xnew)
+
++
+
+    (xnew)
+
+n  (xnew) +     (xnew)
+
+p
+
+(cid:17)
+
+p
+
+ynew(cid:12)(cid:12)(cid:12)z   ,   new =     (xnew)
+(cid:17)
+
+(cid:16)
+ynew(cid:12)(cid:12)(cid:12)z   ,   new =     (xnew)
+
+jnew
+
+,
+
+j
+
+(cid:16)
+
+(24)
+
+where   (xnew) is the parent node of xnew. again, the id203 in the    rst term
+can be computed as before, but the id203 in the second term depends on the
+assignment of the new table, which is unknown. thus, since it is possible that a new
+table will be created at every level in the hierarchy up to the root, we can apply this
+formula recursively. at the root 0, the id203 p(ynew|z   ,   new =   0
+jnew ) is just the
+prior id203 of ynew.
+
+if the tree t is small, it is straightforward to compute the quantity in equation 22
+for every path xnew in the tree, using the method described above. in our application
+however, the size of t depends on the size of the ontology, and may easily become
+very large. in this case, the na  ve approach becomes computationally infeasible. as
+such, we develop an algorithm to incrementally    nd the k best paths that maximize the
+quantity in equation 22. for sparse distributions, where most of the id203 mass is
+concentrated in a small number of paths xnew, this algorithm can effectively characterize
+the predictive distribution in equation 21. the algorithm is essentially a search over
+nodes in the tree, starting at the root and descending the nodes of the tree t , guided
+through paths of high id203. each search state s consists of the following    elds:
+
+    s.n is the current position of the search in the tree.
+    s.v is an array of id203 scores of length nsamples. each element in this array
+represents the id203 of drawing the observation ynew from the current node
+s.n, and thus is identical to the id203 of assigning ynew to a new table at any
+child node of s.n. this is useful to compute the quantity in equation 22 using the
+recursive method as described above.
+
+the search is outlined in algorithm 1. we observe that the quantity in equa-
+tion 22 is a sum of independent functions, each being a linear combination of the
+terms p(ynew|z   
+j ) over the tables available at node n and the new table
+p(ynew|z   
+jnew ) (this latter id203 is stored in s.vi). thus, the upper
+bound on equation 22 over all paths that pass through node s.n is:
+
+i ,   new =   n
+
+i ,   new =   n
+
+max
+
+{xnew:s.n   xnew}
+
+p(xnew)
+nsamples
+
+max
+
+j=1,...,ms.n
+
+i ,   new =   s.n
+
+j
+
+), s.vi
+
+(25)
+
+nsamples(cid:88)
+
+i=1
+
+(cid:8)p(ynew|z   
+
+(cid:9) .
+
+we sort elements in the priority queue using this expression.
+
+as a result, once the algorithm has completed k items, we are guaranteed that the
+search has found k best paths. thus, an    iterator    data structure can be ef   ciently
+implemented using this algorithm, which returns paths xnew in order of decreasing
+predictive id203, with the    rst item being optimal. the search algorithm can be
+modi   ed for other representations of the hdp, and can be extended to the case where h
+and f are not conjugate. it may also be incorporated into a larger id136 procedure to
+jointly infer the paths x and the latent variables in the hdp. it is also straightforward to
+compute predictive probabilities where the path xnew is restricted to a subset of paths x:
+
+9
+
+computational linguistics
+
+volume xx, number xx
+
+algorithm 1: search algorithm to    nd the k best paths in the hdp that maximize
+the quantity in equation 22.
+1 initialize priority queue with initial state s
+2 s.n     0
+3 for i = 1, . . . , nsamples, do
+
+/* start at the root */
+
+n0
+j
+
+n0+  0 p(ynew|z   
+
+i ,   new =   0
+
+j) +   0
+
+n0+  0 p(ynew|z   
+
+i ,   new =   0
+
+jnew )
+
+s.vi    (cid:80)m0
+
+j=1
+
+4
+5 repeat
+6
+7
+
+8
+
+9
+10
+11
+12
+
+13
+
+pop state s from the priority queue
+if s.n is a leaf
+
+complete the path s.n with id203 p{xnew=s.n}
+
+nsamples
+
+(cid:80)nsamples
+
+i=1
+
+s.vi
+
+foreach child node c of s.n, do
+create new search state s   
+s   .n     c
+for i = 1, . . . , nsamples, do
+
+s   .vi    (cid:80)mc
+
+nc
+j
+
+j) +   c
+push s    onto priority queue with key in equation 25
+
+i ,   new =   c
+
+nc+  c p(ynew|z   
+
+j=1
+
+nc+  c s.vi
+
+14
+15 until there are k completed paths
+
+p(xnew|ynew, x, y, xnew     x). to do so, the algorithm is restricted to only expand nodes
+that belong to paths in x.
+
+an important concern when performing id136 with very large trees t is that
+it is not feasible to explicitly store every node in memory. fortunately, collapsed gibbs
+sampling does not require storing nodes whose descendants have zero observations. in
+addition, algorithm 1 can be augmented to avoid storing these nodes, as well. to do
+so, we make the observation that for any node n     t in the tree whose descendants
+have no observations, n will have zero occupied tables. therefore, the id203
+p(ynew|z   , xnew) = p(ynew|z   ,   new =   n
+jnew ) is identical for any path xnew that passes
+through n. thus, when the search reaches node n, it can simultaneously complete all
+paths xnew that pass through n, and avoid expanding nodes with zero observations
+among its descendants. as a result, we only need to explicitly store a number of nodes
+linear in the size of the training data, which enables practical id136 with very large
+hierarchies.
+
+there is a caveat that arises when we wish to compute a joint predictive id203
+, x, y), where we have multiple novel observations. re-
+1
+
+, . . . , xnew
+
+, . . . , ynew
+
+|ynew
+
+p(xnew
+writing equation 21 in this setting, we have:
+
+k
+
+k
+
+1
+
+p(xnew
+
+1
+
+, . . . , xnew
+
+k
+
+, . . . , ynew
+
+, x, y)
+
+1
+
+|ynew
+    p(xnew)
+
+(cid:90)
+
+k
+
+p(ynew
+
+1
+
+, . . . , ynew
+
+k
+
+|z   , xnew)p(z|x, y)dz.
+
+(26)
+
+|z   , xnew) does not factorize, since the
+for the crf, the joint likelihood p(ynew
+observations are not independent (they are exchangeable). one workaround is to use
+a representation of the hdp where the joint likelihood factorizes, such as the direct
+assignment representation (teh et al. 2006). another approach is to approximate the
+
+, . . . , ynew
+
+k
+
+1
+
+10
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+joint likelihood with the factorized likelihood. in our parser, we instead make the
+following approximation:
+
+p(ynew
+
+1
+
+, . . . , ynew
+
+k
+
+|xnew, x, y) =
+
+k(cid:89)
+    k(cid:89)
+
+i=1
+
+p(ynew
+
+i
+
+|ynew
+
+1
+
+, . . . , ynew
+
+i   1 , xnew, x, y)
+
+(27)
+
+p(ynew
+
+i
+
+|xnew, x, y).
+
+(28)
+
+i=1
+
+substituting into equation 26, we obtain:
+
+p(xnew|ynew, x, y)     p(xnew)
+
+(cid:90)
+
+k(cid:89)
+
+i=1
+
+p(ynew
+
+i
+
+|z   , xnew)p(z|x, y)dz.
+
+(29)
+
+when the size of the training data (x, y) is large with respect to the test data
+(xnew, ynew), the approximation works well, which we also    nd to be the case in our
+experiments.
+
+4. generative semantic grammar
+
+we present a generative model of text sentences. in this model, semantic statements
+are generated probabilistically from some higher-order process. given each semantic
+statement, a formal grammar selects text phrases, which are concatenated to form the
+output sentence. we present the model such that it remains    exible with regard to the se-
+mantic formalism. even though our grammar can be viewed as an extension of context-
+free grammars, it is important to note that our model of grammar is only conditionally
+context-free, given the semantic statement. otherwise, if the semantic information is
+marginalized out, the grammar is sensitive to context.
+
+4.1 de   nition
+let n be a set of nonterminals, and let w be a set of terminals. let r be a set of
+production rules which can be written in the form a     b1 . . . bk where a     n and
+b1, . . . , bk     w     n . the tuple (w,n , r) is a context-free grammar (id18) (chomsky
+1956).
+we couple syntax with semantics by augmenting the production rules r. in every
+production rule a     b1 . . . bk in r, we assign to every right-hand side symbol bi a
+surjective operation fi : xa (cid:55)    xbi that transforms semantic statements, where xa is the
+set of semantic statements associated with the symbol a and xbi is the set of semantic
+statements associated with the symbol bi. intuitively, the operation describes how the
+semantic statement is    passed on    to the child nonterminals in the generative pro-
+cess. during parsing, these operations will describe how simpler semantic statements
+combine to form larger statements, enabling semantic compositionality. for example,
+suppose we have a semantic statement x = has_color(reptile:frog,color:green) and the pro-
+duction rule s     np vp. we can pair the semantic operation f1 with the np in the
+right-hand side such that f1(x) = reptile:frog selects the subject argument. similarly, we
+can pair the semantic operation f2 with the vp in the right-hand side such that f2(x) = x
+is the identity operation. the augmented production rule is (a, b1, . . . , bk, f1, . . . , fk)
+
+11
+
+computational linguistics
+
+volume xx, number xx
+
+and the set of augmented rules is r   . in parsing, we require the computation of the
+inverse of semantic operations, which is the preimage of a given semantic statement
+f   1(x) = {x(cid:48) : f (x(cid:48)) = x}. continuing the example above, f   1
+1 (reptile:frog) returns a set
+that contains the statement has_color(reptile:frog,color:green) in addition to statements like
+eats_insect(reptile:frog,insect:   y).
+to complete the de   nition of our grammar, we need to specify the method that,
+given a nonterminal a     n and a semantic statement x     xa, selects a production rule
+from the set of rules in r    with the left-hand side nonterminal a. to accomplish this,
+we de   ne selecta,x as a distribution over rules from r    that has a as its left-hand
+side, dependent on x. we will later provide a number of example de   nitions of this
+selecta,x distribution. thus, a grammar in our framework is fully speci   ed by the
+tuple (w,n , r   , select).
+
+note that other semantic grammar formalisms can be    t into this framework. for
+example, in categorical grammars, a lexicon describes the mapping from elementary
+components of language (such as words) to a syntactic category and a semantic mean-
+ing. rules of id136 are available to combine these lexical items into (tree-structured)
+derivations, eventually resulting in a syntactic and semantic interpretation of the full
+sentence (steedman 1996; j  ger 2004). in our framework, we imagine this process in
+reverse. the set xs is the set of all derivable semantic statements with syntactic category
+s. the generative process begins by selecting one statement from this set x     xs.
+next, we consider all applications of the rules of id136 that would yield x, with
+each unique application of an id136 rule being equivalent to a production rule in
+our framework. we select one of these production rules according to our generative
+process and continue recursively. the items in the lexicon are equivalent to preterminal
+production rules in our framework. thus, the generative process below describes a way
+to endow parses in categorical grammar with a id203 measure. this can be used,
+for example, to extend earlier work on generative models with id35 (hockenmaier 2001;
+hockenmaier and steedman 2002). different choices of the select distribution induce
+different id203 distributions over parses.
+
+we do not see a straightforward way to    t linear or id148 over full
+parses into our framework, where a vector of features can be computed for each full
+parse (berger, pietra, and pietra 1996; ratnaparkhi 1998). this is due to our assumption
+that, given the semantic statement, the id203 of a parse factorizes over the pro-
+duction rules used to construct that parse. however, the select distribution can be
+de   ned using linear and id148, as we will describe in section 4.3.
+
+12
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+4.2 generative process
+
+the process for generating sentences in this framework begins by drawing a semantic
+statement x     xs where s is the root nonterminal. thus, there is a prior distribution
+p(x) for all x     xs. next, the syntax is generated top-down starting at s. we draw a
+production rule with s as the left-hand side from selects,x. the semantic transforma-
+tion operations fi are applied to x and the process is repeated for the right-hand side
+nonterminals. more concretely, we de   ne the following operation expand which takes
+two arguments: a symbol a     w     n and a semantic statement x     xa.
+
+1 function expand(x, a)
+2
+
+if a     w
+
+/* simply return the word if a is a terminal */
+return a
+
+else
+
+/* select a production rule with form a     b1, . . . , bk */
+(a, b1, . . . , bk, f1, . . . , fk)     selecta,x
+return yield(expand(f1(x), b1), . . . , expand(fk(x), bk))
+
+3
+
+4
+
+5
+6
+
+the yield operation concatenates strings into a single output string. then, the output
+sentence y is generated simply by y = expand(x, s). depending on the application,
+we may require that the generative process capitalizes the    rst letter of the output
+sentence, and/or appends terminating punctuation to the end. a noise model may also
+be appended to the generative process. the above algorithm may be easily extended to
+also return the full syntax tree.
+
+4.3 selecting production rules
+
+there are many possible choices for the select distribution. the most straightforward
+is to de   ne a categorical distribution over the available production rules, and simply
+draw the selected rule from this distribution. the result would be a simple extension
+of id140 (pid18s) that couples semantics with syntax.
+however, this would remove any dependence between the semantic statement and the
+production rule selection.
+
+to illustrate the importance of this dependence, consider generating a sentence
+with the semantic statement athlete_plays_sport(athlete:roger_federer,sport:tennis) using the
+grammar in    gure 2 (the process is graphically depicted in    gure 3). we start with the
+root nonterminal s:
+step 1 we can only select the    rst production rule, and so we apply the semantic opera-
+tion select_arg1 on the semantic statement to obtain athlete:roger_federer for the
+right-hand side nonterminal n. we apply the semantic operation delete_arg1
+to obtain athlete_plays_sport(  ,sport:tennis) for vp.
+
+step 2 expanding n, we select a terminal symbol given the semantic statement ath-
+
+lete:roger_federer. suppose    andre agassi    is returned.
+
+step 3 now, we expand the vp symbol. we draw from selectvp to choose one of
+the two available production rules. suppose the rule vp     v n is selected.
+thus, we apply the identity operation for the v nonterminal to obtain
+
+13
+
+computational linguistics
+
+volume xx, number xx
+
+s     n : select_arg1 vp : delete_arg1
+vp     v : identity n : select_arg2
+vp     v : identity
+
+n        tennis   
+n        andre agassi   
+n        chopin   
+v        swims   
+v        plays   
+
+figure 2
+example of a grammar in our framework. this grammar operates on semantic statements of the
+form predicate(   rst argument, second argument). the semantic operation select_arg1 returns the
+   rst argument of the semantic statement. likewise, the operation select_arg2 returns the
+second argument. the operation delete_arg1 removes the    rst argument, and identity
+returns the semantic statement with no change.
+
+athlete_plays_sport(  ,sport:tennis). we similarly apply select_arg2 for the n
+nonterminal to obtain sport:tennis.
+
+step 4 we expand the v nonterminal, drawing from selectv on the semantic statement
+
+athlete_plays_sport(  ,sport:tennis). suppose    plays    is returned.
+
+step 5 finally, we expand the n nonterminal, drawing from selectn with the state-
+ment sport:tennis. suppose    tennis    is returned. we concatenate all returned
+strings to form the sentence    andre agassi plays tennis.   
+
+however, now consider generating another sentence with the same grammar for the
+statement athlete_plays_sport(athlete:roger_federer, sport:swimming). in step 3 of the above
+process, the select distribution would necessarily have to depend on the seman-
+tic statement. in english, the id203 of observing a sentence of the form n v n
+(   rachmaninoff makes music   ) versus n v (   rachmaninoff composes   ) depends on the
+underlying semantic statement.
+to capture this dependence, we use hdps to de   ne the select distribution. every
+nonterminal a     n is associated with an hdp, and in order to fully specify the gram-
+mar, we need to specify the structure of each hdp tree. let ta be the tree associated
+with the nonterminal a. the model is    exible with how the trees are de   ned, but we
+construct trees with the following method. first, select m discrete features g1, . . . , gm
+where each gi : x (cid:55)    z and z is the set of integers. these features operate on semantic
+statements. for example, suppose we restrict the space of semantic statements to be the
+set of single predicate instances (triples). the relations in an ontology can be assigned
+unique integer indices, and so we may de   ne a semantic feature as a function which
+simply returns the index of the predicate given a semantic statement. we construct the
+hdp tree ta starting with the root, we add a child node for every possible output of g1.
+we repeat the process recursively, constructing a complete tree of depth m + 1.
+
+as an example, we will construct a tree for the nonterminal vp for the example
+grammar in    gure 2. suppose in our ontology, we have the predicates athlete_plays_sport
+and musician_plays_instrument, labeled 0 and 1, respectively. the ontology also contains
+the concepts athlete:roger_federer, sport:tennis, and sport:swimming, also labeled 0, 1, and
+2, respectively. we de   ne the    rst feature g1 to return the predicate index. the second
+feature g2 returns the index of the concept in the second argument of the semantic
+statement. the tree is constructed starting with the root, we add a child node for
+each predicate in the ontology: athlete_plays_sport and musician_plays_instrument. next,
+for each child node, we add a grandchild node for every concept in the ontology:
+athlete:roger_federer, sport:tennis, and sport:swimming. the resulting tree tv p has depth
+
+14
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+step 0:
+
+s
+
+athlete_plays_sport(
+
+athlete:roger_federer,
+sport:tennis)
+
+step 1:
+
+s
+
+n
+
+vp
+
+athlete:roger_federer
+
+athlete_plays_sport(
+  , sport:tennis)
+
+step 2:
+
+s
+
+step 3:
+
+s
+
+n
+
+vp
+
+n
+
+vp
+
+   roger federer   
+
+athlete_plays_sport(
+  , sport:tennis)
+
+   roger federer   
+
+v
+
+n
+
+athlete_plays_sport(
+  , sport:tennis)
+
+sport:tennis
+
+step 4:
+
+s
+
+step 5:
+
+s
+
+n
+
+vp
+
+n
+
+vp
+
+   roger federer   
+
+v
+
+n
+
+   roger federer   
+
+v
+
+n
+
+sport:tennis
+
+   plays   
+
+   plays   
+
+   tennis.   
+
+figure 3
+a depiction of the generative process producing a sentence for the semantic statement
+athlete_plays_sport(athlete:roger_federer,sport:tennis) using the grammar in    gure 2.
+
+2, with a root node with 2 child nodes, and each child node has 3 grandchild nodes.
+this construction enables the select distribution for the nonterminal vp to depend on
+the predicate and the second argument of the semantic statement.
+with the fully-speci   ed hdps and their corresponding trees, we have fully speci   ed
+select. when sampling from selecta,x for the nonterminal a     n and a semantic
+statement x     x , we compute the m semantic features for the given semantic statement:
+g1(x), g2(x), . . . , gm(x). this sequence of indices speci   es a path from the root of the tree
+
+15
+
+computational linguistics
+
+volume xx, number xx
+
+down to a leaf. we then simply draw a production rule observation from this leaf node,
+and return the result: r     hdp(x, ta) = selecta,x.
+
+there are many other alternatives for de   ning the select distribution. for in-
+stance, a log-linear model can be used to learn dependence on a set of features. the
+hdp provides statistical advantages, smoothing the learned distributions, resulting in
+a model more robust to data sparsity issues.
+in order to describe id136 in this framework, we must de   ne additional concepts
+and notation. for a nonterminal a     n , observe that the paths from the root to the
+leaves of its hdp tree induce a partition on the set of semantic statements xa. more
+precisely, two semantic statements x1, x2     xa belong to the same equivalence class if
+they correspond to the same path in an hdp tree.
+
+s
+
+s
+
+np
+
+n
+
+v
+
+vp
+
+np
+
+np
+
+=
+
+vp
+
++
+
+pp
+
+n
+
+v
+
+n
+
+p
+
+n
+
+full parse
+
+left outer parse
+
+np
+
+n
+
+inner
+parse
+
+pp
+
++
+
+p
+
+n
+
+right outer parse
+
+figure 4
+an example decomposition of a parse tree into its left outer parse, inner parse (of the object noun
+phrase), and its right outer parse. this is one example of such a decomposition. for instance, we
+may similarly produce a decomposition where the prepositional phrase is the inner parse, or
+where the verb is the inner parse. the terminals are omitted and only the syntactic portion of the
+parse is displayed here for consiseness.
+
+every parse (x, s) consists of a semantic statement x and a syntax tree s. the syntax
+tree s is a rooted tree containing an interior vertex for every nonterminal and a leaf for
+every terminal. every vertex is associated with a start position and end position in the
+sentence. an interior vertex along with its immediate children corresponds to a par-
+ticular production rule in the grammar (a     b1:f1 . . . bn:fn)     r   , where the interior
+vertex is associated with the nonterminal a and its children respectively correspond
+to the symbols b1, . . . , bn, left-to-right. thus, every edge in the tree is labeled with a
+semantic transformation operation. a subgraph si of s can be called an inner syntax tree.
+the corresponding outer syntax tree so is so = s \ si is the syntax tree with si deleted.
+we further draw a distinction between left and right components of an outer syntax
+tree. de   ne the left outer syntax tree sl as the minimal subgraph of so containing all
+subtrees positioned to the left of si, and containing all ancestor vertices of si. the right
+outer syntax tree sr forms the remainder of the outer parse, and so s can be decomposed
+into three distinct trees: s = sl     sr     si. see    gure 4 for an illustration. note that it
+is possible that sr consists of multiple disconnected trees. in the description of our
+parser, we will frequently use the notation p(s) to refer to the joint id203 of all
+(a     )   s a       ), where    is
+
+the production rules in the syntax tree s; that is, p(s) = p((cid:84)
+
+the right-hand side of some production rule.
+
+16
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+5. id136
+let y (cid:44) {y1, . . . , yn} be a collection of training sentences, along with their corresponding
+syntax trees s (cid:44) {s1, . . . , sn} and semantic statement labels x (cid:44) {x1, . . . , xn}. given a
+new sentence ynew, the goal of parsing is to compute the id203 of its semantic
+statement xnew and syntax snew:
+
+p(xnew, snew|ynew, x, s, y)    
+
+p(xnew, snew, ynew|  )p(  |x, s, y)d  .
+
+(30)
+
+in this expression,    are the latent variables in the grammar. different applications
+will rely on this id203 in different ways. for example, we may be interested in
+the semantic parse that maximizes this id203. the above integral is intractable to
+compute exactly, so we use id115 (mcmc) to approximate it:
+
+(cid:90)
+
+(cid:88)
+
+   
+
+1
+
+nsamples
+
+          |x,s,y
+
+p(xnew, snew, ynew|     ),
+
+(31)
+
+where the sum is taken over samples from the posterior of the latent grammar variables
+   given the training data x, s, and y.1
+
+we make the assumption that the likelihood factorizes over the nonterminals. more
+
+precisely:
+
+p(ynew, snew|xnew,   ) =
+
+(cid:89)
+
+a   n
+
+p({a            snew}|xnew,   a),
+
+(32)
+
+where   a are the latent variables speci   c to the nonterminal a, and {a            snew} is
+the set of production rules in snew that have a as the left-hand side nonterminal. thus,
+we may factorize the joint likelihood as:
+
+p(xnew, snew, ynew|  ) = p(xnew)
+
+p ({a            snew}|xnew,   a) ,
+
+(33)
+
+(cid:89)
+
+a   n
+
+where the    rst product is over the nonterminals a     n in the grammar. note that
+the id203 p (a       |xnew,   a) is equivalent to the id203 of drawing the rule
+a        from selecta,xnew for nonterminal a and semantic statement xnew. plugging
+
+1 we also attempted a variational approach to id136, approximating the integral as
+
+eq[p(xnew, snew, ynew|  )], where q was selected to minimize the kl divergence to the posterior
+p(  |x, s, y). we experimented with a number of variational families, but we found that they were not
+suf   ciently expressive to accurately approximate the posterior for our purposes.
+
+17
+
+computational linguistics
+
+volume xx, number xx
+
+equation 33 into 30 and 31, we obtain:
+
+p(xnew, snew|ynew, x, s, y)
+
+(cid:90)
+(cid:89)
+(cid:89)
+
+a   n
+
+(cid:89)
+
+(cid:88)
+
+    p(xnew)
+
+p ({a            snew}|xnew,   a) p(  a|x, s, y)d  a,
+
+    p(xnew)
+
+|n|
+samples
+
+n
+
+a   n
+
+(a     )   snew
+
+a     a|x,s,y
+     
+
+p (a       |xnew,      
+
+a) ,
+
+(34)
+
+(35)
+
+where the second product iterates over the production rules that constitute the syntax
+snew. note that we applied the approximation as described in equation 28. the semantic
+prior p(xnew) plays a critically important role in our framework. it is through this prior
+that we can add dependence on background knowledge during parsing. although we
+present a setting in which training is supervised with both syntax trees and semantic
+labels, it is straightforward to apply our model in the setting where we have semantic
+labels but syntax information is missing. in such a setting, a gibbs step can be added
+where the parser is run on the input sentence with the    xed semantic statement, return-
+ing a distribution over syntax trees for each sentence.
+
+now, we divide the problem of id136 into two major components:
+
+   nd the k best semantic statements x     x that maximize the sum (cid:80) p(a    
+
+id136 over hdp paths: given a set of semantic statements x     x , incrementally
+  |x,   a) within equation 35. we observe that this quantity only depends on the
+hdp associated with nonterminal a. note that this is exactly the setting as de-
+scribed in section 3.1.1, and so we can directly apply algorithm 1 to implement
+this component.
+likely semantic and syntactic parses
+{xnew, snew} that maximize p(xnew, snew|ynew, x, s, y) for a given sentence ynew.
+we describe this component in greater detail in the next section. this component
+utilizes the previous component.
+
+parsing: ef   ciently compute the k most
+
+5.1 parsing
+
+we develop a top-down parsing algorithm that computes the k-best semantic/syntactic
+parses (xnew, snew) that maximize p(xnew, snew|ynew, x, s, y) for a given sentence ynew.
+we emphasize that this parser is largely independent of the choice of the distribution
+select. the algorithm searches over a space of items called rule states, where each
+rule state represents the parser   s position within a speci   c production rule of the
+grammar. complete rule states represent the parser   s position after completing parsing
+of a rule in the grammar. the algorithm also works with nonterminal structures that
+represent a completed parse of a nonterminal within the grammar. the parser keeps
+a priority queue of unvisited rule states called the agenda. a data structure called the
+chart keeps intermediate results on contiguous portions of the sentence. a prede   ned
+set of operations are available to the algorithm. at every iteration of the main loop, the
+algorithm pops the rule state with the highest weight from the agenda and adds it to the
+chart, applying any available operation on this state using any intermediate structures
+in the chart. these operations may add additional rule states to the agenda, with priority
+given by an upper bound on log p(xnew, snew|ynew, x, s, y). the overall structure of our
+parser is reminiscent of the id117 algorithm, which is the classical example of
+
+18
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+a top-down parsing algorithm for id18s (earley 1970). we will draw similarities in our
+description below. the parsing procedure can also be interpreted as an a    search over a
+large hypergraph.
+
+each rule state r is characterized by the following    elds:
+(cid:46) rule is the production rule currently being parsed.
+(cid:46) start is the (inclusive) sentence position marking the beginning of the produc-
+
+tion rule.
+
+(cid:46) end is the (exclusive) sentence position marking the end of the production rule.
+(cid:46) i is the current position in the sentence.
+(cid:46) k is the current position in the production rule. dotted rule notation is a conve-
+nient way to represent the variables rule and k. for example, if the parser is
+currently examining the rule a     b1 . . . bn at rule position k (omitting seman-
+tic transformation operations), we may write this as a     b1 . . . bk     bk+1 . . . bn
+where the dot denotes the current position of the parser.
+
+(cid:46) semantics is a set of semantic statements.
+(cid:46) syntax is a partially completed syntax tree. as an example, if the parser is
+currently examining rule a     b1 . . . bn at position k, the tree will have a root node
+labeled a with k child subtrees each labeled b1 through bk, respectively.
+
+(cid:46) log_id203 is the inner log id203 of the rule up to its current posi-
+
+tion.
+
+every complete rule state r contains the above    elds in addition to an iterator    eld
+which keeps intermediate state for the id136 method described in section 3.1.1 (see
+description of the iteration operation below for details on how this is used).
+every nonterminal structure n contains the    elds:
+
+(cid:46) start, end, semantics, syntax, and log_id203 are identical to the
+
+respective    elds in the rule states.
+
+(cid:46) nonterminal is the nonterminal currently being parsed.
+
+the following are the available operations or deductions that the parser can perform
+while processing rule states:
+expansion takes an incomplete rule state r as input. for notational convenience, let
+k = r.k and r.rule be written as a     b1 . . . bn. this operation examines the
+next right-hand symbol bk. there are two possible cases:
+if bk is a nonterminal: for every production rule in the grammar bk        whose
+left-hand symbol is bk, for every j     {r.i, . . . , r.end}, create a new rule state r   
+only if bk was not previously expanded at this given start and end position:
+r   .rule = bk       ,
+r   .end = j,
+r   .i = r.i,
+r   .log_id203 = 0.
+the semantic statement    eld of the new state is set to be the set of all semantic
+statements for the expanded nonterminal: r   .semantics = xbk. the syntax tree
+of the new rule state r   .syntax is initialized as a single root node. the new rule
+state is added to the agenda (we address speci   cs on prioritization later). this
+operation is analogous to the    prediction    step in id117.
+
+r   .start = r.i,
+r   .k = 0,
+
+19
+
+computational linguistics
+
+volume xx, number xx
+
+if bk is a terminal: read the terminal bk in the sentence starting at position r.i,
+then create a new rule state r    where:
+r   .rule = r.rule,
+r   .start = r.start,
+r   .i = r.i + |bk|,
+r   .k = r.k + 1,
+r   .log_id203 = r.log_id203,
+r   .semantics = r.semantics.
+the new syntax tree is identical to the old syntax tree with an added child node
+corresponding to this terminal symbol bk. the new rule state is then added to the
+agenda. this operation is analogous to the    scanning    step in id117.
+
+r   .end = r.end,
+
+r   .end = r.end,
+
+r   .start = r.start,
+r   .k = r.k + 1.
+
+completion takes as input an incomplete rule state r, and a nonterminal structure n
+where n.nonterminal matches the next right-hand nonterminal in r.rule, and
+where the starting position of the nonterminal structure n.start matches the
+current sentence position of the rule state r.i. for notational convenience, let
+r.rule be written as a     b1:f1 . . . bn:fn. the operation constructs a new rule
+state r   :
+r   .rule = r.rule,
+r   .i = n.end,
+to compute the semantic statements of the new rule state,    rst invert the se-
+mantic statements of the nonterminal structure n with the semantic transforma-
+tion operation f   1
+k , and then intersect the resulting set with the semantic state-
+ments of the incomplete rule state: r   .semantics = r.semantics     {f   1
+k (x) :
+x     n.semantics}. the syntax tree of the new rule state r   .syntax is the syntax
+tree of the old incomplete rule state r.syntax with the added subtree of the non-
+terminal structure n.syntax. the log id203 of the new rule state is the sum
+of that of both input states: r   .log_id203 = r.log_id203 +
+n.log_id203. the new rule state r    is then added to the agenda. this
+operation is analogous to the    completion    step in id117.
+
+duction rule r.rule = a       , we need to compute(cid:80)
+
+iteration takes as input a complete rule state r. having completed parsing the pro-
+a) as in
+equation 35. to do so, we determine hdp paths in order from highest to lowest
+posterior predictive id203 using the hdp id136 approach described in
+section 3.1.1. we store our current position in the list as r.iterator. this oper-
+ation increments the iterator and adds the rule state back into the agenda (if the
+iterator has a successive element). next, this operation creates a new nonterminal
+structure n    where:
+n   .nonterminal = a,
+n   .end = r.end,
+recall that the paths in an hdp induce a partition of the set of semantic statements
+xa, and so the path returned by the iterator corresponds to a subset of seman-
+tic statements x     xa. the semantic statements of the nonterminal structure is
+computed as the intersection of this subset with semantic statements of the rule
+state: n   .semantics = x     r.semantics. the log id203 of the new non-
+terminal structure n   .log_id203 is the sum of the log id203 of the
+path returned by the iterator and r.log_id203. the new nonterminal
+structure is added to the chart.
+
+n   .start = r.start,
+n   .syntax = r.syntax.
+
+p(a       |xnew,      
+
+     
+
+a
+
+the algorithm is started by executing the expansion operation on all production rules
+of the form s        where s is the root nonterminal, starting at position 0 in the sen-
+tence, with semantics initialized as the set of all possible semantic statements xs.
+
+20
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+(cid:32)
+
+(cid:33)
+
+n(cid:88)
+
+k=1
+
+to describe the prioritization of agenda items, recall that any complete syntax tree
+s can be decomposed into inner, left outer, and right outer portions: s = sl     sr    
+si. observe that the id203 of the full parse (equation 35) can be written as a
+product of four terms: (1) the semantic prior p(xnew), (2) the left outer id203
+p(sl|xnew, x, s, y), (3) the right outer id203 p(sr|xnew, x, s, y), and (4) the inner
+id203 p(si|xnew, x, s, y).
+
+items in the agenda are sorted by an upper bound on the log id203 of the entire
+parse. in order to compute this, we rely on an upper bound on the inner id203 that
+only considers the syntactic structure:
+
+ia,i,j (cid:44) max
+a   b1...bn
+
+log p(a     b1 . . . bn|x(cid:48), x, s, y) + max
+
+m2   ...   mn
+
+max
+
+x(cid:48)
+
+ibk,mk,mk+1
+
+,
+
+(36)
+where m1 = i and mn+1 = j. in the sum, if bk is a terminal, then ibk,mk,mk+1 = 0 if
+mk+1     mk = |bk| is the correct length of the terminal; otherwise ibk,mk,mk+1 =       .
+the term maxx(cid:48) log p(a     b1 . . . bn|x(cid:48), x, s, y) can be computed exactly using algorithm
+1, but a tight upper bound can be computed more quickly by terminating algorithm 1
+early and using the priority value given by equation 25 (we    nd that for preterminals,
+even using the priority computed at the root provides a very good estimate). the value
+of i can be computed ef   ciently using existing syntactic (e.g., pid18) parsers in time
+o(n3).
+we also compute an upper bound on the log id203 of the outer portion of the
+syntax tree and the semantic prior. to be more precise, let p(a, i, j) be the set of all
+parses (x, sl, sr, si ) such that s = sl     sr     si is the syntax and si is the inner syntax
+tree with root a that begins at sentence position i (inclusive) and ends at j (exclusive).
+then, a bound on the outer id203 is:
+
+oa,i,j (cid:44)
+
+max
+
+(x,sl,sr,si )   p(a,i,j)
+
+log p(x) + log p(sl|x, x, s, y) +
+
+ia(cid:48),i(cid:48),j(cid:48).
+
+(37)
+
+(a(cid:48),i(cid:48),j(cid:48))   r(sr)
+
+where r(sr) is the set of root vertices of the trees contained in sr, and p(x) is the prior
+id203 of the semantic statement x     xs. note that the third term is an upper bound
+on the right outer id203 p(sr|x, s, x, y).
+
+using these bounds, we can compute an upper bound on the overall log id203
+
+of the parse for any state. for a rule state r, the search priority is given by:
+
+(cid:88)
+
+r.log_id203 +
+
+max
+
+mk+1   ...   mn
+
+ibl,ml,ml+1
+
++ min{log p(r.semantics),oa,r.start,r.end} ,
+
+(38)
+where a     b1 . . . bk is the currently-considered rule r.rule, mk = r.i, and mn+1 =
+r.end. note the    rst two terms constitute an upper bound on the inner id203
+of the nonterminal a, and the third term is an upper bound on the outer id203
+and semantic prior. the second term can be computed ef   ciently using dynamic pro-
+gramming. we further tighten this by adding a term that bounds the log id203
+of the rule log p(a     b1 . . . bk|x(cid:48), x, s, y). the items in the agenda are prioritized by
+this quantity. as long as the log_id203    eld remains exact, as it does in our
+approach, the overall search will yield exact outputs. the use of a syntactic parser
+
+n(cid:88)
+
+l=k
+
+21
+
+computational linguistics
+
+volume xx, number xx
+
+to compute a tigher bound on the outer id203 in an a    parser is similar to the
+approach of klein and manning (2003b).
+
+naive computation of equation 37 is highly infeasible, as it would require enumerat-
+ing all possible outer parses. however, we can rely on the fact that our search algorithm
+is monotonic: the highest score in the agenda never increases as the algorithm progresses.
+we prove monotonicity by induction on the number of iterations. for a given iteration i,
+by the inductive hypothesis, the parser has visited all reachable rule states with priority
+strictly larger than the priority of the current rule state. we will show that all new rule
+states added to the priority queue at iteration i must have priority at most equal to the
+priority of the current rule state. consider each operation:
+in the expansion operation, let i = r.i and k = r.k. if the next right-hand side symbol
+bk is a terminal, the new agenda item will have score at most that of the old agenda
+item, since r   .log_id203 = r.log_id203 and the sum of in-
+ner id203 bounds in equation 38 cannot increase. if the bk is a nonterminal,
+then we claim that any rule state created by this operation must have priority at
+most the priority of the old agenda item. suppose to the contrary that there exists
+a j     {i, . . . , r.end}, a rule bk     c1 . . . cu, and m(cid:48)
+
+u such that:
+
+min{ log p(xbk ),obk,i,j} +
+
+icl,m(cid:48)
+
+l,m(cid:48)
+
+l+1
+
+l=1
+
+> r.log_id203 +
+
+u(cid:88)
+
+2     . . .     m(cid:48)
+n(cid:88)
+
+max
+
+mk+1   ...   mn
+
+l=k
+
+ibl,ml,ml+1
+
++ min{log p(r.semantics),oa,r.start,r.end} ,
+
+where mk = m(cid:48)
+1 = i, m(cid:48)
+u = j, and mn+1 = r.end. note that the left-hand side is
+bounded above by ibk,i,j + obk,i,j which implies, by the de   nition of obk,i,j, that
+there exists a parse (x   , s   
+l, s   
+log p(x   ) + log p(s   
+
+r, s   
+l|x   , x, s, y) + ibk,i,j +
+
+ia(cid:48),i(cid:48),j(cid:48)
+
+(cid:88)
+i )     p(bk, i, j) such that:
+n(cid:88)
+
+(a(cid:48),i(cid:48),j(cid:48))   r(s   
+r)
+
+> r.log_id203 +
+
+ibl,ml,ml+1
+
+max
+
+mk+2   ...   mn
+
+l=k
+
++ min{log p(r.semantics),oa,r.start,r.end} ,
+
+i. in addition, let s   
+
+where mk+1 = j. let c     d1 . . . dv be the production rule in the syntax tree s   
+containing s   
+i be the sibling subtree of si rooted at di. this
+parse implies the existence of a rule state r    where r   .rule = (c     d1 . . . dv),
+r   .start and r   .end are the start and end positions of the vertex corresponding
+i|x   , x, s, y). the search
+
+to c, r   .i = r.i, r   .log_id203 =(cid:80)r   .k
+v(cid:88)
+r   .k   1(cid:88)
+
+priority of this rule state would be:
+
+i=1 log p(s   
+
+log p(s   
+
+i|x   , x, s, y) +
+
+idl,ml,ml+1
+
+max
+
+mk+1   ...   mv
+
+l=r   .k
+
++ min{log p(r   .semantics),oc,r   .start,r   .end}
+
+i=1
+
+22
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+we claim that this search priority must be strictly greater than that of the old
+agenda item r. by the de   nition of o:
+
+(cid:88)
+oc,r   .start,r   .end     log p(x   ) + log p(s   
+
++
+
+l \ {s   
+
+1, . . . , s   
+
+r   .k   1}|x   , x, s, y)
+
+(a(cid:48),i(cid:48),j(cid:48))   r(s   
+
+r\{s   
+
+r   .k+1,...,s   
+
+v})
+
+combined with the fact that log p(x   )     log p(x) for any x     xc, observe that the
+search priority of r    must be at least:
+
+log p(x   ) + log p(s   
+
+l|x   , x, s, y) + ibk,i,j +
+
+ia(cid:48),i(cid:48),j(cid:48),
+
+ia(cid:48),i(cid:48),j(cid:48) ,
+
+(cid:88)
+
+(a(cid:48),i(cid:48),j(cid:48))   r(s   
+r)
+
+which, in turn, is strictly greater than the priority of r. thus, the priority of
+r    is strictly larger than that of r, which would imply that the nonterminal bk
+was previously expanded with start position i and end position j, which is a
+contradiction.
+
+in the completion operation,
+
+the new rule state
+r   .log_id203 is at most the sum of the inner log id203 of the old
+rule state r.log_id203 and the bound maxj ibk,i,j. thus, the priority of
+the new rule state is bounded by the priority of the old rule state.
+
+the inner log id203 of
+
+in the iteration operation, monotonicity is guaranteed since the iterator structure re-
+
+turns items in order of non-increasing id203.
+
+therefore, the parser is monotonic. as a consequence, whenever the algorithm    rst
+expands a nonterminal bk from a rule a     b1 . . . bn, at start position i and end position
+j in the sentence, we have found the left outer parse that maximizes equation 37:
+
+obr.k,i,j = r.log_id203 +
+
+max
+
+mk+2   ...   mn
+
+ibl,ml,ml+1
+
++ min{log p(r.semantics),oa,r.start,r.end} ,
+
+thereby computing obr.k,i,j at no additional cost. similarly, when the parser    rst con-
+structs a nonterminal structure for the symbol a at start position i and end position j,
+monotonicity guarantees that no other nonterminal structure at (a, i, j) will have higher
+id203. we exploit this by updating the value of ia,i,j as the algorithm progresses,
+incorporating more semantic information in the values of i.
+
+23
+
+n(cid:88)
+
+l=k+1
+
+computational linguistics
+
+volume xx, number xx
+
+figure 5
+a step-by-step example of the parser running on the sentence    chopin plays    using the
+grammar very similar to the one shown in    gure 2. the top-left table lists the semantic
+statements sorted by their log id203 of drawing the observation    chopin    from the hdp
+associated with the nonterminal n. the top-center and top-right tables are de   ned similarly.
+
+n        chopin   
+
+log prob.
+
+musician:chopin
+sport:swimming
+sport:tennis
+instrument:piano
+
+*
+
+-2
+-8
+-8
+-8
+-8
+
+the symbol * is a wildcard, re-
+ferring to any entity in the on-
+tology excluding those listed.
+in this example, we use the
+
+grammar in    gure 2.
+
+iteration
+
+operation
+
+v        plays   
+
+log prob.
+
+vp     v
+
+log prob.
+
+athlete_plays_sport(*, *)
+musician_plays_inst(*, *)
+musician_plays_inst(*,
+
+instrument:piano)
+
+athlete_plays_sport(*,
+
+sport:tennis)
+
+athlete_plays_sport(*,
+
+sport:swimming)
+
+-2
+-2
+-2
+
+-2
+
+-8
+
+athlete_plays_sport(*, *)
+musician_plays_inst(*, *)
+athlete_plays_sport(*,
+
+sport:swimming)
+musician_plays_inst(*,
+
+instrument:piano)
+
+athlete_plays_sport(*,
+
+sport:tennis)
+
+athlete_plays_sport(*,
+
+instrument:piano)
+
+...
+
+instrument:piano)
+
+athlete_plays_sport(*,
+
+-8
+...
+new states created
+
+...
+
+-4
+-4
+-4
+
+-5
+
+-5
+
+-8
+...
+
+expand s at start position
+0, end position 12
+pop the s         n vp state
+and expand n at start po-
+sition 0 and end positions
+0, . . . , 12
+
+iterate the complete rule
+state n        chopin       
+pop the n nonterminal
+state and complete any
+waiting rule states
+pop the s     n     vp state
+and expand vp at start po-
+sition 7 and end position
+12
+pop the vp         v state
+and expand v
+
+iterate the complete rule
+state v        plays       
+pop a v nonterminal state
+and complete any waiting
+rule states
+
+iterate the complete rule
+state vp     v    
+
+pop the vp nonterminal
+state and complete any
+waiting rule states
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+24
+
+s         n vp
+i: 0, end: 12
+log_prob: 0
+
+n        chopin       
+
+i: 6 , end: 6
+log_prob: 0
+
+n
+
+start: 0, end: 6
+log_prob: -2
+musician:chopin
+s     n     vp
+i: 7, end: 12
+log_prob: -2
+
+* (musician:chopin, *)
+
+vp         v
+i: 7, end: 12
+log_prob: 0
+
+vp         v n
+i: 7, end: 12
+log_prob: 0
+
+vp         v
+i: 7, end: 11
+log_prob: 0
+
+. . .
+
+v        plays       
+i: 12, end: 12
+log_prob: 0
+
+. . .
+
+. . .
+
+v
+
+start: 7, end: 12
+
+log_prob: -2
+
+v
+
+start: 7, end: 12
+
+log_prob: -2
+
+athlete_plays_sport(*, *)
+
+musician_plays_inst(*, *)
+
+vp     v    
+i: 12, end: 12
+log_prob: -2
+
+musician_plays_inst(*, *)
+
+vp     v     n
+i: 12, end: 12
+log_prob: -2
+
+musician_plays_inst(*, *)
+
+vp
+
+start: 7, end: 12
+
+log_prob: -6
+
+musician_plays_inst(*, *)
+
+s     n vp    
+i: 12, end: 12
+log_prob: -8
+
+musician_plays_inst(
+musician:chopin, *)
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+simple grammar
+
+verb morphology grammar
+
+s
+
+s
+
+n
+
+vp
+
+n
+
+vp
+
+federer
+
+v
+
+n
+
+federer
+
+v
+
+n
+
+plays
+
+tennis
+
+vroot
+
+vaf   x
+
+tennis
+
+play
+
+s
+
+athlete_plays_sport(
+athlete:roger_federer,
+sport:tennis)
+
+athlete_plays_sport(
+athlete:roger_federer,
+sport:tennis, time:present)
+
+figure 6
+an example of a (simpi   ed) labeled data instance in our experiments. for brevity, we omit
+semantic transformation operations, syntax elements such as word boundaries, irregular verb
+forms, etc.
+
+6. results
+
+the experiments in this section evaluate our parser   s ability to parse semantic state-
+ments from short sentences, consisting of a subject noun, a simple verb phrase, and an
+object noun. we also evaluate the ability to incorporate background knowledge during
+parsing, through the semantic prior. to do so, we used the ontology and knowledge
+base of the never-ending language learning system (nell) (mitchell et al. 2015). we
+use a snapshot of nell at iteration 905 containing 1,786,741 concepts, 623 relation
+predicates, and 2,212,187 beliefs (of which there are 131,365 relation instances). the
+relations in nell are typed, where the domain and range of each relation is a category in
+the ontology. we compare our parser to a state-of-the-art id35 parser (krishnamurthy
+and mitchell 2014) trained and tested on the same data.
+
+6.1 id36
+
+we    rst evaluate our parser on a id36 task on a dataset of subject-verb-
+object (svo) sentences. we created this dataset by    ltering and labeling sentences from a
+corpus of svo triples (talukdar, wijaya, and mitchell 2012) extracted from dependency
+parses of the clueweb09 dataset (callan et al. 2009). nell provides a can_refer_to
+relation, mapping noun phrases to concepts in the nell ontology. we created our
+own mapping between verbs (or simple verb phrases) and 223 relations in the nell
+ontology. using these two mappings, we can identify whether an svo triple can refer
+to a belief in the nell knowledge base. we only accepted sentences that referred
+to high-con   dence beliefs in nell (for which nell gives a con   dence score of at
+least 0.999). the accepted sentences were labeled with the referred beliefs. for this
+experiment, we restrict all verbs to the present tense. this yielded a    nal dataset of
+2,546 svo three-word sentences, along with their corresponding semantic statement
+from the nell kb, spanning over 74 relations and 1,913 concepts. we randomly split
+the data into a training set of 2,025 sentences and a test set of 521 sentences. in the task,
+each parser makes predictions on every test sentence, which we mark as correct if the
+
+25
+
+computational linguistics
+
+volume xx, number xx
+
+output semantic statement exactly matches the label. the main dif   culty in this task is
+to learn the mapping between relations and the sentence text. for example, the dataset
+contains verbs such as    makes    which can refer to at least    ve nell relations, including
+companyeconomicsector, directordirectedmovie and musicartistgenre. the semantic types of
+the subject and object concepts are very informative in resolving ambiguity, and prior
+knowledge in the form of a belief system can further aid parsing. the precision-recall
+curves in    gure 7 were generated by sorting the outputs of our parser by posterior
+id203, which was computed using the top k = 10000 output parses for each test
+sentence (see section 6.4 for experiments with varying k).
+
+we call a semantic statement    type-correct    if the subject and object concepts agree
+with the domain and range of the instantiated relation, under the nell ontology. we
+experimented with three prior settings for our parser: (1) uniform prior, (2) a prior
+where all type-correct semantic statements have a prior id203 that is larger by 4
+units (in terms of log id203) than type-incorrect statements, and (3) a prior where
+all semantic statements that correspond to true beliefs in the kb have a prior id203
+that is 8 larger than type-incorrect statements and all type-correct correct statements
+have id203 4 larger than type-incorrect statements.
+
+in the simple id36 task, we    nd that id35 performs comparably to
+our parser under a uniform and type-correct prior. in fact, the parsers make the almost
+identical predictions on the test sentences. the differences in the precision-recall curves
+arise due to the differences in the scoring of predictions. the primary source of incorrect
+predictions is when a noun in the test set refers to a concept in the ontology but does
+not refer to the same concept in the training set. for example, in the sentence    wilson
+plays guitar,    both parsers predict that    wilson    refers to the politician greg wilson.
+the similarity in the performance of our parser with the uniform prior and the type-
+correct prior suggests that the parser learns    type-correctness    from the training data.
+this is due to the fact that, in our grammar, the distribution of the verb depends
+jointly on the types of both arguments. with the kb prior, our parser outperforms id35,
+demonstrating that our parser effectively incorporates background knowledge via the
+semantic prior to improve precision and recall.
+
+6.2 modeling word morphology
+
+in the second experiment, we demonstrate our parser   s ability to extract semantic
+information from the morphology of individual verbs, by operating over characters
+instead of preprocessed tokens. we generated a new labeled svo dataset using a
+process similar to that in the    rst experiment. in this experiment, we did not restrict the
+verbs to the present tense. this dataset contains 3,197 sentences spanning 56 relations
+and 2,166 concepts. the data was randomly split into a set of 2,538 training sentences
+and 659 test sentences. we added a simple temporal model to the semantic formalism:
+all sentences in any past tense refer to semantic statements that were true in the past;
+all sentences in any present tense refer to presently true statements; and sentences
+in any future tense refer to statements that will be true in the future. thus the task
+becomes one of temporally-scoped id36. a simple verb morphology model
+was incorporated into the grammar. each verb is modeled as a concatenated root and
+af   x. in the grammar, the random selection of a production rule captures the selection
+of the verb tense. the af   x is selected deterministically according to the desired tense
+and the grammatical person of the subject. the posterior id203 of each parse was
+estimated using the top k = 10000 parses for each test example. results are shown in
+   gure 8.
+
+26
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+figure 7
+precision-recall curves for the standard id36 task. we compare our approach with
+three different settings of the prior (yellow, orange, red) and id35 (blue). the uniform prior
+places equal id203 mass on all semantic statements. the    type-correct    prior places higher
+mass (+4 in log id203) on semantic statements with subject and object types that agree with
+the domain and range of the relation predicate. the    knowledge base prior    is similar to the
+type-correct prior, except that it additionally places higher id203 mass on semantic
+statements that correspond to true beliefs in the nell knowledge base (an additional +4 in log
+id203).
+
+table 1
+a sample of two randomly selected parses from the simple id36 task, using a
+uniform prior and k = 107. for each of the two sample sentences, the top few parse outputs are
+displayed, along with their log probabilities. recall that our parser operates over sets of semantic
+statements, so some of the outputs contain wildcards. it is evident from the output on the right
+that the phrase    kidneys    did not appear in the training set, and so the highest-ranked parse is
+ambiguous.
+
+   mickey rourke
+stars in wrestler   
+
+actor_starred_in_movie(
+actor:mickey_rourke,
+movie:wrestler)
+
+actor_starred_in_movie(
+
+except
+
+actor
+
+any
+actor:miley_cyrus,
+actor:mike_myers, etc.,
+movie:wrestler)
+
+actor_starred_in_movie(
+actor:mickey_rourke,
+any
+movie:austin_powers,
+movie:cold_mountain,
+etc.)
+
+movie
+
+except
+
+actor_starred_in_movie(
+
+actor:anne_hathaway,
+movie:wrestler)
+
+...
+
+log prob.
+
+   kidneys contain
+blood vessels   
+
+-10.50
+
+-15.11
+
+-15.11
+
+-15.11
+
+...
+
+bodypart
+
+bodypart_contains_bodypart(
+except
+braintis-
+
+any
+artery:hand,
+sue:brains, etc.,
+artery:blood_vessels)
+
+bodypart_contains_bodypart(
+
+bodypart:blood,
+artery:blood_vessels)
+
+bodypart_contains_bodypart(
+
+bodypart:legs,
+artery:blood_vessels)
+
+bodypart_contains_bodypart(
+
+braintissue:parts,
+artery:blood_vessels)
+
+bodypart_contains_bodypart(
+
+bodypart:nerves001,
+artery:blood_vessels)
+
+...
+
+log prob.
+
+-15.11
+
+-15.11
+
+-15.11
+
+-15.11
+
+-15.11
+
+...
+
+27
+
+0.00.20.40.60.81.0recall0.800.850.900.951.00precisionsimple id36 taskid35uniform priortype-correct priorknowledge base priorcomputational linguistics
+
+volume xx, number xx
+
+figure 8
+precision-recall curves for the temporally-scoped id36 task. we compare our
+approach with three different settings of the prior (yellow, orange, red) and id35 (blue). the
+solid lines denote our parser   s performance when using a grammar that models the morphology
+of verbs, whereas the dashed lines are produced when our parser is trained with a grammar that
+does not model verb morphology. the uniform prior places equal id203 mass on all
+semantic statements. the    type-correct    prior places higher mass (+4 in log id203) on
+semantic statements with subject and object types that agree with the domain and range of the
+relation predicate. the    knowledge base prior    is similar to the type-correct prior, except that it
+additionally places higher id203 mass on semantic statements that correspond to true
+beliefs in the nell knowledge base (additional +4 in log id203).
+
+in this temporally-scoped id36 task, our parser demonstrates better
+generalization over verb forms. our parser performs better when trained on a grammar
+that models verb morphology (solid lines) than when trained on a simpler grammar
+that does not consider the morphology of verbs (dashed lines). the parser is able to ac-
+complish this due to its ability to model the semantics in the morphology of individual
+words. as in the    rst experiment, the performance of our parser improves when we use
+the knowledge base prior, supporting the observation that our parser can effectively
+leverage background knowledge to improve its accuracy. there is, again, no difference
+in performance when using the uniform prior vs. the type-correct prior.
+
+6.3 out-of-vocabulary behavior
+
+recall that our parser operates over sets of semantic statements, as opposed to indi-
+vidual statements. thus, it is possible that when parsing completes, the output is a
+non-singleton set of semantic statements that all share the highest id203 parse.
+in our    rst two experiments, we counted these outputs as a    non-parse    to more fairly
+compare with id35. however, we can evaluate the quality of these ambiguous outputs.
+in    gure 9, we again perform the simple id36 task with a modi   cation: we
+measure the correctness of our parser   s output by whether the ground truth semantic
+statement is contained within the set of semantic statements that share the highest prob-
+ability parse. id35 does not produce output on sentences that contain tokens which did
+not appear in the training data. in a sense, this evaluation measures out-of-vocabulary
+performance. although precision is not as high as the in-vocabulary test, recall is much
+
+28
+
+0.00.20.40.60.81.0recall0.880.900.920.940.960.981.00precisionverb morphology id36 taskuniform priortype-correct priorknowledge base priorid35uniform priortype-correct priorknowledge base priorwith simple grammarwith verb morph. grammarsaparov and mitchell
+
+a probabilistic generative grammar for id29
+
+figure 9
+(top) precision and recall for the simple id36 task, including unambiguous
+outputs, and (bottom) on the subset of sentences for which id35 did not provide output. we
+compare our approach with three different settings of the prior (yellow, orange, red) and id35
+(blue). the uniform prior places equal id203 mass on all semantic statements. the
+   type-correct    prior places higher mass (+4 in log id203) on semantic statements with
+subject and object types that agree with the domain and range of the relation predicate. the
+   knowledge base prior    is similar to the type-correct prior, except that it additionally places
+higher id203 mass on semantic statements that correspond to true beliefs in the nell
+knowledge base (additional +4 in log id203).
+
+improved. the knowledge base prior again results in improved performance over the
+less informative priors.
+
+6.4 effect of changing the parameter k
+
+in our parser, the search algorithm does not terminate until it has found the k-best
+semantic parses. this is useful for evaluating the con   dence of the parser in its output,
+and for estimating the posterior id203 of each parse. we examine the behavior of
+the parser as a function of k in    gure 10. the timing results demonstrate that the parser
+can scale to large knowledge bases while maintaining ef   ciency during parsing.
+
+29
+
+0.00.20.40.60.81.0recall0.800.850.900.951.00precisionsimple id36 task (with ambiguous output)id35uniform priortype-correct priorknowledge base prior0.00.20.40.60.81.0recall0.00.20.40.60.81.0precisionuniform priortype-correct priorknowledge base priorcomputational linguistics
+
+volume xx, number xx
+
+figure 10
+area under the precision-recall curve and average parse time versus k, for the simple relation
+extraction task and a uniform prior. the dark green curve measures the area under the
+precision-recall curve without considering ambiguous outputs (as in    gure 7), whereas the light
+green curve measures the area under the precision-recall curve taking into account the
+ambiguous outputs (as in the top plot in    gure 9)
+
+recall that, in order to produce the precision-recall curves for our parser   s output,
+we sort the outputs by their con   dence scores (estimates of the posterior id203).
+in the    gure, the area under the precision-recall curve (auc) converges quickly at fairly
+small values of k, indicating that the relative ordering of the parse outputs converges
+quickly. we found this behavior to be consistent for other choices of prior distributions
+and for the more complex temporally-scoped id36 task. for values of k
+smaller than     106, the parser provides outputs very quickly. this is due to the fact that,
+as the parser performs its search, it can quickly    nd a set of semantic statements of size
+roughly 106 (e.g., when parsing    federer plays golf   , it will quickly    nd an output that
+looks like athlete_plays_sport(athlete:roger_federer,*) where * is a wildcard that denotes
+any concept in the ontology). the parser will require additional time to search beyond
+this initial ambiguous output. note that this threshold value of k is identical to the
+number of concepts in the ontology: 1,786,741. the second threshold is likely related
+to the product of the number of concepts and the number of relations in the ontology:
+623    1786741     1.11    109.
+
+6.5 out-of-knowledge base id36
+
+in all earlier experiments, we used a dataset that only contained sentences that refer to
+beliefs in the nell knowledge base. in order to inspect the performance of the parser on
+sentences that do not refer to nell beliefs, we create a new dataset. we again start with
+the svo sentence corpus and modify the    ltering process: we only accept sentences that
+(1) contain noun phrases that also exist in the    rst dataset (to ensure the parsers at least
+have a chance to unambiguously understand the sentences), (2) contain verb phrases
+that exist in the hand-constructed verb-relation map we used to create the    rst dataset,
+(3) cannot refer to any nell belief, according to the can_refer_to instances and
+the verb-relation map. more precisely, for every sentence, the can_refer_to relation
+
+30
+
+10010110210310410510610710810910101011k0.00.20.40.60.81.0areaaucauc (with ambiguous output)average parse time05001000150020002500millisecondsbehavior vs. ksaparov and mitchell
+
+a probabilistic generative grammar for id29
+
+table 2
+precision and recall of the parsers evaluated on the out-of-knowledge base dataset. the uniform
+prior places equal id203 mass on all semantic statements. the    type-correct    prior places
+higher mass (+4 in log id203) on semantic statements with subject and object types that
+agree with the domain and range of the relation predicate. the    knowledge base prior    is
+similar to the type-correct prior, except that it additionally places higher id203 mass on
+semantic statements that correspond to true beliefs in the nell knowledge base (additional +4
+in log id203).
+simple id36
+id35
+our parser (no prior)
+our parser (type-correct prior)
+our parser (kb prior)
+
+precision recall
+0.44
+0.58
+0.46
+0.45
+
+f1
+0.52
+0.66
+0.60
+0.60
+
+0.65
+0.78
+0.84
+0.90
+
+temporally-scoped relation extr.
+id35
+our parser (no prior)
+our parser (type-correct prior)
+our parser (kb prior)
+
+precision recall
+0.63
+0.68
+0.59
+0.54
+
+0.78
+0.81
+0.84
+0.84
+
+f1
+0.69
+0.73
+0.69
+0.65
+
+maps each noun phrase to a set of possible referent concepts; the relation-verb map
+provides a set of possible referent relations; and so their cartesian product provides a
+set of possible referent semantic statements. we discard those sentences where the set of
+referent semantic statements contains a nell belief. we sorted the resulting sentence
+list by frequency and labeled them by hand. of the 1365 most frequent sentences in
+the    ltered set, we labeled 100, since some sentences referred to concepts outside of the
+ontology or their verbs referred to unrecognized relations (i.e., not in the verb-relation
+map). this dataset is referred to as the out-of-knowledge base dataset, since the sentences
+refer to beliefs outside the knowledge base. we selected 20 sentences from this dataset as
+training sentences. we trained all parsers on these sentences in addition to the entirety
+of the    rst dataset. we tested the parsers on the remaining 80 sentences.
+
+table 2 displays the performance results of our parser and id35 on this out-of-
+knowledge base dataset, in both the simple id36 task as well as the
+temporally-scoped task. our parser is trained with the simple grammar in the simple
+id36 task, and with the grammar that models verb morphology in the
+temporally-scoped id36 task. as expected, the more informative priors
+do not uniformly improve parsing performance in this evaluation. interestingly, the
+parser behaves more conservatively when incorporating the stronger priors, outputting
+a smaller set of the most con   dent responses, which results in higher precision and
+reduced recall. our parser is indeed capable of extracting the correct semantic state-
+ments from sentences that refer to beliefs outside the knowledge base, and the use of
+the informative priors does not obviously hurt performance.
+
+7. discussion
+
+in this article, we presented a generative model of sentences for id29, ex-
+tending the id18 formalism to couple semantics with syntax. in the generative process,
+a semantic statement is    rst generated, for example, from a knowledge base. next,
+
+31
+
+computational linguistics
+
+volume xx, number xx
+
+the tree is constructed top-down using a recursive procedure: production rules are
+selected randomly, possibly depending on features of the semantic statement. semantic
+transformation operations specify how to decompose the semantic statement in order
+to continue recursion. we presented a particular construction where production rules
+are selected using an hdp. we applied mcmc to perform id136 in this model, and
+constructed a chart-driven agenda parser. our application of the hdp is distinct from
+previous uses, since in our construction, the path indicator for each observation is not
+assumed to be    xed. we evaluate our parser on a dataset of svo sentences, labeled
+with semantic statements from nell. the results demonstrate that our parser can
+incorporate prior knowledge from a knowledge base via the semantic prior. with an
+informative prior, our parser outperforms a state-of-the-art id35 parser. in addition, we
+demonstrate that our model can be used to jointly model the morphology of individual
+verbs, leading to improved generalization over verbs in a temporally-scoped relation
+extraction task. the results indicate that our framework can scale to knowledge bases,
+such as nell, with millions of beliefs, and can be extended to more complex grammars
+and richer semantic formalisms without sacri   cing exact id136 and the principled
+nature of the model.
+
+an interesting parallel can be drawn between our id136 problem and the prob-
+lem of    nding shortest paths in hypergraphs. similar parallels have been drawn in
+other parsers (klein and manning 2001, 2003a; pauls and klein 2009; pauls, klein, and
+quirk 2010). since our approach is top-down, the speci   cation of our hypergraph is
+more involved. imagine a hypergraph containing a vertex for every semantic statement
+x     x , a vertex for every intermediate rule state a     b1 . . . bk     bk+1 . . . bn, and two
+vertices for every nonterminal (one indicating that parsing is incomplete and one for
+completed parses). add a hyperedge to this graph for every allowable operation by the
+parser. a hyperedge is a generalization of an edge where both its    head    and    tail    can
+be sets of vertices. then, the problem of parsing can be equivalently stated as    nding the
+shortest    path    from two sets of vertices: the source set of vertices are those representing
+the incomplete s nonterminal and all elements of xs, and the destination vertex is the
+complete s nonterminal. see gallo, longo, and pallottino (1993), klein and manning
+(2001) for de   nitions and further details. our algorithm can then be understood as an
+application of a    search for the k-best paths in this hypergraph. the monotonicity prop-
+erty of our algorithm is a consequence of dijkstra   s theorem generalized to hypergraphs
+(gallo, longo, and pallottino 1993). this also suggests that our parser can be improved
+by utilizing a tighter heuristic.
+
+in the parser, the prior contribution is rather loosely incorporated into the objective
+(equation 38). this is due to the fact that we assumed nothing about the structure of the
+semantic prior. however, the algorithm could potentially be made more ef   cient if we
+could factorize the prior, for example, over nonterminals or rules in the grammar. this
+could provide an additive term to equation 38.
+
+we presented our id136 approach as a combination of two search algorithms: (1)
+the hdp id136 component, and (2) the joint syntactic-semantic parser. however, it
+is possible to merge these two searches into a single search (the priority queues of each
+algorithm would be uni   ed into a single global priority queue), potentially improving
+the overall ef   ciency.
+
+in this article, we showed how to utilize hdps to add dependence between seman-
+tic features and the probabilistic selection of production rules in the generative process.
+it would be interesting to explore the application of other dependent dirichlet processes
+and random id203 measures, possibly as a means to induct a grammar in our
+framework.
+
+32
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+another highly promising avenue of research is to explore more complex prior
+structures. for instance, a generative model of a knowledge base could be composed
+with the framework we present here. this would result in a parser that would learn
+new beliefs as it reads text. another direction is to model the generation of a sequence
+of sentences (such as in a paragraph), where complex relationships between concepts
+bridge across multiple sentences. such an approach would likely contain a model of
+context shared across sentences. an example of such a generative process would be to
+   generate    a representation of the document context using a background knowledge
+base. then, semantic statements for each sentence in the document can be generated
+from this intermediate document-level representation in addition to other sources of
+document-level information. finally, our grammar would generate sentences for each
+semantic statement. the problem of co-reference resolution also becomes more apparent
+in these settings with more complex sentences. in both the single-sentence and multiple-
+sentence settings, co-reference resolution can be integrated into parsing. incorporating
+these extensions into a richer uni   ed parsing framework would be promising.
+
+acknowledgments
+
+we thank emmanouil a. platanios and jayant krishnamurthy for the insightful discus-
+sion and helpful comments on the draft. we also thank anonymous reviewers for their
+feedback on the shortened version of this manuscript. this work was supported in part
+by nsf grant iis1250956, and in part by darpa deft contract fa87501320005.
+
+references
+adams, beverly colwell, laura c. bell, and charles a. perfetti. 1995. a trading relationship
+between reading skill and domain knowledge in children   s text comprehension. discourse
+processes, 20(3):307   323. 2
+
+aho, albert v. and jeffery d. ullman. 1972. the theory of parsing, translation, and compiling,
+
+volume 1. prentice-hall, englewood cliffs, nj. 4
+
+aldous, david j. 1985. exchangeability and related topics. in   cole d     t   de probabilit  s de
+
+saint-flour, xiii   1983, volume 1117 of lecture notes in math. springer, berlin, pages 1   198. 5
+
+anderson, richard c. and p. david pearson. 1984. a schema-theoretic view of basic processes in
+reading comprehension. university of illinois at urbana-champaign champaign, ill. : bolt,
+beranek, and newman inc. 2
+
+baker, collin f., charles j. fillmore, and john b. lowe. 1998. the berkeley framenet project. in
+
+proceedings of the 17th international conference on computational linguistics, volume 1, pages
+86   90, montreal, quebec, canada. association for computational linguistics. 3
+
+banarescu, laura, claire bonial, shu cai, madalina georgescu, kira grif   tt, ulf hermjakob,
+
+kevin knight, philipp koehn, martha palmer, and nathan schneider. 2013. abstract meaning
+representation for sembanking. 3
+
+berger, adam, stephen della pietra, and vincent della pietra. 1996. a maximum id178
+
+approach to natural language processing. computational linguistics, 22:39   71. 12
+
+bloom, paul. 2000. how children learn the meanings of words. mit press, cambridge, ma. 2
+bordes, antoine, xavier glorot, jason weston, and yoshua bengio. 2012. joint learning of words
+and meaning representations for open-text id29. in neil d. lawrence and mark
+girolami, editors, aistats, volume 22 of jmlr proceedings, pages 127   135. jmlr.org. 1
+
+callan, jamie, mark hoy, changkuk yoo, and le zhao. 2009. the clueweb09 dataset. 25
+chomsky, n., editor. 1957. syntactic structures. mouton & co., the hague. 4
+chomsky, noam. 1956. three models for the description of language. ire transactions on
+
+church, a. 1932. a set of postulates for the foundation of logic part i. annals of mathematics,
+
+id205, 2:113   124. 4, 11
+
+33(2):346   366. 3
+
+cohen, shay b., david m. blei, and noah a. smith. 2010. variational id136 for adaptor
+
+grammars. in hlt-naacl, pages 564   572. the association for computational linguistics. 4
+
+33
+
+computational linguistics
+
+volume xx, number xx
+
+durrett, greg and dan klein. 2014. a joint model for entity analysis: coreference, typing, and
+
+linking. tacl, 2:477   490. 5
+
+earley, jay. 1970. an ef   cient context-free parsing algorithm. communications of the acm,
+
+6(8):451   455. reprinted in grosz et al. (1986). 19
+
+ferguson, thomas s. 1973. a bayesian analysis of some nonparametric problems. the annals of
+
+fincher-kiefer, rebecca. 1992. the role of prior knowledge in inferential processing. journal of
+
+statistics, 1(2):209   230. 5
+
+research in reading, 15:12   27. 2
+
+finkel, jenny rose and christopher d. manning. 2009. joint parsing and named entity
+
+recognition. in hlt-naacl, pages 326   334. the association for computational linguistics. 1
+
+finkel, jenny rose and christopher d. manning. 2010. hierarchical joint learning: improving
+
+joint parsing and id39 with non-jointly labeled data. in jan hajic, sandra
+carberry, and stephen clark, editors, acl, pages 720   728. the association for computer
+linguistics. 1
+
+gallo, giorgio, giustino longo, and stefano pallottino. 1993. directed hypergraphs and
+
+applications. discrete applied mathematics, 42(2):177   201. 4, 32
+
+gelfand, alan e. and adrian f. m. smith. 1990. sampling-based approaches to calculating
+
+marginal densities. journal of the american statistical association, 85(410):398   409. 6
+
+hockenmaier, julia. 2001. statistical parsing for id35 with simple generative models. in acl
+
+(companion volume), pages 7   12. cnrs, toulose, france. 12
+
+hockenmaier, julia and mark steedman. 2002. generative models for statistical parsing with
+
+id35. in acl, pages 335   342. acl. 12
+
+j  ger, gerhard. 2004. anaphora and type logical grammar. universit  d   tsbibliothek johann
+
+christian senckenberg. 12
+
+johnson, mark and katherine demuth. 2010. unsupervised phonemic chinese word
+
+segmentation using adaptor grammars. in chu-ren huang and dan jurafsky, editors,
+coling, pages 528   536. tsinghua university press. 4
+
+johnson, mark, thomas l. grif   ths, and sharon goldwater. 2007. adaptor grammars: a
+
+framework for specifying compositional nonparametric bayesian models. in advances in
+neural information processing systems (nips). 4
+
+kazama, jun   ichi and kentaro torisawa. 2007. exploiting wikipedia as external knowledge for
+
+id39. in joint conference on empirical methods in natural language
+processing and computational natural language learning, pages 698   707. 1
+
+kim, j. and d. moldovan. 1995. acquisition of linguistic patterns for knowledge-based
+
+information extraction. ieee transactiops on knowledge and data engineering, 7(5):713   724. 5
+klein, dan and christopher d. manning. 2001. parsing and hypergraphs. in iwpt. tsinghua
+
+klein, dan and christopher d. manning. 2003a. a* parsing: fast exact viterbi parse selection. in
+
+university press. 4, 32
+
+hlt-naacl. 4, 32
+
+klein, dan and christopher d. manning. 2003b. fast exact id136 with a factored model for
+
+natural language parsing. in in advances in neural information processing systems 15 (nips). 22
+
+krishnamurthy, jayant and tom m. mitchell. 2014. joint syntactic and id29 with
+
+id35. in proceedings of the 52nd annual meeting of the association for
+computational linguistics (volume 1: long papers), pages 1188   1198, baltimore, maryland, june.
+association for computational linguistics. 5, 25
+
+li, junhui, muhua zhu, wei lu, and guodong zhou. 2015. improving id29 with
+
+enriched synchronous context-free grammar. in llu  s m  rquez, chris callison-burch, jian su,
+daniele pighin, and yuval marton, editors, emnlp, pages 1455   1465. the association for
+computational linguistics. 4
+
+liang, percy, michael i. jordan, and dan klein. 2013. learning dependency-based compositional
+
+semantics. computational linguistics, 39(2):389   446. 3
+
+merlo, paola and gabriele musillo. 2008. id29 for high-precision semantic role
+labelling. in alexander clark and kristina toutanova, editors, conll, pages 1   8. acl. 1
+
+mitchell, t., w. cohen, e. hruscha, p. talukdar, j. betteridge, a. carlson, b. dalvi, m. gardner,
+b. kisiel, j. krishnamurthy, n. lao, k. mazaitis, t. mohammad, n. nakashole, e. platanios,
+a. ritter, m. samadi, b. settles, r. wang, d. wijaya, a. gupta, x. chen, a. saparov,
+m. greaves, and j. welling. 2015. never-ending learning. in aaai. : never-ending learning in
+aaai-2015. 25
+
+34
+
+saparov and mitchell
+
+a probabilistic generative grammar for id29
+
+nakashole, ndapandula and tom m. mitchell. 2015. a knowledge-intensive model for
+
+prepositional phrase attachment. in acl (1), pages 365   375. the association for computer
+linguistics. 5
+
+ng, vincent. 2007. shallow semantics for coreference resolution. in ijcai, pages 1689   1694. 1
+pauls, adam and dan klein. 2009. k-best a* parsing. in keh-yih su, jian su, and janyce wiebe,
+
+editors, acl/ijcnlp, pages 958   966. the association for computer linguistics. 4, 32
+
+pauls, adam, dan klein, and chris quirk. 2010. top-down k-best a* parsing. in proceedings of the
+
+acl 2010 conference short papers, aclshort    10, pages 200   204, stroudsburg, pa, usa.
+association for computational linguistics. 4, 32
+
+ponzetto, s. p. and m. strube. 2006. exploiting id14, id138 and wikipedia
+
+for coreference resolution. proceedings of the main conference on human language technology
+conference of the north american chapter of the association of computational linguistics, pages
+192   199. 1
+
+prokofyev, roman, alberto tonon, michael luggen, loic vouilloz, djellel eddine difallah, and
+
+philippe cudr  l   -mauroux. 2015. sanaphor: ontology-based coreference resolution. in
+marcelo arenas,     sscar corcho, elena simperl, markus strohmaier, mathieu d   aquin,
+kavitha srinivas, paul t. groth, michel dumontier, jeff he   in, krishnaprasad thirunarayan,
+and steffen staab, editors, international semantic web conference (1), volume 9366 of lecture
+notes in computer science, pages 458   473. springer. 5
+
+ratinov, lev-arie and dan roth. 2012. learning-based multi-sieve co-reference resolution with
+knowledge. in jun   ichi tsujii, james henderson, and marius pasca, editors, emnlp-conll,
+pages 1234   1244. acl. 5
+
+ratnaparkhi, adwait. 1998. maximum id178 models for natural language ambiguity
+
+robert, c. p. and g. casella. 2010. monte carlo statistical methods. springer, new york, ny. 6
+salloum, wael. 2009. a id53 system based on conceptual graph formalism.
+
+salton, gerald. 1971. the smart retrieval system: experiments in automatic document processing.
+
+steedman, mark. 1996. surface structure and interpretation. linguistic inquiry monographs, 30.
+
+resolution. phd thesis. 12
+
+volume 3. ieee cs press. 5
+
+prentice hall. 3
+
+mit press. 12
+
+talukdar, partha pratim, derry tanti wijaya, and tom m. mitchell. 2012. acquiring temporal
+
+constraints between relations. in xue wen chen, guy lebanon, haixun wang, and
+mohammed j. zaki, editors, cikm, pages 992   1001. acm. 25
+
+tanaka, takaaki, francis bond, timothy baldwin, sanae fujita, and chikara hashimoto. 2007.
+
+id51 incorporating lexical and structural semantic information. in
+emnlp-conll, pages 477   485. acl. 1
+
+teh, yee whye, michael i. jordan, matthew j. beal, and david m. blei. 2006. hierarchical
+
+dirichlet processes. journal of the american statistical association, 101(476):1566   1581. 4, 6, 7, 10
+
+turney, peter d. and patrick pantel. 2010. from frequency to meaning: vector space models of
+
+semantics. corr, abs/1003.1141. 3
+
+wong, yuk wah and raymond j. mooney. 2006. learning for id29 with statistical
+
+machine translation. in robert c. moore, jeff a. bilmes, jennifer chu-carroll, and mark
+sanderson, editors, hlt-naacl. the association for computational linguistics. 4
+
+wong, yuk wah and raymond j. mooney. 2007. learning synchronous grammars for semantic
+
+parsing with id198. in john a. carroll, antal van den bosch, and annie zaenen,
+editors, acl. the association for computational linguistics. 4
+
+35
+
+36
+
+

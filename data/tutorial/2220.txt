@@ -1,0 +1,281 @@
+   #[1]the keras blog atom feed
+
+                               [2]the keras blog
+
+   [3]keras is a deep learning library for python, that is simple,
+   modular, and extensible.
+
+     * [4]archives
+     * [5]github
+     * [6]documentation
+     * [7]google group
+
+               [8]how convolutional neural networks see the world
+
+   sat 30 january 2016
+
+
+    by [9]francois chollet
+
+   in [10]demo.
+
+an exploration of convnet filters with keras
+
+   note: all code examples have been updated to the keras 2.0 api on march
+   14, 2017. you will need keras version 2.0.0 or higher to run them.
+
+   in this post, we take a look at what deep convolutional neural networks
+   (convnets) really learn, and how they understand the images we feed
+   them. we will use keras to visualize inputs that maximize the
+   activation of the filters in different layers of the vgg16
+   architecture, trained on id163. all of the code used in this post
+   can be found [11]on github.
+
+   some convnet filters
+
+   vgg16 (also called oxfordnet) is a convolutional neural network
+   architecture named after the [12]visual geometry group from oxford, who
+   developed it. it was used to [13]win the ilsvr (id163) competition
+   in 2014. to this day is it still considered to be an excellent vision
+   model, although it has been somewhat outperformed by more revent
+   advances such as inception and resnet.
+
+   first of all, let's start by defining the vgg16 model in keras:
+from keras import applications
+
+# build the vgg16 network
+model = applications.vgg16(include_top=false,
+                           weights='id163')
+
+# get the symbolic outputs of each "key" layer (we gave them unique names).
+layer_dict = dict([(layer.name, layer) for layer in model.layers])
+
+   note that we only go up to the last convolutional layer --we don't
+   include fully-connected layers. the reason is that adding the fully
+   connected layers forces you to use a fixed input size for the model
+   (224x224, the original id163 format). by only keeping the
+   convolutional modules, our model can be adapted to arbitrary input
+   sizes.
+
+   the model loads a set of weights pre-trained on id163.
+
+   now let's define a id168 that will seek to maximize the
+   activation of a specific filter (filter_index) in a specific layer
+   (layer_name). we do this via a keras backend function, which allows our
+   code to run both on top of tensorflow and theano.
+from keras import backend as k
+
+layer_name = 'block5_conv3'
+filter_index = 0  # can be any integer from 0 to 511, as there are 512 filters i
+n that layer
+
+# build a id168 that maximizes the activation
+# of the nth filter of the layer considered
+layer_output = layer_dict[layer_name].output
+loss = k.mean(layer_output[:, :, :, filter_index])
+
+# compute the gradient of the input picture wrt this loss
+grads = k.gradients(loss, input_img)[0]
+
+# id172 trick: we normalize the gradient
+grads /= (k.sqrt(k.mean(k.square(grads))) + 1e-5)
+
+# this function returns the loss and grads given the input picture
+iterate = k.function([input_img], [loss, grads])
+
+   all very simple. the only trick here is to normalize the gradient of
+   the pixels of the input image, which avoids very small and very large
+   gradients and ensures a smooth gradient ascent process.
+
+   now we can use the keras function we defined to do gradient ascent in
+   the input space, with regard to our filter activation loss:
+import numpy as np
+
+# we start from a gray image with some noise
+input_img_data = np.random.random((1, 3, img_width, img_height)) * 20 + 128.
+# run gradient ascent for 20 steps
+for i in range(20):
+    loss_value, grads_value = iterate([input_img_data])
+    input_img_data += grads_value * step
+
+   this operation takes a few seconds on cpu with tensorflow.
+
+   we can then extract and display the generated input:
+from scipy.misc import imsave
+
+# util function to convert a tensor into a valid image
+def deprocess_image(x):
+    # normalize tensor: center on 0., ensure std is 0.1
+    x -= x.mean()
+    x /= (x.std() + 1e-5)
+    x *= 0.1
+
+    # clip to [0, 1]
+    x += 0.5
+    x = np.clip(x, 0, 1)
+
+    # convert to rgb array
+    x *= 255
+    x = x.transpose((1, 2, 0))
+    x = np.clip(x, 0, 255).astype('uint8')
+    return x
+
+img = input_img_data[0]
+img = deprocess_image(img)
+imsave('%s_filter_%d.png' % (layer_name, filter_index), img)
+
+   result:
+
+   conv5_1_filter_0
+
+visualize all the filters!
+
+   now the fun part. we can use the same code to systematically display
+   what sort of input (they're not unique) maximizes each filter in each
+   layer, giving us a neat visualization of the convnet's
+   modular-hierarchical decomposition of its visual space.
+
+   the first layers basically just encode direction and color. these
+   direction and color filters then get combined into basic grid and spot
+   textures. these textures gradually get combined into increasingly
+   complex patterns.
+
+   you can think of the filters in each layer as a basis of vectors,
+   typically overcomplete, that can be used to encode the layer's input in
+   a compact way. the filters become more intricate as they start
+   incorporating information from an increasingly larger spatial extent.
+
+   vgg16_filters_overview
+
+   a remarkable observation: a lot of these filters are identical, but
+   rotated by some non-random factor (typically 90 degrees). this means
+   that we could potentially compress the number of filters used in a
+   convnet by a large factor by finding a way to make the convolution
+   filters rotation-invariant. i can see a few ways this could be achieved
+   --it's an interesting research direction.
+
+   shockingly, the rotation observation holds true even for relatively
+   high-level filters, such as those in block4_conv1.
+
+   in the highest layers (block5_conv2, block5_conv3) we start to
+   recognize textures similar to that found in the objects that network
+   was trained to classify, such as feathers, eyes, etc.
+
+convnet dreams
+
+   another fun thing to do is to apply these filters to photos (rather
+   than to noisy all-gray inputs). this is the principle of deep dreams,
+   popularized by google last year. by picking specific combinations of
+   filters rather than single filters, you can achieve quite pretty
+   results. if you are interested in this, you could also check out the
+   [14]deep dream example in keras, and [15]the google blog post that
+   introduced the technique.
+
+   deep filter dreams
+
+finding an input that maximizes a specific class
+
+   now for something else --what if you included the fully connected
+   layers at the end of the network, and tried to maximize the activation
+   of a specific output of the network? would you get an image that looked
+   anything like the class encoded by that output? let's try it.
+
+   we can just define this very simple id168:
+model = applications.vgg16(include_top=true,
+                           weights='id163')
+loss = k.mean(model.output[:, output_index])
+
+   let's apply it to output_index = 65 (which is the sea snake class in
+   id163). we quickly reach a loss of 0.999, which means that the
+   convnet is 99.9% confident that the generated input is a sea snake.
+   let's take a look at the generated input.
+
+   vgg16 sea snake
+
+   oh well. doesn't look like a sea snake. surely that's a fluke, so let's
+   try again with output_index = 18 (the magpie class).
+
+   vgg16 magpie
+
+   ok then. so our convnet's notion of a magpie looks nothing like a
+   magpie --at best, the only resemblance is at the level of local
+   textures (feathers, maybe a beak or two). does it mean that convnets
+   are bad tools? of course not, they serve their purpose just fine. what
+   it means is that we should refrain from our natural tendency to
+   anthropomorphize them and believe that they "understand", say, the
+   concept of dog, or the appearance of a magpie, just because they are
+   able to classify these objects with high accuracy. they don't, at least
+   not to any any extent that would make sense to us humans.
+
+   so what do they really "understand"? two things: first, they understand
+   a decomposition of their visual input space as a hierarchical-modular
+   network of convolution filters, and second, they understand a
+   probabilitistic mapping between certain combinations of these filters
+   and a set of arbitrary labels. naturally, this does not qualify as
+   "seeing" in any human sense, and from a scientific perspective it
+   certainly doesn't mean that we somehow solved id161 at this
+   point. don't believe the hype; we are merely standing on the first step
+   of a very tall ladder.
+
+   some say that the hierarchical-modular decomposition of visual space
+   learned by a convnet is analogous to what the human visual cortex does.
+   it may or may not be true, but there is no strong evidence to believe
+   so. of course, one would expect the visual cortex to learn something
+   similar, to the extent that this constitutes a "natural" decomposition
+   of our visual world (in much the same way that the fourier
+   decomposition would be a "natural" decomposition of a periodic audio
+   signal). but the exact nature of the filters and hierarchy, and the
+   process through which they are learned, has most likely little in
+   common with our puny convnets. the visual cortex is not convolutional
+   to begin with, and while it is structured in layers, the layers are
+   themselves structured into cortical columns whose exact purpose is
+   still not well understood --a feature not found in our artificial
+   networks (although geoff hinton is working on it). besides, there is so
+   much more to visual perception than the classification of static
+   pictures --human perception is fundamentally sequential and active, not
+   static and passive, and is tightly intricated with motor control (e.g.
+   eye saccades).
+
+   think about this next time your hear some vc or big-name ceo appear in
+   the news to warn you against the existential threat posed by our recent
+   advances in deep learning. today we have better tools to map complex
+   information spaces than we ever did before, which is awesome, but at
+   the end of the day they are tools, not creatures, and none of what they
+   do could reasonably qualify as "thinking". drawing a smiley face on a
+   rock doesn't make it "happy", even if your primate neocortex tells you
+   so.
+
+   that said, visualizing what convnets learn is quite fascinating --who
+   would have guessed that simple id119 with a reasonable loss
+   function over a sufficiently large dataset would be enough to learn
+   this beautiful hierarchical-modular network of patterns that manages to
+   explain a complex visual space surprisingly well. deep learning may not
+   be intelligence is any real sense, but it's still working considerably
+   better than anybody could have anticipated just a few years ago. now,
+   if only we understood why... ;-)
+
+   [16]@fchollet, january 2016
+
+
+    powered by [17]pelican, which takes great advantages of [18]python.
+
+references
+
+   1. https://blog.keras.io/
+   2. https://blog.keras.io/index.html
+   3. https://github.com/fchollet/keras
+   4. https://blog.keras.io/
+   5. https://github.com/fchollet/keras
+   6. http://keras.io/
+   7. https://groups.google.com/forum/#!forum/keras-users
+   8. https://blog.keras.io/how-convolutional-neural-networks-see-the-world.html
+   9. https://twitter.com/fchollet
+  10. https://blog.keras.io/category/demo.html
+  11. https://github.com/fchollet/keras/blob/master/examples/conv_filter_visualization.py
+  12. http://www.robots.ox.ac.uk/~vgg/
+  13. http://www.robots.ox.ac.uk/~vgg/research/very_deep/
+  14. https://github.com/fchollet/keras/blob/master/examples/deep_dream.py
+  15. http://googleresearch.blogspot.com/2015/06/inceptionism-going-deeper-into-neural.html
+  16. https://twitter.com/fchollet
+  17. http://alexis.notmyidea.org/pelican/
+  18. http://python.org/

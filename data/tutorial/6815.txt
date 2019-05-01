@@ -1,0 +1,328 @@
+   #[1]rss
+
+     * [2]about
+     * [3]software
+     * [4]demos
+     * [5]blog
+
+   [catastrophic-forgetting.jpg]    [6]kemal   anl   & freepik
+
+pseudo-rehearsal: a simple solution to catastrophic forgetting for nlp
+
+   august 23, 2017    by matthew honnibal
+
+   sometimes you want to fine-tune a pre-trained model to add a new label
+   or correct some specific errors. this can introduce the "catastrophic
+   forgetting" problem. pseudo-rehearsal is a good solution: use the
+   original model to label examples, and mix them through your fine-tuning
+   updates.
+
+   the [7]catastrophic forgetting problem occurs when you optimise two
+   learning problems in succession, with the weights from the first
+   problem used as part of the initialisation for the weights of the
+   second problem. a lot of work has gone into designing optimisation
+   algorithms that are less sensitive to initialisation. ideally, our
+   optimisers would be so good that they'd always find the same     optimal
+       solution to a given problem, no matter how the weights are
+   initialised. this isn't true, but it's something we're aiming for. this
+   means that if you optimise for two problems in succession, catastrophic
+   forgetting is what should happen.
+
+   this point has been well made [8]by hal daum   in a blog post, and
+   reiterated more recently on twitter by jason eisner. yoav goldberg also
+   discusses the problem [9]in his book, with more detail about smarter
+   techniques for using pre-trained vectors.
+
+     if you suspect    is a pretty good parameter value (e.g.,
+     pretraining), please regularize toward    instead of just
+     initializing at   . #ml
+
+     [10]@adveisner
+
+     e.g., regularize toward id27s    that were pretrained on
+     big data for some other objective. coeff controls bias/variance
+     tradeoff.
+
+     [11]@adveisner
+
+     i have this in the book btw (p. 117):
+
+     [12]@yoavgo
+
+[13]id72 in spacy
+
+   catastrophic forgetting problems have become more relevant for
+   [14]spacy users lately, because spacy v2's part-of-speech, named
+   entity, syntactic dependency and sentence segmentation models all share
+   an input representation, produced by a convolutional neural network.
+   this lets the various models share most of their weights, making the
+   total model very small     the [15]latest release is only 18mb, while the
+   previous linear model was almost 1gb. the multi-task input
+   representation can also be used for other tasks, such as text
+   classification and semantic similarity, via the doc.tensor
+   attribute.spacy v2.0.0a10to help you avoid the catastrophic forgetting
+   problem, the latest [16]spacy v2.0 alpha model mixes the multi-task id98
+   with local id98s, specific to each task. this lets you update a task in
+   isolation, without writing to the shared component.
+
+   however, sharing the weights between all these models sets a subtle
+   trap. let's say you're parsing short commands, so you have a lot of
+   examples where you know the first word is an imperative verb. the
+   default spacy model performs poorly on this type of input, so we want
+   to update the model on some examples of the type of user-command text
+   we'll be processing.
+import spacy
+
+nlp = spacy.load('en_core_web_sm')
+doc = nlp(u'search for pictures of playful rodents')
+spacy.displacy.serve(doc)
+
+   searchnnforinpicturesnnsofinplayfuljjrodentsnnspreppobjprepamodpobj
+
+   this parse is wrong     it's analysed "search" as a noun, where it should
+   be a verb. if all you know is that the first word of the sentence
+   should be a verb, you can still use that to update spacy's model. to
+   update the model, we pass a doc instance and a goldparse instance to
+   the nlp.update() method:
+from spacy.gold import goldparse
+
+new_tags = [none] * len(doc)
+new_tags[0] = 'vbp'
+gold = goldparse(doc, tags=new_tags)
+nlp.update(doc, gold, update_shared=true)
+
+   the none values indicate there's no supervision on those tags, so
+   gradients will be 0 for those predictions. there are also no labels for
+   the dependency parse or the entity recognizer, so the weights for those
+   models won't be updated. however, all models share the same input
+   representation, so if that representation is updated, all models are
+   potentially affected. to address that problem, [17]spacy v2.0.0a10
+   introduces a new flag update_shared. this flag is set to false by
+   default.
+
+   if we make a few updates on this single example, we'll get a model that
+   tags it correctly. however, from a single example, there's no way for
+   the model to guess what level of generality it should learn at. are all
+   words now tagged vbp? all first-words of the sentence? all instances of
+   search? we need to give the model more information about the solution
+   we're looking for, or the learning problem will be too unconstrained,
+   and we'll be unlikely to get the solution we want.
+
+[18]beyond the metaphor
+
+   to make the "forgetting" metaphor explicit here, we could say that the
+   overall multi-task model started out "knowing" how to tag entities and
+   produce dependency parses for a range of genres of written english.
+   then we focussed on a few more specific corrections, but this caused
+   the model to lose the more general capabilities. this metaphor makes
+   the problem seem surprising: why should our ai be so stupid and
+   brittle? this is the point at which the metaphor has outlived its
+   usefulness, and we need to think more precisely about what's going on.
+
+   when we call nlp.update(), we ask the model to produce an analyis given
+   its current weights. an error gradient is then calculated for each
+   subtask, and the weights are updated via id26. essentially,
+   we push the weights around until we get a set of weights that produce
+   analyses where our error gradients are near zero. any set of weights
+   that produce zero loss is stable.
+
+   it's not necessarily useful to think in terms of the model
+   "remembering" or "forgetting" things. it's simply optimising the
+   function you tell it to optimise     sometimes well, sometimes poorly.
+   sometimes we have reason to believe that the solution that optimises
+   one objective will be quite good at another objective. but if we don't
+   encode this restriction explicitly, it's difficult to guarantee.
+
+   one way to preserve the previous behaviour is to encode a bias against
+   changing the parameters too much. however, this type of regularisation
+   penalty isn't always a good approximation of what we want. in a deep
+   neural network, the relationship between the model's weights and its
+   prediction behaviours is non-linear. very deep networks may be
+   downright chaotic. what we actually care about are the outputs, not the
+   parameter values     so that's how we should frame our objective. as
+   models become more complex and less linear, it's better to avoid trying
+   to guess what the parameters ought to look like.id173 is still
+   good for embeddingsembedding tables define a vector space, so there's a
+   linear relationship between changes to the parameter values and changes
+   to the solution. in this situation, it makes sense to penalize the l2
+   norm of the divergence from the initial values.
+
+[19]pseudo-rehearsal
+
+   all this leads to a very simple recommendation to address the
+   "catastrophic forgetting" problem. when we start fine-tuning the model,
+   we're hoping to get a solution that's correct on the new training
+   examples, while producing output that's similar to the original. this
+   is easy: we can generate as much of the original output as we want. we
+   just have to create some mixture of that original output and the new
+   examples. unsurprisingly, this is [20]not a new suggestion.
+pseudo-rehearsalrevision_data = []
+
+# apply the initial model to raw examples. you'll want to experiment
+# with finding a good number of revision texts. it can also help to
+# filter out some data.
+for doc in nlp.pipe(revision_texts):
+    tags = [w.tag_ for w in doc]
+    heads = [w.head.i for w in doc]
+    deps = [w.dep_ for w in doc]
+    entities = [(e.start_char, e.end_char, e.label_) for e in doc.ents]
+    revision_data.append((doc, goldparse(doc, tags=doc_tags, heads=heads,
+                                         deps=deps, entities=entities)))
+
+# now shuffle the previous behaviour into the new fine-tuning data, and
+# update with them together. you might want to upsample the fine-tuning
+# examples (e.g. include 5 copies of it). this lets you use a better
+# variety of revision data without changing the ratio of revision : tuning
+# data.
+n_epoch = 5
+batch_size = 32
+for i in range(n_epoch):
+    examples = revision_data + fine_tune_data
+    losses = {}
+    random.shuffle(examples)
+    for batch in partition_all(batch_size, examples):
+        docs, golds = zip(*batch)
+        nlp.update(docs, golds, losses=losses)
+
+   a crucial detail in this process is that the "revision exercises" that
+   you're mixing into the new material must not be produced by the weights
+   you're currently optimising. you should keep the model that generates
+   the revision material static. otherwise, the model can stabilise on
+   trivial solutions. if you're streaming the examples, you'll need to
+   hold two copies of the model in memory. alternatively, you can
+   pre-parse a batch of text, and then use the annotations to stabilise
+   your fine-tuning.
+
+   there's one improvement to this recipe that's still pending. at the
+   moment spacy treats the analyses provided by the teaching model the
+   same as any other type of gold-standard data. this seems unideal,
+   because the models use log-loss. for the part-of-speech tagger, this
+   means that an original prediction of "80% confidence tag is 'nn'" gets
+   converted into "100% confidence tag is 'nn'". it would be better to
+   either supervise with the distribution returned by the teaching model,
+   or to use a log-loss.
+
+[21]summary
+
+   it's common to use pre-trained models for id161 and natural
+   language processing. image, video, text and audio inputs have rich
+   internal structure, that can be learned from large training samples and
+   generalised across tasks. these pre-trained models are particularly
+   useful if they can be "fine-tuned" on the specific problem of interest.
+   however, the fine-tuning process can introduce the problem of
+   "catastrophic forgetting": a solution is found that optimises the
+   specific fine-tuning data, and the generalisation is lost.
+
+   some people suggest regularisation penalties to address this problem.
+   however, this encodes a preference for solutions that are close to the
+   previous model in parameter-space, when what we really want are
+   solutions that are close to the previous model in output space.
+   pseudo-rehearsal is a good way to achieve that: predict a number of
+   examples with the initial model, and mix them through the fine-tuning
+   data. this represents an objective for a model that behaves similarly
+   to the pre-trained one, except on the fine-tuning data.
+
+   matthew honnibal
+   about the author
+
+matthew honnibal
+
+   matthew is a leading expert in ai technology, known for his research,
+   software and writings. he completed his phd in 2009, and spent a
+   further 5 years publishing research on state-of-the-art natural
+   language understanding systems. anticipating the ai boom, he left
+   academia in 2014 to develop spacy, an open-source library for
+   industrial-strength nlp.
+
+read more
+
+[22]introducing spacy v2.1
+
+[23]explosion ai in 2017: our year in review
+
+[24]introducing custom pipelines and extensions for spacy v2.0
+
+[25]prodigy: a new tool for radically efficient machine teaching
+
+[26]supervised learning is great     it   s data collection that   s broken
+
+[27]supervised similarity: learning symmetric relations from duplicate
+question data
+
+    about us
+
+   explosion ai is a digital studio specialising in artificial
+   intelligence and natural language processing. we   re the makers of
+   spacy, the leading open-source nlp library.
+
+    navigation
+
+     * [28]home
+     * [29]about
+     * [30]software
+     * [31]demos
+     * [32]blog
+     * [33]legal / imprint
+
+    our software
+
+     * [34]spacy
+       industrial-strength nlp
+     * [35]prodigy
+       radically efficient machine teaching
+
+   [36]see more    
+
+references
+
+   visible links
+   1. https://explosion.ai/feed.xml
+   2. https://explosion.ai/about
+   3. https://explosion.ai/software
+   4. https://explosion.ai/demos
+   5. https://explosion.ai/blog
+   6. http://www.freepik.com/free-vector/tropical-leaves-background_765638.htm
+   7. https://en.wikipedia.org/wiki/catastrophic_interference
+   8. https://nlpers.blogspot.de/2016/05/a-bad-optimizer-is-not-good-thing.html
+   9. https://www.amazon.com/network-methods-natural-language-processing/dp/1627052984
+  10. https://twitter.com/adveisner/status/896428540538834944
+  11. https://twitter.com/adveisner/status/896428976910061568
+  12. https://twitter.com/yoavgo/status/897032942198902785
+  14. https://spacy.io/
+  15. https://github.com/explosion/spacy-models/releases/tag/en_core_web_sm-2.0.0-alpha1
+  16. https://github.com/explosion/spacy/releases/tag/v2.0.0-alpha
+  17. https://github.com/explosion/spacy/releases/tag/v2.0.0-alpha
+  20. https://www.semanticscholar.org/paper/catastrophic-forgetting-rehearsal-and-pseudorehear-robins/5ac423a83b4321b43249224fcc528bb70e086826
+  22. https://explosion.ai/blog/spacy-v2-1
+  23. https://explosion.ai/blog/year-in-review-2017
+  24. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  25. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  26. https://explosion.ai/blog/supervised-learning-data-collection
+  27. https://explosion.ai/blog/supervised-similarity-siamese-id98
+  28. https://explosion.ai/
+  29. https://explosion.ai/about
+  30. https://explosion.ai/software
+  31. https://explosion.ai/demos
+  32. https://explosion.ai/blog
+  33. https://explosion.ai/legal
+  34. https://spacy.io/
+  35. https://prodi.gy/
+  36. https://explosion.ai/software
+
+   hidden links:
+  38. https://explosion.ai/
+  39. mailto:matt@explosion.ai
+  40. https://twitter.com/honnibal
+  41. https://github.com/honnibal
+  42. https://www.semanticscholar.org/search?q=matthew%20honnibal
+  43. https://explosion.ai/blog/spacy-v2-1
+  44. https://explosion.ai/blog/year-in-review-2017
+  45. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  46. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  47. https://explosion.ai/blog/supervised-learning-data-collection
+  48. https://explosion.ai/blog/supervised-similarity-siamese-id98
+  49. mailto:contact@explosion.ai
+  50. https://twitter.com/explosion_ai
+  51. https://github.com/explosion
+  52. https://youtube.com/c/explosionai
+  53. https://explosion.ai/feed

@@ -1,0 +1,1236 @@
+multilingual language processing from bytes
+
+dan gillick, cliff brunk, oriol vinyals, amarnag subramanya
+
+{dgillick, cliffbrunk, vinyals, asubram}@google.com
+
+google research
+
+6
+1
+0
+2
+
+ 
+r
+p
+a
+2
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+3
+0
+1
+0
+0
+
+.
+
+2
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+we describe an lstm-based model which
+we call byte-to-span (bts) that reads text
+as bytes and outputs span annotations of the
+form [start, length, label] where start posi-
+tions, lengths, and labels are separate entries
+in our vocabulary. because we operate di-
+rectly on unicode bytes rather than language-
+speci   c words or characters, we can analyze
+text in many languages with a single model.
+due to the small vocabulary size, these multi-
+lingual models are very compact, but produce
+results similar to or better than the state-of-
+the-art in part-of-speech tagging and named
+entity recognition that use only the provided
+training datasets (no external data sources).
+our models are learning    from scratch    in that
+they do not rely on any elements of the stan-
+dard pipeline in natural language processing
+(including id121), and thus can run in
+standalone fashion on raw text.
+
+introduction
+
+1
+the long-term trajectory of research in natural
+language processing has seen the replacement of
+rules and speci   c linguistic knowledge with ma-
+chine learned components. perhaps the most stan-
+dardized way that knowledge is still injected into
+largely statistical systems is through the processing
+pipeline: some set of basic language-speci   c tokens
+are identi   ed in a    rst step. sequences of tokens
+are segmented into sentences in a second step. the
+resulting sentences are fed one at a time for syntac-
+tic analysis: part-of-speech (pos) tagging and pars-
+ing. next, the predicted syntactic structure is typi-
+cally used as features in semantic analysis, named
+
+entity recognition (ner), id14,
+etc. while each step of the pipeline now relies more
+on data and models than on hand-curated rules, the
+pipeline structure itself encodes one particular un-
+derstanding of how meaning attaches to raw strings.
+one motivation for our work is to try removing
+this structural dependence. rather than rely on the
+intermediate representations invented for speci   c
+subtasks (for example, id32 id121),
+we are allowing the model to learn whatever internal
+structure is most conducive to producing the annota-
+tions of interest. to this end, we describe a recur-
+rent neural network (id56) model that reads raw in-
+put string segments, one byte at a time, and produces
+output span annotations corresponding to speci   c
+byte regions in the input1. this is truly language
+annotation from scratch (see collobert et al. (2011)
+and zhang and lecun (2015)).
+
+two key innovations facilitate this approach.
+first, long short term memory (lstm) models
+(hochreiter and schmidhuber, 1997) allow us to re-
+place the traditional independence assumptions in
+text processing with structural constraints on mem-
+ory. while we have long known that long-term de-
+pendencies are important in language, we had no
+mechanism other than conditional independence to
+keep sparsity in check. the memory in an lstm,
+however, is not constrained by any explicit assump-
+tions of independence. rather, its ability to learn
+patterns is limited only by the structure of the net-
+work and the size of the memory (and of course the
+
+1our span annotation model can be applied to any sequence
+it is not immediately applicable to predicting
+
+labeling task;
+more complex structures like trees.
+
+figure 1: a diagram showing the way the byte-to-span (bts) model converts an input text segment to a sequence of span
+annotations. the model reads the input segment one byte at a time (this can involve multibyte unicode characters), then a special
+generate output (go) symbol, then produces the argmax output of a softmax over all possible start positions, lengths, and labels
+(as well as stop, signifying no additional outputs). the prediction from the previous time step is fed as an input to the next time
+step.
+
+amount of training data).
+
+second, sequence-to-sequence models (sutskever
+et al., 2014), allow for    exible input/output dynam-
+ics. traditional models, including feedforward neu-
+ral networks, read    xed-length inputs and generate
+   xed-length outputs by following a    xed set of com-
+putational steps. instead, we can now read an entire
+segment of text before producing an arbitrary num-
+ber of outputs, allowing the model to learn a function
+best suited to the task.
+
+we leverage these two ideas with a basic strategy:
+decompose inputs and outputs into their component
+pieces, then read and predict them as sequences.
+rather than read words, we are reading a sequence
+of unicode bytes2; rather than producing a label for
+each word, we are producing triples [start, length,
+label], that correspond to the spans of interest, as a
+sequence of three separate predictions (see figure
+1). this forces the model to learn how the compo-
+nents of words and labels interact so all the structure
+typically imposed by the nlp pipeline (as well as
+the rules of unicode) are left to the lstm to model.
+decomposed inputs and outputs have a few im-
+portant bene   ts. first, they reduce the size of the
+
+2we use the variable length utf-8 encodings to keep the
+
+vocabulary as small as possible.
+
+vocabulary relative to word-level inputs, so the re-
+sulting models are extremely compact (on the or-
+der of a million parameters). second, because uni-
+code is essentially a universal language, we can train
+models to analyze many languages at once. in fact,
+by stacking lstms, we are able to learn represen-
+tations that appear to generalize across languages,
+improving performance signi   cantly (without using
+any additional parameters) over models trained on
+a single language. this is the    rst account, to our
+knowledge, of a multilingual model that achieves
+good results across many languages, thus bypass-
+ing all the language-speci   c engineering usually re-
+quired to build models in different languages3. we
+describe results similar to or better than the state-
+of-the-art in part-of-speech tagging and named en-
+tity recognition that use only the provided training
+datasets (no external data sources).
+
+the rest of this paper is organized as follows. sec-
+tion 2 discusses related work; section 3 describes
+our model; section 4 gives training details includ-
+ing a new variety of dropout (hinton et al., 2012);
+
+3these multilingual models are able to handle code-mixed
+text, an important practical problem that   s received relatively
+little attention. however, we do not have any annotated data
+that contains code switching, so we cannot report any results.
+
+gos0s0l13pers26l11locl13pers26l11locstop   btsspans[s0, l13, per]     [s26, l11, loc]segment  scar romero was born in el salvador.0xc30x930x73  s   0x63csection 5 gives id136 details; section 6 presents
+results on id52 and ner across many lan-
+guages; finally, we summarize our contributions in
+section 7.
+
+2 related work
+
+one important feature of our work is the use of
+byte inputs. character-level inputs have been used
+with some success for tasks like ner (klein et al.,
+2003), parallel text alignment (church, 1993), and
+authorship attribution (peng et al., 2003) as an ef-
+fective way to deal with id165 sparsity while still
+capturing some aspects of word choice and mor-
+phology.
+such approaches often combine char-
+acter and word features and have been especially
+useful for handling languages with large character
+sets (nakagawa, 2004). however, there is almost
+no work that explicitly uses bytes     one exception
+uses byte id165s to identify source code author-
+ship (frantzeskou et al., 2006)     but there is noth-
+ing, to the best of our knowledge, that exploits bytes
+as a cross-lingual representation of language. work
+on multilingual parsing using neural networks that
+share some subset of the parameters across lan-
+guages (duong et al., 2015) seems to bene   t the
+low-resource languages; however, we are sharing all
+the parameters among all languages.
+
+recent work has shown that modeling the se-
+quence of characters in each token with an lstm
+can more effectively handle rare and unknown words
+than independent id27s (ling et al.,
+2015; ballesteros et al., 2015). similarly, language
+modeling, especially for morphologically complex
+languages, bene   ts from a convolutional neural
+network (id98) over characters to generate word
+embeddings (kim et al., 2015). rather than de-
+compose words into characters, rohan and denero
+(2015) encode rare words with huffman codes, al-
+lowing a neural translation model to learn something
+about word subcomponents. in contrast to this line
+of research, our work has no explicit notion of to-
+kens and operates on bytes rather than characters.
+
+our work is philosophically similar
+
+to col-
+lobert et al.   s (2011) experiments with    almost from
+scratch    language processing. they avoid task-
+speci   c feature engineering, instead relying on a
+multilayer feedforward (or convolutional) neural
+
+network to combine id27s to produce
+features useful for each task.
+in the results sec-
+tion, below, we compare ner performance on the
+same dataset they used. the    almost    in the ti-
+tle actually refers to the use of preprocessed (low-
+ercased) tokens as input instead of raw sequences
+of letters. our byte-level models can be seen as a
+realization of their comment:    a completely from
+scratch approach would presumably not know any-
+thing about words at all and would work from letters
+only.    recent work with convolutional neural net-
+works that read character-level inputs (zhang et al.,
+2015) shows some interesting results on a variety of
+classi   cation tasks, but because their models need
+very large training sets, they do not present compar-
+isons to established baselines on standard tasks.
+
+finally, recent work on automatic speech recog-
+nition (asr) uses a similar sequence-to-sequence
+lstm framework to produce letter sequences di-
+rectly from acoustic frame sequences (chan et al.,
+2015; bahdanau et al., 2015). just as we are dis-
+carding the usual intermediate representations used
+for text processing, their models make no use of pho-
+netic alignments, clustered triphones, or pronunci-
+ation dictionaries. this line of work     discarding
+intermediate representations in speech     was pio-
+neered by graves and jaitly (2014) and earlier, by
+eyben et al. (2009).
+
+3 model
+our model is based on the sequence-to-sequence
+model used for machine translation (sutskever et al.,
+2014), an adaptation of an lstm that encodes a
+variable length input as a    xed-length vector, then
+decodes it into a variable number of outputs4.
+
+from t .
+
+generally,
+
+the sequence-to-sequence lstm is
+trained to estimate the id155
+p (y1, ..., yt (cid:48)|x1, ..., xt ) where (x1, ..., xt ) is an
+input sequence and (y1, ..., yt (cid:48)) is the correspond-
+ing output sequence whose length t (cid:48) may dif-
+fer
+the encoding step computes a
+   xed-dimensional representation v of the input
+(x1, ..., xt ) given by the hidden state of the lstm
+4related translation work adds an attention mechanism
+(bahdanau et al., 2014), allowing the decoder to attend directly
+to particularly relevant inputs. we tried adding the same mech-
+anism to our model but saw no improvement in performance on
+the ner task, though training converged in fewer steps.
+
+after reading the last input xt . the decoding step
+computes the output id203 p (y1, ..., yt (cid:48)) with
+the standard lstm formulation for language mod-
+eling, except that the initial hidden state is set to v:
+
+t (cid:48)(cid:89)
+
+t=1
+
+p (y1, ..., yt (cid:48)|x1, ..., xt ) =
+
+p (yt|v, y1, ..., yt   1)
+(1)
+sutskever et al. used a separate lstm for the en-
+coding and decoding tasks. while this separation
+permits training the encoder and decoder lstms
+separately, say for multitask learning or pre-training,
+we found our results were no worse if we used a sin-
+gle set of lstm parameters for both encoder and
+decoder.
+
+3.1 vocabulary
+the primary difference between our model and the
+translation model is our novel choice of vocabulary.
+the set of inputs include all 256 possible bytes, a
+special generate output (go) symbol, and a spe-
+cial drop symbol used for id173, which
+we will discuss below. the set of outputs include
+all possible span start positions (byte 0..k), all pos-
+sible span lengths (0..k), all span labels (per, loc,
+org, misc for the ner task), as well as a special
+stop symbol. a complete span annotation includes
+a start, a length, and a label, but as shown in fig-
+ure 1, the model is trained to produce this triple as
+three separate outputs. this keeps the vocabulary
+size small and in practice, gives better performance
+(and faster convergence) than if we use the cross-
+product space of the triples.
+
+more precisely, the prediction at time t is condi-
+tioned on the full input and all previous predictions
+(via the chain rule). by splitting each span anno-
+tation into a sequence [start, length, label], we are
+making no independence assumption; instead we are
+relying on the model to maintain a memory state that
+captures the important dependencies.
+each output distribution p (yt|v, y1, ..., yt   1) is
+given by a softmax over all possible items in the out-
+put vocabulary, so at a given time step, the model is
+free to predict any start, any length, or any label (in-
+cluding stop). in practice, because the training data
+always has these complete triples in a    xed order,
+we seldom see malformed or incomplete spans (the
+
+decoder simply ignores such spans). during train-
+ing, the true label yt   1 is fed as input to the model
+at step t (see figure 1), and during id136, the
+argmax prediction is used instead. note also that
+the training procedure tries to maximize the proba-
+bility in equation 1 (summed over all the training
+examples). while this does not quite match our task
+objectives (f1 over labels, for example), it is a rea-
+sonable proxy.
+
+independent segments
+
+3.2
+ideally, we would like our input segments to cover
+full documents so that our predictions are condi-
+tioned on as much relevant information as possible.
+however, this is impractical for a few reasons. from
+a training perspective, a recurrent neural network
+is unrolled to resemble a deep feedforward network,
+with each layer corresponding to a time step.
+it
+is well-known that running id26 over a
+very deep network is hard because it becomes in-
+creasingly dif   cult to estimate the contribution of
+each layer to the gradient, and further, id56s have
+trouble generalizing to different length inputs (er-
+han et al., 2009).
+
+so instead of document-sized input segments,
+we make a segment-independence assumption: we
+choose some    xed length k and train the model on
+segments of length k (any span annotation not com-
+pletely contained in a segment is ignored). this has
+the added bene   t of limiting the range of the start
+and length label components. it can also allow for
+more ef   cient batched id136 since each segment
+is decoded independently. finally, we can generate a
+large number of training segments by sliding a win-
+dow of size k one byte at a time through a document.
+note that the resulting training segments can begin
+and end mid-word, and indeed, mid-character. for
+both tasks described below, we set the segment size
+k = 60.
+
+3.3 sequence ordering
+our model differs from the translation model in one
+more important way. sutskever et al.
+found that
+feeding the input words in reverse order and gen-
+erating the output words in forward order gave sig-
+ni   cantly better translations, especially for long sen-
+tences. in theory, the predictions are conditioned on
+the entire input, but as a practical matter, the learn-
+
+ing problem is easier when relevant information is
+ordered appropriately since long dependencies are
+harder to learn than short ones.
+
+because the byte order is more meaningful in the
+forward direction (the    rst byte of a multibyte char-
+acter speci   es the length, for example), we found
+somewhat better performance with forward order
+than reverse order (less than 1% absolute). but un-
+like translation, where the outputs have a complex
+order determined by the syntax of the language, our
+span annotations are more like an unordered set. we
+tried sorting them by end position in both forward
+and backward order, and found a small improvement
+(again, less than 1% absolute) using the backward
+ordering (assuming the input is given in the forward
+order). this result validates the translation ordering
+experiments: the modeling problem is easier when
+the sequence-to-sequence lstm is used more like a
+stack than a queue.
+
+3.4 model shape
+we experimented with a few different architectures
+and found no signi   cant improvements in using
+more than 320 units for the embedding dimension
+and lstm memory and 4 stacked lstms (see table
+4). this observation holds for both models trained
+on a single language and models trained on many
+languages. because the vocabulary is so small, the
+total number of parameters is dominated by the size
+of the recurrent matrices. all the results reported
+below use the same architecture (unless otherwise
+noted) and thus have roughly 900k parameters.
+
+4 training
+we trained our models with stochastic gradient de-
+scent (sgd) on mini-batches of size 128, using an
+initial learning rate of 0.3. for all other hyper-
+parameter choices, including random initialization,
+learning rate decay, and gradient clipping, we fol-
+low sutskever et al. (2014). each model is trained
+on a single cpu over a period of a few days, at
+which point, development set results have stabilized.
+distributed training on gpus would likely speed up
+training to just a few hours.
+
+4.1 dropout and byte-dropout
+neural network models are often trained using
+dropout (hinton et al., 2012), which tends to im-
+
+prove generalization by limiting correlations among
+hidden units. during training, dropout randomly ze-
+roes some fraction of the elements in the embedding
+layer and the model state just before the softmax
+layer (zaremba et al., 2014).
+
+we were able to further improve generalization
+with a technique we are calling byte-dropout: we
+randomly replace some fraction of the input bytes in
+each segment with a special drop symbol (without
+changing the corresponding span annotations). intu-
+itively, this results in a more robust model, perhaps
+by forcing it to use longer-range dependencies rather
+than memorizing particular local sequences.
+
+it is worth noting that noise is often added at
+training time to images in image classi   cation and
+speech in id103 where the added noise
+does not fundamentally alter the input, but rather
+blurs it. by using a byte representation of language,
+we are now capable of achieving something like
+blurring with text. indeed, if we removed 20% of
+the characters in a sentence, humans would be able
+to infer words and meaning reasonably well.
+
+5
+
+id136
+
+we perform id136 on a segment by (greedily)
+computing the most likely output at each time step
+and feeding it to the next time step. experiments
+with id125 show no meaningful improve-
+ments (less than 0.2% absolute). because we as-
+sume that each segment is independent, we need to
+choose how to break up the input into segments and
+how to stitch together the results.
+
+the simplest approach is to divide up the input
+into segments with no overlapping bytes. because
+the model is trained to ignore incomplete spans, this
+approach misses all spans that cross segment bound-
+aries, which, depending on the choice of k, can be a
+signi   cant number. we avoid the missed-span prob-
+lem by choosing segments that overlap such that
+each span is likely to be fully contained by at least
+one segment.
+
+for our experiments, we create segments with a
+   xed overlap (k/2 = 30). this means that with
+the exception of the    rst segment in a document, the
+model reads 60 bytes of input, but we only keep pre-
+dictions about the last 30 bytes.
+
+6 results
+
+here we describe experiments on two datasets that
+include annotations across a variety of languages.
+the multilingual datasets allow us to highlight the
+advantages of using byte-level inputs: first, we can
+train a single compact model that can handle many
+languages at once. second, we demonstrate some
+cross-lingual abstraction that improves performance
+of a single multilingual model over each single-
+language model.
+in the experiments, we refer to
+the lstm setup described above as byte-to-span or
+bts.
+
+most state-of-the-art results in id52 and
+ner leverage unlabeled data to improve a super-
+vised baseline. for example, word clusters or word
+embeddings estimated from a large corpus are of-
+ten used to help deal with sparsity. because our
+lstm models are reading bytes, it is not obvious
+how to insert information like a word cluster iden-
+tity. recent results with sequence-to-sequence auto-
+encoding (dai and le, 2015) seem promising in this
+regard, but here we limit our experiments to use just
+annotated data.
+
+each task speci   es separate data for training, de-
+velopment, and testing. we used the development
+data for tuning the dropout and byte-dropout pa-
+rameters (since these likely depend on the amount
+of available training data), but did not tune the re-
+maining hyperparameters. in total, our training set
+for id52 across 13 languages included 2.87
+million tokens and our training set for ner across
+4 languages included 0.88 million tokens. recall,
+though, that our training examples are 60-byte seg-
+ments obtained by sliding a window through the
+training data, shifting by 1 byte each time. this re-
+sults in 25.3 million and 6.0 million training seg-
+ments for the two tasks.
+
+6.1 part-of-speech tagging
+our part-of-speech tagging experiments use version
+1.1 of the universal dependency data5, a collection
+of treebanks across many languages annotated with
+a universal tagset (petrov et al., 2011). the most
+relevant recent work (ling et al., 2015) uses differ-
+ent datasets, with different    ner-grained tagsets in
+each language. because we are primary interested
+
+in multilingual models that can share language-
+independent parameters, the universal tagset is im-
+portant, and thus our results are not immediately
+comparable. however, we provide baseline results
+(for each language separately) using a conditional
+random field (lafferty et al., 2001) with an exten-
+sive collection of features with performance compa-
+rable to the stanford pos tagger (manning, 2011).
+for our experiments, we chose the 13 languages that
+had at least 50k tokens of training data. we did not
+subsample the training data, though the amount of
+data varies widely across languages, but rather shuf-
+   ed all training examples together. these languages
+represent a broad range of linguistic phenomena and
+character sets so it was not obvious at the outset that
+a single multilingual model would work.
+
+table 1 compares the baselines with (crf+) and
+without (crf) externally trained cluster features
+with our model trained on all languages (bts) as
+well as each language separately (bts*). the single
+bts model improves on average over the crf mod-
+els trained using the same data, though clearly there
+is some bene   t in using external resources. note
+that bts is particularly strong in finnish, surpass-
+ing even crf+ by nearly 1.5% (absolute), probably
+because the byte representation generalizes better to
+agglutinative languages than word-based models, a
+   nding validated by ling et al.
+in addi-
+tion, the baseline crf models, including the (com-
+pressed) cluster tables, require about 50 mb per lan-
+guage, while bts is under 10 mb. bts improves
+on average over bts*, suggesting that it is learning
+some language-independent representation.
+
+(2015).
+
+6.2 id39
+our main motivation for showing id52 re-
+sults was to demonstrate how effective a single bts
+model can be across a wide range of languages. the
+ner task is a more interesting test case because,
+as discussed in the introduction, it usually relies
+on a pipeline of processing. we use the 2002 and
+2003 conll shared task datasets6 for multilingual
+ner because they contain data in 4 languages (en-
+glish, german, spanish, and dutch) with consistent
+annotations of named entities (per, loc, org,
+and misc). in addition, the shared task competition
+
+5http://universaldependencies.github.io/docs/
+
+6http://www.cnts.ua.ac.be/conll200{2,3}/ner
+
+language
+bulgarian
+czech
+danish
+german
+greek
+english
+spanish
+farsi
+finnish
+french
+indonesian
+italian
+swedish
+average
+
+crf+ crf
+97.00
+97.97
+98.00
+98.38
+95.06
+95.93
+93.08
+91.99
+97.21
+97.72
+94.51
+95.11
+96.08
+95.03
+96.25
+96.59
+92.82
+94.34
+95.93
+96.00
+92.84
+92.71
+97.61
+97.70
+96.15
+96.81
+96.04
+95.41
+
+bts bts*
+97.02
+97.84
+98.44
+98.50
+92.45
+95.52
+92.87
+92.34
+96.64
+97.39
+94.00
+93.87
+95.80
+95.26
+96.76
+96.82
+96.05
+95.48
+95.17
+95.75
+92.85
+91.03
+97.40
+97.56
+93.17
+95.57
+95.85
+95.06
+
+table 1: part-of-speech tagging accuracy for two crf base-
+lines and 2 versions of bts. crf+ uses resources external to
+the training data (word clusters) and crf uses only the training
+data. bts (unlike crf+ and crf) is a single model trained
+on all the languages together, while bts* is a separate byte-to-
+span model for each language.
+
+produced strong baseline numbers for comparison.
+however, most published results use extra informa-
+tion beyond the provided training data which makes
+fair comparison with our model more dif   cult.
+
+the best competition results for english and ger-
+man (florian et al., 2003) used a large gazetteer
+and the output of two additional ner classi   ers
+trained on richer datasets. since 2003, better results
+have been reported using additional semi-supervised
+techniques (ando and zhang, 2005) and more re-
+cently, passos et al.
+(2014) claimed the best en-
+glish results (90.90% f1) using features derived
+from word-embeddings. the 1st place submission
+in 2002 (carreras et al., 2002) comment that with-
+out extra resources for spanish, their results drop by
+about 2% (absolute).
+
+perhaps the most relevant comparison is the over-
+all 2nd place submission in 2003 (klein et al., 2003).
+they use only the provided data and report results
+with character-based models which provide a useful
+comparison point to our byte-based lstm. the per-
+formance of a character id48 alone is much worse
+than their best result (83.2% vs 92.3% on the en-
+glish development data), which includes a variety of
+word and pos-tag features that describe the context
+
+(as well as some post-processing rules). for english
+(assuming just ascii strings), the character id48
+uses the same inputs as bts, but is hindered by
+some combination of the independence assumption
+and smaller capacity.
+
+collobert et al.   s (2011) convolutional model (dis-
+cussed above) gives 81.47% f1 on the english test
+set when trained on only the gold data. however, by
+using carefully selected word-embeddings trained
+on external data, they are able to increase f1 to
+88.67%. huang et al. (2015) improve on collobert   s
+results by using a bidirectional lstm with a crf
+layer where the inputs are features describing the
+words in each sentence. either by virtue of the more
+powerful model, or because of more expressive fea-
+tures, they report 84.26% f1 on the same test set
+and 90.10% when they add pretrained word embed-
+ding features. dos santos et al.
+(2015) represent
+each word by concatenating a pretrained word em-
+bedding with a character-level embedding produced
+by a convolutional neural network.
+
+there is relatively little work on multilingual
+ner, and most research is focused on building sys-
+tems that are unsupervised in the sense that they use
+resources like wikipedia and freebase rather than
+manually annotated data. nothman et al. (2013) use
+wikipedia anchor links and disambiguation pages
+joined with freebase types to create a huge amount
+of somewhat noisy training data and are able to
+achieve good results on many languages (with some
+extra heuristics). these results are also included in
+table 2.
+
+while bts does not improve on the state-of-
+the-art in english, its performance is better than
+the best previous results that use only the provided
+training data. bts improves signi   cantly on the
+best known results in german, spanish, and dutch
+even though these leverage external data. in addi-
+tion, the bts* models, trained separately on each
+language, are worse than the single bts model
+(with the same number of parameters as each single-
+language model) trained on all languages combined,
+again suggesting that the model is learning some
+language-independent representation of the task.
+
+one interesting shortcoming of the bts model is
+that it is not obvious how to tune it to increase re-
+call. in a standard classi   er framework, we could
+simply increase the prediction threshold to increase
+
+model
+passos
+ando
+florian
+carreras
+dos santos
+nothman
+klein
+huang
+collobert
+bts
+bts*
+
+en
+90.90
+89.31
+88.76
+
+   
+   
+85.2
+86.07
+84.26
+81.47
+86.50
+84.57
+
+de
+   
+
+75.27
+72.41
+
+   
+   
+66.5
+71.90
+
+   
+   
+
+76.22
+72.08
+
+es
+   
+   
+   
+
+81.39
+82.21
+79.6
+   
+   
+   
+
+82.95
+81.83
+
+nl
+   
+   
+   
+
+77.05
+
+   
+78.6
+   
+   
+   
+
+82.84
+78.08
+
+table 2: a comparison of ner systems. the results are f1
+scores, where a correct span annotation exactly matches a gold
+span annotation (start, length, and entity type must all be cor-
+rect). results of the systems described in the text are shown for
+english, german, spanish, and dutch. bts* shows the results
+of the bts model trained separately on each language while
+bts is a single model trained on all 4 languages together. the
+top set of results leverage resources beyond the training data;
+the middle set do not, and thus are most comparable to our re-
+sults (bottom set).
+
+precision and decrease the prediction threshold to in-
+crease recall. however, because we only produce
+annotations for spans (non-spans are not annotated),
+we can adjust a threshold on total span id203
+(the product of the start, length, and label probabili-
+ties) to increase precision, but there is no clear way
+to increase recall. the untuned model tends to pre-
+fer precision over recall already, so some heuristic
+for increasing recall might improve our overall f1
+results.
+
+6.3 dropout and stacked lstms
+there are many modeling options and hyperparam-
+eters that signi   cantly impact the performance of
+neural networks. here we show the results of a
+few experiments that were particularly relevant to
+the performance obtained above.
+
+first, table 3 shows how dropout and byte-
+dropout improve performance for both tasks. with-
+out any kind of dropout, the training process starts to
+over   t (development data perplexity starts increas-
+ing) relatively quickly. for id52, we set
+dropout and byte-dropout to 0.2, while for ner, we
+set both to 0.3. this signi   cantly reduces the over-
+
+   tting problem.
+
+bts training
+vanilla
++ dropout
++ byte-dropout
+
+pos accuracy ner f1
+74.75
+78.76
+82.13
+
+94.78
+95.35
+95.85
+
+table 3: bts part-of-speech tagging average accuracy across
+all 13 evaluated languages and id39 aver-
+age f1 across all 4 evaluated languages with various modi   ca-
+tions to the vanilla training setup. dropout is standard in neural
+network model training because it often improves generaliza-
+tion; byte-dropout randomly replaces input bytes with a special
+drop marker.
+
+depth width=320 width=640
+
+1
+2
+3
+4
+
+76.15
+79.40
+81.44
+82.13
+
+77.59
+79.73
+81.93
+82.18
+
+table 4: macro-averaged (across 4 languages) f1 for the ner
+task using different model architectures.
+
+second, table 4 shows how performance im-
+proves as we increase the size of the model in two
+ways:
+the number of units in the model   s state
+(width) and the number of stacked lstms (depth).
+increasing the width of the model improves perfor-
+mance less than increasing the depth, and once we
+use 4 stacked lstms, the added bene   t of a much
+wider model has disappeared. this result suggests
+that rather than learning to partition the space of in-
+puts according to the source language, the model is
+learning some lanugage-independent representation
+at the deeper levels.
+
+to validate our claim about language-independent
+representation, figure 2 shows the results of a tsne
+plot of the lstm   s memory state when the output
+is one of per, loc, org, misc across the four
+languages. while the label clusters are neatly sepa-
+rated, the examples of each individual label do not
+appear to be clustered by language. thus rather than
+partitioning each (label, language) combination, the
+model is learning uni   ed label representations that
+are independent of the language.
+7 conclusions
+we have described a model that uses a sequence-to-
+sequence lstm framework that reads a segment of
+
+figure 2: a tsne plot of the bts model   s memory state just before the softmax layer produces one of the ner labels.
+
+text one byte at a time and then produces span anno-
+tations over the inputs. this work makes a number
+of novel contributions:
+
+first, we use the bytes in variable length unicode
+encodings as inputs. this makes the model vocab-
+ulary very small and also allows us to train a mul-
+tilingual model that improves over single-language
+models without using additional parameters. we in-
+troduce byte-dropout, an analog to added noise in
+speech or blurring in images, which signi   cantly im-
+proves generalization.
+
+second,
+
+the model produces span annotations,
+where each is a sequence of three outputs: a start
+position, a length, and a label. this decomposi-
+tion keeps the output vocabulary small and marks a
+signi   cant departure from the typical begin-inside-
+outside (bio) scheme used for labeling sequences.
+
+finally, the models are much more compact than
+traditional word-based systems and they are stan-
+dalone     no processing pipeline is needed. in par-
+ticular, we do not need a tokenizer to segment text
+in each of the input languages.
+
+acknowledgments
+
+many thanks to fernando pereira and dan ramage
+for their insights about this project from the outset.
+thanks also to cree howard for creating figure 1.
+
+references
+
+[ando and zhang2005] rie kubota ando and tong
+zhang. 2005. a framework for learning predictive
+structures from multiple tasks and unlabeled data. the
+journal of machine learning research, 6:1817   1853.
+[bahdanau et al.2014] dzmitry bahdanau, kyunghyun
+cho, and yoshua bengio.
+2014. neural machine
+translation by jointly learning to align and translate.
+arxiv preprint arxiv:1409.0473.
+
+[bahdanau et al.2015] dzmitry
+
+jan
+chorowski, dmitriy serdyuk, philemon brakel,
+2015. end-to-end attention-
+and yoshua bengio.
+arxiv
+based large vocabulary id103.
+preprint arxiv:1508.04395.
+
+bahdanau,
+
+[ballesteros et al.2015] miguel ballesteros, chris dyer,
+and noah a smith. 2015. improved transition-based
+parsing by modeling characters instead of words with
+lstms. arxiv preprint arxiv:1508.00657.
+
+40302010010203040504030201001020304050loc enloc deloc esloc nlmisc enmisc demisc esmisc nlorg enorg deorg esorg nlper enper deper esper nl[carreras et al.2002] xavier carreras, llu    s m`arques, and
+llu    s padr  o. 2002. named entity extraction using ad-
+in proceedings of conll-2002, pages 167   
+aboost.
+170. taipei, taiwan.
+
+[chan et al.2015] william chan, navdeep jaitly, quoc v
+le, and oriol vinyals. 2015. listen, attend and spell.
+arxiv preprint arxiv:1508.01211.
+
+[chitnis and denero2015] rohan chitnis and john den-
+ero. 2015. variable-length word encodings for neural
+translation models. in proceedings of the 2015 con-
+ference on empirical methods in natural language
+processing, pages 2088   2093.
+
+[church1993] kenneth ward church. 1993. char align:
+a program for aligning parallel texts at the character
+in proceedings of the 31st annual meeting on
+level.
+association for computational linguistics, pages 1   8.
+association for computational linguistics.
+
+[collobert et al.2011] ronan collobert, jason weston,
+l  eon bottou, michael karlen, koray kavukcuoglu,
+and pavel kuksa. 2011. natural language process-
+ing (almost) from scratch. the journal of machine
+learning research, 12:2493   2537.
+
+[dai and le2015] andrew m dai and quoc v le. 2015.
+semi-supervised sequence learning. arxiv preprint
+arxiv:1511.01432.
+
+dos
+
+[dos santos et al.2015] c  cero
+
+victor
+guimaraes, rj niter  oi, and rio de janeiro. 2015.
+boosting id39 with neural char-
+acter embeddings. in proceedings of news 2015 the
+fifth named entities workshop, page 25.
+
+santos,
+
+[duong et al.2015] long duong, trevor cohn, steven
+bird, and paul cook. 2015. low resource depen-
+dency parsing: cross-lingual parameter sharing in a
+neural network parser. in 53rd annual meeting of the
+association for computational linguistics and the 7th
+international joint conference on natural language
+processing (volume 2: short papers), pages 845   850.
+[erhan et al.2009] dumitru erhan, pierre-antoine man-
+zagol, yoshua bengio, samy bengio, and pascal vin-
+cent. 2009. the dif   culty of training deep architec-
+tures and the effect of unsupervised pre-training.
+in
+international conference on arti   cial intelligence and
+statistics, pages 153   160.
+
+[eyben et al.2009] florian eyben, martin w  ollmer, bj  orn
+schuller, and alex graves. 2009. from speech to
+letters-using a novel neural network architecture for
+grapheme based asr. in automatic id103
+& understanding, 2009. asru 2009. ieee workshop
+on, pages 376   380. ieee.
+
+[florian et al.2003] radu florian, abe
+
+ittycheriah,
+2003. named
+hongyan jing, and tong zhang.
+entity recognition through classi   er combination.
+in
+proceedings of the seventh conference on natural
+
+language learning at hlt-naacl 2003-volume
+4, pages 168   171. association for computational
+linguistics.
+
+[frantzeskou et al.2006] georgia frantzeskou, efstathios
+stamatatos, stefanos gritzalis, and sokratis katsikas.
+2006. effective identi   cation of source code authors
+in proceedings of the
+using byte-level information.
+28th international conference on software engineer-
+ing, pages 893   896. acm.
+
+[graves and jaitly2014] alex graves and navdeep jaitly.
+2014. towards end-to-end id103 with re-
+current neural networks. in proceedings of the 31st in-
+ternational conference on machine learning (icml-
+14), pages 1764   1772.
+
+[hinton et al.2012] geoffrey e hinton, nitish srivas-
+tava, alex krizhevsky, ilya sutskever, and ruslan r
+salakhutdinov. 2012. improving neural networks by
+preventing co-adaptation of feature detectors. arxiv
+preprint arxiv:1207.0580.
+
+[hochreiter and schmidhuber1997] sepp hochreiter and
+j  urgen schmidhuber. 1997. long short-term memory.
+neural computation, 9(8):1735   1780.
+
+[huang et al.2015] zhiheng huang, wei xu, and kai yu.
+2015. bidirectional lstm-crf models for sequence tag-
+ging. arxiv preprint arxiv:1508.01991.
+
+[kim et al.2015] yoon kim, yacine jernite, david son-
+2015. character-
+arxiv preprint
+
+tag, and alexander m rush.
+aware neural
+arxiv:1508.06615.
+
+language models.
+
+[klein et al.2003] dan klein, joseph smarr, huy nguyen,
+and christopher d manning. 2003. named entity
+recognition with character-level models. in proceed-
+ings of the seventh conference on natural language
+learning at hlt-naacl 2003-volume 4, pages 180   
+183. association for computational linguistics.
+
+[lafferty et al.2001] john lafferty, andrew mccallum,
+and fernando cn pereira. 2001. conditional random
+   elds: probabilistic models for segmenting and label-
+ing sequence data.
+
+[ling et al.2015] wang ling, tiago lu    s, lu    s marujo,
+ram  on fernandez astudillo, silvio amir, chris dyer,
+alan w black, and isabel trancoso. 2015. finding
+function in form: compositional character models for
+open vocabulary word representation. arxiv preprint
+arxiv:1508.02096.
+
+[manning2011] christopher d manning. 2011. part-of-
+speech tagging from 97% to 100%: is it time for some
+linguistics? in computational linguistics and intelli-
+gent text processing, pages 171   189. springer.
+
+[nakagawa2004] tetsuji nakagawa.
+
+chinese
+and japanese id40 using word-level and
+in proceedings of the
+character-level information.
+
+2004.
+
+20th international conference on computational lin-
+guistics, page 466. association for computational lin-
+guistics.
+
+[nothman et al.2013] joel nothman, nicky ringland,
+will radford, tara murphy, and james r curran.
+2013. learning multilingual id39
+from wikipedia. arti   cial intelligence, 194:151   175.
+[passos et al.2014] alexandre passos, vineet kumar, and
+andrew mccallum. 2014. lexicon infused phrase
+arxiv
+embeddings for named entity resolution.
+preprint arxiv:1404.5367.
+
+[peng et al.2003] fuchun peng, dale schuurmans, shao-
+jun wang, and vlado keselj. 2003. language in-
+dependent authorship attribution using character level
+language models. in proceedings of the tenth confer-
+ence on european chapter of the association for com-
+putational linguistics-volume 1, pages 267   274. as-
+sociation for computational linguistics.
+
+[petrov et al.2011] slav petrov, dipanjan das, and ryan
+mcdonald. 2011. a universal part-of-speech tagset.
+arxiv preprint arxiv:1104.2086.
+
+[sutskever et al.2014] ilya sutskever, oriol vinyals, and
+quoc v le. 2014. sequence to sequence learning with
+in advances in neural information
+neural networks.
+processing systems, pages 3104   3112.
+
+[zaremba et al.2014] wojciech zaremba, ilya sutskever,
+and oriol vinyals. 2014. recurrent neural network
+id173. arxiv preprint arxiv:1409.2329.
+
+[zhang et al.2015] xiang zhang, junbo zhao, and yann
+lecun. 2015. character-level convolutional networks
+for text classi   cation. in advances in neural informa-
+tion processing systems, pages 649   657.
+
+

@@ -1,0 +1,1493 @@
+day 2
+
+sequence models
+
+in this class, we relax the assumption that datapoints are independently and
+identically distributed (i.i.d.) by moving to a scenario of id170,
+where the inputs are assumed to have temporal or spacial dependencies. we
+start by considering sequential models, which correspond to a chain structure:
+for instance, the words in a sentence. in this lecture, we will use part-of-speech
+tagging as our example task.
+the problem setting is the following: let x = {  x1, . . . ,   xd} be a training set
+of independent and identically-distributed random variables. in this work   xd
+(for notation simplicity we will drop the superscript d when considering an iso-
+lated example) corresponds to a sentence in natural language and decomposes
+as a sequence of observations of length n:   x = x1 . . . xn. each xn is a discrete
+random variable (a word), taking a value v from a    nite vocabulary v. each   x
+has an unknown hidden structure   y that we want to predict. the structures are
+sequences   y = y1 . . . yn of the same length n as the observations. each hidden
+state yn is a discrete random variable and can take a value y from a discrete
+vocabulary y.
+
+we focus on the well known hidden markov model (id48) on section
+2.1, where we describe how to estimate its parameters from labeled data 2.2.
+we will then move to how to    nd the most likely hidden sequence (decod-
+ing) given an observation sequence and a parameter set 2.3. this section will
+explain the required id136 algorithms (viterbi and forward-backward) for
+sequence models. these id136 algorithms will be fundamental for the rest
+of this lecture, as well as for the next lecture on discriminative training of se-
+quence models. finally, section 2.4 will describe the task of part-of-speech tag-
+ging, and how id48 are suitable for this task.
+
+53
+
+x
+d
+  x = x1 . . . xn
+n
+xi
+v
+|v|
+vi
+  y = y1 . . . yn
+yi
+y
+|y|
+yi
+
+notation
+
+training set
+number of training examples
+observation sequence
+size of the observation sequence
+observation at position i in the sequence
+observation values set
+number of distinct observation types
+particular observation, i     |v|
+hidden state sequence
+hidden state at position i in the sequence
+hidden states value set
+number of distinct hidden value types
+particular hidden value, i     |y|
+
+table 2.1: general notation used in this class
+
+2.1 id48
+
+the hidden markov model (id48) is one of the most common sequence prob-
+abilistic models, and has been applied to a wide variety of tasks. more gener-
+ally, an id48 is a particular instance of a chain directed probabilistic graphical
+model, or a id110. in a id110, every random variable is
+represented as a node in a graph, and the edges in the graph are directed and
+represent probabilistic dependencies between the random variables. for an
+id48, the random variables are divided into two sets, the observed variables,
+in our case x, and the hidden variables, in our case y. in the id48 terminol-
+ogy, the observed variables are called observations, and the hidden variables are
+called states.
+
+as you may    nd out in today   s lab session, implementing the id136
+routines of the id48 can be challenging, and debugging can become hard in
+large datasets. we thus start with a small and very simple (very unrealistic!)
+example. the idea is that you may compute the desired quantities by hand and
+check if your implementation yields the correct result.
+
+example 2.1 consider a person, which is only interested in four activities:
+
+    walking in the park (w);
+
+    shopping (s);
+
+    cleaning his apartment (c);
+
+    playing tennis (t).
+
+54
+
+the choice of what to do on a given day is determined exclusively by the weather at that
+day. the weather can be either rainy (r) or sunny (s). now, suppose that we observe
+what the person did on a sequence of days; can we use that information to predict the
+weather each of those days? to tackle this problem, we assume that the weather behaves
+as a discrete markov chain: the weather on a given day is independent of everything
+else given the weather on the previous day. the entire system is that of a hidden
+markov model (id48).
+
+assume we are asked to predict what was the weather on two different sequences of
+days given the following observations:    walk walk shop clean    and    clean walk tennis
+walk   . this will be our test set.
+
+to train our model, we will be given access to three different sequences of days,
+containing both the activities and the weather on those days, namely:    walk/rainy
+walk/sunny shop/sunny clean/sunny   ,    walk/rainy walk/rainy shop/rainy clean/rainy
+    and    shop/rainy walk/rainy shop/rainy clean/rainy   . this will be our training set.
+
+figure 2.1 show the id48 model the    rst sequence of our simple example
+
+(the notation is summarized in table 2.2).
+
+id48 example
+
+  x
+n = 4
+i, j
+v = {w, s, c, t}
+p, q
+xi = vq, xj = vp
+y = {r, s}
+l, m
+yi = yl, yj = ym
+
+observed sentence    w w s c   
+observation length
+positions in the sentence: i, j     {1 . . . n}
+observation vocabulary
+indexes into the vocabulary p, q     |v|
+observation at position xi (xj) has value vq (vp)
+hidden values vocabulary
+indexes into the hidden values vocabulary
+state at position yi (yj) has hidden value yl (ym)
+
+table 2.2: id48 notation for the running example.
+
+a    rst order id48 model has the following independence assumptions
+
+over the joint distribution p  (  x,   y):
+
+    independence of previous states. the id203 of being in a given
+state yl at position yi only depends on the state ym of the previous posi-
+tion yi   1, that is p  (yi = yl | yi   1 = ym, yi   2 . . . y1) = p  (yi = yl | yi   1 =
+ym), de   ning a    rst order markov chain.1
+
+    homogeneous transition. the id203 of making a transition from
+state yl to state ym is independent of the particular position in the sen-
+1the order of the markov chain depends on the number of previous positions taken into ac-
+count. the remainder of the exposition can be easily extend to higher order id48, giving the
+model more expressiveness, but making id136 harder.
+
+55
+
+figure 2.1: id48 structure, for the simple running example.
+
+tence, for all i, j     {1, . . . , n}: p  (yi = yl | yi   1 = ym) = p  (yj = yl |
+yj   1 = ym), so p  (yi = yl | yi   1 = ym) = p  (yl | ym).
+
+    observation independence. the id203 of observing vq at position
+i is fully determined by the state at that position, that is p  (xi = vq | yi =
+yl), and this id203 is independent of the particular position, that is
+p  (xi = vq | yi = yl) = p  (vq | yl).
+
+these conditional independence assumptions are crucial to allow ef   cient in-
+ference, as will be described. we also need to de   ne a start id203, the
+id203 of starting at state yl. furthermore, when dealing with text, it is
+usual to break the homogeneous transition for the last position, and model the
+   nal transitions as independent parameters. the four id203 distributions
+that de   ne the id48 model are summarized in table 2.3. for each one of them
+we will use a short notation to simplify the exposition.
+
+id48 distributions
+
+name
+initial id203
+   nal id203
+transition id203
+observation id203
+
+id203 distribution
+p  (y1 = yl)
+p  (yt = yl | yt   1 = ym)
+p  (yi = yl | yi   1 = ym)
+p  (xi = vq | yi = yl)
+
+short notation
+  l
+fm,l
+am,l
+bl(xi)
+
+table 2.3: id48 id203 distributions.
+
+the joint distribution can be expressed as:
+
+p  (  x,   y) =   y1by1 (x1)[
+
+n   1   
+
+i=2
+
+ayi   1,yibyi (xi)] fyn   1,yn byn (xn),
+
+(2.1)
+
+56
+
+rssswwscshort notation
+
+  j
+al,m
+fl,m
+bq(l)
+
+p  (y1 = yj)
+
+id203 distribution    parameters   
+p  (yi = yl | yi   1 = ym)
+p  (yn = yl | yn   1 = ym)
+p  (xi = vq | yi = yl)
+
+|y| - 1
+(|y|     1)2
+(|y|     1)2
+(|v|     1)|y|
+
+constraint
+   y   y   j = 1;
+   yl   y am,l = 1;
+   yl   y tm,l = 1;
+   vq   v bq(l) = 1.
+
+table 2.4: multinomial parametrization of the id48 distributions.
+
+which for the example from figure 2.1 is:
+
+p  (  x,   y) =   rbr(   w   )ar,sbs(   w   )as,sbs(   s   ) fs,sbs(   c   ).
+
+(2.2)
+
+in the next section we turn our attention to estimating the different proba-
+
+bilities distributions of the model   l, am,l, fm,l and bl(xi).
+
+exercise 2.1 load the simple sequence dataset: from the ipython command line (note
+start ipython from the code directory), create a simple sequence object and look at the
+training and test set.
+
+1 in[]: run readers/simple_sequence.py
+
+in[]: simple = simplesequence()
+
+3 in[]: simple.train
+
+out[]: [w/r w/s s/s c/s , w/r w/r s/r c/s , w/s s/s s/s c/s ]
+
+5 in[]: simple.test
+
+out[]: [w/r w/s s/s c/s , c/s w/s t/s w/s ]
+
+2.2
+
+finding the maximum likelihood parameters
+
+so far we have not committed to any form for the id203 distributions,   l,
+am,l, fm,l and bl(xi). in both applications addressed in this class, both the obser-
+vations and the hidden variables are discrete. the most common approach is
+to model each of these id203 distributions as multinomial distributions,
+summarized in table 2.4.
+
+we will refer to the set of all parameters as   . the id48 model is trained
+to maximize the log likelihood of the data. given a dataset d the objective
+being optimized is:
+
+arg max
+
+  
+
+   
+  x,  y   d
+
+log p  (  x,   y)
+
+(2.3)
+
+multinomial distributions are attractive for several reasons:    rst of all they
+are easy to implement; secondly the estimation of the maximum likelihood
+
+57
+
+parameters has a simple closed form. they are just normalized counts of events
+that occur in the corpus (the same as the na    ve bayes from previous class).
+
+given a labeled corpus the estimation process consists in counting how
+many times each event occurs in the corpus and normalize the counts to form
+proper id203 distributions. let us de   ne the following quantities, called
+suf   cient statistics, that represent the counts of each event in the corpus:
+
+initial counts :
+
+final counts :
+
+transition counts :
+
+state counts :
+
+1(y1 = yj);
+
+ic(yl) =    
+  x,  y   d
+f c(yl, ym) =    
+  x,  y   d
+tc(yl, ym) =    
+  x,  y   d
+sc(vq, yl) =    
+  x,  y   d
+
+i=1
+
+n   
+
+i=1
+
+1(yn = yl | yn   1 = ym);
+n   1   
+
+1(yi = yl | yi   1 = ym);
+
+1(xi = vq | yi = yl)
+
+(2.4)
+
+(2.5)
+
+(2.6)
+
+(2.7)
+
+note that 1 is an indicator function that has the value one when the par-
+ticular event happens, and zero otherwise. in words the previous equations
+amount to do a pass over the training corpus and count how many times each
+even occurs: e.g. the word    w    appears with state    s   , or state    s    follows
+another state    s   , or state    s    begins the sentence.
+
+after computing the counts, one can perform some sanity checks to make
+sure the implementation is correct. summing over all entries of each count
+table we should observe the following:
+
+    initial counts: - should sum to the number of sentences.
+
+    final counts: - should sum to the number of sentences.
+
+    transition counts: - should sum to the number of tokens minus 2 times
+the number of sentences. note that there are n-1 edges for each sentence,
+and the last edge is being accounted by the    nal transitions. so this leaves
+us with n-2 edges per sentence, where n is the number of tokens in that
+sentence.
+
+    observation counts: - should sum to the number of tokens.
+
+exercise 2.2 convince yourself of the sanity check described above.
+
+implement a method to sanity check the counts table.
+
+def sanity_check_counts(self,seq_list):
+
+58
+
+collect the counts from a supervised corpus using method collect counts from corpus(self,sequence list)
+
+and make sure your sanity check method is correct.
+
+1 in []: run sequences/id48.py
+
+in []: id48 = id48(simple)
+
+3 in []: id48.collect_counts_from_corpus(simple)
+
+in []: id48.sanity_check_counts(simple)
+
+5 init counts match
+
+final counts match
+
+7 transition counts match
+
+observations counts match
+
+using the suf   cient statistics (counts) the parameter estimates are:
+
+    l =
+
+  fl,m =
+
+  al,m =
+
+  bl(vq = o) =
+
+ic(yl)
+
+   ym   y ic(ym)
+f c(yl, ym)
+
+   ym   y f c(yl, ym)
+
+tc(yl, ym)
+
+   ym   y tc(yl, ym)
+
+sc(vq, yl)
+
+   vp   v sc(vp, yl)
+
+(2.8)
+
+(2.9)
+
+(2.10)
+
+(2.11)
+
+exercise 2.3 implement a function that estimates the maximum likelihood estimates
+for the parameters given the corpus in the class id48. the function header is in the
+id48.py    le.
+
+def train_supervised(self,sequence_list):
+
+run this function given the simple dataset and compare the results with ones given (if
+the results are the same then you are ready to go).
+
+1 in[]:
+
+run sequences/id48.py
+
+in[]: id48 = id48(simple)
+
+3 in[]: id48.train_supervised(simple.train)
+
+in []: id48.init_probs
+
+5 out[]:
+
+array([[ 0.66666667],
+
+7
+
+[ 0.33333333]])
+
+in []: id48.transition_probs
+
+9 out[]:
+
+array([[ 0.66666667,
+[ 0.33333333,
+
+0.
+1.
+
+11
+
+],
+]])
+
+59
+
+in []: id48.final_probs
+
+13 out[]:
+
+array([[ 0., 0.],
+
+15
+
+[ 1.,
+
+1.]])
+
+in []: id48.observation_probs
+
+17 out[]:
+
+array([[ 0.75 ,
+[ 0.25 ,
+,
+[ 0.
+[ 0.
+,
+
+19
+
+21
+
+0.25 ],
+0.375],
+0.375],
+0.
+
+]])
+
+2.3
+
+finding the most likely sequence - decoding
+
+given the learned parameters and an observation   x we want to    nd the best
+hidden state sequence   y   . there are several ways to de   ne what we mean by
+the best   y   , for instance, the best assignment to each hidden variable yi and
+the best assignment to the sequence   y as a whole. the    rst way, normally
+called posterior decoding consists in picking the highest state posterior for
+each position in the sequence:
+
+  y    = arg max
+y1...yn
+
+  i(yi),
+
+(2.12)
+
+where   i(yi) is the posterior id203 p(yi|  x). this method does not guar-
+antee that the sequence   y    is a valid sequence of the model. for instance there
+might be a transition id203 between two of the best node posteriors with
+id203 zero.
+
+the second approach called viterbi decoding consists in picking the best
+
+global hidden state sequence   y.
+
+  y    = arg max
+
+  y
+
+p  (  x,   y).
+
+(2.13)
+
+both approaches rely on id145 making use of the inde-
+pendence assumptions of the id48 model over an alternative representation
+of the id48 called a trellis (figure 2.2).
+
+this representation unfolds all possible states for each position and makes
+explicit the independence assumption, each position only depends on the pre-
+vious position. figure 2.2 shows the trellis for the particular example in figure
+2.1.
+
+each column represents a position, in the sentence as is associated with its
+observation, and each row represents a possible state. for the algorithms de-
+scribed in the following section it would be useful to de   ne a new re-parametrization
+
+60
+
+figure 2.2: trellis representation of the id48 in figure 2.1, for the observation
+sequence    w w s c   , where each hidden variable can take the values r, s.
+
+of the model, in terms of node potentials   n(l) (the value of the boxes in figure
+2.2) and edge potentials   n(l, m) (the value of the links in figure 2.2). there is
+a direct mapping from the id48 parameters to this new representation:
+
+    edge potentials - correspond to the transition parameters, with the excep-
+tion of the edges into the last position that correspond to the    nal transi-
+tion parameters.
+
+    node potentials - correspond to the observation parameters for a given
+state and the observation at that position. the    rst position is the excep-
+tion and corresponds to the product between the observation parameters
+for that state and the observation in that position with the initial param-
+eters for that state.
+
+although this re-parametrization simpli   es the exposition, and will be used
+in this lectures, it is not necessarily very practical since we will be reproducing
+several values (for instance the transition parameters for each position). given
+the node potentials and edge potentials the id203 of the sequence form
+the example is:
+
+p  (  x,   y) =   1(r)  1(r, s)  2(s)  2(s, s)  3(s)  3(s, s)  4(s).
+
+(2.14)
+
+exercise 2.4 convince yourself that the equation 2.14 is equivalent to equation 2.2
+
+implement a function that builds the node and edge potentials for a given sequence.
+
+the function head is in the id48.py    le:
+
+1 def build_potentials(self,sequence):
+
+run this function for the    rst training sequence from the simple dataset and com-
+
+pare the results given (if the results are the same then you are ready to go).
+
+1 in[]:
+
+run sequences/id48.py
+
+61
+
+rsrsrsrsin[]: id48 = id48(simple)
+
+3 in[]: id48.train_supervised(simple.train)
+
+in[]: node_potentials,edge_potentials = id48.build_potentials(
+
+simple.train.seq_list[0])
+
+5 in []: node_potentials
+
+out[]:
+
+7 array([[ 0.5
+
+,
+[ 0.08333333,
+
+0.75
+0.25
+
+,
+,
+
+0.25
+0.375
+
+, 0.
+, 0.375
+
+],
+]])
+
+9
+
+in []: edge_potentials
+
+11 out[]:
+
+13
+
+15
+
+array([[[ 0.66666667,
+[ 0.33333333,
+
+0.66666667,
+0.33333333,
+
+0.
+1.
+
+[[ 0.
+[ 1.
+
+,
+,
+
+0.
+1.
+
+, 0.
+1.
+,
+
+],
+]],
+
+],
+]]])
+
+2.3.1 posterior decoding
+posterior decoding consists in picking the highest state posterior for each posi-
+tion in the sequence:
+
+  y    = arg max
+y1...yn
+
+  i(yi).
+
+(2.15)
+
+for a given sequence, the sequence posterior distribution is the id203
+of a particular hidden state sequence given that we have observed a particular
+sentence. moreover, we will be interested in two other posteriors distributions:
+the state posterior distribution, corresponding to the id203 of being in a
+given state in a certain position given the observed sentence; the transition
+posterior distribution, which is the id203 of making a particular transi-
+tion, from position i to i + 1 given the observed sentence.
+
+sequence posterior :
+
+p  (   y |   x) =
+
+p  (  x,   y)
+p  (  x)
+
+;
+
+state posterior :   i(yl) = p  (yi = yl |   x);
+
+transition posterior :
+
+  i(yl, ym) = p  (yi = yl, yi+1 = ym |   x).
+
+(2.16)
+
+(2.17)
+(2.18)
+
+to compute the posteriors a    rst step is to be able to compute the likelihood
+of the sequence p  (  x), which corresponds to summing the id203 of all
+possible hidden state sequences.
+
+likelihood :
+
+p  (  x) =    
+
+  y
+
+p  (  x,   y).
+
+(2.19)
+
+62
+
+figure 2.3: forward trellis for the    rst sentence of the training data at position
+1 (left) and at position 2 (right)
+
+the number of possible hidden state sequences is exponential in the length of
+the sentence (|y|n), which makes summing over all of them hard. in this partic-
+ular small example there are 24 = 16 such paths and we can actually enumerate
+them explicitly and calculate their id203 using equation 2.14. but this is
+as far as it goes, for part-of-speech induction with a small tagset of 12 tags and
+a medium size sentence of length 10, there are 1210 = 61917364224 such paths.
+yet, we must be able to compute this sum (sum over   y) to compute the above
+likelihood formula, this is called the id136 problem. for sequence models ,
+there is a well know id145 algorithm, the forward backward
+algorithm (fb), that allows the computation to be performed in linear time, by
+making use of the independence assumptions.
+
+the fb algorithm relies on the independence of previous states assumption,
+which is illustrated in the trellis view by only having arrows between consec-
+utive states. the fb algorithm de   nes two auxiliary probabilities, the forward
+id203 and the backward id203.
+
+forward id203 :
+
+  i(yl) = p  (yi = yl, x1 . . . xi)
+
+(2.20)
+
+the forward id203 represents the id203 that in position i we are in
+state yi = yl and that we have observed   x up to that position. the forward
+id203 is de   ned by the following recurrence (we will use the marginals
+parametrization of the model):
+
+(cid:34)
+
+  1(yl) =   1(l)
+   
+ym   y
+
+  i(yl) =
+
+(cid:35)
+
+(2.21)
+
+(2.22)
+
+  (i   1)(m, l)  i   1(ym)
+
+  i(l)
+
+at position 1, the id203 of being in state    r    corresponding to being
+in state    r    and observing word    w    is just the node marginal for that position
+  1(r) =   1(r) (see figure 2.3 left). at position 2 the id203 of being in
+state    s    and observing the sequence of words    w w    corresponds to the sum
+of all possible ways of reaching position 2 in state    s    namely:    rs    or    ss   
+(see figure 2.3 right). the id203 of the    rst is   1(r)  1(r, s)  2(s) and the
+
+63
+
+rsrsrsrsrsrsrsrssecond is   1(s)  1(s, s)  2(s), so:
+
+  2(s) =   1(r)  1(r, s)  2(s) +   1(s)  1(s, s)  2(s)
+  2(s) = [  1(r)  1(r, s)  2(s) +   1(s)  1(s, s)]   2(s)
+  2(s) =    
+y   y
+  2(s) =    
+y   y
+
+[  1(y)  1(y, s)  2(s)]
+
+[  1(y)  1(y, s)  2(s)]
+
+using the forward trellis one can compute the likelihood by summing over
+
+all possible hidden states for the last position.
+
+p  (  x) =    
+
+  y
+
+p  (  x,   y) =    
+y   y
+
+  n(y).
+
+(2.23)
+
+although the forward id203 is enough to calculate the likelihood of
+a given sequence, we will also need the backward id203 to calculate the
+node and edge posteriors. the backward id203, represents the id203
+of observing   x from position i + 1 up to n, given that at position i we are at state
+yi = yl:
+
+backward id203 :
+
+  i(yl) = p  (xi+1...xn|yi = yl).
+
+(2.24)
+
+the backward recurrence is given by:
+
+  n(yl) = 1
+  i(yl) =    
+ym   y
+
+  i(l, m)  i+1(m)  i+1(ym).
+
+(2.25)
+(2.26)
+
+the backward id203 is similar to the forward id203, but operates
+in the inverse direction. at position n there are no more observations, and
+the backward id203 is set to 1. at position i the id203 of having
+observed the future and being in state yl, is given by the sum for all possible
+states of the id203 of having transitioned from position i in state yl to
+position i + 1 with state ym and observed xi+1 at time i + 1 and the future given
+by   i+1(yi+1 = ym).
+
+with the fb id203 one can compute the likelihood of a given sentence
+
+using any position in the sentence.
+
+p  (  x) =    
+
+  y
+
+p  (  x,   y) =    i    
+y   y
+
+  i(y)  i(y).
+
+(2.27)
+
+note that for time n,   n(y) = 1 and we get back to equation 2.23. although
+redundant, this fact is useful when implementing an id48 as a sanity check
+that the computations are being performed correctly, since one can compare the
+
+64
+
+algorithm 7 forward backward algorithm
+1: input: sentence   x, parameters   
+2: forward pass: compute the forward probabilities
+3: initialization
+4: for yl     y do
+5:
+6: end for
+(cid:34)
+7: for i = 2 to n do
+for yl     y do
+8:
+   
+m   y
+
+  (i   1)(m, l)  i   1(ym)
+
+  1(yl) =   1(yl)
+
+  i(yl) =
+
+  i(l)
+
+(cid:35)
+
+9:
+
+end for
+
+10:
+11: end for
+12: backward pass: compute the backward probabilities
+13: initialization
+14: for yl     y do
+  n(yl) = 1
+
+15:
+16: end for
+17: for i = n     1 to 1 do
+18:
+
+  i(yl) =    
+ym   y
+
+  i(l, m)  i+1(m)  i+1(ym).
+
+19: end for
+20: output: the forward and backward probabilities    and   
+
+likelihood at each position that should be the same. the fb algorithm may fail
+for long sequences since the nested multiplication of numbers smaller than 1
+may easily become smaller than the machine precision. to avoid that problem,
+rabiner (1989) presents a scaled version of the fb algorithm that avoids this
+problem.
+
+algorithm 7 shows the pseudo code for the forward backward algorithm.
+
+exercise 2.5 given the implementation of the forward pass of the forward backward
+algorithm in the    le forward backward.py implement the backward pass.
+
+1
+
+3
+
+5
+
+7
+
+9
+
+11
+
+def forward_backward(node_potentials,edge_potentials):
+
+h,n = node_potentials.shape
+forward = np.zeros([h,n],dtype=float)
+backward = np.zeros([h,n],dtype=float)
+forward[:,0] = node_potentials[:,0]
+## forward loop
+for pos in xrange(1,n):
+
+for current_state in xrange(h):
+
+for prev_state in xrange(h):
+
+forward_v = forward[prev_state,pos-1]
+
+65
+
+trans_v = edge_potentials[prev_state,
+
+current_state,pos-1]
+prob = forward_v*trans_v
+forward[current_state,pos] += prob
+
+forward[current_state,pos] *= node_potentials[
+
+current_state,pos]
+
+## backward loop
+
+## your code
+
+return forward,backward
+
+13
+
+15
+
+17
+
+use the provided function that makes use of equation 2.27 to make sure your im-
+
+plementation is correct:
+
+1 in[]:
+
+run sequences/id48.py
+
+in[]: id48 = id48(simple)
+
+3 in[]: id48.train_supervised(simple.train)
+
+in[]: forward,backward =
+
+id48.forward_backward(simple.train.
+
+seq_list[0])
+
+5 in []: sanity_check_forward_backward(forward,backward)
+
+out[]:
+
+7 array([[ 0.03613281],
+[ 0.03613281],
+[ 0.03613281],
+[ 0.03613281]])
+
+9
+
+moreover, given the forward and backward probabilities one can compute
+
+both the state and transition posteriors.
+
+state posterior :   i(yl) = p  (yi = yl |   x) =
+
+  i(yl)  i(yl)
+
+;
+
+(2.28)
+
+p  (  x)
+  i(yl, ym) = p  (yi = yl, yi+1 = ym |   x)
+
+transition posterior :
+
+=
+
+  i(yl)  i(l, m)  i+1(m)  i+1(ym)
+
+p  (  x)
+
+.
+
+(2.29)
+
+a graphical representation of these posteriors is illustrated in    gure 2.4. on
+the left it is shown that   i(yl)  i(yl) returns the sum of all paths that contain the
+state yi, weighted by p  (  x,   y), and on the right we can see that   i(yl)  i(l, m)  i+1(m)  i+1(ym)
+returns the same for all paths containing the edge from yl to ym. thus, these
+posteriors can be seen as the ratio of the number of paths that contain the given
+state or transition (weighted by p  (  x,   y)) and the number of possible paths in
+the graph p  (  x). as an practical example, given that the person perform the
+sequence of actions    w w s c   , we want to know the id203 of having been
+
+66
+
+figure 2.4: a graphical representation of the components in the state and tran-
+sition posteriors.
+
+algorithm 8 posterior decoding algorithm
+1: input: the forward and backward probabilities    and   .
+2: compute likelihood: compute the likelihood of the sentence
+3: l = 0
+4: for yl     y do
+
+p  (  x) = p  (  x) +   n(yl)
+
+5:
+6: end for
+7:     y = []
+8: for i = 1 to n do
+9: max = 0
+for yl     y do
+10:
+
+11:
+
+  i(yl) =   i(yl )  i(yl )
+if   i(yl) > max then
+
+p   (  x)
+
+max =   i(yl)
+  yi = yl
+
+12:
+13:
+14:
+15:
+16:
+17: end for
+18: output: the posterior path     y
+
+end if
+end for
+
+raining in the second day. the state posterior id203 for this event can be
+seen as the id203 that the sequence of actions    walk walk shop clean    was
+generated by a sequence of weathers and where it was raining in the second
+day. in this case, the possible sequences would be    r r r r   ,    s r r r   ,    r r s r   ,    r
+r r s   ,    s r s r   ,    s r r s   ,    r r s s   , and    s r s s   .
+
+using the node posteriors we are ready to perform posterior decoding. al-
+
+gorithm 8 shown the posterior decoding algorithm.
+
+exercise 2.6 given the node and edge posterior formulas 2.17,2.18 and the forward
+and backward formulas 2.20,2.24 convince yourself that formulas 2.28,2.29 are correct.
+compute the node posteriors for the    rst training sentence, and look at the output.
+can you come up with a sanity check for calculating the posteriors (hint: note that
+the node posteriors are a proper id203 distribution).
+
+67
+
+rsrsrsrs  i(yl)  i(ym)rsrsrsrs  i(l,m)  i+1(m)  i(yl)  i+1(ym)in[]:
+
+run sequences/id48.py
+
+2 in[]: id48 = id48(simple)
+
+in[]: id48.train_supervised(simple.train)
+
+4 in [15]: node_posteriors = id48.get_node_posteriors(simple.train
+
+.seq_list[0])
+
+6 in [16]: node_posteriors
+
+out[16]:
+
+8 array([[ 0.91891892,
+[ 0.08108108,
+
+0.75675676,
+0.24324324,
+
+0.43243243, 0.
+0.56756757, 1.
+
+],
+]])
+
+implement the posterior decode method using the method you tried previously.
+
+1 def posterior_decode(self,seq):
+
+run the posterior decode on the    rst test sequence, and evaluate it.
+
+1 in[]:
+
+run sequences/id48.py
+
+in[]: id48 = id48(simple)
+
+3 in[]: id48.train_supervised(simple.train)
+
+in [19]: y_pred = id48.posterior_decode(simple.test.seq_list[0])
+
+5 in [20]: w/r w/r s/s c/s
+
+out[20]: array([0, 0, 1, 1])
+
+7 in [21]: simple.test.seq_list[0]
+
+out[21]: w/r w/s s/s c/s
+
+do the same for the second test sentence:
+
+in [22]: y_pred = id48.posterior_decode(simple.test.seq_list[1])
+
+2 in [23]: y_pred
+
+out[23]: c/r w/r t/r w/r
+
+4 in [24]: simple.test.seq_list[1]
+
+out[24]: c/s w/s t/s w/s
+
+what is wrong? observe the observations for that sentence. in fact the observation
+t was never seen at training time, so the id203 for it will be zero (no matter what
+state) and make all possible state sequences have zero id203 (the value 0 is just
+the default. as seen in the previous lecture, this is a problem with generative models,
+that can be corrected using smoothing (there are other options).
+
+change your train method to add smoothing:
+
+1 def train_supervised(self,sequence_list, smoothing):
+
+68
+
+repeat the last exercise with the new parameters. what do you observe?
+
+note that if you use smoothing when training you need to account for that
+
+in the counts sanity checks you did in the previous exercise.
+
+exercise 2.7 change the function you just created def sanity check counts(self,seq list):
+to account for smoothing. make sure it works properly.
+
+1 in []: run sequences/id48.py
+
+in []: id48 = id48(posc)
+
+3 in []: id48.collect_counts_from_corpus(posc.train,smoothing=0.1)
+
+in []: id48.sanity_check_counts(posc.train,smoothing=0.1)
+
+5 init counts match
+
+final counts match
+
+7 transition counts match
+
+observations counts match
+
+2.3.2 viterbi decoding
+viterbi decoding consists in picking the best global hidden state sequence   y.
+
+  y    = arg max
+
+  y
+
+p  (  x,   y).
+
+(2.30)
+
+the viterbi algorithm is very similar to the forward procedure of the fb
+algorithm, making use of the same trellis structure to ef   ciently represent and
+use all the exponential number of sequences. in fact the only difference from
+the forward algorithm is in the recursion 2.22 where instead of summing over
+all possible hidden states, we take their maximum.
+
+viterbi
+
+  i(yl) = arg max
+
+y1...yi
+
+p  (yi = yl, x1 . . . xi)
+
+(2.31)
+
+the viterbi trellis represents the path with maximum id203 in position i
+when we are in state yi = yl and that we have observed   x up to that position.
+the viterbi algorithm is de   ned by the following recurrence (we will use the
+marginals parametrization of the model):
+
+(cid:20)
+(cid:34)
+
+  1(yl) =   1(l)
+
+  i(yl) =
+
+max
+y1...yi
+
+  (i   1)(m, l)  i   1(ym)
+
+(cid:35)
+
+  i(yl) =
+
+arg max
+
+y1...yi
+
+(cid:21)
+
+  i(l)
+
+(2.32)
+
+(2.33)
+
+(2.34)
+
+algorithm 9 shows the pseudo code for the viterbi algorithm.
+
+69
+
+algorithm 9 viterbi algorithm
+1: input: sentence   x, parameters   
+2: forward pass: compute the maximum paths for every end state
+3: initialization
+4: for yl     y do
+5:
+6: end for
+(cid:20)
+7: for i = 2 to n do
+for yl     y do
+8:
+
+  1(yl) =   1(yl)
+
+(cid:21)
+
+  (i   1)(m, l)  i   1(ym)
+
+  i(l)
+
+9:
+
+  i(yl) =
+  i(yl) = m
+
+max
+m   y
+
+end for
+
+10:
+11:
+12: end for
+13: backward pass: build the most likely path
+14:     y = []
+15:
+
+  n(yl)
+
+  yn = arg max
+ym   |y|
+
+16: for i = n to 2 do
+  yi =   i+1(yi+1)
+17:
+18: end for
+19: output: the viterbi path     y
+
+exercise 2.8 implement a method for performing viterbi decoding.
+
+def viterbi_decode(self,seq):
+
+test your method on both test sentences and compare the results with the ones
+
+given.
+
+1 in []: y_pred = id48.viterbi_decode(simple.test.seq_list[0])
+
+in []: y_pred
+
+3 out[]: w/r w/r s/r c/s
+
+in []: y_pred = id48.viterbi_decode(simple.test.seq_list[1])
+
+5 in []: y_pred
+
+out[]: c/r w/r t/r w/r
+
+2.4
+
+part-of-speech tagging (pos)
+
+id52 is probably one the most common nlp tasks. the task
+is to assign each word with a grammatical category, i.e noun, verb, adjective,
+
+70
+
+... . in english, using the id32 (ptb) (marcus et al., 1993) the current
+state of the art for id52 is around the 97% for a variety of
+methods 2.
+
+in the rest of this class we will use a subset of the ptb corpus, but instead of
+using the original 45 tags we will use a reduced tag set of 12 tags, to make the
+algorithms faster for the class. in this task,   x is a sentence and   y is the sequence
+of possible pos tags.
+
+the    rst step is to load the pos corpus, we will start by loading 1000 sen-
+tences for training and 200 sentences both for development and testing, and
+train the id48 model.
+
+in []: run readers/pos_corpus.py
+
+2 in []: posc = postagcorpus("en",max_sent_len=15,train_sents=
+
+1000,dev_sents=200,test_sents=200)
+
+in []: id48 = id48(posc)
+
+4 in []: id48.train_supervised(posc.train)
+
+warning: invalid value encountered in divide
+
+note the warning    warning: invalid value encountered in divide    again
+due to the lack of smoothing. this is because we are trying to estimate the
+id203 of words that were never seen during training, so the counts are
+zero and we are trying to do 0/0.
+
+look at the transitions probabilities of the trained model (see figure 2.5)
+and see if they match your intuition about the english language (e.g. adjectives
+tend to come before nouns).
+
+exercise 2.9 test the model using both posterior decoding and viterbi decoding on
+both the train and test set, using the methods in class id48:
+
+1 viterbi_decode_corpus(self,seq_list)
+
+posterior_decode_corpus(self,seq_list)
+
+3 evaluate(self,seq_list,predictions)
+
+what do you observe. remake the previous exercise but now train the id48 using
+smoothing. try different values and report the results on the train and development set
+(1,0.1,0.001,0.0001). (use function pick best smoothing).
+
+1 in []: id48.pick_best_smoothing(posc.train,posc.dev,[0,0.1,0.01,
+
+1])
+
+warning: invalid value encountered in divide
+
+3 smoothing 0.000000 --
+
+train set accuracy: posterior decode 0.
+
+985, viterbi decode: 0.985
+
+2see acl state of the art wiki
+
+71
+
+figure 2.5: transition probabilities of the trained model. each column is pre-
+vious state and row is current state. note the high id203 of having noun
+after adjective, as expected.
+
+smoothing 0.000000 -- test set accuracy: posterior decode 0.177
+
+, viterbi decode: 0.381
+
+5 smoothing 0.100000 --
+
+train set accuracy: posterior decode 0.
+
+971, viterbi decode: 0.967
+
+smoothing 0.100000 -- test set accuracy: posterior decode 0.852
+
+, viterbi decode: 0.836
+
+7 smoothing 0.010000 --
+
+train set accuracy: posterior decode 0.
+
+983, viterbi decode: 0.982
+
+smoothing 0.010000 -- test set accuracy: posterior decode 0.816
+
+, viterbi decode: 0.809
+
+9 smoothing 1.000000 --
+
+train set accuracy: posterior decode 0.
+
+890, viterbi decode: 0.876
+
+smoothing 1.000000 -- test set accuracy: posterior decode 0.857
+
+, viterbi decode: 0.829
+
+using the best smoothing value evaluate the accuracy on the test set.
+
+in []: run readers/pos_corpus.py
+
+2 in []: posc = postagcorpus("en",max_sent_len=15,train_sents=
+
+1000,dev_sents=200,test_sents=200)
+
+in []: id48 = id48(posc)
+
+4 in []: id48.train_supervised(posc.train,smoothing=1)
+
+in []: pred = id48.viterbi_decode_corpus(posc.test.seq_list)
+
+72
+
+figure 2.6: confusion matrix for the previous example. predict tags are
+columns and the true tags corresponds to the constituents of each column.
+
+6 in []: eval_test = id48.evaluate_corpus(posc.test.seq_list,pred)
+
+in []: eval_test
+
+8 out[]: 0.77711397058823528
+
+perform some error analysis to understand were the errors are coming from. you
+
+can start visualizing the confusion matrix (true tags vs predicted tags).
+
+in []: run sequences/confusion_matrix.py
+
+2 in []: cm = build_confusion_matrix(posc.test.seq_list,pred,len(
+
+posc.int_to_pos),id48.nr_states)
+
+another option to look at is to the error for words with different number of occur-
+
+rences, rare words vs commons words.
+
+exercise 2.10 implement a function that produces the accuracy for rare words vs com-
+mon words. use you own de   nition of rare word.
+
+can you come up with other error analysis methods? which?
+
+exercise 2.11 so far we have only worked with a limited dataset of 1000 words. in
+this exercise you will test the accuracy of the id48 model for different training sizes
+(1000,5000,10000,50000). what do you observe?
+
+73
+
+

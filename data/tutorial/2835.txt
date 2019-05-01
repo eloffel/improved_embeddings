@@ -1,0 +1,930 @@
+   #[1]index [2]search [3]convolutional neural networks (lenet)
+   [4]classifying mnist digits using id28
+
+navigation
+
+     * [5]index
+     * [6]next |
+     * [7]previous |
+     * [8]deeplearning 0.1 documentation   
+
+[9]table of contents
+
+     * [10]multilayer id88
+          + [11]the model
+          + [12]going from id28 to mlp
+          + [13]putting it all together
+          + [14]tips and tricks for training mlps
+               o [15]nonlinearity
+               o [16]weight initialization
+               o [17]learning rate
+               o [18]number of hidden units
+               o [19]id173 parameter
+
+previous topic
+
+   [20]classifying mnist digits using id28
+
+next topic
+
+   [21]convolutional neural networks (lenet)
+
+this page
+
+     * [22]show source
+
+quick search
+
+   ____________________
+   go
+
+multilayer id88[23]  
+
+   note
+
+   this section assumes the reader has already read through
+   [24]classifying mnist digits using id28. additionally,
+   it uses the following new theano functions and concepts: [25]t.tanh,
+   [26]shared variables, [27]basic arithmetic ops, [28]t.grad, [29]l1 and
+   l2 id173, [30]floatx. if you intend to run the code on gpu
+   also read [31]gpu.
+
+   note
+
+   the code for this section is available for download [32]here.
+
+   the next architecture we are going to present using theano is the
+   single-hidden-layer multi-layer id88 (mlp). an mlp can be viewed
+   as a id28 classifier where the input is first
+   transformed using a learnt non-linear transformation \phi . this
+   transformation projects the input data into a space where it becomes
+   linearly separable. this intermediate layer is referred to as a hidden
+   layer. a single hidden layer is sufficient to make mlps a universal
+   approximator. however we will see later on that there are substantial
+   benefits to using many such hidden layers, i.e. the very premise of
+   deep learning. see these course notes for an [33]introduction to mlps,
+   the back-propagation algorithm, and how to train mlps.
+
+   this tutorial will again tackle the problem of mnist digit
+   classification.
+
+the model[34]  
+
+   an mlp (or id158 - ann) with a single hidden layer
+   can be represented graphically as follows:
+   _images/mlp.png
+
+   formally, a one-hidden-layer mlp is a function f: r^d \rightarrow r^l ,
+   where d is the size of input vector x and l is the size of the output
+   vector f(x) , such that, in matrix notation:
+
+   f(x) = g( b^{(2)} + w^{(2)}( s( b^{(1)} + w^{(1)} x))),
+
+   with bias vectors b^{(1)} , b^{(2)} ; weight matrices w^{(1)} , w^{(2)}
+   and id180 g and s .
+
+   the vector h(x) = \phi(x) = s(b^{(1)} + w^{(1)} x) constitutes the
+   hidden layer. w^{(1)} \in r^{d \times d_h} is the weight matrix
+   connecting the input vector to the hidden layer. each column
+   w^{(1)}_{\cdot i} represents the weights from the input units to the
+   i-th hidden unit. typical choices for s include tanh , with
+   tanh(a)=(e^a-e^{-a})/(e^a+e^{-a}) , or the logistic sigmoid function,
+   with sigmoid(a)=1/(1+e^{-a}) . we will be using tanh in this tutorial
+   because it typically yields to faster training (and sometimes also to
+   better local minima). both the tanh and sigmoid are scalar-to-scalar
+   functions but their natural extension to vectors and tensors consists
+   in applying them element-wise (e.g. separately on each element of the
+   vector, yielding a same-size vector).
+
+   the output vector is then obtained as: o(x) = g(b^{(2)} + w^{(2)} h(x))
+   . the reader should recognize the form we already used for
+   [35]classifying mnist digits using id28. as before,
+   class-membership probabilities can be obtained by choosing g as the
+   softmax function (in the case of multi-class classification).
+
+   to train an mlp, we learn all parameters of the model, and here we use
+   [36]stochastic id119 with minibatches. the set of parameters
+   to learn is the set \theta = \{w^{(2)},b^{(2)},w^{(1)},b^{(1)}\} .
+   obtaining the gradients \partial{\ell}/\partial{\theta} can be achieved
+   through the id26 algorithm (a special case of the chain-rule
+   of derivation). thankfully, since theano performs automatic
+   differentiation, we will not need to cover this in the tutorial!
+
+going from id28 to mlp[37]  
+
+   this tutorial will focus on a single-hidden-layer mlp. we start off by
+   implementing a class that will represent a hidden layer. to construct
+   the mlp we will then only need to throw a id28 layer on
+   top.
+class hiddenlayer(object):
+    def __init__(self, rng, input, n_in, n_out, w=none, b=none,
+                 activation=t.tanh):
+        """
+        typical hidden layer of a mlp: units are fully-connected and have
+        sigmoidal activation function. weight matrix w is of shape (n_in,n_out)
+        and the bias vector b is of shape (n_out,).
+
+        note : the nonlinearity used here is tanh
+
+        hidden unit activation is given by: tanh(dot(input,w) + b)
+
+        :type rng: numpy.random.randomstate
+        :param rng: a random number generator used to initialize weights
+
+        :type input: theano.tensor.dmatrix
+        :param input: a symbolic tensor of shape (n_examples, n_in)
+
+        :type n_in: int
+        :param n_in: dimensionality of input
+
+        :type n_out: int
+        :param n_out: number of hidden units
+
+        :type activation: theano.op or function
+        :param activation: non linearity to be applied in the hidden
+                           layer
+        """
+        self.input = input
+
+   the initial values for the weights of a hidden layer i should be
+   uniformly sampled from a symmetric interval that depends on the
+   activation function. for tanh activation function results obtained in
+   [38][xavier10] show that the interval should be
+   [-\sqrt{\frac{6}{fan_{in}+fan_{out}}},\sqrt{\frac{6}{fan_{in}+fan_{out}
+   }}] , where fan_{in} is the number of units in the (i-1) -th layer, and
+   fan_{out} is the number of units in the i -th layer. for the sigmoid
+   function the interval is
+   [-4\sqrt{\frac{6}{fan_{in}+fan_{out}}},4\sqrt{\frac{6}{fan_{in}+fan_{ou
+   t}}}] . this initialization ensures that, early in training, each
+   neuron operates in a regime of its activation function where
+   information can easily be propagated both upward (activations flowing
+   from inputs to outputs) and backward (gradients flowing from outputs to
+   inputs).
+        # `w` is initialized with `w_values` which is uniformely sampled
+        # from sqrt(-6./(n_in+n_hidden)) and sqrt(6./(n_in+n_hidden))
+        # for tanh activation function
+        # the output of uniform if converted using asarray to dtype
+        # theano.config.floatx so that the code is runable on gpu
+        # note : optimal initialization of weights is dependent on the
+        #        activation function used (among other things).
+        #        for example, results presented in [xavier10] suggest that you
+        #        should use 4 times larger initial weights for sigmoid
+        #        compared to tanh
+        #        we have no info for other function, so we use the same as
+        #        tanh.
+        if w is none:
+            w_values = numpy.asarray(
+                rng.uniform(
+                    low=-numpy.sqrt(6. / (n_in + n_out)),
+                    high=numpy.sqrt(6. / (n_in + n_out)),
+                    size=(n_in, n_out)
+                ),
+                dtype=theano.config.floatx
+            )
+            if activation == theano.tensor.nnet.sigmoid:
+                w_values *= 4
+
+            w = theano.shared(value=w_values, name='w', borrow=true)
+
+        if b is none:
+            b_values = numpy.zeros((n_out,), dtype=theano.config.floatx)
+            b = theano.shared(value=b_values, name='b', borrow=true)
+
+        self.w = w
+        self.b = b
+
+
+   note that we used a given non-linear function as the activation
+   function of the hidden layer. by default this is tanh, but in many
+   cases we might want to use something else.
+        lin_output = t.dot(input, self.w) + self.b
+        self.output = (
+            lin_output if activation is none
+            else activation(lin_output)
+        )
+
+   if you look into theory this class implements the graph that computes
+   the hidden layer value h(x) = \phi(x) = s(b^{(1)} + w^{(1)} x) . if you
+   give this graph as input to the logisticregression class, implemented
+   in the previous tutorial [39]classifying mnist digits using logistic
+   regression, you get the output of the mlp. you can see this in the
+   following short implementation of the mlp class.
+class mlp(object):
+    """multi-layer id88 class
+
+    a multilayer id88 is a feedforward id158 model
+    that has one layer or more of hidden units and nonlinear activations.
+    intermediate layers usually have as activation function tanh or the
+    sigmoid function (defined here by a ``hiddenlayer`` class)  while the
+    top layer is a softmax layer (defined here by a ``logisticregression``
+    class).
+    """
+
+    def __init__(self, rng, input, n_in, n_hidden, n_out):
+        """initialize the parameters for the multilayer id88
+
+        :type rng: numpy.random.randomstate
+        :param rng: a random number generator used to initialize weights
+
+        :type input: theano.tensor.tensortype
+        :param input: symbolic variable that describes the input of the
+        architecture (one minibatch)
+
+        :type n_in: int
+        :param n_in: number of input units, the dimension of the space in
+        which the datapoints lie
+
+        :type n_hidden: int
+        :param n_hidden: number of hidden units
+
+        :type n_out: int
+        :param n_out: number of output units, the dimension of the space in
+        which the labels lie
+
+        """
+
+        # since we are dealing with a one hidden layer mlp, this will translate
+        # into a hiddenlayer with a tanh activation function connected to the
+        # logisticregression layer; the activation function can be replaced by
+        # sigmoid or any other nonlinear function
+        self.hiddenlayer = hiddenlayer(
+            rng=rng,
+            input=input,
+            n_in=n_in,
+            n_out=n_hidden,
+            activation=t.tanh
+        )
+
+        # the id28 layer gets as input the hidden units
+        # of the hidden layer
+        self.logregressionlayer = logisticregression(
+            input=self.hiddenlayer.output,
+            n_in=n_hidden,
+            n_out=n_out
+        )
+
+   in this tutorial we will also use l1 and l2 id173 (see [40]l1
+   and l2 id173). for this, we need to compute the l1 norm and
+   the squared l2 norm of the weights w^{(1)}, w^{(2)} .
+        # l1 norm ; one id173 option is to enforce l1 norm to
+        # be small
+        self.l1 = (
+            abs(self.hiddenlayer.w).sum()
+            + abs(self.logregressionlayer.w).sum()
+        )
+
+        # square of l2 norm ; one id173 option is to enforce
+        # square of l2 norm to be small
+        self.l2_sqr = (
+            (self.hiddenlayer.w ** 2).sum()
+            + (self.logregressionlayer.w ** 2).sum()
+        )
+
+        # negative log likelihood of the mlp is given by the negative
+        # log likelihood of the output of the model, computed in the
+        # id28 layer
+        self.negative_log_likelihood = (
+            self.logregressionlayer.negative_log_likelihood
+        )
+        # same holds for the function computing the number of errors
+        self.errors = self.logregressionlayer.errors
+
+        # the parameters of the model are the parameters of the two layer it is
+        # made out of
+        self.params = self.hiddenlayer.params + self.logregressionlayer.params
+
+   as before, we train this model using stochastic id119 with
+   mini-batches. the difference is that we modify the cost function to
+   include the id173 term. l1_reg and l2_reg are the
+   hyperparameters controlling the weight of these id173 terms in
+   the total cost function. the code that computes the new cost is:
+    # the cost we minimize during training is the negative log likelihood of
+    # the model plus the id173 terms (l1 and l2); cost is expressed
+    # here symbolically
+    cost = (
+        classifier.negative_log_likelihood(y)
+        + l1_reg * classifier.l1
+        + l2_reg * classifier.l2_sqr
+    )
+
+   we then update the parameters of the model using the gradient. this
+   code is almost identical to the one for id28. only the
+   number of parameters differ. to get around this ( and write code that
+   could work for any number of parameters) we will use the list of
+   parameters that we created with the model params and parse it,
+   computing a gradient at each step.
+    # compute the gradient of cost with respect to theta (sorted in params)
+    # the resulting gradients will be stored in a list gparams
+    gparams = [t.grad(cost, param) for param in classifier.params]
+
+    # specify how to update the parameters of the model as a list of
+    # (variable, update expression) pairs
+
+    # given two lists of the same length, a = [a1, a2, a3, a4] and
+    # b = [b1, b2, b3, b4], zip generates a list c of same size, where each
+    # element is a pair formed from the two lists :
+    #    c = [(a1, b1), (a2, b2), (a3, b3), (a4, b4)]
+    updates = [
+        (param, param - learning_rate * gparam)
+        for param, gparam in zip(classifier.params, gparams)
+    ]
+
+    # compiling a theano function `train_model` that returns the cost, but
+    # in the same time updates the parameter of the model based on the rules
+    # defined in `updates`
+    train_model = theano.function(
+        inputs=[index],
+        outputs=cost,
+        updates=updates,
+        givens={
+            x: train_set_x[index * batch_size: (index + 1) * batch_size],
+            y: train_set_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
+
+putting it all together[41]  
+
+   having covered the basic concepts, writing an mlp class becomes quite
+   easy. the code below shows how this can be done, in a way which is
+   analogous to our previous id28 implementation.
+"""
+this tutorial introduces the multilayer id88 using theano.
+
+ a multilayer id88 is a logistic regressor where
+instead of feeding the input to the id28 you insert a
+intermediate layer, called the hidden layer, that has a nonlinear
+activation function (usually tanh or sigmoid) . one can use many such
+hidden layers making the architecture deep. the tutorial will also tackle
+the problem of mnist digit classification.
+
+.. math::
+
+    f(x) = g( b^{(2)} + w^{(2)}( s( b^{(1)} + w^{(1)} x))),
+
+references:
+
+    - textbooks: "pattern recognition and machine learning" -
+                 christopher m. bishop, section 5
+
+"""
+
+from __future__ import print_function
+
+__docformat__ = 'restructedtext en'
+
+
+import os
+import sys
+import timeit
+
+import numpy
+
+import theano
+import theano.tensor as t
+
+
+from logistic_sgd import logisticregression, load_data
+
+
+# start-snippet-1
+class hiddenlayer(object):
+    def __init__(self, rng, input, n_in, n_out, w=none, b=none,
+                 activation=t.tanh):
+        """
+        typical hidden layer of a mlp: units are fully-connected and have
+        sigmoidal activation function. weight matrix w is of shape (n_in,n_out)
+        and the bias vector b is of shape (n_out,).
+
+        note : the nonlinearity used here is tanh
+
+        hidden unit activation is given by: tanh(dot(input,w) + b)
+
+        :type rng: numpy.random.randomstate
+        :param rng: a random number generator used to initialize weights
+
+        :type input: theano.tensor.dmatrix
+        :param input: a symbolic tensor of shape (n_examples, n_in)
+
+        :type n_in: int
+        :param n_in: dimensionality of input
+
+        :type n_out: int
+        :param n_out: number of hidden units
+
+        :type activation: theano.op or function
+        :param activation: non linearity to be applied in the hidden
+                           layer
+        """
+        self.input = input
+        # end-snippet-1
+
+        # `w` is initialized with `w_values` which is uniformely sampled
+        # from sqrt(-6./(n_in+n_hidden)) and sqrt(6./(n_in+n_hidden))
+        # for tanh activation function
+        # the output of uniform if converted using asarray to dtype
+        # theano.config.floatx so that the code is runable on gpu
+        # note : optimal initialization of weights is dependent on the
+        #        activation function used (among other things).
+        #        for example, results presented in [xavier10] suggest that you
+        #        should use 4 times larger initial weights for sigmoid
+        #        compared to tanh
+        #        we have no info for other function, so we use the same as
+        #        tanh.
+        if w is none:
+            w_values = numpy.asarray(
+                rng.uniform(
+                    low=-numpy.sqrt(6. / (n_in + n_out)),
+                    high=numpy.sqrt(6. / (n_in + n_out)),
+                    size=(n_in, n_out)
+                ),
+                dtype=theano.config.floatx
+            )
+            if activation == theano.tensor.nnet.sigmoid:
+                w_values *= 4
+
+            w = theano.shared(value=w_values, name='w', borrow=true)
+
+        if b is none:
+            b_values = numpy.zeros((n_out,), dtype=theano.config.floatx)
+            b = theano.shared(value=b_values, name='b', borrow=true)
+
+        self.w = w
+        self.b = b
+
+        lin_output = t.dot(input, self.w) + self.b
+        self.output = (
+            lin_output if activation is none
+            else activation(lin_output)
+        )
+        # parameters of the model
+        self.params = [self.w, self.b]
+
+
+# start-snippet-2
+class mlp(object):
+    """multi-layer id88 class
+
+    a multilayer id88 is a feedforward id158 model
+    that has one layer or more of hidden units and nonlinear activations.
+    intermediate layers usually have as activation function tanh or the
+    sigmoid function (defined here by a ``hiddenlayer`` class)  while the
+    top layer is a softmax layer (defined here by a ``logisticregression``
+    class).
+    """
+
+    def __init__(self, rng, input, n_in, n_hidden, n_out):
+        """initialize the parameters for the multilayer id88
+
+        :type rng: numpy.random.randomstate
+        :param rng: a random number generator used to initialize weights
+
+        :type input: theano.tensor.tensortype
+        :param input: symbolic variable that describes the input of the
+        architecture (one minibatch)
+
+        :type n_in: int
+        :param n_in: number of input units, the dimension of the space in
+        which the datapoints lie
+
+        :type n_hidden: int
+        :param n_hidden: number of hidden units
+
+        :type n_out: int
+        :param n_out: number of output units, the dimension of the space in
+        which the labels lie
+
+        """
+
+        # since we are dealing with a one hidden layer mlp, this will translate
+        # into a hiddenlayer with a tanh activation function connected to the
+        # logisticregression layer; the activation function can be replaced by
+        # sigmoid or any other nonlinear function
+        self.hiddenlayer = hiddenlayer(
+            rng=rng,
+            input=input,
+            n_in=n_in,
+            n_out=n_hidden,
+            activation=t.tanh
+        )
+
+        # the id28 layer gets as input the hidden units
+        # of the hidden layer
+        self.logregressionlayer = logisticregression(
+            input=self.hiddenlayer.output,
+            n_in=n_hidden,
+            n_out=n_out
+        )
+        # end-snippet-2 start-snippet-3
+        # l1 norm ; one id173 option is to enforce l1 norm to
+        # be small
+        self.l1 = (
+            abs(self.hiddenlayer.w).sum()
+            + abs(self.logregressionlayer.w).sum()
+        )
+
+        # square of l2 norm ; one id173 option is to enforce
+        # square of l2 norm to be small
+        self.l2_sqr = (
+            (self.hiddenlayer.w ** 2).sum()
+            + (self.logregressionlayer.w ** 2).sum()
+        )
+
+        # negative log likelihood of the mlp is given by the negative
+        # log likelihood of the output of the model, computed in the
+        # id28 layer
+        self.negative_log_likelihood = (
+            self.logregressionlayer.negative_log_likelihood
+        )
+        # same holds for the function computing the number of errors
+        self.errors = self.logregressionlayer.errors
+
+        # the parameters of the model are the parameters of the two layer it is
+        # made out of
+        self.params = self.hiddenlayer.params + self.logregressionlayer.params
+        # end-snippet-3
+
+        # keep track of model input
+        self.input = input
+
+
+def test_mlp(learning_rate=0.01, l1_reg=0.00, l2_reg=0.0001, n_epochs=1000,
+             dataset='mnist.pkl.gz', batch_size=20, n_hidden=500):
+    """
+    demonstrate stochastic id119 optimization for a multilayer
+    id88
+
+    this is demonstrated on mnist.
+
+    :type learning_rate: float
+    :param learning_rate: learning rate used (factor for the stochastic
+    gradient
+
+    :type l1_reg: float
+    :param l1_reg: l1-norm's weight when added to the cost (see
+    id173)
+
+    :type l2_reg: float
+    :param l2_reg: l2-norm's weight when added to the cost (see
+    id173)
+
+    :type n_epochs: int
+    :param n_epochs: maximal number of epochs to run the optimizer
+
+    :type dataset: string
+    :param dataset: the path of the mnist dataset file from
+                 http://www.iro.umontreal.ca/~lisa/deep/data/mnist/mnist.pkl.gz
+
+
+   """
+    datasets = load_data(dataset)
+
+    train_set_x, train_set_y = datasets[0]
+    valid_set_x, valid_set_y = datasets[1]
+    test_set_x, test_set_y = datasets[2]
+
+    # compute number of minibatches for training, validation and testing
+    n_train_batches = train_set_x.get_value(borrow=true).shape[0] // batch_size
+    n_valid_batches = valid_set_x.get_value(borrow=true).shape[0] // batch_size
+    n_test_batches = test_set_x.get_value(borrow=true).shape[0] // batch_size
+
+    ######################
+    # build actual model #
+    ######################
+    print('... building the model')
+
+    # allocate symbolic variables for the data
+    index = t.lscalar()  # index to a [mini]batch
+    x = t.matrix('x')  # the data is presented as rasterized images
+    y = t.ivector('y')  # the labels are presented as 1d vector of
+                        # [int] labels
+
+    rng = numpy.random.randomstate(1234)
+
+    # construct the mlp class
+    classifier = mlp(
+        rng=rng,
+        input=x,
+        n_in=28 * 28,
+        n_hidden=n_hidden,
+        n_out=10
+    )
+
+    # start-snippet-4
+    # the cost we minimize during training is the negative log likelihood of
+    # the model plus the id173 terms (l1 and l2); cost is expressed
+    # here symbolically
+    cost = (
+        classifier.negative_log_likelihood(y)
+        + l1_reg * classifier.l1
+        + l2_reg * classifier.l2_sqr
+    )
+    # end-snippet-4
+
+    # compiling a theano function that computes the mistakes that are made
+    # by the model on a minibatch
+    test_model = theano.function(
+        inputs=[index],
+        outputs=classifier.errors(y),
+        givens={
+            x: test_set_x[index * batch_size:(index + 1) * batch_size],
+            y: test_set_y[index * batch_size:(index + 1) * batch_size]
+        }
+    )
+
+    validate_model = theano.function(
+        inputs=[index],
+        outputs=classifier.errors(y),
+        givens={
+            x: valid_set_x[index * batch_size:(index + 1) * batch_size],
+            y: valid_set_y[index * batch_size:(index + 1) * batch_size]
+        }
+    )
+
+    # start-snippet-5
+    # compute the gradient of cost with respect to theta (sorted in params)
+    # the resulting gradients will be stored in a list gparams
+    gparams = [t.grad(cost, param) for param in classifier.params]
+
+    # specify how to update the parameters of the model as a list of
+    # (variable, update expression) pairs
+
+    # given two lists of the same length, a = [a1, a2, a3, a4] and
+    # b = [b1, b2, b3, b4], zip generates a list c of same size, where each
+    # element is a pair formed from the two lists :
+    #    c = [(a1, b1), (a2, b2), (a3, b3), (a4, b4)]
+    updates = [
+        (param, param - learning_rate * gparam)
+        for param, gparam in zip(classifier.params, gparams)
+    ]
+
+    # compiling a theano function `train_model` that returns the cost, but
+    # in the same time updates the parameter of the model based on the rules
+    # defined in `updates`
+    train_model = theano.function(
+        inputs=[index],
+        outputs=cost,
+        updates=updates,
+        givens={
+            x: train_set_x[index * batch_size: (index + 1) * batch_size],
+            y: train_set_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
+    # end-snippet-5
+
+    ###############
+    # train model #
+    ###############
+    print('... training')
+
+    # early-stopping parameters
+    patience = 10000  # look as this many examples regardless
+    patience_increase = 2  # wait this much longer when a new best is
+                           # found
+    improvement_threshold = 0.995  # a relative improvement of this much is
+                                   # considered significant
+    validation_frequency = min(n_train_batches, patience // 2)
+                                  # go through this many
+                                  # minibatche before checking the network
+                                  # on the validation set; in this case we
+                                  # check every epoch
+
+    best_validation_loss = numpy.inf
+    best_iter = 0
+    test_score = 0.
+    start_time = timeit.default_timer()
+
+    epoch = 0
+    done_looping = false
+
+    while (epoch < n_epochs) and (not done_looping):
+        epoch = epoch + 1
+        for minibatch_index in range(n_train_batches):
+
+            minibatch_avg_cost = train_model(minibatch_index)
+            # iteration number
+            iter = (epoch - 1) * n_train_batches + minibatch_index
+
+            if (iter + 1) % validation_frequency == 0:
+                # compute zero-one loss on validation set
+                validation_losses = [validate_model(i) for i
+                                     in range(n_valid_batches)]
+                this_validation_loss = numpy.mean(validation_losses)
+
+                print(
+                    'epoch %i, minibatch %i/%i, validation error %f %%' %
+                    (
+                        epoch,
+                        minibatch_index + 1,
+                        n_train_batches,
+                        this_validation_loss * 100.
+                    )
+                )
+
+                # if we got the best validation score until now
+                if this_validation_loss < best_validation_loss:
+                    #improve patience if loss improvement is good enough
+                    if (
+                        this_validation_loss < best_validation_loss *
+                        improvement_threshold
+                    ):
+                        patience = max(patience, iter * patience_increase)
+
+                    best_validation_loss = this_validation_loss
+                    best_iter = iter
+
+                    # test it on the test set
+                    test_losses = [test_model(i) for i
+                                   in range(n_test_batches)]
+                    test_score = numpy.mean(test_losses)
+
+                    print(('     epoch %i, minibatch %i/%i, test error of '
+                           'best model %f %%') %
+                          (epoch, minibatch_index + 1, n_train_batches,
+                           test_score * 100.))
+
+            if patience <= iter:
+                done_looping = true
+                break
+
+    end_time = timeit.default_timer()
+    print(('optimization complete. best validation score of %f %% '
+           'obtained at iteration %i, with test performance %f %%') %
+          (best_validation_loss * 100., best_iter + 1, test_score * 100.))
+    print(('the code for file ' +
+           os.path.split(__file__)[1] +
+           ' ran for %.2fm' % ((end_time - start_time) / 60.)), file=sys.stderr)
+
+
+if __name__ == '__main__':
+    test_mlp()
+
+   the user can then run the code by calling:
+python code/mlp.py
+
+   the output one should expect is of the form:
+optimization complete. best validation score of 1.690000 % obtained at iteration
+ 2070000, with test performance 1.650000 %
+the code for file mlp.py ran for 97.34m
+
+   on an intel(r) core(tm) i7-2600k cpu @ 3.40ghz the code runs with
+   approximately 10.3 epoch/minute and it took 828 epochs to reach a test
+   error of 1.65%.
+
+   to put this into perspective, we refer the reader to the results
+   section of [42]this page.
+
+tips and tricks for training mlps[43]  
+
+   there are several hyper-parameters in the above code, which are not
+   (and, generally speaking, cannot be) optimized by id119.
+   strictly speaking, finding an optimal set of values for these
+   hyper-parameters is not a feasible problem. first, we can   t simply
+   optimize each of them independently. second, we cannot readily apply
+   gradient techniques that we described previously (partly because some
+   parameters are discrete values and others are real-valued). third, the
+   optimization problem is not convex and finding a (local) minimum would
+   involve a non-trivial amount of work.
+
+   the good news is that over the last 25 years, researchers have devised
+   various rules of thumb for choosing hyper-parameters in a neural
+   network. a very good overview of these tricks can be found in
+   [44]efficient backprop by yann lecun, leon bottou, genevieve orr, and
+   klaus-robert mueller. in here, we summarize the same issues, with an
+   emphasis on the parameters and techniques that we actually used in our
+   code.
+
+nonlinearity[45]  
+
+   two of the most common ones are the sigmoid and the tanh function. for
+   reasons explained in [46]section 4.4, nonlinearities that are symmetric
+   around the origin are preferred because they tend to produce zero-mean
+   inputs to the next layer (which is a desirable property). empirically,
+   we have observed that the tanh has better convergence properties.
+
+weight initialization[47]  
+
+   at initialization we want the weights to be small enough around the
+   origin so that the activation function operates in its linear regime,
+   where gradients are the largest. other desirable properties, especially
+   for deep networks, are to conserve variance of the activation as well
+   as variance of back-propagated gradients from layer to layer. this
+   allows information to flow well upward and downward in the network and
+   reduces discrepancies between layers. under some assumptions, a
+   compromise between these two constraints leads to the following
+   initialization:
+   uniform[-\frac{\sqrt{6}}{\sqrt{fan_{in}+fan_{out}}},\frac{\sqrt{6}}{\sq
+   rt{fan_{in}+fan_{out}}}] for tanh and
+   uniform[-4*\frac{\sqrt{6}}{\sqrt{fan_{in}+fan_{out}}},4*\frac{\sqrt{6}}
+   {\sqrt{fan_{in}+fan_{out}}}] for sigmoid. where fan_{in} is the number
+   of inputs and fan_{out} the number of hidden units. for mathematical
+   considerations please refer to [48][xavier10].
+
+learning rate[49]  
+
+   there is a great deal of literature on choosing a good learning rate.
+   the simplest solution is to simply have a constant rate. rule of thumb:
+   try several log-spaced values ( 10^{-1},10^{-2},\ldots ) and narrow the
+   (logarithmic) grid search to the region where you obtain the lowest
+   validation error.
+
+   decreasing the learning rate over time is sometimes a good idea. one
+   simple rule for doing that is \frac{\mu_0}{1 + d\times t} where \mu_0
+   is the initial rate (chosen, perhaps, using the grid search technique
+   explained above), d is a so-called    decrease constant    which controls
+   the rate at which the learning rate decreases (typically, a smaller
+   positive number, 10^{-3} and smaller) and t is the epoch/stage.
+
+   [50]section 4.7 details procedures for choosing a learning rate for
+   each parameter (weight) in our network and for choosing them adaptively
+   based on the error of the classifier.
+
+number of hidden units[51]  
+
+   this hyper-parameter is very much dataset-dependent. vaguely speaking,
+   the more complicated the input distribution is, the more capacity the
+   network will require to model it, and so the larger the number of
+   hidden units that will be needed (note that the number of weights in a
+   layer, perhaps a more direct measure of capacity, is d\times d_h
+   (recall d is the number of inputs and d_h is the number of hidden
+   units).
+
+   unless we employ some id173 scheme (early stopping or l1/l2
+   penalties), a typical number of hidden units vs. generalization
+   performance graph will be u-shaped.
+
+id173 parameter[52]  
+
+   typical values to try for the l1/l2 id173 parameter \lambda
+   are 10^{-2},10^{-3},\ldots . in the framework that we described so far,
+   optimizing this parameter will not lead to significantly better
+   solutions, but is worth exploring nonetheless.
+
+navigation
+
+     * [53]index
+     * [54]next |
+     * [55]previous |
+     * [56]deeplearning 0.1 documentation   
+
+      copyright 2008--2010, lisa lab. last updated on jun 15, 2018. created
+   using [57]sphinx 1.5.
+
+references
+
+   1. http://deeplearning.net/tutorial/genindex.html
+   2. http://deeplearning.net/tutorial/search.html
+   3. http://deeplearning.net/tutorial/lenet.html
+   4. http://deeplearning.net/tutorial/logreg.html
+   5. http://deeplearning.net/tutorial/genindex.html
+   6. http://deeplearning.net/tutorial/lenet.html
+   7. http://deeplearning.net/tutorial/logreg.html
+   8. http://deeplearning.net/tutorial/contents.html
+   9. http://deeplearning.net/tutorial/contents.html
+  10. http://deeplearning.net/tutorial/mlp.html
+  11. http://deeplearning.net/tutorial/mlp.html#the-model
+  12. http://deeplearning.net/tutorial/mlp.html#going-from-logistic-regression-to-mlp
+  13. http://deeplearning.net/tutorial/mlp.html#putting-it-all-together
+  14. http://deeplearning.net/tutorial/mlp.html#tips-and-tricks-for-training-mlps
+  15. http://deeplearning.net/tutorial/mlp.html#nonlinearity
+  16. http://deeplearning.net/tutorial/mlp.html#weight-initialization
+  17. http://deeplearning.net/tutorial/mlp.html#learning-rate
+  18. http://deeplearning.net/tutorial/mlp.html#number-of-hidden-units
+  19. http://deeplearning.net/tutorial/mlp.html#id173-parameter
+  20. http://deeplearning.net/tutorial/logreg.html
+  21. http://deeplearning.net/tutorial/lenet.html
+  22. http://deeplearning.net/tutorial/_sources/mlp.txt
+  23. http://deeplearning.net/tutorial/mlp.html#multilayer-id88
+  24. http://deeplearning.net/tutorial/logreg.html
+  25. http://deeplearning.net/software/theano/tutorial/examples.html?highlight=tanh
+  26. http://deeplearning.net/software/theano/tutorial/examples.html#using-shared-variables
+  27. http://deeplearning.net/software/theano/tutorial/adding.html#adding-two-scalars
+  28. http://deeplearning.net/software/theano/tutorial/examples.html#computing-gradients
+  29. http://deeplearning.net/tutorial/gettingstarted.html#l1-l2-id173
+  30. http://deeplearning.net/software/theano/library/config.html#config.floatx
+  31. http://deeplearning.net/software/theano/tutorial/using_gpu.html
+  32. http://deeplearning.net/tutorial/code/mlp.py
+  33. http://www.iro.umontreal.ca/~pift6266/h10/notes/mlp.html
+  34. http://deeplearning.net/tutorial/mlp.html#the-model
+  35. http://deeplearning.net/tutorial/logreg.html
+  36. http://deeplearning.net/tutorial/gettingstarted.html#opt-sgd
+  37. http://deeplearning.net/tutorial/mlp.html#going-from-logistic-regression-to-mlp
+  38. http://deeplearning.net/tutorial/references.html#xavier10
+  39. http://deeplearning.net/tutorial/logreg.html
+  40. http://deeplearning.net/tutorial/gettingstarted.html#l1-l2-id173
+  41. http://deeplearning.net/tutorial/mlp.html#putting-it-all-together
+  42. http://yann.lecun.com/exdb/mnist
+  43. http://deeplearning.net/tutorial/mlp.html#tips-and-tricks-for-training-mlps
+  44. http://yann.lecun.com/exdb/publis/pdf/lecun-98b.pdf
+  45. http://deeplearning.net/tutorial/mlp.html#nonlinearity
+  46. http://yann.lecun.com/exdb/publis/pdf/lecun-98b.pdf
+  47. http://deeplearning.net/tutorial/mlp.html#weight-initialization
+  48. http://deeplearning.net/tutorial/references.html#xavier10
+  49. http://deeplearning.net/tutorial/mlp.html#learning-rate
+  50. http://yann.lecun.com/exdb/publis/pdf/lecun-98b.pdf
+  51. http://deeplearning.net/tutorial/mlp.html#number-of-hidden-units
+  52. http://deeplearning.net/tutorial/mlp.html#id173-parameter
+  53. http://deeplearning.net/tutorial/genindex.html
+  54. http://deeplearning.net/tutorial/lenet.html
+  55. http://deeplearning.net/tutorial/logreg.html
+  56. http://deeplearning.net/tutorial/contents.html
+  57. http://sphinx-doc.org/

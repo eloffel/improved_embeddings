@@ -1,0 +1,379 @@
+   #[1]pseudo-profound samples    feed [2]pseudo-profound samples   
+   comments feed [3]pseudo-profound samples    recursive (not recurrent!)
+   neural nets in tensorflow comments feed [4]write once, infer anywhere:
+   modular, reusable probabilistic id136 components [5]some fun with
+   algebraic numbers [6]alternate [7]alternate [8]pseudo-profound samples
+   [9]wordpress.com
+
+   [10]skip to content
+   [11]menu
+
+[12]pseudo-profound samples
+
+what does an mcmc process running inside a brain look like?
+
+   [13]anejati in [14]uncategorized june 20, 2016july 17, 2016 1,237 words
+
+recursive (not recurrent!) neural nets in tensorflow
+
+   for the past few days i   ve been working on how to implement recursive
+   neural networks in tensorflow. id56s (which i   ll
+   call treenets from now on to avoid confusion with recurrent neural
+   nets) can be used for learning tree-like structures (more generally,
+   [15]directed acyclic graph structures). they are highly useful for
+   parsing natural scenes and language; see the [16]work of richard socher
+   (2011) for examples. more recently, in 2014, ozan   rsoy used a deep
+   variant of treenets to obtain some [17]interesting nlp results.
+
+   the best way to explain treenet architecture is, i think, to compare
+   with other kinds of architectures, for example with id56s:
+
+
+   text4155.png
+
+   in id56s, at each time step the network takes as input its previous
+   state s(t-1) and its current input x(t) and produces an output y(t) and
+   a new hidden state s(t). treenets, on the other hand, don   t have a
+   simple linear structure like that. with id56s, you can    unroll    the net
+   and think of it as a large feedforward net with inputs x(0), x(1),    ,
+   x(t), initial state s(0), and outputs y(0),y(1),   ,y(t), with t varying
+   depending on the input data stream, and the weights in each of the
+   cells tied with each other. you can also think of treenets by unrolling
+   them     the weights in each branch node are tied with each other, and
+   the weights in each leaf node are tied with each other. the treenet
+   illustrated above has different numbers of inputs in the branch nodes.
+   usually, we just restrict the treenet to be a binary tree     each node
+   either has one or two input nodes. there may be different types of
+   branch nodes, but branch nodes of the same type have tied weights.
+
+   the advantage of treenets is that they can be very powerful in learning
+   hierarchical, tree-like structure. the disadvantages are, firstly, that
+   the tree structure of every input sample must be known at training
+   time. we will represent the tree structure like this (lisp-like
+   notation):
+(s (np that movie) (vp was) (adjp cool))
+
+   in each sub-expression, the type of the sub-expression must be given    
+   in this case, we are parsing a sentence, and the type of the
+   sub-expression is simply the part-of-speech (pos) tag. you can see that
+   expressions with three elements (one head and two tail elements)
+   correspond to binary operations, whereas those with four elements (one
+   head and three tail elements) correspond to trinary operations, etc.
+
+   the second disadvantage of treenets is that training is hard because
+   the tree structure changes for each training sample and it   s not easy
+   to map training to mini-batches and so on.
+
+implementation in tensorflow
+
+   there are a few methods for training treenets. the method we   re going
+   to be using is a method that is probably the simplest, conceptually. it
+   consists of simply assigning a tensor to every single intermediate
+   form. so, for instance, imagine that we want to train on simple
+   mathematical expressions, and our input expressions are the following
+   (in lisp-like notation):
+1
+(+ 1 2)
+(* (+ 2 1) 2)
+(+ (* 1 2) (+ 2 1))
+
+   now our full list of intermediate forms is:
+a = 1
+b = 2
+c = (+ a b)
+d = (+ b a)
+e = (* d b)
+f = (* a b)
+g = (+ f d)
+
+   for example, f = (* 1 2), and g = (+ (* 1 2) (+ 2 1)). we can see that
+   all of our intermediate forms are simple expressions of other
+   intermediate forms (or inputs). each of these corresponds to a separate
+   sub-graph in our tensorflow graph. so, for instance, for *, we would
+   have two matrices w_times_l and w_times_r, and one bias vector
+   bias_times. and for computing f, we would have:
+   f = relu(w_times_l * a + w_times_r * b + bias_times)
+   similarly, for computing d we would have:
+   d = relu(w_plus_l * b + w_plus_r * a + bias_plus)
+   the full intermediate graph (excluding input and loss calculation)
+   looks like:
+a = w_input * [1, 0]
+b = w_input * [0, 1]
+c = relu(w_plus_l  * a + w_plus_r  * b + bias_plus)
+d = relu(w_plus_l  * b + w_plus_r  * a + bias_plus)
+e = relu(w_times_l * d + w_times_r * b + bias_times)
+f = relu(w_times_l * a + w_times_r * b + bias_times)
+g = relu(w_plus_l  * f + w_plus_r  * d + bias_plus)
+output1 = sigmoid(w_output * a)
+output2 = sigmoid(w_output * c)
+output3 = sigmoid(w_output * e)
+output4 = sigmoid(w_output * g)
+
+   for training, we simply initialize our inputs and outputs as one-hot
+   vectors (here, we   ve set the symbol 1 to [1, 0] and the symbol 2 to [0,
+   1]), and perform id119 over all w and bias matrices in our
+   graph. the advantage of this method is that, as i said, it   s
+   straightforward and easy to implement. the disadvantage is that our
+   graph complexity grows as a function of the input size. this isn   t as
+   bad as it seems at first, because no matter how big our data set
+   becomes, there will only ever be one training example (since the entire
+   data set is trained simultaneously) and so even though the size of the
+   graph grows, we only need a single pass through the graph per training
+   epoch. however, it seems likely that if our graph grows to very large
+   size (millions of data points) then we need to look at batch training.
+   batch training actually isn   t that hard to implement; it just makes it
+   a bit harder to see the flow of information. we can represent a    batch   
+   as a list of variables: [a, b, c]. so, in our previous example, we
+   could replace the operations with two batch operations:
+[a, b]    = w_input * [[1, 0], [0, 1]]
+[c, d, g] = relu(w_plus_l  * [a, b, f] + w_plus_r  * [b, a, d] + bias_plus)
+[e, f]    = relu(w_times_l * [d, a]    + w_times_r * [b, b]    + bias_times)
+output    = sigmoid(w_output * [a, c, e, g])
+
+   you   ll immediately notice that even though we   ve rewritten it in a
+   batch way, the order of variables inside the batches is totally random
+   and inconsistent. this is the problem with batch training in this
+   model: the batches need to be constructed separately for each pass
+   through the network. if we think of the input as being a huge matrix
+   where each row (or column) of the matrix is the vector corresponding to
+   each intermediate form (so [a, b, c, d, e, f, g]) then we can pick out
+   the variables corresponding to each batch using tensorflow   s tf.gather
+   function. so for instance, gathering the indices [1, 0, 3] from [a, b,
+   c, d, e, f, g] would give [b, a, d], which is one of the sub-batches we
+   need. the total number of sub-batches we need is two for every binary
+   operation and one for every unary operation in the model.
+   for the sake of simplicity, i   ve only implemented the first (non-batch)
+   version in tensorflow, and my early experiments show that it works. for
+   example, consider predicting the parity (even or odd-ness) of a number
+   given as an expression. so 1 would have parity 1, (+ 1 1) (which is
+   equal to 2) would have parity 0, (+ 1 (* (+ 1 1) (+ 1 1))) (which is
+   equal to 5) would have parity 1, and so on. training a treenet on the
+   following small set of training examples:
+1
+[+,1,1]
+[*,1,1]
+[*,[+,1,1],[+,1,1]]
+[+,[+,1,1],[+,1,1]]
+[+,[+,1,1],1 ]
+[+,1,[+,1,1]]
+
+   seems to be enough for it to    get the point    of parity, and it is
+   capable of correctly predicting the parity of much more complicated
+   inputs, for instance:
+[+,[+,[+,1,1],[+,[+,1,1],[+,1,1]]],1]
+
+   correctly, with very high accuracy (>99.9%), with accuracy only
+   diminishing once the size of the inputs becomes very large. the code is
+   just a single python file which you can download and run [18]here.
+   advertisements
+
+share this:
+
+     * [19]twitter
+     * [20]facebook
+     *
+
+like this:
+
+   like loading...
+
+post navigation
+
+   [21]write once, infer anywhere: modular, reusable probabilistic
+   id136 components
+   [22]some fun with algebraic numbers
+
+6 thoughts on    recursive (not recurrent!) neural nets in tensorflow   
+
+    1.
+   christopher snyder says:
+       [23]july 7, 2016 at 7:03 pm
+       interesting. i had not seen this example before. there is a
+       standing issue in tensorflow for implementing recursive networks,
+       and i   m not sure what the status is. i think that the main
+       roadblock is that recursive networks like the socher paper you
+       reference need to dynamically create the computation graph from
+       intermediate results.
+       in other cases where there are few (in your example there is only
+       one possible) computation graph to consider, i think it currently
+       works well.
+       also, i would mention to the interested reader that a lot of the
+       time that training examples may have multiple correct
+       tree-structures.
+       [24]likelike
+       [25]reply
+         1.
+        [26]anejati says:
+            [27]july 7, 2016 at 10:34 pm
+            in my example there is more than one possible computation
+            graph.
+            the computation graphs are combined together and trained
+            simultaneously.
+            [28]likelike
+            [29]reply
+    2.
+   [30]randy gobbel says:
+       [31]july 18, 2016 at 9:26 pm
+       have you considered using tensorflow   s iteration constructs for
+       this? if the graph is in topologically sorted order (for a tree
+       this is just postorder) you can sweep through the entire graph in a
+       linear fashion, both forward and back. you can then accommodate
+       graphs of any size, up to the maximum number of nodes that you
+       preallocate. iteration is done entirely within tensorflow rather
+       than python.
+       [32]likelike
+       [33]reply
+         1.
+        [34]anejati says:
+            [35]july 18, 2016 at 9:38 pm
+            have you looked at my code?
+            [36]likeliked by [37]1 person
+            [38]reply
+    3. pingback: [39]differentiable programming     pseudo-profound samples
+    4. pingback: [40]how black is this black box -
+
+leave a reply [41]cancel reply
+
+   enter your comment here...
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+
+   fill in your details below or click an icon to log in:
+     *
+     *
+     *
+
+       iframe: [42]googleplus-sign-in
+
+     *
+     *
+
+   [43]gravatar
+   email (required) (address never made public)
+   ____________________
+   name (required)
+   ____________________
+   website
+   ____________________
+   wordpress.com logo
+
+   you are commenting using your wordpress.com account. ( [44]log out /
+   [45]change )
+   google photo
+
+   you are commenting using your google account. ( [46]log out /
+   [47]change )
+   twitter picture
+
+   you are commenting using your twitter account. ( [48]log out /
+   [49]change )
+   facebook photo
+
+   you are commenting using your facebook account. ( [50]log out /
+   [51]change )
+   [52]cancel
+
+   connecting to %s
+
+   [ ] notify me of new comments via email.
+
+   post comment
+
+   [53]blog at wordpress.com.
+   (button) menu
+
+menu
+
+     * [54]about
+     * [55]contact
+     * [56]some links
+
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   post to
+   [57]cancel reblog post
+
+   close and accept privacy & cookies: this site uses cookies. by
+   continuing to use this website, you agree to their use.
+   to find out more, including how to control cookies, see here:
+   [58]cookie policy
+
+   iframe: [59]likes-master
+
+   %d bloggers like this:
+
+references
+
+   visible links
+   1. https://pseudoprofound.wordpress.com/feed/
+   2. https://pseudoprofound.wordpress.com/comments/feed/
+   3. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/feed/
+   4. https://pseudoprofound.wordpress.com/2016/06/15/write-once-infer-anywhere-modular-reusable-probabilistic-id136-components/
+   5. https://pseudoprofound.wordpress.com/2016/07/09/some-fun-with-algebraic-numbers/
+   6. https://public-api.wordpress.com/oembed/?format=json&url=https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/&for=wpcom-auto-discovery
+   7. https://public-api.wordpress.com/oembed/?format=xml&url=https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/&for=wpcom-auto-discovery
+   8. https://pseudoprofound.wordpress.com/osd.xml
+   9. https://s1.wp.com/opensearch.xml
+  10. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#content
+  11. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#slide-menu
+  12. https://pseudoprofound.wordpress.com/
+  13. https://pseudoprofound.wordpress.com/author/anejati/
+  14. https://pseudoprofound.wordpress.com/category/uncategorized/
+  15. https://en.wikipedia.org/wiki/directed_acyclic_graph
+  16. http://www.socher.org/index.php/main/parsingnaturalscenesandnaturallanguagewithrecursiveneuralnetworks
+  17. https://www.cs.cornell.edu/~oirsoy/files/nips14drsv.pdf
+  18. https://gist.github.com/anj1/504768e05fda49a6e3338e798ae1cddd
+  19. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?share=twitter
+  20. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?share=facebook
+  21. https://pseudoprofound.wordpress.com/2016/06/15/write-once-infer-anywhere-modular-reusable-probabilistic-id136-components/
+  22. https://pseudoprofound.wordpress.com/2016/07/09/some-fun-with-algebraic-numbers/
+  23. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-16
+  24. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?like_comment=16&_wpnonce=9e4119ac8e
+  25. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?replytocom=16#respond
+  26. https://pseudoprofound.wordpress.com/
+  27. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-17
+  28. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?like_comment=17&_wpnonce=6f05b3bd77
+  29. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?replytocom=17#respond
+  30. https://www.facebook.com/app_scoped_user_id/10154047001289597/
+  31. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-20
+  32. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?like_comment=20&_wpnonce=2e62e38e07
+  33. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?replytocom=20#respond
+  34. https://pseudoprofound.wordpress.com/
+  35. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-22
+  36. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?like_comment=22&_wpnonce=05e195047f
+  37. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/
+  38. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/?replytocom=22#respond
+  39. https://pseudoprofound.wordpress.com/2016/08/03/differentiable-programming/
+  40. https://blog.xcipi.io/black-black-box/
+  41. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#respond
+  42. https://public-api.wordpress.com/connect/?googleplus-sign-in=https://pseudoprofound.wordpress.com&color_scheme=light
+  43. https://gravatar.com/site/signup/
+  44. javascript:highlandercomments.doexternallogout( 'wordpress' );
+  45. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/
+  46. javascript:highlandercomments.doexternallogout( 'googleplus' );
+  47. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/
+  48. javascript:highlandercomments.doexternallogout( 'twitter' );
+  49. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/
+  50. javascript:highlandercomments.doexternallogout( 'facebook' );
+  51. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/
+  52. javascript:highlandercomments.cancelexternalwindow();
+  53. https://wordpress.com/?ref=footer_blog
+  54. https://pseudoprofound.wordpress.com/about/
+  55. https://pseudoprofound.wordpress.com/contact/
+  56. https://pseudoprofound.wordpress.com/interesting-links/
+  57. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/
+  58. https://automattic.com/cookies
+  59. https://widgets.wp.com/likes/master.html?ver=20190321#ver=20190321
+
+   hidden links:
+  61. https://pseudoprofound.wordpress.com/
+  62. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-form-guest
+  63. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-form-load-service:wordpress.com
+  64. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-form-load-service:twitter
+  65. https://pseudoprofound.wordpress.com/2016/06/20/recursive-not-recurrent-neural-nets-in-tensorflow/#comment-form-load-service:facebook

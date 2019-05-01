@@ -1,0 +1,1033 @@
+8
+1
+0
+2
+
+ 
+r
+a
+
+m
+6
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+4
+v
+4
+0
+6
+1
+0
+
+.
+
+1
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2017
+
+dynamic coattention networks
+for id53
+
+caiming xiong   , victor zhong   , richard socher
+salesforce research
+palo alto, ca 94301, usa
+{cxiong, vzhong, rsocher}@salesforce.com
+
+abstract
+
+several deep learning models have been proposed for id53. how-
+ever, due to their single-pass nature, they have no way to recover from local max-
+ima corresponding to incorrect answers. to address this problem, we introduce
+the dynamic coattention network (dcn) for id53. the dcn    rst
+fuses co-dependent representations of the question and the document in order to
+focus on relevant parts of both. then a dynamic pointing decoder iterates over po-
+tential answer spans. this iterative procedure enables the model to recover from
+initial local maxima corresponding to incorrect answers. on the stanford question
+answering dataset, a single dcn model improves the previous state of the art from
+71.0% f1 to 75.9%, while a dcn ensemble obtains 80.4% f1.
+
+1
+
+introduction
+
+id53 (qa) is a crucial task in natural language processing that requires both natural
+language understanding and world knowledge. previous qa datasets tend to be high in quality due
+to human annotation, but small in size (berant et al., 2014; richardson et al., 2013). hence, they did
+not allow for training data-intensive, expressive models such as deep neural networks.
+to address this problem, researchers have developed large-scale datasets through semi-automated
+techniques (hermann et al., 2015; hill et al., 2016). compared to their smaller, hand-annotated
+counterparts, these qa datasets allow the training of more expressive models. however, it has
+been shown that they differ from more natural, human annotated datasets in the types of reasoning
+required to answer the questions (chen et al., 2016).
+recently, rajpurkar et al. (2016) released the stanford id53 dataset (squad), which
+is orders of magnitude larger than all previous hand-annotated datasets and has a variety of qualities
+that culminate in a natural qa task. squad has the desirable quality that answers are spans in a
+reference document. this constrains answers to the space of all possible spans. however, rajpurkar
+et al. (2016) show that the dataset retains a diverse set of answers and requires different forms of
+logical reasoning, including multi-sentence reasoning.
+we introduce the dynamic coattention network (dcn), illustrated in fig. 1, an end-to-end neural
+network for id53. the model consists of a coattentive encoder that captures the
+interactions between the question and the document, as well as a dynamic pointing decoder that
+alternates between estimating the start and end of the answer span. our single model obtains an f1
+of 75.9% compared to the best published result of 71.0% (yu et al., 2016). in addition, our ensemble
+model obtains an f1 of 80.4% compared to the second best result of 78.1% on the of   cial squad
+leaderboard.1
+
+   equal contribution
+1as of nov. 3 2016. see https://rajpurkar.github.io/squad-explorer/ for latest results.
+
+1
+
+published as a conference paper at iclr 2017
+
+2 dynamic coattention networks
+
+figure 1 illustrates an overview of the dcn. we    rst describe the encoders for the document and
+the question, followed by the coattention mechanism and the dynamic decoder which produces the
+answer span.
+
+figure 1: overview of the dynamic coattention network.
+
+2.1 document and question encoder
+
+1 , xq
+1 , xd
+
+(cid:0)dt   1, xd
+
+(cid:1). we de   ne the
+
+2 , . . . , xq
+2 , . . . , xd
+
+let (xq
+n ) denote the sequence of word vectors corresponding to words in the question
+m) denote the same for words in the document. using an lstm (hochreiter
+and (xd
+& schmidhuber, 1997), we encode the document as: dt = lstmenc
+document encoding matrix as d = [d1 . . . dm d   ]     r(cid:96)  (m+1). we also add a sentinel vector d   
+(merity et al., 2016), which we later show allows the model to not attend to any particular word in
+the input.
+the question embeddings are computed with the same lstm to share representation power: qt =
+. we de   ne an intermediate question representation q(cid:48) = [q1 . . . qn q   ]    
+lstmenc
+r(cid:96)  (n+1). to allow for variation between the question encoding space and the document encod-
+ing space, we introduce a non-linear projection layer on top of the question encoding. the    nal
+
+representation for the question becomes: q = tanh(cid:0)w (q)q(cid:48) + b(q)(cid:1)     r(cid:96)  (n+1).
+
+qt   1, xq
+t
+
+(cid:16)
+
+(cid:17)
+
+t
+
+2.2 coattention encoder
+
+we propose a coattention mechanism that attends to the question and document simultaneously,
+similar to (lu et al., 2016), and    nally fuses both attention contexts. figure 2 provides an illustration
+of the coattention encoder.
+we    rst compute the af   nity matrix, which contains af   nity scores corresponding to all pairs of
+document words and question words: l = d(cid:62)q     r(m+1)  (n+1). the af   nity matrix is nor-
+malized row-wise to produce the attention weights aq across the document for each word in the
+question, and column-wise to produce the attention weights ad across the question for each word
+in the document:
+
+aq = softmax (l)     r(m+1)  (n+1) and ad = softmax(cid:0)l
+
+(cid:62)(cid:1)     r(n+1)  (m+1)
+
+(1)
+
+next, we compute the summaries, or attention contexts, of the document in light of each word of the
+question.
+
+c q = daq     r(cid:96)  (n+1).
+
+(2)
+
+2
+
+document encoderquestion encoderwhat plants create most electric power?coattention encoderthe weight of boilers and condensers generally makes the power-to-weight ... however, most electric power is generated using steam turbine plants, so that indirectly the world's industry is  ...dynamic pointer decoderstart index: 49end index: 51steam turbine plantspublished as a conference paper at iclr 2017
+
+figure 2: coattention encoder. the af   nity matrix l is not shown here. we instead directly show
+the normalized attention weights ad and aq.
+
+we similarly compute the summaries qad of the question in light of each word of the document.
+similar to cui et al. (2016), we also compute the summaries c qad of the previous attention con-
+texts in light of each word of the document. these two operations can be done in parallel, as is
+shown in eq. 3. one possible interpretation for the operation c qad is the mapping of question
+encoding into space of document encodings.
+
+c d =(cid:2)q; c q(cid:3) ad     r2(cid:96)  (m+1).
+
+(3)
+
+we de   ne c d, a co-dependent representation of the question and document, as the coattention
+context. we use the notation [a; b] for concatenating the vectors a and b horizontally.
+the last step is the fusion of temporal information to the coattention context via a bidirectional
+lstm:
+
+ut = bi-lstm(cid:0)ut   1, ut+1,(cid:2)dt; cd
+
+(4)
+we de   ne u = [u1, . . . , um]     r2(cid:96)  m , which provides a foundation for selecting which span may
+be the best possible answer, as the coattention encoding.
+
+(cid:3)(cid:1)     r2(cid:96).
+
+t
+
+2.3 dynamic pointing decoder
+
+due to the nature of squad, an intuitive method for producing the answer span is by predicting
+the start and end points of the span (wang & jiang, 2016b). however, given a question-document
+pair, there may exist several intuitive answer spans within the document, each corresponding to a
+local maxima. we propose an iterative technique to select an answer span by alternating between
+predicting the start point and predicting the end point. this iterative procedure allows the model to
+recover from initial local maxima corresponding to incorrect answer spans.
+figure 3 provides an illustration of the dynamic decoder, which is similar to a state machine whose
+state is maintained by an lstm-based sequential model. during each iteration, the decoder updates
+its state taking into account the coattention encoding corresponding to current estimates of the start
+and end positions, and produces, via a multilayer neural network, new estimates of the start and end
+positions.
+let hi, si, and ei denote the hidden state of the lstm, the estimate of the position, and the estimate
+of the end position during iteration i. the lstm state update is then described by eq. 5.
+
+(cid:0)hi   1,(cid:2)usi   1 ; uei   1
+
+(cid:3)(cid:1)
+
+hi = lstm dec
+
+(5)
+
+where usi   1 and uei   1 are the representations corresponding to the previous estimate of the start and
+end positions in the coattention encoding u.
+
+3
+
+aqaddocumentproductconcatproductbi-lstmbi-lstmbi-lstmbi-lstmbi-lstmconcatn+1m+1d:q:cqcdutu:``published as a conference paper at iclr 2017
+
+figure 3: dynamic decoder. blue denotes the variables and functions related to estimating the start
+position whereas red denotes the variables and functions related to estimating the end position.
+
+given the current hidden state hi, previous start position usi   1, and previous end position uei   1, we
+estimate the current start position and end position via eq. 6 and eq. 7.
+
+si = argmax
+
+t
+
+(  1, . . . ,   m)
+
+ei = argmax
+
+t
+
+(  1, . . . ,   m)
+
+(6)
+
+(7)
+
+where   t and   t represent the start score and end score corresponding to the tth word in the doc-
+ument. we compute   t and   t with separate neural networks. these networks have the same
+architecture but do not share parameters.
+based on the strong empirical performance of maxout networks (goodfellow et al., 2013) and high-
+way networks (srivastava et al., 2015), especially with regards to deep architectures, we propose a
+highway maxout network (hmn) to compute   t as described by eq. 8. the intuition behind us-
+ing such model is that the qa task consists of multiple question types and document topics. these
+variations may require different models to estimate the answer span. maxout provides a simple and
+effective way to pool across multiple model variations.
+
+(cid:0)ut, hi, usi   1 , uei   1
+
+(cid:1)
+
+  t = hmn start
+
+here, ut is the coattention encoding corresponding to the tth word in the document. hmn start is
+illustrated in figure 4. the end score,   t, is computed similarly to the start score   t, but using a
+separate hmn end.
+we now describe the hmn model:
+
+hmn(cid:0)ut, hi, usi   1 , uei   1
+
+(cid:1) = max
+
+t
+
+t
+
+m(1)
+
+; m(2)
+
++ b(3)(cid:17)
+(cid:105)
+w (3)(cid:104)
+(cid:16)
+(cid:3)(cid:17)
+(cid:16)
+w (d)(cid:2)hi; usi   1 ; uei   1
+w (1) [ut; r] + b(1)(cid:17)
+(cid:16)
+t + b(2)(cid:17)
+(cid:16)
+
+w (2)m(1)
+
+r = tanh
+
+m(1)
+
+t
+
+m(2)
+
+t
+
+= max
+
+= max
+
+4
+
+(8)
+
+(9)
+
+(10)
+
+(11)
+
+(12)
+
+4849505152      usingsteamturbineplant,      hmnargmax (turbine)(steam)argmaxhmnhihi+1u:u48u49u50u51u52u49u51usi 1uei 1lstmlstmusiueisi:49ei:51published as a conference paper at iclr 2017
+
+t
+
+t
+
+t
+
+t
+
+where r     r(cid:96) is a non-linear projection of the cur-
+rent state with parameters w (d)     r(cid:96)  5(cid:96), m(1)
+is
+the output of the    rst maxout layer with parame-
+ters w (1)     rp  (cid:96)  3(cid:96) and b(1)     rp  (cid:96), and m(2)
+is the output of the second maxout layer with pa-
+rameters w (2)     rp  (cid:96)  (cid:96) and b(2)     rp  (cid:96). m(1)
+and m(2)
+are fed into the    nal maxout layer, which
+has parameters w (3)     rp  1  2(cid:96), and b(3)     rp. p
+is the pooling size of each maxout layer. the max
+operation computes the maximum value over the
+   rst dimension of a tensor. we note that there is
+highway connection between the output of the    rst
+maxout layer and the last maxout layer.
+to train the network, we minimize the cumulative
+softmax cross id178 of the start and end points
+across all iterations. the iterative procedure halts
+when both the estimate of the start position and the
+estimate of the end position no longer change, or
+when a maximum number of iterations is reached.
+details can be found in section 4.1
+
+figure 4: highway maxout network. dotted
+lines denote highway connections.
+
+3 related work
+
+statistical qa traditional approaches to id53 typically involve rule-based algorithms
+or linear classi   ers over hand-engineered feature sets. richardson et al. (2013) proposed two base-
+lines, one that uses simple lexical features such as a sliding window to match bags of words, and
+another that uses word-distances between words in the question and in the document. berant et al.
+(2014) proposed an alternative approach in which one    rst learns a structured representation of the
+entities and relations in the document in the form of a knowledge base, then converts the question
+to a structured query with which to match the content of the knowledge base. wang et al. (2015)
+described a statistical model using frame semantic features as well as syntactic features such as part
+of speech tags and dependency parses. chen et al. (2016) proposed a competitive statistical baseline
+using a variety of carefully crafted lexical, syntactic, and word order features.
+neural qa neural id12 have been widely applied for machine comprehension or
+question-answering in nlp. hermann et al. (2015) proposed an attentivereader model with the
+release of the id98/daily mail cloze-style id53 dataset. hill et al. (2016) released
+another dataset steming from the children   s book and proposed a window-based memory network.
+kadlec et al. (2016) presented a pointer-style attention mechanism but performs only one attention
+step. sordoni et al. (2016) introduced an iterative neural attention model and applied it to cloze-style
+machine comprehension tasks.
+recently, rajpurkar et al. (2016) released the squad dataset. different from cloze-style queries,
+answers include non-entities and longer phrases, and questions are more realistic. for squad,
+wang & jiang (2016b) proposed an end-to-end neural network model that consists of a match-lstm
+encoder, originally introduced in wang & jiang (2016a), and a pointer network decoder (vinyals
+et al., 2015); yu et al. (2016) introduced a dynamic chunk reader, a neural reading comprehension
+model that extracts a set of answer candidates of variable lengths from the document and ranks them
+to answer the question.
+lu et al. (2016) proposed a hierarchical co-attention model for visual id53, which
+achieved state of the art result on the coco-vqa dataset (antol et al., 2015). in (lu et al., 2016),
+the co-attention mechanism computes a conditional representation of the image given the question,
+as well as a conditional representation of the question given the image.
+inspired by the above works, we propose a dynamic coattention model (dcn) that consists of a
+novel coattentive encoder and dynamic decoder. in our model, instead of estimating the start and
+end positions of the answer span in a single pass (wang & jiang, 2016b), we iteratively update the
+
+5
+
+4849505152      usingsteamturbineplant,      u:u48u49u50u51u52maxoutmlpusi 1uei 1himaxoutmaxout      rm(1)m(2)   49   48   50   51   52published as a conference paper at iclr 2017
+
+model
+ensemble
+dcn (ours)
+microsoft research asia    
+allen institute    
+singapore management university    
+google nyc    
+single model
+dcn (ours)
+microsoft research asia    
+google nyc    
+singapore management university    
+carnegie mellon university    
+dynamic chunk reader (yu et al., 2016)
+match-lstm (wang & jiang, 2016b)
+baseline (rajpurkar et al., 2016)
+human (rajpurkar et al., 2016)
+
+dev em dev f1 test em test f1
+
+70.3
+   
+69.2
+67.6
+68.2
+
+65.4
+65.9
+66.4
+   
+   
+62.5
+59.1
+40.0
+81.4
+
+79.4
+   
+77.8
+76.8
+76.7
+
+75.6
+75.2
+74.9
+   
+   
+71.2
+70.0
+51.0
+91.0
+
+71.2
+69.4
+69.9
+67.9
+   
+
+66.2
+65.5
+   
+64.7
+62.5
+62.5
+59.5
+40.4
+82.3
+
+80.4
+78.3
+78.1
+77.0
+   
+
+75.9
+75.0
+   
+73.7
+73.3
+71.0
+70.3
+51.0
+91.2
+
+table 1: leaderboard performance at the time of writing (nov 4 2016).     indicates that the model
+used for submission is unpublished.     indicates that the development scores were not publicly
+available at the time of writing.
+
+start and end positions in a similar fashion to the iterative conditional modes algorithm (besag,
+1986).
+
+4 experiments
+
+4.1
+
+implementation details
+
+we train and evaluate our model on the squad dataset. to preprocess the corpus, we use the
+tokenizer from stanford corenlp (manning et al., 2014). we use as glove word vectors pre-
+trained on the 840b common crawl corpus (pennington et al., 2014). we limit the vocabulary
+to words that are present in the common crawl corpus and set embeddings for out-of-vocabulary
+words to zero. empirically, we found that training the embeddings consistently led to over   tting and
+subpar performance, and hence only report results with    xed id27s.
+we use a max sequence length of 600 during training and a hidden state size of 200 for all recurrent
+units, maxout layers, and linear layers. all lstms have randomly initialized parameters and an
+initial state of zero. sentinel vectors are randomly initialized and optimized during training. for
+the dynamic decoder, we set the maximum number of iterations to 4 and use a maxout pool size of
+16. we use dropout to regularize our network during training (srivastava et al., 2014), and optimize
+the model using adam (kingma & ba, 2014). all models are implemented and trained with
+chainer (tokui et al., 2015).
+
+4.2 results
+
+evaluation on the squad dataset consists of two metrics. the exact match score (em) calculates
+the exact string match between the predicted answer and a ground truth answer. the f1 score
+calculates the overlap between words in the predicted answer and a ground truth answer. because
+a document-question pair may have several ground truth answers, the em and f1 for a document-
+question pair is taken to be the maximum value across all ground truth answers. the overall metric
+is then computed by averaging over all document-question pairs. the of   cal squad evaluation is
+hosted on codalab 2. the training and development sets are publicly available while the test set is
+withheld.
+
+2https://worksheets.codalab.org
+
+6
+
+published as a conference paper at iclr 2017
+
+the performance of the dynamic coattention network on the squad dataset, compared to other
+submitted models on the leaderboard 3, is shown in table 1. at the time of writing, our single-
+model dcn ranks    rst at 66.2% exact match and 75.9% f1 on the test data among single-model
+submissions. our ensemble dcn ranks    rst overall at 71.6% exact match and 80.4% f1 on the test
+data.
+the dcn has the capability to estimate the start and end points of the answer span multiple times,
+each time conditioned on its previous estimates. by doing so, the model is able to explore local
+maxima corresponding to multiple plausible answers, as is shown in figure 5.
+
+figure 5: examples of the start and end conditional distributions produced by the dynamic decoder.
+odd (blue) rows denote the start distributions and even (red) rows denote the end distributions. i
+indicates the iteration number of the dynamic decoder. higher id203 mass is indicated by
+darker regions. the offset corresponding to the word with the highest id203 mass is shown
+on the right hand side. the predicted span is underlined in red, and a ground truth answer span is
+underlined in green.
+
+for example, question 1 in figure 5 demonstrates an instance where the model initially guesses
+an incorrect start point and a correct end point. in subsequent iterations, the model adjusts the start
+point, ultimately arriving at the correct start point in iteration 3. similarly, the model gradually shifts
+id203 mass for the end point to the correct word.
+question 2 shows an example in which both the start and end estimates are initially incorrect. the
+model then settles on the correct answer in the next iteration.
+
+3https://rajpurkar.github.io/squad-explorer
+
+7
+
+s : 5e : 22s : 6e : 22s : 21e : 22question 1: who recovered tolbert's fumble?answer: danny trevathangroundtruth: danny trevathans : 66e : 66s : 84e : 94answer: gain support from china for a planned $2.5 billion railway   question 2: what did the kenyan business people hope for when meeting with the chinese?groundtruth: support from china for a planned $2.5 billion railways : 23e : 25s : 24e : 26s : 23e : 25s : 24e : 26question 3: what kind of weapons did tesla's treatise concern?answer: particle beam weaponsgroundtruth: charged particle beam      published as a conference paper at iclr 2017
+
+figure 6: performance of the dcn for various lengths of documents, questions, and answers. the
+blue dot indicates the mean f1 at given length. the vertical bar represents the standard deviation of
+f1s at a given length.
+
+dev em dev f1
+
+75.6
+74.9
+75.2
+74.4
+74.0
+73.7
+
+65.4
+64.4
+65.2
+63.8
+63.7
+63.7
+
+table 2: single model ablations on the development set.
+
+model
+dynamic coattention network (dcn)
+pool size 16 hmn
+pool size 8 hmn
+pool size 4 hmn
+dcn with 2-layer mlp instead of hmn
+dcn with single iteration decoder
+dcn with wang & jiang (2016b) attention
+
+while the dynamic nature of the decoder allows the model to escape initial local maxima corre-
+sponding to incorrect answers, question 3 demonstrates a case where the model is unable to decide
+between multiple local maxima despite several iterations. namely, the model alternates between the
+answers    charged particle beam    and    particle beam weapons    inde   nitely. empirically, we observe
+that the model, trained with a maximum iteration of 4, takes 2.7 iterations to converge to an answer
+on average.
+model ablation the perfor-
+mance of our model and its
+ablations on the squad de-
+velopment set is shown in ta-
+ble 2. on the decoder side,
+we experiment with various
+pool sizes for the hmn max-
+out
+layers, using a 2-layer
+mlp instead of a hmn, and
+forcing the hmn decoder to
+a single iteration. empiri-
+cally, we achieve the best performance on the development set with an iterative hmn with pool
+size 16, and    nd that the model consistently bene   ts from a deeper, iterative decoder network. the
+performance improves as the number of maximum allowed iterations increases, with little improve-
+ment after 4 iterations. on the encoder side, replacing the coattention mechanism with an attention
+mechanism similar to wang & jiang (2016b) by setting c d to qad in equation 3 results in a 1.9
+point f1 drop. this suggests that, at an additional cost of a softmax computation and a dot product,
+the coattention mechanism provides a simple and effective means to better encode the document
+and question sequences. further studies, such as performance without attention and performance on
+questions requiring different types of reasoning can be found in the appendix.
+performance across length one point of inter-
+est is how the performance of the dcn varies
+with respect to the length of document. intu-
+itively, we expect the model performance to de-
+teriorate with longer examples, as is the case
+with id4 (luong et al.,
+2015). however, as in shown in figure 6,
+there is no notable performance degradation for
+longer documents and questions contrary to our
+expectations. this suggests that the coattentive
+encoder is largely agnostic to long documents,
+and is able to focus on small sections of rel-
+evant text while ignoring the rest of the (po-
+tentially very long) document. we do note a
+performance degradation with longer answers.
+however, this is intuitive given the nature of the
+evaluation metric. namely, it becomes increas-
+ingly challenging to compute the correct word span as the number of words increases.
+
+figure 7: performance of the dcn across ques-
+tion types. the height of each bar represents the
+mean f1 for the given question type. the lower
+number denotes how many instances in the dev set
+are of the corresponding question type.
+
+8
+
+0100200300400500600700# tokens in document0.00.20.40.60.81.01.2f105101520253035# tokens in question0510152025average # tokens in answerwhatwhohowwhenwhichwherewhyotherquestion type0.00.20.40.60.81.01.2f160731242118771264247415090published as a conference paper at iclr 2017
+
+performance across question type another natural way to analyze the performance of the model
+is to examine its performance across question types. in figure 7, we note that the mean f1 of dcn
+exceeds those of previous systems (wang & jiang, 2016b; yu et al., 2016) across all question types.
+the dcn, like other models, is adept at    when    questions and struggles with the more complex
+   why    questions.
+breakdown of f1 distribution finally, we note that the dcn performance is highly bimodal. on
+the development set, the model perfectly predicts (100% f1) an answer for 62.2% of examples and
+predicts a completely wrong answer (0% f1) for 16.3% of examples. that is, the model picks out
+partial answers only 21.5% of the time. upon qualitative inspections of the 0% f1 answers, some of
+which are shown in appendix a.4, we observe that when the model is wrong, its mistakes tend to
+have the correct    answer type    (eg. person for a    who    question, method for a    how    question) and
+the answer boundaries encapsulate a well-de   ned phrase.
+
+5 conclusion
+
+we proposed the dynamic coattention network, an end-to-end neural network architecture for ques-
+tion answering. the dcn consists of a coattention encoder which learns co-dependent representa-
+tions of the question and of the document, and a dynamic decoder which iteratively estimates the
+answer span. we showed that the iterative nature of the model allows it to recover from initial lo-
+cal maxima corresponding to incorrect predictions. on the squad dataset, the dcn achieves the
+state of the art results at 75.9% f1 with a single model and 80.4% f1 with an ensemble. the dcn
+signi   cantly outperforms all other models.
+
+acknowledgments
+
+we thank kazuma hashimoto and bryan mccann for their help and insights.
+
+references
+stanislaw antol, aishwarya agrawal, jiasen lu, margaret mitchell, dhruv batra, c lawrence zit-
+nick, and devi parikh. vqa: visual id53. in proceedings of the ieee international
+conference on id161, pp. 2425   2433, 2015.
+
+jonathan berant, vivek srikumar, pei-chun chen, abby vander linden, brittany harding, brad
+huang, peter clark, and christopher d manning. modeling biological processes for reading
+comprehension. in emnlp, 2014.
+
+julian besag. on the statistical analysis of dirty pictures. journal of the royal statistical society.
+
+series b (methodological), pp. 259   302, 1986.
+
+danqi chen, jason bolton, and christopher d. manning. a thorough examination of the id98/daily
+
+mail reading comprehension task. in association for computational linguistics (acl), 2016.
+
+yiming cui, zhipeng chen, si wei, shijin wang, ting liu, and guoping hu. attention-over-
+
+attention neural networks for reading comprehension. arxiv preprint arxiv:1607.04423, 2016.
+
+ian j goodfellow, david warde-farley, mehdi mirza, aaron c courville, and yoshua bengio. max-
+
+out networks. icml (3), 28:1319   1327, 2013.
+
+karl moritz hermann, tomas kocisky, edward grefenstette, lasse espeholt, will kay, mustafa
+in advances in
+
+suleyman, and phil blunsom. teaching machines to read and comprehend.
+neural information processing systems, pp. 1693   1701, 2015.
+
+felix hill, antoine bordes, sumit chopra, and jason weston. the goldilocks principle: reading
+
+children   s books with explicit memory representations. in iclr, 2016.
+
+sepp hochreiter and j  urgen schmidhuber. long short-term memory. neural computation, 9(8):
+
+1735   1780, 1997.
+
+rudolf kadlec, martin schmid, ondrej bajgar, and jan kleindienst. text understanding with the
+
+attention sum reader network. arxiv preprint arxiv:1603.01547, 2016.
+
+9
+
+published as a conference paper at iclr 2017
+
+diederik kingma and jimmy ba. adam: a method for stochastic optimization. arxiv preprint
+
+arxiv:1412.6980, 2014.
+
+jiasen lu, jianwei yang, dhruv batra, and devi parikh. hierarchical question-image co-attention
+
+for visual id53. arxiv preprint arxiv:1606.00061, 2016.
+
+minh-thang luong, hieu pham, and christopher d. manning. effective approaches to attention-
+based id4. in proceedings of the 2015 conference on empirical meth-
+ods in natural language processing, pp. 1412   1421. association for computational linguistics,
+september 2015.
+
+christopher d manning, mihai surdeanu, john bauer, jenny rose finkel, steven bethard, and
+in acl (system
+
+david mcclosky. the stanford corenlp natural language processing toolkit.
+demonstrations), pp. 55   60, 2014.
+
+stephen merity, caiming xiong, james bradbury, and richard socher. pointer sentinel mixture
+
+models. arxiv preprint arxiv:1609.07843, 2016.
+
+jeffrey pennington, richard socher, and christopher d manning. glove: global vectors for word
+
+representation. in emnlp, volume 14, pp. 1532   43, 2014.
+
+p. rajpurkar, j. zhang, k. lopyrev, and p. liang. squad: 100,000+ questions for machine compre-
+
+hension of text. in empirical methods in natural language processing (emnlp), 2016.
+
+matthew richardson, christopher jc burges, and erin renshaw. mctest: a challenge dataset for
+
+the open-domain machine comprehension of text. in emnlp, volume 3, pp. 4, 2013.
+
+alessandro sordoni, phillip bachman, and yoshua bengio. iterative alternating neural attention for
+
+machine reading. arxiv preprint arxiv:1606.02245, 2016.
+
+nitish srivastava, geoffrey e hinton, alex krizhevsky, ilya sutskever, and ruslan salakhutdinov.
+dropout: a simple way to prevent neural networks from over   tting. journal of machine learning
+research, 15(1):1929   1958, 2014.
+
+rupesh k srivastava, klaus greff, and juergen schmidhuber. training very deep networks.
+
+advances in neural information processing systems 28, pp. 2377   2385, 2015.
+
+in
+
+seiya tokui, kenta oono, shohei hido, and justin clayton. chainer: a next-generation open
+in proceedings of workshop on machine learning sys-
+source framework for deep learning.
+tems (learningsys) in the twenty-ninth annual conference on neural information processing
+systems (nips), 2015.
+
+oriol vinyals, meire fortunato, and navdeep jaitly. id193.
+
+information processing systems, pp. 2692   2700, 2015.
+
+in advances in neural
+
+hai wang, mohit bansal, kevin gimpel, and david mcallester. machine comprehension with
+syntax, frames, and semantics. in proceedings of the 53rd annual meeting of the association
+for computational linguistics and the 7th international joint conference on natural language
+processing (volume 2: short papers), pp. 700   706. association for computational linguistics,
+2015.
+
+shuohang wang and jing jiang. learning natural language id136 with lstm. in proceedings
+of the 2016 conference of the north american chapter of the association for computational
+linguistics: human language technologies, pp. 1442   1451. association for computational lin-
+guistics, 2016a.
+
+shuohang wang and jing jiang. machine comprehension using match-lstm and answer pointer.
+
+arxiv preprint arxiv:1608.07905, 2016b.
+
+y. yu, w. zhang, k. hasan, m. yu, b. xiang, and b. zhou. end-to-end reading comprehension
+
+with dynamic answer chunk ranking. arxiv e-prints, october 2016.
+
+yang yu, wei zhang, kazi hasan, mo yu, bing xiang, and bowen zhou. end-to-end answer chunk
+
+extraction and ranking for reading comprehension. arxiv preprint arxiv:1610.09996v2, 2016.
+
+10
+
+published as a conference paper at iclr 2017
+
+a appendix
+
+a.1 performance without attention
+
+in our experiments, we also investigate a model without any attention mechanism. in this model,
+the encoder is a simple lstm network that    rst ingests the question and then ingests the document.
+the hidden states corresponding to words in the document is then passed to the decoder. this model
+achieves 33.3% exact match and 41.9% f1, signi   cantly worse than models with attention.
+
+a.2 samples requiring different types of reasoning
+
+we generate predictions for examples requiring different types of reasoning, given by rajpurkar
+et al. (2016). because this set of examples is very limited, they do not conclusively demonstrate the
+effectiveness of the model on different types of reasoning tasks. nevertheless, these examples show
+that the dcn is a promising architecture for challenging id53 tasks including those
+that involve reasoning over multiple sentences.
+
+what is the rankine cycle sometimes called?
+
+the rankine cycle is sometimes referred to as a practical carnot cycle because, when an ef   cient
+turbine is used, the ts diagram begins to resemble the carnot cycle.
+type of reasoning lexical variation (synonymy)
+ground truth practical carnot cycle
+prediction practical carnot cycle
+
+which two governing bodies have legislative veto power?
+
+while the commision has a monopoly on initiating legislation, the european parliament and the
+council of the european union have powers of amendment and veto during the legislative progress.
+type of reasoning lexical variation (world knowledge)
+ground truth the european parliament and the council of the european union
+prediction european parliament and the council of the european union
+
+what shakespeare scholar is currently on the universitys faculty?
+
+current faculty include the anthropologist marshall sahlins, historian dipesh chakrabarty, ... shake-
+speare scholar david bevington, and renowned political scientists john mearsheimer and robert
+pape.
+type of reasoning syntactic variation
+ground truth david bevington
+prediction david bevington
+
+what collection does the v&a theatre & performance galleries hold?
+
+the v&a theatre & performance galleries, formerly the theatre museum, opened in march 2009.
+the collections are stored by the v&a, and are available for research, exhibitions and other shows.
+they hold the uk   s biggest national collection of material about live performance in the uk since
+shakespeare   s day, covering drama, dance, musical theatre, circus, music hall, rock and pop, and
+most other forms of live entertainment.
+type of reasoning multiple sentence reasoning
+ground truth material about live performance
+
+11
+
+published as a conference paper at iclr 2017
+
+prediction uk   s biggest national collection of material about live performance in the uk since
+shakespeare   s day
+
+what is the main goal of criminal punishment of civil disobedients?
+
+type of reasoning ambiguous
+along with giving the offender his    just deserts   , achieving crime control via incapacitation and
+deterrence is a major goal of crime punishment.
+ground truth achieving crime control via incapacitation and deterrence
+prediction achieving crime control via incapacitation and deterrence
+
+a.3 samples of correct squad predictions by the dynamic coattention
+
+network
+
+how did the mongols acquire chinese printing technology?
+
+id: 572882242ca10214002da420
+the mongol rulers patronized the yuan printing industry. chinese printing technology was trans-
+ferred to the mongols through kingdom of qocho and tibetan intermediaries. some yuan docu-
+ments such as wang zhen   s nong shu were printed with earthenware movable type, a technology
+invented in the 12th century. however, most published works were still produced through tradi-
+tional block printing techniques. the publication of a taoist text inscribed with the name of tregene
+khatun, gedei   s wife, is one of the    rst printed works sponsored by the mongols.
+in 1273, the
+mongols created the imperial library directorate, a government-sponsored printing of   ce. the
+yuan government established centers for printing throughout china. local schools and government
+agencies were funded to support the publishing of books.
+ground truth through kingdom of qocho and tibetan intermediaries
+prediction: through kingdom of qocho and tibetan intermediaries
+
+who appoints elders?
+
+id 5730d473b7151e1900c0155b
+elders are called by god, af   rmed by the church, and ordained by a bishop to a ministry of word,
+sacrament, order and service within the church. they may be appointed to the local church, or to
+other valid extension ministries of the church. elders are given the authority to preach the word of
+god, administer the sacraments of the church, to provide care and counseling, and to order the life
+of the church for ministry and mission. elders may also be assigned as district superintendents, and
+they are eligible for election to the episcopacy. elders serve a term of 23 years as provisional elders
+prior to their ordination.
+ground truth bishop, the local church
+prediction a bishop
+
+an algorithm for x which reduces to c would allow us to do what?
+
+id 56e1ce08e3433e14004231a6
+this motivates the concept of a problem being hard for a complexity class. a problem x is hard for
+a class of problems c if every problem in c can be reduced to x. thus no problem in c is harder
+than x, since an algorithm for x allows us to solve any problem in c. of course, the notion of
+hard problems depends on the type of reduction being used. for complexity classes larger than p,
+polynomial-time reductions are commonly used. in particular, the set of problems that are hard for
+np is the set of np-hard problems.
+ground truth solve any problem in c
+
+12
+
+published as a conference paper at iclr 2017
+
+prediction solve any problem in c
+
+how many general questions are available to opposition leaders?
+
+id 572fd7b8947a6a140053cd3e
+parliamentary time is also set aside for question periods in the debating chamber. a    general ques-
+tion time    takes place on a thursday between 11:40 a.m. and 12 p.m. where members can direct
+questions to any member of the scottish government. at 2.30pm, a 40-minute long themed    ques-
+tion time    takes place, where members can ask questions of ministers in departments that are se-
+lected for questioning that sitting day, such as health and justice or education and transport. between
+12 p.m. and 12:30 p.m. on thursdays, when parliament is sitting, first minister   s question time
+takes place. this gives members an opportunity to question the first minister directly on issues
+under their jurisdiction. opposition leaders ask a general question of the first minister and then
+supplementary questions. such a practice enables a    lead-in    to the questioner, who then uses their
+supplementary question to ask the first minister any issue. the four general questions available to
+opposition leaders are:
+ground truth four
+prediction four
+
+what are some of the accepted general principles of european union law?
+
+id 5726a00cf1498d1400e8e551
+the principles of european union law are rules of law which have been developed by the european
+court of justice that constitute unwritten rules which are not expressly provided for in the treaties but
+which affect how european union law is interpreted and applies. in formulating these principles, the
+courts have drawn on a variety of sources, including: public international law and legal doctrines and
+principles present in the legal systems of european union member states and in the jurisprudence of
+the european court of human rights. accepted general principles of european union law include
+fundamental rights (see human rights), proportionality, legal certainty, equality before the law and
+subsidiarity.
+ground truth fundamental rights (see human rights), proportionality, legal certainty, equality be-
+fore the law and subsidiarity
+prediction fundamental rights (see human rights), proportionality, legal certainty, equality before
+the law and subsidiarity
+
+why was tesla returned to gospic?
+
+id 56dfaa047aa994140058dfbd
+on 24 march 1879, tesla was returned to gospi under police guard for not having a residence
+permit. on 17 april 1879, milutin tesla died at the age of 60 after contracting an unspeci   ed illness
+(although some sources say that he died of a stroke). during that year, tesla taught a large class of
+students in his old school, higher real gymnasium, in gospi.
+ground truth not having a residence permit
+prediction not having a residence permit
+
+a.4 samples of incorrect squad predictions by the dynamic coattention
+
+network
+
+what is one supplementary source of european union law?
+
+id 5725c3a9ec44d21400f3d506
+european union law is applied by the courts of member states and the court of justice of the euro-
+pean union. where the laws of member states provide for lesser rights european union law can be
+
+13
+
+published as a conference paper at iclr 2017
+
+enforced by the courts of member states. in case of european union law which should have been
+transposed into the laws of member states, such as directives, the european commission can take
+proceedings against the member state under the treaty on the functioning of the european union.
+the european court of justice is the highest court able to interpret european union law. supple-
+mentary sources of european union law include case law by the court of justice, international law
+and general principles of european union law.
+ground truth international law
+prediction case law by the court of justice
+comment the prediction produced by the model is correct, however it was not selected by mechan-
+ical turk annotators.
+
+who designed the illumination systems that tesla electric light &
+manufacturing installed?
+
+id 56e0d6cf231d4119001ac424
+after leaving edison   s company tesla partnered with two businessmen in 1886, robert lane and
+benjamin vail, who agreed to    nance an electric lighting company in tesla   s name, tesla electric
+light & manufacturing. the company installed electrical arc light based illumination systems de-
+signed by tesla and also had designs for dynamo electric machine commutators, the    rst patents
+issued to tesla in the us.
+ground truth tesla
+prediction robert lane and benjamin vail
+comment the model produces an incorrect prediction that corresponds to people that funded tesla,
+instead of tesla who actually designed the illumination system. empirically, we    nd that most
+mistakes made by the model have the correct type (eg. named entity type) despite not including
+types as prior knowledge to the model. in this case, the incorrect response has the correct type of
+person.
+
+cydippid are typically what shape?
+
+id 57265746dd62a815002e821a
+cydippid ctenophores have bodies that are more or less rounded, sometimes nearly spherical and
+other times more cylindrical or egg-shaped; the common coastal    sea gooseberry,    pleurobrachia,
+sometimes has an egg-shaped body with the mouth at the narrow end, although some individuals are
+more uniformly round. from opposite sides of the body extends a pair of long, slender tentacles,
+each housed in a sheath into which it can be withdrawn. some species of cydippids have bodies that
+are    attened to various extents, so that they are wider in the plane of the tentacles.
+ground truth more or less rounded, egg-shaped
+prediction spherical
+comment although the mistake is subtle, the prediction is incorrect. the statement    are more or
+less rounded, sometimes nearly spherical    suggests that the entity is more often    rounded    than
+   spherical    or    cylindrical    or    egg-shaped    (an answer given by an annotator). this suggests that
+the model has trouble discerning among multiple intuitive answers due to a lack of understanding of
+the relative severity of    more or less    versus    sometimes    and    other times   .
+
+14
+
+

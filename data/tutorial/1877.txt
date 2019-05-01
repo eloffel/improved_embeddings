@@ -1,0 +1,2445 @@
+   (button) toggle navigation
+   [1][nav_logo.svg?v=479cefe8d932fb14a67b93911b97d70f]
+     * [2]jupyter
+     * [3]faq
+     * [4]view as code
+     * [5]python 3 kernel
+     * [6]view on github
+     * [7]execute on binder
+     * [8]download notebook
+
+    1. [9]sippycup
+    2. [10]sippycup-unit-1.ipynb
+
+   [sippycup-small.jpg]
+
+sippycup
+unit 1: natural language arithmetic
+
+   [11]bill maccartney
+   spring 2015
+   this is unit 1 of the [12]sippycup codelab.
+
+   our first case study is directly inspired by [13]liang & potts 2015. we
+   consider the problem of interpreting expressions of natural language
+   arithmetic, such as:
+"one plus one"
+"minus three minus two"
+"three plus three minus two"
+"two times two plus three"
+
+
+   while these phrases are simple enough, they do exhibit some interesting
+   ambiguity. for example, "two times two plus three" exhibits
+   [14]syntactic ambiguity: it could refer to either seven or ten,
+   depending on the [15]order of operations. and "minus three minus two"
+   exhibits [16]lexical ambiguity: the first "minus" refers to the (unary)
+   negation operator, while the second "minus" refers to the (binary)
+   subtraction operator.
+
+   still, as id29 problems go, this one is not very
+   challenging. it has a small, closed vocabulary, and a limited variety
+   of syntactic structures. these qualities make the arithmetic domain an
+   ideal vehicle for developing the essential elements of a semantic
+   parsing system.
+
+example inputs[17]  
+
+   whenever we begin work on a new domain (that is, application or use
+   case) for id29, the first order of business is to collect a
+   broad sample of the inputs we want to be able to handle, and to study
+   its properties. the characteristics of this sample will drive the
+   choice of semantic representation, the style and structure of the
+   grammar, and the selection of features for the scoring model. it will
+   also serve as the basis of the dataset used for evaluation and for
+   training. therefore, it's important that the sample be as large and as
+   realistic as possible. it should be representative of the inputs the
+   semantic parser will actually encounter in its intended application.
+
+   the central challenge of id29 is linguistic diversity.
+   there are just a zillion different ways to say the same thing     far,
+   far more than a single person will ever come up with. therefore, when
+   constructing a set of example inputs, we should strongly prefer
+   naturally-occurring (or "found") data reflecting the linguistic output
+   of many different people. only in this way can we be confident that our
+   sample reflects the diversity of real-world usage.
+
+   however, for this case study only, we're going to ignore that fine
+   advice. the arithmetic domain is simple and straightforward, and for
+   now our goals are strictly pedagogical. so a small, artificial sample
+   of inputs will suffice. here's a sample of 17 inputs borrowed from the
+   [18]companion code to [19]liang & potts 2015.
+   in [1]:
+inputs = [
+    "one plus one",
+    "one plus two",
+    "one plus three",
+    "two plus two",
+    "two plus three",
+    "three plus one",
+    "three plus minus two",
+    "two plus two",
+    "three minus two",
+    "minus three minus two",
+    "two times two",
+    "two times three",
+    "three plus three minus two",
+    "minus three",
+    "three plus two",
+    "two times two plus three",
+    "minus four",
+]
+
+   note that, even for the arithmetic domain, this sample is quite limited
+   in scope. it uses only the integers one through four, and it uses only
+   a small number of arithmetic operations. the [20]exercises at the end
+   of this unit will challenge you to extend the scope of the problem in
+   various ways.
+
+   in our [21]second case study, we'll look at strategies for extracting a
+   larger and more realistic sample of inputs from search query logs.
+
+semantic representation [22]  
+
+   having collected a sample of inputs, the next order of business is to
+   choose a good semantic representation. after all, the semantic
+   representation is the desired output of the id29 system, so
+   the choice of representation will drive many other decisions.
+
+   as discussed [23]earlier, our semantic representation should be
+   machine-readable, unambiguous, and easily executable. for the domain of
+   natural language arithmetic, a natural choice is to use [24]binary
+   expression trees, represented in python by nested tuples. that is,
+   every semantic representation will be either a number, or a tuple
+   consisting of an operator and one or more arguments, which are
+   themselves semantic representations. to begin with, we'll define just
+   four operators: + (addition), - (subtraction), * (multiplication), and
+   ~ (negation). thus, all of the following are valid semantic
+   representations:
+   in [2]:
+sems = [
+    ('+', 1, 1),                # one plus one
+    ('-', ('~', 3), 2),         # minus three minus two
+    ('-', ('+', 3, 3), 2),      # three plus three minus two
+    ('+', ('*', 2, 2), 3),      # two times two plus three
+]
+
+   it's easy to implement an executor which actually performs the
+   arithmetic calculations described by these semantic representations to
+   return a denotation.
+   in [3]:
+ops = {
+    '~': lambda x: -x,
+    '+': lambda x, y: x + y,
+    '-': lambda x, y: x - y,
+    '*': lambda x, y: x * y,
+}
+
+def execute(sem):
+    if isinstance(sem, tuple):
+        op = ops[sem[0]]
+        args = [execute(arg) for arg in sem[1:]]
+        return op(*args)
+    else:
+        return sem
+
+   note that the executor is simple, straightforward, deterministic, and
+   doesn't rely on any linguistic knowledge. this is a sign that we've
+   chosen a good semantic representation!
+
+   let's see the executor in action:
+   in [4]:
+for sem in sems:
+    print('%s = %d' % (sem, execute(sem)))
+
+('+', 1, 1) = 2
+('-', ('~', 3), 2) = -5
+('-', ('+', 3, 3), 2) = 4
+('+', ('*', 2, 2), 3) = 7
+
+   it works!
+
+example data [25]  
+
+   now that we've collected a sample of inputs and defined a semantic
+   representation, we can construct a set of examples which pair inputs
+   with their target outputs. examples have two purposes:
+    1. they can serve as evaluation data to assess the quality of our
+       semantic parser.
+    2. they can serve as training data to improve the system.
+
+   however, writing down target semantics for a large sample of inputs can
+   be laborious, time-consuming, and error-prone. depending on the
+   complexity of the semantic representation, it may also require expert
+   knowledge. in many domains, it is easier and faster to write down
+   target denotations than to write down target semantics, and the task
+   often can be [26]crowdsourced. as we'll see later, in many cases target
+   denotations alone can suffice for both evaluation and training.
+
+   for the arithmetic domain, we'll generate examples which include both
+   semantics and denotations. the sippycup codebase defines (in
+   [27]example.py) a simple container class called example. by importing
+   this class, we can define some examples to guide our development.
+   in [5]:
+from example import example
+
+arithmetic_examples = [
+    example(input="one plus one", semantics=('+', 1, 1), denotation=2),
+    example(input="one plus two", semantics=('+', 1, 2), denotation=3),
+    example(input="one plus three", semantics=('+', 1, 3), denotation=4),
+    example(input="two plus two", semantics=('+', 2, 2), denotation=4),
+    example(input="two plus three", semantics=('+', 2, 3), denotation=5),
+    example(input="three plus one", semantics=('+', 3, 1), denotation=4),
+    example(input="three plus minus two", semantics=('+', 3, ('~', 2)), denotati
+on=1),
+    example(input="two plus two", semantics=('+', 2, 2), denotation=4),
+    example(input="three minus two", semantics=('-', 3, 2), denotation=1),
+    example(input="minus three minus two", semantics=('-', ('~', 3), 2), denotat
+ion=-5),
+    example(input="two times two", semantics=('*', 2, 2), denotation=4),
+    example(input="two times three", semantics=('*', 2, 3), denotation=6),
+    example(input="three plus three minus two", semantics=('-', ('+', 3, 3), 2),
+ denotation=4),
+    example(input="minus three", semantics=('~', 3), denotation=-3),
+    example(input="three plus two", semantics=('+', 3, 2), denotation=5),
+    example(input="two times two plus three", semantics=('+', ('*', 2, 2), 3), d
+enotation=7),
+    example(input="minus four", semantics=('~', 4), denotation=-4),
+]
+
+   note that for examples with syntactically ambiguous inputs, our target
+   semantics and denotations reflects a specific choice about how to
+   resolve the ambiguity which accords with the standard [28]order of
+   operations.
+
+syntactic parsing[29]  
+
+   ok, we've defined the problem, and we have a collection of examples
+   which pair inputs with intended outputs. it's time to get down to
+   business. how do we actually build a id29 system that can
+   map the example inputs to the target outputs?
+
+   in order to do id29, we're going to start by doing
+   syntactic parsing. syntactic parsing is a big topic, and we'll give
+   only a cursory treatment here. if you haven't seen syntactic parsing
+   before, you might benefit from the fuller exposition in part iii of
+   jurafsky & martin, [30]speech and language processing.
+
+   in syntactic parsing, the goal is to build a tree structure (a parse)
+   over the input which describes what linguists call its [31]constituency
+   structure, which basically means how we group the words into larger and
+   larger phrases. for example, there are two different ways to parse
+   "minus three minus two", depending on the order in which we group the
+   words into phrases. if we start by grouping "minus three" into a
+   phrase, we arrive at an answer of -5; if we start by grouping "three
+   minus two", we arrive at -1. we can represent these two parses by
+   adding parentheses to the input, like this:
+parse 1        ((minus three) minus two)          yields -5
+parse 2        (minus (three minus two))          yields -1
+
+
+   alternatively, we could represent these two parses graphically like
+   this:
+
+   [sippycup-figure-11.svg] in syntactic parsing, we not only group words
+   into phrases, but also assign labels known as categories to each word
+   and phrase. in sippycup, we adopt the convention that category names
+   always begin with $, so that they are easily distinguished from
+   ordinary words. for the arithmetic domain, we require only three
+   categories:
+     * $e, the category of expressions, including both numerals and longer
+       phrases which denote a number.
+     * $binop, the category of binary operators, such as "plus", "minus"
+       (meaning subtraction), and "times".
+     * $unop, the category of unary operators, such as "minus" (meaning
+       negation).
+
+   if we add category labels to our parses, they look like this:
+parse 1        ($e ($e ($unop minus) ($e three)) ($binop minus) ($e two))
+parse 2        ($e ($unop minus) ($e ($e three) ($binop minus) ($e two)))
+
+
+   or, graphically:
+
+   [sippycup-figure-12.svg]
+
+grammars and rules[32]  
+
+   in order to build a valid parse tree over an input, we need to know the
+   space of possibilities. this is the role of the grammar, which in
+   sippycup is a [33]context-free grammar (id18). the grammar contains a
+   collection of rules, each of which specifies a valid local subtree,
+   consisting of a parent and its immediate children.
+
+   in these figures, two local subtrees are highlighted in red:
+
+   [sippycup-figure-13.svg]
+
+   it's kind of like building with legos. there are many types of pieces.
+   each grammar rule specifies the shape of one type of piece, and how it
+   connects to other pieces. starting from the words of the input, you
+   connect pieces into larger and larger structures, always according to
+   the rules. the set of pieces available defines the space of structures
+   you can build.
+
+   here are all the pieces we need to build either of the parse trees
+   above:
+
+   [sippycup-figure-14.svg]
+
+   a grammar rule has a left-hand side (lhs) which is a single category,
+   and a right-hand side (rhs) which is a sequence of one or more
+   categories or words. (words are also known as terminals, and categories
+   as non-terminals.) the lhs specifies the parent of a valid local
+   subtree; the rhs, the children.
+
+   here's a simple python class for representing grammar rules. you can
+   ignore sem for now     we're only concerned with syntax at this point.
+   in [6]:
+class rule:
+    def __init__(self, lhs, rhs, sem=none):
+        self.lhs = lhs
+        self.rhs = tuple(rhs.split()) if isinstance(rhs, str) else rhs
+        self.sem = sem
+
+    def __str__(self):
+        return 'rule' + str((self.lhs, ' '.join(self.rhs), self.sem))
+
+   note that while rhs is stored as a tuple of strings, the constructor
+   will accept either a tuple of strings or a single space-separated
+   string. this is purely for convenience; it means that instead of
+   rule('$e', ('$e', '$binop', $e')) we can write rule('$e', '$e $binop
+   $e').
+
+   we can now write down a few grammar rules for the arithmetic domain.
+   in [7]:
+numeral_rules = [
+    rule('$e', 'one'),
+    rule('$e', 'two'),
+    rule('$e', 'three'),
+    rule('$e', 'four'),
+]
+
+operator_rules = [
+    rule('$unop', 'minus'),
+    rule('$binop', 'plus'),
+    rule('$binop', 'minus'),
+    rule('$binop', 'times'),
+]
+
+compositional_rules = [
+    rule('$e', '$unop $e'),
+    rule('$e', '$e $binop $e'),
+]
+
+def arithmetic_rules():
+    return numeral_rules + operator_rules + compositional_rules
+
+   in fact, these rules are all we need to be able to parse the 17
+   examples above.
+
+   there's just one little snag: the parsing algorithm we'll present in
+   the next section requires that the grammar be in [34]chomsky normal
+   form, or cnf. (we'll look at ways to relax this restriction in the
+   [35]next unit.) roughly, cnf requires that every grammar rule have one
+   of two forms:
+     * in a unary lexical rule, the rhs must consist of exactly one word
+       (terminal).
+     * in a binary compositional rule, the rhs must consist of exactly two
+       categories (non-terminals).
+
+   actually, we're already pretty close to satisfying these criteria. all
+   the rules in numeral_rules and operator_rules are unary lexical rules.
+   and the first rule in compositional_rules is a binary compositional
+   rule. but the second rule is a problem: it has three categories on the
+   rhs, so it's a trinary compositional rule.
+
+   fear not! we can convert our grammar to cnf by binarizing the offending
+   rule. it's easiest to think in terms of local subtrees here. to
+   binarize a local subtree having more than two children, we just
+   introduce a new node underneath the parent which becomes the new parent
+   of all the children except the rightmost. (if the new node still has
+   more than two children, we just repeat the process.)
+
+   [sippycup-figure-15.svg]
+
+   we also have to come up with a category for the new node. since it
+   spans an $e and a $binop, let's call it $ebo.
+
+   [sippycup-figure-16.svg]
+
+   in terms of grammar rules, we're replacing the (bad) trinary rule with
+   two (good) binary rules, as follows:
+   in [8]:
+compositional_rules = [
+    rule('$e', '$unop $e'),
+    rule('$ebo', '$e $binop'),  # binarized rule
+    rule('$e', '$ebo $e'),      # binarized rule
+]
+
+   let's define some helper functions which will help us ensure that our
+   grammars are in cnf.
+   in [9]:
+def is_cat(label):
+    return label.startswith('$')
+
+def is_lexical(rule):
+    return all([not is_cat(rhsi) for rhsi in rule.rhs])
+
+def is_binary(rule):
+    return len(rule.rhs) == 2 and is_cat(rule.rhs[0]) and is_cat(rule.rhs[1])
+
+   (in a more object-oriented design, these functions might be defined as
+   methods of rule. however, defining them as static functions is more
+   convenient for the incremental presentation of this codelab.)
+
+   now we'll create a grammar class to hold a collection of rules. we'll
+   store the rules in maps indexed by their right-hand sides, which will
+   facilitate lookup during parsing. ignore the parse_input() method for
+   now     we'll define it shortly.
+   in [10]:
+from collections import defaultdict
+
+class grammar:
+    def __init__(self, rules=[]):
+        self.lexical_rules = defaultdict(list)
+        self.binary_rules = defaultdict(list)
+        for rule in rules:
+            add_rule(self, rule)
+        print('created grammar with %d rules.' % len(rules))
+
+    def parse_input(self, input):
+        """returns a list of parses for the given input."""
+        return parse_input(self, input)  # defined later
+
+def add_rule(grammar, rule):
+    if is_lexical(rule):
+        grammar.lexical_rules[rule.rhs].append(rule)
+    elif is_binary(rule):
+        grammar.binary_rules[rule.rhs].append(rule)
+    else:
+        raise exception('cannot accept rule: %s' % rule)
+
+   (again, we've defined add_rule() as a static function, rather than a
+   member of the grammar class, only because it facilitates the
+   incremental presentation of this codelab.)
+
+   let's create a grammar using the rules we defined earlier.
+   in [11]:
+arithmetic_grammar = grammar(arithmetic_rules())
+
+created grammar with 11 rules.
+
+   great, we have a grammar. now we need to implement a parsing algorithm.
+
+chart parsing[36]  
+
+   the next question is, given a grammar and a specific input, how can we
+   find the set of parses for the input which are allowed by the grammar?
+   to solve this problem, we're going to use a variant of the [37]cyk
+   algorithm, which is an example of a [38]chart parsing algorithm, and
+   more broadly, of [39]id145.
+
+   chart parsing relies on a data structure known as the chart, which has
+   one entry (known as a cell) for every possible span in the input. spans
+   are identified by a pair of token indices (i, j), where i is the
+   (0-based) index of the leftmost token of the span, and j is one greater
+   than the index of the rightmost token of the span. it follows that j    
+   i is equal to the length of the span. for example, if the input is "one
+   plus two", then span (0, 1) is "one", span (1, 3) is "plus two", and
+   span (0, 3) is "one plus two". the chart cell for each span holds a
+   list of possible parses for that span.
+
+   (todo: show diagram of chart, with iteration order marked by arrows.)
+
+   the chart parsing algorithm works like this:
+     * split the input into a sequence of tokens.
+     * construct a chart, which maps from each span of the input to a list
+       of possible parses for that span.
+     * iterate over all possible spans, working bottom-up, from smaller
+       spans to larger spans.
+     * for each span, and for each grammar rule, if the rule lets you
+       build a parse for the span, add it to the chart.
+
+   here's how to express the algorithm in python. it's surprisingly
+   simple!
+   in [12]:
+def parse_input(grammar, input):
+    """returns a list of all parses for input using grammar."""
+    tokens = input.split()
+    chart = defaultdict(list)  # map from span (i, j) to list of parses
+    for j in range(1, len(tokens) + 1):
+        for i in range(j - 1, -1, -1):
+            apply_lexical_rules(grammar, chart, tokens, i, j)
+            apply_binary_rules(grammar, chart, i, j)
+    return chart[(0, len(tokens))]  # return all parses for full span
+
+   the definition of apply_lexical_rules() is very simple. we simply
+   retrieve from the grammar all the lexical rules having the given token
+   span as rhs. for each such rule, we construct a new instance of parse
+   (a class we'll define in a moment) and add it to the chart.
+   in [13]:
+def apply_lexical_rules(grammar, chart, tokens, i, j):
+    """add parses to span (i, j) in chart by applying lexical rules from grammar
+ to tokens."""
+    for rule in grammar.lexical_rules[tuple(tokens[i:j])]:
+        chart[(i, j)].append(parse(rule, tokens[i:j]))
+
+   (by the way, you might wonder why the invocation of
+   apply_lexical_rules() appears inside the loop over i (and why its
+   arguments include i). isn't it enough to call it once for each value of
+   j? yes, for now, it is. but in the [40]next unit, we'll extend the
+   grammar to support lexical rules with multiple words in the rhs, and
+   this code design will make that easier.)
+
+   the definition of apply_binary_rules() is slightly more complicated.
+   first, we need to iterate over all indices k at which the span (i, j)
+   could be split into two subspans. for each split point, we consult the
+   chart to see what parses we've already constructed for the two
+   subspans. then, for each pair of subspan parses, we retrieve from the
+   grammar all binary rules that could used to combine them. for each such
+   rule, we construct a new instance of parse and add it to the chart.
+   in [14]:
+from itertools import product
+
+def apply_binary_rules(grammar, chart, i, j):
+    """add parses to span (i, j) in chart by applying binary rules from grammar.
+"""
+    for k in range(i + 1, j):  # all ways of splitting the span into two subspan
+s
+        for parse_1, parse_2 in product(chart[(i, k)], chart[(k, j)]):
+            for rule in grammar.binary_rules[(parse_1.rule.lhs, parse_2.rule.lhs
+)]:
+                chart[(i, j)].append(parse(rule, [parse_1, parse_2]))
+
+   by the way, it should now be clear why we require the grammar to be in
+   chomsky normal form. if we allow rules with three (or more) items on
+   the rhs, then we have to consider all ways of splitting a span into
+   three (or more) subspans. this quickly becomes both inefficient and
+   unwieldy. better to binarize all the rules first.
+
+   now what about the parse class? it's a simple container class which
+   stores the rule used to build the parse and the children to which the
+   rule was applied. if the rule was a lexical rule, the children are just
+   tokens; if it was a compositional rule, the children are other parses.
+   in [15]:
+class parse:
+    def __init__(self, rule, children):
+        self.rule = rule
+        self.children = tuple(children[:])
+        self.semantics = compute_semantics(self)  # ignore this for now -- we'll
+ use it later.
+        self.score = float('nan')                 # ditto.
+        self.denotation = none                    # ditto.
+
+    def __str__(self):
+        return '(%s %s)' % (self.rule.lhs, ' '.join([str(c) for c in self.childr
+en]))
+
+def compute_semantics(parse):
+    return none                                   # we'll redefine this later.
+
+   we're finally ready to do some parsing! let's see our grammar in
+   action, by applying it to the set of 17 examples we defined above.
+   in [16]:
+arithmetic_grammar = grammar(arithmetic_rules())
+for example in arithmetic_examples:
+    parses = parse_input(arithmetic_grammar, example.input)
+    print()
+    print('%-16s %s' % ('input', example.input))
+    for idx, parse in enumerate(parses):
+        print('%-16s %s' % ('parse %d' % idx, parse))
+
+created grammar with 11 rules.
+
+input            one plus one
+parse 0          ($e ($ebo ($e one) ($binop plus)) ($e one))
+
+input            one plus two
+parse 0          ($e ($ebo ($e one) ($binop plus)) ($e two))
+
+input            one plus three
+parse 0          ($e ($ebo ($e one) ($binop plus)) ($e three))
+
+input            two plus two
+parse 0          ($e ($ebo ($e two) ($binop plus)) ($e two))
+
+input            two plus three
+parse 0          ($e ($ebo ($e two) ($binop plus)) ($e three))
+
+input            three plus one
+parse 0          ($e ($ebo ($e three) ($binop plus)) ($e one))
+
+input            three plus minus two
+parse 0          ($e ($ebo ($e three) ($binop plus)) ($e ($unop minus) ($e two))
+)
+
+input            two plus two
+parse 0          ($e ($ebo ($e two) ($binop plus)) ($e two))
+
+input            three minus two
+parse 0          ($e ($ebo ($e three) ($binop minus)) ($e two))
+
+input            minus three minus two
+parse 0          ($e ($unop minus) ($e ($ebo ($e three) ($binop minus)) ($e two)
+))
+parse 1          ($e ($ebo ($e ($unop minus) ($e three)) ($binop minus)) ($e two
+))
+
+input            two times two
+parse 0          ($e ($ebo ($e two) ($binop times)) ($e two))
+
+input            two times three
+parse 0          ($e ($ebo ($e two) ($binop times)) ($e three))
+
+input            three plus three minus two
+parse 0          ($e ($ebo ($e three) ($binop plus)) ($e ($ebo ($e three) ($bino
+p minus)) ($e two)))
+parse 1          ($e ($ebo ($e ($ebo ($e three) ($binop plus)) ($e three)) ($bin
+op minus)) ($e two))
+
+input            minus three
+parse 0          ($e ($unop minus) ($e three))
+
+input            three plus two
+parse 0          ($e ($ebo ($e three) ($binop plus)) ($e two))
+
+input            two times two plus three
+parse 0          ($e ($ebo ($e two) ($binop times)) ($e ($ebo ($e two) ($binop p
+lus)) ($e three)))
+parse 1          ($e ($ebo ($e ($ebo ($e two) ($binop times)) ($e two)) ($binop
+plus)) ($e three))
+
+input            minus four
+parse 0          ($e ($unop minus) ($e four))
+
+   you should observe that all 17 examples were successfully parsed.
+   moreover, the examples which exhibit ambiguity get multiple parses,
+   exactly as expected.
+
+   syntactic parsing provides the spine around which we'll build our
+   id29 system. but now we need to add semantics.
+
+adding semantics[41]  
+
+   now we need to bring semantics into the picture. given a parse tree,
+   we'd like to attach a semantic representation to every node in the
+   tree, like this:
+
+   [sippycup-figure-18.svg]
+
+   how are the semantic representations computed? like the parse tree
+   itself, they are computed bottom-up. we begin at the leaf nodes, where
+   the semantics are determined directly by the words: the semantics for
+   "one" is 1, the semantics for "plus" is +, and so on. this is province
+   of [42]lexical semantics.
+
+   then, as we work our way up the tree, the semantic representation for
+   each internal node is computed from the semantics of its children, in a
+   manner that depends on the rule that was used to combine them. this is
+   the province of id152, and it hinges on the
+   [43]principle of compositionality (often attributed to [44]gottlob
+   frege).
+
+the principle of compositionality
+
+   the meaning of a compound expression is a function of the meanings of
+   its parts and the manner of their combination.
+
+   (the principle of compositionality is central to [45]montague grammar,
+   which provides the theoretical foundation for much academic work in
+   id29. however, most formulations of montague grammar assume
+   the use of the [46]typed id198 for semantic representations.
+   sippycup is compatible with this choice, but does not assume it.)
+
+   now recall that the rules of our grammar specify valid local subtrees
+   from which we can construct parse trees. just as we've added semantic
+   attachments to our parse trees, we'll add semantic attachments to the
+   rules of our grammar. the semantic attachment to a rule specifies how
+   to construct the semantics for the parent (lhs) category. for a lexical
+   rule, the semantic attachment is simply a semantic representation (or a
+   fragment thereof). for a compositional rule, the semantic attachment is
+   a function which takes the semantics of the children as input and
+   returns the semantics for the parent.
+
+   let's see how this looks in python. we need to redefine our rules to
+   include semantic attachments. for lexical rules, the semantic
+   attachments directly specify semantic representations (or fragments
+   thereof):
+   in [17]:
+numeral_rules = [
+    rule('$e', 'one', 1),
+    rule('$e', 'two', 2),
+    rule('$e', 'three', 3),
+    rule('$e', 'four', 4),
+]
+
+operator_rules = [
+    rule('$unop', 'minus', '~'),
+    rule('$binop', 'plus', '+'),
+    rule('$binop', 'minus', '-'),
+    rule('$binop', 'times', '*'),
+]
+
+   for compositional rules, the semantic attachments are functions which
+   specify how to construct the semantics of the parent from the semantics
+   of the children. we'll define these functions using python's lambda
+   syntax, and we'll establish the convention that these lambda functions
+   always have a single parameter called sems, which will contain a list
+   of the semantic representations of the children on the rhs of the rule.
+
+   for example, consider the rule which specifies how to combine a unary
+   operator with its argument. we can define its semantic attachment like
+   this:
+rule('$e', '$unop $e', lambda sems: (sems[0], sems[1]))
+
+
+   now, sems[0] refers to the semantics of the child $unop, and sems[1]
+   refers to the semantics of the child $e. so this semantic attachment
+   says: take the semantics of the child $unop and the semantics of the
+   child $e, form a pair from them, and return that pair as the semantics
+   for the parent $e.
+
+   for the other two compositional rules     the ones involving binary
+   operators     things are complicated by binarization. recall that before
+   binarization, we had a single rule, for which we could easily specify a
+   semantic attachment:
+rule('$e', '$e $binop $e', lambda sems: (sems[1], sems[0], sems[2]))
+
+
+   note the order of the tuple elements here: first we have sems[1], which
+   refers to the semantics of the child $binop, and then we have sems[0]
+   and sems[2], which refer to the semantics of the child $es.
+
+   however, after binarization, we need to break our semantic construction
+   into stages. first we combine the semantics of the left child $e with
+   the semantics of $binop, forming a semantic representation for $ebo
+   which is an "incomplete" tuple:
+rule('$ebo', '$e $binop', lambda sems: (sems[1], sems[0]))
+
+
+   this semantic representation is incomplete in the sense that it
+   combines a binary operator with a single argument. (this is a form of
+   [47]currying.)
+
+   then we follow through by combining the "incomplete" semantics for $ebo
+   with the semantics for the right child $e to yield the semantic
+   representation for the parent $e:
+rule('$e', '$ebo $e', lambda sems: (sems[0][0], sems[0][1], sems[1]))
+
+
+   putting everything together, we get:
+   in [18]:
+compositional_rules = [
+    rule('$e', '$unop $e', lambda sems: (sems[0], sems[1])),
+    rule('$ebo', '$e $binop', lambda sems: (sems[1], sems[0])),
+    rule('$e', '$ebo $e', lambda sems: (sems[0][0], sems[0][1], sems[1])),
+]
+
+   ok, these lambda functions tell us how to construct the semantics for
+   the parent, given the semantics for the children. but when and where do
+   these functions actually get invoked? there needs to be a function that
+   constructs the semantics for a parse. here it is:
+   in [19]:
+from types import functiontype
+
+def compute_semantics(parse):
+    if is_lexical(parse.rule) or not isinstance(parse.rule.sem, functiontype):
+        return parse.rule.sem
+    else:
+        return parse.rule.sem([child.semantics for child in parse.children])
+
+   you may recall that compute_semantics() was invoked in the constructor
+   for parse shown above. thus, sippycup performs semantic construction
+   "eagerly", that is, during parsing. it's worth noting that this is a
+   design choice     it would also be possible to make semantic construction
+   a separate phase which occurs only after parsing is complete.
+
+   at this point, we should have all the pieces we need to do semantic
+   parsing. let's test that by parsing "two times two plus three":
+   in [20]:
+arithmetic_grammar = grammar(arithmetic_rules())
+parses = parse_input(arithmetic_grammar, "two times two plus three")
+for parse in parses:
+    print()
+    print(parse)
+    print(parse.semantics)
+
+created grammar with 11 rules.
+
+($e ($ebo ($e two) ($binop times)) ($e ($ebo ($e two) ($binop plus)) ($e three))
+)
+('*', 2, ('+', 2, 3))
+
+($e ($ebo ($e ($ebo ($e two) ($binop times)) ($e two)) ($binop plus)) ($e three)
+)
+('+', ('*', 2, 2), 3)
+
+   ok, it looks like it's working!
+
+   next we'd like to evaluate the performance of our semantic grammar on
+   our whole dataset. the sippycup codebase includes a number of helper
+   functions (in [48]experiment.py) to facilitate empirical evaluations.
+   but since the code isn't very interesting, we won't reproduce it here
+       we'll just import it.
+   in [21]:
+from experiment import evaluate_grammar
+
+arithmetic_grammar = grammar(arithmetic_rules())
+evaluate_grammar(grammar=arithmetic_grammar, executor=execute, examples=arithmet
+ic_examples)
+
+created grammar with 11 rules.
+================================================================================
+evaluating on 17 examples
+
+--------------------------------------------------------------------------------
+input                              one plus one
+target semantics                   ('+', 1, 1)
+target denotation                  2
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 1, 1)
+               denotation      +   2
+
+--------------------------------------------------------------------------------
+input                              one plus two
+target semantics                   ('+', 1, 2)
+target denotation                  3
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 1, 2)
+               denotation      +   3
+
+--------------------------------------------------------------------------------
+input                              one plus three
+target semantics                   ('+', 1, 3)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 1, 3)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              two plus two
+target semantics                   ('+', 2, 2)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 2, 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              two plus three
+target semantics                   ('+', 2, 3)
+target denotation                  5
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 2, 3)
+               denotation      +   5
+
+--------------------------------------------------------------------------------
+input                              three plus one
+target semantics                   ('+', 3, 1)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 3, 1)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              three plus minus two
+target semantics                   ('+', 3, ('~', 2))
+target denotation                  1
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 3, ('~', 2))
+               denotation      +   1
+
+--------------------------------------------------------------------------------
+input                              two plus two
+target semantics                   ('+', 2, 2)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 2, 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              three minus two
+target semantics                   ('-', 3, 2)
+target denotation                  1
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('-', 3, 2)
+               denotation      +   1
+
+--------------------------------------------------------------------------------
+input                              minus three minus two
+target semantics                   ('-', ('~', 3), 2)
+target denotation                  -5
+
+semantics accuracy                 0
+semantics oracle accuracy          1
+denotation accuracy                0
+denotation oracle accuracy         1
+number of parses                   2
+spurious ambiguity                 0
+
+0      0.000   semantics       -   ('~', ('-', 3, 2))
+               denotation      -   -1
+1      0.000   semantics       +   ('-', ('~', 3), 2)
+               denotation      +   -5
+
+--------------------------------------------------------------------------------
+input                              two times two
+target semantics                   ('*', 2, 2)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('*', 2, 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              two times three
+target semantics                   ('*', 2, 3)
+target denotation                  6
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('*', 2, 3)
+               denotation      +   6
+
+--------------------------------------------------------------------------------
+input                              three plus three minus two
+target semantics                   ('-', ('+', 3, 3), 2)
+target denotation                  4
+
+semantics accuracy                 0
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   2
+spurious ambiguity                 0
+
+0      0.000   semantics       -   ('+', 3, ('-', 3, 2))
+               denotation      +   4
+1      0.000   semantics       +   ('-', ('+', 3, 3), 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              minus three
+target semantics                   ('~', 3)
+target denotation                  -3
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('~', 3)
+               denotation      +   -3
+
+--------------------------------------------------------------------------------
+input                              three plus two
+target semantics                   ('+', 3, 2)
+target denotation                  5
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 3, 2)
+               denotation      +   5
+
+--------------------------------------------------------------------------------
+input                              two times two plus three
+target semantics                   ('+', ('*', 2, 2), 3)
+target denotation                  7
+
+semantics accuracy                 0
+semantics oracle accuracy          1
+denotation accuracy                0
+denotation oracle accuracy         1
+number of parses                   2
+spurious ambiguity                 0
+
+0      0.000   semantics       -   ('*', 2, ('+', 2, 3))
+               denotation      -   10
+1      0.000   semantics       +   ('+', ('*', 2, 2), 3)
+               denotation      +   7
+
+--------------------------------------------------------------------------------
+input                              minus four
+target semantics                   ('~', 4)
+target denotation                  -4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('~', 4)
+               denotation      +   -4
+
+--------------------------------------------------------------------------------
+over 17 examples:
+
+semantics accuracy                 0.824
+semantics oracle accuracy          1.000
+denotation accuracy                0.882
+denotation oracle accuracy         1.000
+number of parses                   1.176
+spurious ambiguity                 0.000
+
+
+   if you look at the bottom of the output, you see that we report the
+   mean values of several id74 over the 17 examples in the
+   dataset. (id74 are defined in [49]metrics.py.) the first
+   two are particularly significant at this point:
+     * the "semantics accuracy" metric shows how often the semantics of
+       the parse at position 0 matched the target semantics in the
+       example. the result is 0.824, or 14/17. in other words, there were
+       three examples where the parse at position 0 was not correct.
+     * the "semantics oracle accuracy" metric shows how often the
+       semantics of any parse matched the target semantics in the example.
+       the result is 1.000, or 17/17. in other words, in every example we
+       produced some correct parse.
+
+   the gap between accuracy and oracle accuracy represents an opportunity.
+   if we had some way of ranking candidate parses so that correct parses
+   were likely to appear higher in the list, then we could bring accuracy
+   closer to oracle accuracy. (the "oracle" in question is one that
+   magically knows the optimal ranking of candidate parses.)
+
+scoring candidate parses[50]  
+
+   so far, we've seen only a couple of cases where the parser found more
+   than one parse for a given input. but in richer domains, with more
+   complex grammars, it's not unusual to find tens, hundreds, or even
+   thousands of parses for some inputs. however, the list of candidate
+   parses returned by parse_input() appears in arbitrary order. the first
+   parse is not necessarily the best, and the best parse is not
+   necessarily the first. therefore, we'd like to have some way of ranking
+   the candidates, so that more plausible interpretations appear earlier
+   in the list.
+
+   consider the example "two times two plus three". because of syntactic
+   ambiguity, there are two possible interpretations, according to whether
+   we perform multiplication first (in accordance with the standard
+   [51]order of operations) or addition first. our parser duly produces
+   both parses, but it happens to produce the wrong parse (the one with
+   denotation 10) first, and the right parse (with denotation 7) second.
+   so this example counts as a loss for the accuracy metric, which only
+   considers the first parse.
+
+   an easy way to rank candidate parses is with a linear scoring function.
+   (this approach will be very familiar if you've had any exposure to
+   machine learning.) the idea is that we define a vector of [52]feature
+   functions, each of which takes a parse as input and returns as output a
+   real number which encodes some salient characteristic of the parse. we
+   then define a corresponding vector of real-valued weights (one for each
+   feature), and we compute the score for a parse as the [53]inner product
+   of the weight vector and the feature vector. if $p$ is a parse, $w$ is
+   the weight vector, and $\phi$ is the vector of feature functions, we
+   can write this as:
+
+   $ score(p) = \sum_i w_i \cdot \phi_i(p) $
+
+   finally, we sort the candidate parses by score, so that the
+   highest-scoring parses appear first.
+
+   we now have two problems:
+    1. feature engineering: defining features which help to discriminate
+       good parses from bad.
+    2. weight learning: deciding what weight to assign to each feature.
+
+   the rest of this section will focus on feature engineering; we'll turn
+   to weight learning in the next section.
+
+   in the academic literature on id29, the default starting
+   point for feature engineering is usually with rule features. there is
+   one such feature for each rule in the grammar, and its value for a
+   given parse simply indicates how many times the rule was used in the
+   parse. we can implement rule features in python like this:
+   in [22]:
+def rule_features(parse):
+    """
+    returns a map from (string representations of) rules to how often they were
+    used in the given parse.
+    """
+    def collect_rule_features(parse, features):
+        feature = str(parse.rule)
+        features[feature] += 1.0
+        for child in parse.children:
+            if isinstance(child, parse):
+                collect_rule_features(child, features)
+    features = defaultdict(float)
+    collect_rule_features(parse, features)
+    return features
+
+   for example, here are the rule features for "two times two":
+   in [23]:
+parses = parse_input(arithmetic_grammar, "two times two")
+for feature, value in rule_features(parses[0]).items():
+    print('%8g   %s' % (value, feature))
+
+       1   rule('$e', '$ebo $e', <function <lambda> at 0x1043bac80>)
+       1   rule('$ebo', '$e $binop', <function <lambda> at 0x1043bad08>)
+       2   rule('$e', 'two', 2)
+       1   rule('$binop', 'times', '*')
+
+   note that the rule feature for rule('$e', 'two', 2) has value 2,
+   because that rule was used twice in the parse.
+
+   rule features are often quite effective in discriminating good parses
+   from bad. in cases of lexical ambiguity, rule features can help to
+   identify the preferred interpretation, by assigning a higher weight to
+   one lexical rule with the given rhs than to another. likewise, in cases
+   of syntactic ambiguity, rule features can help to identify the more
+   plausible construction.
+
+   however, rule features won't help us distinguish between the two
+   candidate parses of "two times two plus three", because the two parses
+   use exactly the same rules, only in a different order. here, let's
+   prove it:
+   in [24]:
+parses = parse_input(arithmetic_grammar, "two times two plus three")
+print('number of parses:', len(parses))
+print('identical rule features?', rule_features(parses[0]) == rule_features(pars
+es[1]))
+
+number of parses: 2
+identical rule features? true
+
+   in order to discriminate between the two candidate parses of "two times
+   two plus three", we need features that explicitly represent operator
+   precedence. the following feature function will do the job.
+   in [25]:
+def operator_precedence_features(parse):
+    """
+    traverses the arithmetic expression tree which forms the semantics of
+    the given parse and adds a feature (op1, op2) whenever op1 appears
+    lower in the tree than (i.e. with higher precedence than) than op2.
+    """
+    def collect_features(semantics, features):
+        if isinstance(semantics, tuple):
+            for child in semantics[1:]:
+                collect_features(child, features)
+                if isinstance(child, tuple) and child[0] != semantics[0]:
+                    features[(child[0], semantics[0])] += 1.0
+    features = defaultdict(float)
+    collect_features(parse.semantics, features)
+    return features
+
+   let's make sure it works properly.
+   in [26]:
+for parse in parses:
+    print('semantics %s yields features %s' % (parse.semantics, dict(operator_pr
+ecedence_features(parse))))
+
+semantics ('*', 2, ('+', 2, 3)) yields features {('+', '*'): 1.0}
+semantics ('+', ('*', 2, 2), 3) yields features {('*', '+'): 1.0}
+
+   looks good. now we want to make sure that a parse with feature ('*',
+   '+') will get a higher score (all else being equal) than a parse with
+   feature ('+', '*'). that's easy to arrange: we can just assign a weight
+   of 1 to the former feature and a weight of -1 to the latter. while
+   we're at it, let's assign weights to a few other precedence features in
+   accordance with the standard order of operations.
+   in [27]:
+weights = defaultdict(float)
+weights[('*', '+')] = 1.0
+weights[('*', '-')] = 1.0
+weights[('~', '+')] = 1.0
+weights[('~', '-')] = 1.0
+weights[('+', '*')] = -1.0
+weights[('-', '*')] = -1.0
+weights[('+', '~')] = -1.0
+weights[('-', '~')] = -1.0
+
+   now we need a function that actually computes the score for a parse,
+   given a feature function and a weight vector.
+   in [28]:
+def score(parse=none, feature_fn=none, weights=none):
+    """returns the inner product of feature_fn(parse) and weights."""
+    return sum(weights[feature] * value for feature, value in feature_fn(parse).
+items())
+
+   let's verify that our preferred interpretation for "two times two plus
+   three" gets a higher score.
+   in [29]:
+for parse in parses:
+    print('semantics %s gets score %4.1f' % (parse.semantics, score(parse, opera
+tor_precedence_features, weights)))
+
+semantics ('*', 2, ('+', 2, 3)) gets score -1.0
+semantics ('+', ('*', 2, 2), 3) gets score  1.0
+
+   great, it works.
+
+   now that we have a grammar, scoring, and an executor, it will be
+   convenient to tie all these pieces together in a class called model,
+   which can take an input and generate a ranked list of parses with
+   scores, semantics, and denotations:
+   in [30]:
+class model:
+    def __init__(self,
+                 grammar=none,
+                 feature_fn=lambda parse: defaultdict(float),
+                 weights=defaultdict(float),
+                 executor=none):
+        self.grammar = grammar
+        self.feature_fn = feature_fn
+        self.weights = weights
+        self.executor = executor
+
+    def parse_input(self, input):
+        parses = self.grammar.parse_input(input)
+        for parse in parses:
+            if self.executor:
+                parse.denotation = self.executor(parse.semantics)
+            parse.score = score(parse, self.feature_fn, self.weights)
+        parses = sorted(parses, key=lambda parse: parse.score, reverse=true)
+        return parses
+
+   let's redo the evaluation we ran at the end of the last section, to
+   demonstrate that we've achieved a gain from introducing scoring.
+   in [31]:
+from experiment import evaluate_model
+
+arithmetic_model = model(grammar=arithmetic_grammar,
+                         feature_fn=operator_precedence_features,
+                         weights=weights,
+                         executor=execute)
+evaluate_model(model=arithmetic_model, examples=arithmetic_examples)
+
+================================================================================
+evaluating on 17 examples
+
+--------------------------------------------------------------------------------
+input                              one plus one
+target semantics                   ('+', 1, 1)
+target denotation                  2
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 1, 1)
+               denotation      +   2
+
+--------------------------------------------------------------------------------
+input                              one plus two
+target semantics                   ('+', 1, 2)
+target denotation                  3
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 1, 2)
+               denotation      +   3
+
+--------------------------------------------------------------------------------
+input                              one plus three
+target semantics                   ('+', 1, 3)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 1, 3)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              two plus two
+target semantics                   ('+', 2, 2)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 2, 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              two plus three
+target semantics                   ('+', 2, 3)
+target denotation                  5
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 2, 3)
+               denotation      +   5
+
+--------------------------------------------------------------------------------
+input                              three plus one
+target semantics                   ('+', 3, 1)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 3, 1)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              three plus minus two
+target semantics                   ('+', 3, ('~', 2))
+target denotation                  1
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      1.000   semantics       +   ('+', 3, ('~', 2))
+               denotation      +   1
+
+--------------------------------------------------------------------------------
+input                              two plus two
+target semantics                   ('+', 2, 2)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 2, 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              three minus two
+target semantics                   ('-', 3, 2)
+target denotation                  1
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('-', 3, 2)
+               denotation      +   1
+
+--------------------------------------------------------------------------------
+input                              minus three minus two
+target semantics                   ('-', ('~', 3), 2)
+target denotation                  -5
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   2
+spurious ambiguity                 0
+
+0      1.000   semantics       +   ('-', ('~', 3), 2)
+               denotation      +   -5
+1     -1.000   semantics       -   ('~', ('-', 3, 2))
+               denotation      -   -1
+
+--------------------------------------------------------------------------------
+input                              two times two
+target semantics                   ('*', 2, 2)
+target denotation                  4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('*', 2, 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              two times three
+target semantics                   ('*', 2, 3)
+target denotation                  6
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('*', 2, 3)
+               denotation      +   6
+
+--------------------------------------------------------------------------------
+input                              three plus three minus two
+target semantics                   ('-', ('+', 3, 3), 2)
+target denotation                  4
+
+semantics accuracy                 0
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   2
+spurious ambiguity                 0
+
+0      0.000   semantics       -   ('+', 3, ('-', 3, 2))
+               denotation      +   4
+1      0.000   semantics       +   ('-', ('+', 3, 3), 2)
+               denotation      +   4
+
+--------------------------------------------------------------------------------
+input                              minus three
+target semantics                   ('~', 3)
+target denotation                  -3
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('~', 3)
+               denotation      +   -3
+
+--------------------------------------------------------------------------------
+input                              three plus two
+target semantics                   ('+', 3, 2)
+target denotation                  5
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('+', 3, 2)
+               denotation      +   5
+
+--------------------------------------------------------------------------------
+input                              two times two plus three
+target semantics                   ('+', ('*', 2, 2), 3)
+target denotation                  7
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   2
+spurious ambiguity                 0
+
+0      1.000   semantics       +   ('+', ('*', 2, 2), 3)
+               denotation      +   7
+1     -1.000   semantics       -   ('*', 2, ('+', 2, 3))
+               denotation      -   10
+
+--------------------------------------------------------------------------------
+input                              minus four
+target semantics                   ('~', 4)
+target denotation                  -4
+
+semantics accuracy                 1
+semantics oracle accuracy          1
+denotation accuracy                1
+denotation oracle accuracy         1
+number of parses                   1
+spurious ambiguity                 0
+
+0      0.000   semantics       +   ('~', 4)
+               denotation      +   -4
+
+--------------------------------------------------------------------------------
+over 17 examples:
+
+semantics accuracy                 0.941
+semantics oracle accuracy          1.000
+denotation accuracy                1.000
+denotation oracle accuracy         1.000
+number of parses                   1.176
+spurious ambiguity                 0.000
+
+
+   if you look at the bottom of the output, you'll see that our semantics
+   accuracy has increased from 0.824 (or 14 of 17) to 0.941 (or 16 of 17).
+   hooray, scoring works! in particular, our operator precedence features
+   now allow us to correctly rank the alternate parses for "minus three
+   minus two" and "two times two minus three".
+
+   the remaining error is on "three plus three minus two". note that in
+   the standard order of operations, operators with same precedence level
+   (such as addition and subtraction) are evaluated left-to-right.
+   accordingly, the target semantics performs the addition first. however,
+   the parse at position 0 performs the subtraction first. in this case,
+   both parses yield the same denotation, so you might think that this
+   mistake doesn't much matter. but that's not true in general: if the
+   example were instead "three minus three plus two", the denotation would
+   depend on the order of operations. in the [54]exercises at the end of
+   this unit, we'll ask you to introduce new features to address this
+   problem.
+
+learning the scoring model[55]  
+
+   in the previous section, we set the weights of our scoring model "by
+   hand". and it was easy to do so, because the model uses just a handful
+   of features. moreover, there was no question about what weights to
+   choose: the sign of each weight was determined by the standard order of
+   operations, and the magnitudes were all the same.
+
+   in more realistic applications, however, things are often more
+   complicated. scoring models can contain hundreds or thousands of
+   features, too many to set by hand. and, perhaps surprisingly, it's not
+   always obvious whether the weight of a particular feature should be
+   positive or negative, let alone what its magnitude should be.
+
+   rather than setting weights by hand, we'd like learn the weights
+   automatically from training data.
+
+learning with stochastic id119 (sgd)[56]  
+
+   (todo ... flesh out this section. until this section is fleshed out,
+   please refer to [57]liang & potts 2015, which describes the application
+   of sgd to id29 with great clarity. you may also find it
+   useful to examine the [58]demonstration code published as a companion
+   to that paper. the code here is superficially different but
+   fundamentally the same.)
+   in [32]:
+def latent_sgd(model=none, examples=[], training_metric=none, t=10, eta=0.1, see
+d=none):
+    print('running sgd learning on %d examples with training metric: %s' % (
+        len(examples), training_metric.name()))
+    if seed:
+        print('random.seed(%d)' % seed)
+        random.seed(seed)
+    model = clone_model(model)
+    for t in range(t):
+        random.shuffle(examples)
+        num_correct = 0
+        for example in examples:
+            # parse input with current weights.
+            parses = model.parse_input(example.input)
+            # get the highest-scoring "good" parse among the candidate parses.
+            good_parses = [p for p in parses if training_metric.evaluate(example
+, [p])]
+            if good_parses:
+                target_parse = good_parses[0]
+                # get all (score, parse) pairs.
+                scores = [(p.score + cost(target_parse, p), p) for p in parses]
+                # get the maximal score.
+                max_score = sorted(scores)[-1][0]
+                # get all the candidates with the max score and choose one rando
+mly.
+                predicted_parse = random.choice([p for s, p in scores if s == ma
+x_score])
+                if training_metric.evaluate(example, [predicted_parse]):
+                    num_correct += 1
+                update_weights(model, target_parse, predicted_parse, eta)
+        print('sgd iteration %d: train accuracy: %.3f' % (t, 1.0 * num_correct /
+ len(examples)))
+    print_weights(model.weights)
+    return model
+
+def cost(parse_1, parse_2):
+    return 0.0 if parse_1 == parse_2 else 1.0
+
+def clone_model(model):
+    return model(grammar=model.grammar,
+                 feature_fn=model.feature_fn,
+                 weights=defaultdict(float),  # zero the weights.
+                 executor=model.executor)
+
+def update_weights(model, target_parse, predicted_parse, eta):
+    target_features = model.feature_fn(target_parse)
+    predicted_features = model.feature_fn(predicted_parse)
+    for f in set(target_features.keys() + predicted_features.keys()):
+        update = target_features[f] - predicted_features[f]
+        if update != 0.0:
+            # print 'update %g + %g * %g = %g\t%s' % (
+            #     model.weights[f], eta, update, model.weights[f] + eta * update
+, f)
+            model.weights[f] += eta * update
+
+learning from semantics[59]  
+
+   let's put latent_sgd() to the test, by using it to learn weights for
+   our arithmetic model. we'll divide our 17 arithmetic examples into 13
+   training examples and 4 test examples. then, we'll use the utility
+   function train_test(), defined in [60]experiment.py, which:
+     * evaluates the current model on both the training examples and the
+       test examples
+     * trains the model on the training examples, using latent_sgd()
+     * reports the learned weights
+     * evaluates the trained model on both the training examples and the
+       test examples
+
+   note that train_test() has a parameter called training_metric, which is
+   passed through to the latent_sgd() parameter of the same name. to begin
+   with, we'll use the semanticsaccuracymetric as the training metric:
+   thus, a parse will count as correct iff its semantic yield matches the
+   target semantics in the example. here we go:
+   in [33]:
+from experiment import train_test
+from metrics import semanticsaccuracymetric
+
+train_test(model=arithmetic_model,
+           train_examples=arithmetic_examples[:13],
+           test_examples=arithmetic_examples[13:],
+           training_metric=semanticsaccuracymetric(),
+           seed=1)
+
+13 training examples, 4 test examples
+================================================================================
+evaluating on 13 train examples
+
+--------------------------------------------------------------------------------
+over 13 examples:
+
+semantics accuracy                 0.846
+semantics oracle accuracy          1.000
+denotation accuracy                0.923
+denotation oracle accuracy         1.000
+number of parses                   1.154
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+semantics accuracy                 0.750
+semantics oracle accuracy          1.000
+denotation accuracy                0.750
+denotation oracle accuracy         1.000
+number of parses                   1.250
+spurious ambiguity                 0.000
+
+================================================================================
+running sgd learning on 13 examples with training metric: semantics accuracy
+
+random.seed(1)
+sgd iteration 0: train accuracy: 0.846
+sgd iteration 1: train accuracy: 0.846
+sgd iteration 2: train accuracy: 0.846
+sgd iteration 3: train accuracy: 0.846
+sgd iteration 4: train accuracy: 0.846
+sgd iteration 5: train accuracy: 0.846
+sgd iteration 6: train accuracy: 1.000
+sgd iteration 7: train accuracy: 1.000
+sgd iteration 8: train accuracy: 1.000
+sgd iteration 9: train accuracy: 1.000
+
+feature weights:
+     0.6        ('~', '-')
+     0.6        ('+', '-')
+    -0.6        ('-', '~')
+    -0.6        ('-', '+')
+
+================================================================================
+evaluating on 13 train examples
+
+--------------------------------------------------------------------------------
+over 13 examples:
+
+semantics accuracy                 1.000
+semantics oracle accuracy          1.000
+denotation accuracy                1.000
+denotation oracle accuracy         1.000
+number of parses                   1.154
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+semantics accuracy                 0.750
+semantics oracle accuracy          1.000
+denotation accuracy                0.750
+denotation oracle accuracy         1.000
+number of parses                   1.250
+spurious ambiguity                 0.000
+
+
+   note that, while training accuracy increased from 0.846 (11 of 13
+   correct) to 1.000 (all 13 correct), test accuracy remained stuck at
+   0.750 (3 of 4 correct). we seem to have learned something from the
+   training data, but whatever we learned did not generalize to the test
+   data. in fact, if we look at the learned features, we can see exactly
+   what we learned from the training data: that '~' should take precedence
+   over '-' (which is correct, in the sense that it accords with the
+   standard order of operations), and that '+' should take precedence over
+   '-' (which is not correct, in general). the model learned these
+   specific preferences because the two errors it was making on the
+   training data involved these two precedence pairs.
+
+   however, the one error we're making on the test data involves a
+   different precedence pair. if you add the argument print_examples=true
+   to train_test(), you can see which example we're getting wrong: it's
+   "two times two plus three". in order to get this example right, we need
+   to know that * should take precedence over +. but none of the examples
+   in the training data involved this precedence pair, so we haven't
+   learned that.
+
+   of course, this failure to improve test accuracy doesn't reflect any
+   problem with latent_sgd(). it's merely a consequence of the extremely
+   small size of our training dataset. with so few training examples, it's
+   not surprising that a test example hinges on a feature not seen in
+   training. going forward, we'll strive for larger datasets which are
+   less subject to this kind of sampling noise.
+
+learning from denotations[61]  
+
+   it's clear that we need larger datasets, with more training examples.
+   but as we noted [62]above, annotating examples with target semantics
+   can be slow, expensive, and error-prone, and may require expert
+   knowledge. however, annotating examples with target denotations can
+   often be faster, cheaper, and more reliable.
+
+   the arithmetic domain illustrates this nicely. writing down the target
+   semantics for "minus three minus two" (namely, ('-', ('~', 3), 2)) is a
+   tedious chore that most people probably could not perform reliably. you
+   need to understand lisp-y prefix notation. you need to remember to use
+   the funny '~', instead of the more natural '-', for unary "minus". you
+   need to remember to quote the operators. and you need to get the order
+   of operations right.
+
+   by contrast, writing down the target denotation (namely, -5) is easy as
+   pie. the only thing you really need to think about is the order of
+   operations, which most people are capable of mastering. so if you're
+   asking only for denotations, rather than semantics, you can get more
+   annotations, faster, cheaper, and more reliably, from ordinary people.
+
+   one of the principal contributions of [63]liang et al. 2011 was to show
+   that it is possible to learn scoring models for id29 using
+   only target denotations, rather than target semantics, as the source of
+   supervision. the central idea is presented with admirable clarity in
+   [64]liang & potts 2015.
+
+   in sippycup, we can change the source of supervision from semantics to
+   denotations simply by changing the training metric from
+   semanticsaccuracymetric to denotationaccuracymetric. with this change,
+   a parse will count as correct iff the denotation of its semantic yield
+   matches the target denotation in the example.
+
+   let's begin by repeating the experiment we did a moment ago, but
+   switching to denotations as the source of supervision:
+   in [34]:
+from metrics import denotationaccuracymetric
+
+train_test(model=arithmetic_model,
+           train_examples=arithmetic_examples[:13],
+           test_examples=arithmetic_examples[13:],
+           training_metric=denotationaccuracymetric(),
+           seed=1)
+
+13 training examples, 4 test examples
+================================================================================
+evaluating on 13 train examples
+
+--------------------------------------------------------------------------------
+over 13 examples:
+
+semantics accuracy                 0.846
+semantics oracle accuracy          1.000
+denotation accuracy                0.923
+denotation oracle accuracy         1.000
+number of parses                   1.154
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+semantics accuracy                 0.750
+semantics oracle accuracy          1.000
+denotation accuracy                0.750
+denotation oracle accuracy         1.000
+number of parses                   1.250
+spurious ambiguity                 0.000
+
+================================================================================
+running sgd learning on 13 examples with training metric: denotation accuracy
+
+random.seed(1)
+sgd iteration 0: train accuracy: 0.923
+sgd iteration 1: train accuracy: 0.923
+sgd iteration 2: train accuracy: 0.923
+sgd iteration 3: train accuracy: 0.923
+sgd iteration 4: train accuracy: 0.923
+sgd iteration 5: train accuracy: 0.923
+sgd iteration 6: train accuracy: 1.000
+sgd iteration 7: train accuracy: 1.000
+sgd iteration 8: train accuracy: 1.000
+sgd iteration 9: train accuracy: 1.000
+
+feature weights:
+     0.6        ('~', '-')
+     0.6        ('-', '+')
+    -0.6        ('-', '~')
+    -0.6        ('+', '-')
+
+================================================================================
+evaluating on 13 train examples
+
+--------------------------------------------------------------------------------
+over 13 examples:
+
+semantics accuracy                 0.923
+semantics oracle accuracy          1.000
+denotation accuracy                1.000
+denotation oracle accuracy         1.000
+number of parses                   1.154
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+semantics accuracy                 0.750
+semantics oracle accuracy          1.000
+denotation accuracy                0.750
+denotation oracle accuracy         1.000
+number of parses                   1.250
+spurious ambiguity                 0.000
+
+
+   now that we're learning from denotations, the semantics accuracy on the
+   training data did not reach 1.000, as it did before. one of the
+   [65]exercises will ask you to investigate why. however, the denotation
+   accuracy did reach 1.000.
+
+   to no one's astonishment, performance on the test data did not budge.
+   as we saw earlier, the sole error on a test example depends on a
+   feature which is not observed in the training data. learning from
+   denotations does not solve that problem directly. however, it opens the
+   door to obtaining larger datasets for training, which may help.
+
+   the file [66]arithmetic.py contains a set of 100 "development" examples
+   for the arithmetic domain. these examples are annotated only with
+   denotations, not with semantics. 100 examples is still not huge, but
+   the arithmetic domain is simple enough that it should suffice.
+   in [35]:
+from arithmetic import arithmetic_dev_examples
+from metrics import denotation_match_metrics
+
+train_test(model=arithmetic_model,
+           train_examples=arithmetic_dev_examples,
+           test_examples=arithmetic_examples[13:],
+           metrics=denotation_match_metrics(),
+           training_metric=denotationaccuracymetric(),
+           seed=1)
+
+100 training examples, 4 test examples
+================================================================================
+evaluating on 100 train examples
+
+--------------------------------------------------------------------------------
+over 100 examples:
+
+denotation accuracy                0.640
+denotation oracle accuracy         1.000
+number of parses                   4.520
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+denotation accuracy                0.750
+denotation oracle accuracy         1.000
+number of parses                   1.250
+spurious ambiguity                 0.000
+
+================================================================================
+running sgd learning on 100 examples with training metric: denotation accuracy
+
+random.seed(1)
+sgd iteration 0: train accuracy: 0.670
+sgd iteration 1: train accuracy: 0.850
+sgd iteration 2: train accuracy: 0.890
+sgd iteration 3: train accuracy: 0.900
+sgd iteration 4: train accuracy: 0.900
+sgd iteration 5: train accuracy: 0.910
+sgd iteration 6: train accuracy: 0.910
+sgd iteration 7: train accuracy: 0.930
+sgd iteration 8: train accuracy: 0.930
+sgd iteration 9: train accuracy: 0.930
+
+feature weights:
+     1.2        ('-', '+')
+     1.1        ('*', '~')
+     1.1        ('*', '+')
+     0.7        ('~', '-')
+     0.5        ('*', '-')
+     0.0        ('~', '+')
+    -0.5        ('+', '-')
+    -1.0        ('-', '*')
+    -1.1        ('~', '*')
+    -1.1        ('-', '~')
+    -1.2        ('+', '~')
+    -1.2        ('+', '*')
+
+================================================================================
+evaluating on 100 train examples
+
+--------------------------------------------------------------------------------
+over 100 examples:
+
+denotation accuracy                0.930
+denotation oracle accuracy         1.000
+number of parses                   4.520
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+denotation accuracy                1.000
+denotation oracle accuracy         1.000
+number of parses                   1.250
+spurious ambiguity                 0.000
+
+
+   note that denotation accuracy on the test examples now reaches 1.000
+   after training. the sole error is corrected, because the larger
+   training dataset affords ample opportunity to learn that * should take
+   precedence over +.
+
+inducing the lexicon[67]  
+
+   we'd like to automate the process of building a id29 model
+   as much as possible. ideally, we'd start from training examples
+   annotated with denotations, run one command, and get back a fully-baked
+   id29 model. this would make it vastly easier to build
+   models for new domains or in new languages.
+
+   the weight learning introduced in the previous section brings us one
+   step closer to that goal. it makes it possible to leverage machine
+   learning, rather than human expertise, in constructing a scoring model
+   for ranking candidate parses.
+
+   in truth, however, we're still quite far from fully automated model
+   construction. as things stand, there's one big piece that remains
+   completely manual: grammar engineering. in the arithmetic domain, we
+   had to write rules that specify that the token "one" corresponds to the
+   semantic representation 1, that the token "times" corresponds to the
+   semantic representation *, and so on. because the arithmetic domain is
+   simple and the grammar is small, this wasn't especially cumbersome. but
+   in more realistic domains, grammars can become very large, with
+   thousands of rules. the burden of manual grammar engineering then
+   becomes a major impediment to rapid progress.
+
+   consequently, a major theme in academic research on id29
+   (and, indeed, syntactic parsing as well) has been [68]grammar
+   induction, which means automatically inducing the rules of the grammar
+   from data. this is a big topic, one that we will touch on only lightly
+   in sippycup.
+
+   one approach to inducing the rules of the grammar, explored in
+   [69]zettlemoyer & collins 2005, reduces the problem to conventional
+   weight learning:
+     * generate all rules possible under certain constraints,
+     * build a linear scoring model with rule features,
+     * use sgd training, as in the previous section, to learn weights for
+       each rule, and then
+     * (optional) prune all but the highest-weight rules
+
+   this strategy has usually been applied only to lexical rules, with
+   compositional rules still defined manually. what does it mean to
+   generate all lexical rules possible? the basic idea is to build rules
+   from pieces that we find in the training examples. to generate a
+   lexical rule, we:
+     * choose the lhs from the set of categories which appear in the
+       compositional rules,
+     * choose the rhs from the set of tokens which appear in the example
+       inputs, and
+     * choose the semantics from the set of fragments which appear in the
+       example semantics.
+
+   this generative process is usually constrained in some way, and much
+   depends on the specific constraints. if we generate too few rules, we
+   are unlikely to find the ones we need for parsing, and we'll see oracle
+   accuracy stuck near zero. but if we generate too many, our grammar will
+   be very large, parsing will be exceedingly slow, and training will
+   grind to a halt.
+
+   one way of constraining the generative process, suggested in [70]liang
+   & potts 2015, is to assume that we know the proper syntactic category
+   for each token and each semantic fragment, but not the proper mapping
+   between tokens and semantic fragments within the same syntactic
+   category. in the arithmetic domain, this would mean knowing that the
+   tokens 'plus', 'minus', and 'times, and the semantic fragments '+',
+   '-', and '*', all belong to the syntactic category $binop, but without
+   knowing that 'plus' corresponds to '+'.
+
+   let's test this out! the following function expands a set of rules by
+   generating lexical rules from the [71]cartesian product of existing
+   lexical tokens and semantic fragments for each category, thereby
+   effective "forgetting" the proper mapping between them.
+   in [36]:
+def cartesian_product_of_lexical_rules(rules):
+    """
+    expands the given collection of rules by iterating through all possible
+    pairs of existing lexical rules and adding a new rule which combines the rhs
+    of the first rule with the semantics of the second.
+    """
+    lexical_rules = [rule for rule in rules if is_lexical(rule)]
+    expanded_rules = [rule for rule in rules if not is_lexical(rule)]
+    # partition rules by lhs.
+    lexical_rules_by_lhs = defaultdict(list)
+    for rule in lexical_rules:
+        lexical_rules_by_lhs[rule.lhs].append(rule)
+    # in each partition, iterate through cross-product of lexical rules.
+    for lhs, rules in lexical_rules_by_lhs.items():
+        sems = set([rule.sem for rule in rules])
+        for rule, sem in product(rules, sems):
+            expanded_rules.append(rule(rule.lhs, rule.rhs, sem))
+    return expanded_rules
+
+   let's see what it looks like when we apply this to our current
+   arithmetic rules.
+   in [37]:
+original_arithmetic_rules = arithmetic_rules()
+expanded_arithmetic_rules = cartesian_product_of_lexical_rules(original_arithmet
+ic_rules)
+print("expanded %d arithmetic rules into %d rules\n" % (
+    len(original_arithmetic_rules), len(expanded_arithmetic_rules)))
+for rule in expanded_arithmetic_rules:
+    print(rule)
+
+expanded 11 arithmetic rules into 29 rules
+
+rule('$e', '$unop $e', <function <lambda> at 0x1043abc80>)
+rule('$ebo', '$e $binop', <function <lambda> at 0x1043bad08>)
+rule('$e', '$ebo $e', <function <lambda> at 0x1043bac80>)
+rule('$binop', 'plus', '+')
+rule('$binop', 'plus', '*')
+rule('$binop', 'plus', '-')
+rule('$binop', 'minus', '+')
+rule('$binop', 'minus', '*')
+rule('$binop', 'minus', '-')
+rule('$binop', 'times', '+')
+rule('$binop', 'times', '*')
+rule('$binop', 'times', '-')
+rule('$e', 'one', 1)
+rule('$e', 'one', 2)
+rule('$e', 'one', 3)
+rule('$e', 'one', 4)
+rule('$e', 'two', 1)
+rule('$e', 'two', 2)
+rule('$e', 'two', 3)
+rule('$e', 'two', 4)
+rule('$e', 'three', 1)
+rule('$e', 'three', 2)
+rule('$e', 'three', 3)
+rule('$e', 'three', 4)
+rule('$e', 'four', 1)
+rule('$e', 'four', 2)
+rule('$e', 'four', 3)
+rule('$e', 'four', 4)
+rule('$unop', 'minus', '~')
+
+   as expected, the expanded rule set pairs every token with every
+   semantic fragment, restricted by syntactic category.
+
+   in our earlier learning experiments, we used the
+   operator_precedence_features(). but this approach to lexicon induction
+   depends on using rule features, so let's create a feature function
+   which generates both kinds of features:
+   in [38]:
+def arithmetic_features(parse):
+    features = rule_features(parse)
+    features.update(operator_precedence_features(parse))
+    return features
+
+   ok, we're finally ready to run a train_test() experiment. let's create
+   a model using the expanded rule set and both kinds of features.
+   training is going to be a lot slower now, so let's use our original
+   training dataset of 13 examples, and our usual test dataset of 4
+   examples.
+   in [39]:
+expanded_arithmetic_grammar = grammar(expanded_arithmetic_rules)
+expanded_arithmetic_model = model(grammar=expanded_arithmetic_grammar,
+                                  feature_fn=arithmetic_features,
+                                  weights=weights,
+                                  executor=execute)
+train_test(model=expanded_arithmetic_model,
+           train_examples=arithmetic_examples[:13],
+           test_examples=arithmetic_examples[13:],
+           metrics=denotation_match_metrics(),
+           training_metric=denotationaccuracymetric(),
+           seed=1)
+
+created grammar with 29 rules.
+13 training examples, 4 test examples
+================================================================================
+evaluating on 13 train examples
+
+--------------------------------------------------------------------------------
+over 13 examples:
+
+denotation accuracy                0.077
+denotation oracle accuracy         1.000
+number of parses                   136.615
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+denotation accuracy                0.000
+denotation oracle accuracy         1.000
+number of parses                   302.000
+spurious ambiguity                 0.000
+
+================================================================================
+running sgd learning on 13 examples with training metric: denotation accuracy
+
+random.seed(1)
+sgd iteration 0: train accuracy: 0.154
+sgd iteration 1: train accuracy: 0.077
+sgd iteration 2: train accuracy: 0.077
+sgd iteration 3: train accuracy: 0.154
+sgd iteration 4: train accuracy: 0.538
+sgd iteration 5: train accuracy: 0.692
+sgd iteration 6: train accuracy: 0.615
+sgd iteration 7: train accuracy: 0.923
+sgd iteration 8: train accuracy: 0.923
+sgd iteration 9: train accuracy: 0.846
+
+feature weights:
+     1.0        ('+', '~')
+     0.9        rule('$e', 'two', 2)
+     0.9        rule('$e', 'three', 3)
+     0.9        rule('$e', 'one', 1)
+     0.8        rule('$binop', 'times', '*')
+     0.8        rule('$binop', 'plus', '+')
+     0.8        ('-', '+')
+     0.4        rule('$binop', 'minus', '-')
+    -0.1        ('~', '+')
+    -0.1        ('~', '*')
+    -0.1        ('+', '*')
+    -0.1        ('*', '+')
+    -0.2        rule('$binop', 'minus', '*')
+    -0.2        rule('$binop', 'minus', '+')
+    -0.3        rule('$e', 'two', 4)
+    -0.3        rule('$e', 'two', 3)
+    -0.3        rule('$e', 'two', 1)
+    -0.3        rule('$e', 'three', 4)
+    -0.3        rule('$e', 'three', 2)
+    -0.3        rule('$e', 'three', 1)
+    -0.3        rule('$e', 'one', 4)
+    -0.3        rule('$e', 'one', 3)
+    -0.3        rule('$e', 'one', 2)
+    -0.4        rule('$binop', 'times', '-')
+    -0.4        rule('$binop', 'times', '+')
+    -0.4        rule('$binop', 'plus', '-')
+    -0.4        rule('$binop', 'plus', '*')
+    -0.4        ('~', '-')
+    -0.4        ('-', '~')
+    -0.4        ('+', '-')
+
+================================================================================
+evaluating on 13 train examples
+
+--------------------------------------------------------------------------------
+over 13 examples:
+
+denotation accuracy                1.000
+denotation oracle accuracy         1.000
+number of parses                   136.615
+spurious ambiguity                 0.000
+
+================================================================================
+evaluating on 4 test examples
+
+--------------------------------------------------------------------------------
+over 4 examples:
+
+denotation accuracy                0.500
+denotation oracle accuracy         1.000
+number of parses                   302.000
+spurious ambiguity                 0.000
+
+
+   you will observe not only that denotation accuracy improves
+   dramatically on both training and test datasets, but also that
+   "correct" lexical rules (such as the one that pairs 'plus' with '+')
+   get positive weight, while "incorrect" rules (like the one that pairs
+   'plus' with '-') get negative weight. you will also observe that the
+   number of parses is far higher than it was before! that's because the
+   expanded grammar is much looser and more productive than it was. but at
+   this point we can begin to imagine schemes for pruning the grammar.
+
+   there are, of course, a wide variety of approaches to inducing the
+   rules of a semantic grammar from training data, but this simple example
+   should give you some hope that it's possible.
+
+exercises [72]  
+
+   note that some of these exercises ask you to extend the grammar in ways
+   that will be a bit awkward, given the requirement that rules be in
+   chomsky normal form (cnf). in the [73]next unit, we'll look at ways to
+   relax this restriction by enriching the grammar class. don't jump the
+   gun! your solutions to these exercises should adhere to the cnf
+   restriction. it's going to be a bit of a pain in the ass, and that's
+   part of the point.
+
+straightforward[74]  
+
+    1. how many parses do you get for "one plus one plus one plus one plus
+       one"? why?
+    2. extend the grammar to support postfix unary operators, as in "two
+       squared" or "two cubed".
+    3. extend the grammar to support divison, as in "four divided by
+       three" or "minus four over two".
+    4. extend the grammar to support multi-word operators, as in "the
+       square root of one" or "the average of one and two". (you may need
+       to extend the semantic representation and the executor as well.)
+    5. extend the grammar to parse expressions for very large numbers,
+       such as "one million forty eight thousand five hundred seventy six"
+       or "a billion and one".
+    6. extend the grammar to support decimal numbers, such as "three point
+       one four one six" or "one point zero zero zero one".
+    7. extend the grammar to support fractions, including [75]improper
+       fractions and [76]mixed numbers, such as "four thirds", "twenty two
+       over seven", or "two and a quarter".
+    8. when we learned from semantics, semantics accuracy on the training
+       examples reached 1.000 after training. however, when we switched to
+       learning from denotations, it did not. explain why. be precise and
+       specific.
+    9. when we trained on the 100 examples in arithmetic_dev_examples,
+       denotation accuracy on the training examples did not reach 1.000
+       after training. diagnose the errors and describe your findings.
+       what could help us to eliminate those errors? (you don't need to
+       implement the fix. just give a precise diagnosis.)
+   10. add features to ensure that subtraction and division are properly
+       [77]left-associative, so that "four minus three plus two" has
+       denotation 3, "four minus three minus two" has denotation -1, and
+       "four over three times two" has denotation 8/3.
+
+challenging[78]  
+
+    1. implement an "eager" version of the arithmetic grammar, in which
+       the semantics of "plus" is not simply a symbol ('+'), but a lambda
+       function (lambda x, y: x + y), and similarly for the other
+       operators. what else has to change to make this work? what impact
+       does this have on accuracy?
+    2. when inducing the lexicon, what happens if you drop the restriction
+       that the token and the semantics of a lexical rule must belong to
+       the same syntactic category? if you encounter obstacles, can they
+       be overcome?
+
+   copyright (c) 2015 bill maccartney
+
+   this website does not host notebooks, it only renders notebooks
+   available on other websites.
+
+   delivered by [79]fastly, rendered by [80]rackspace
+
+   nbviewer github [81]repository.
+
+   nbviewer version: [82]33c4683
+
+   nbconvert version: [83]5.4.0
+
+   rendered (fri, 05 apr 2019 18:00:53 utc)
+
+references
+
+   1. https://nbviewer.jupyter.org/
+   2. http://jupyter.org/
+   3. https://nbviewer.jupyter.org/faq
+   4. https://nbviewer.jupyter.org/format/script/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb
+   5. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb
+   6. https://github.com/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb
+   7. https://mybinder.org/v2/gh/wcmac/sippycup/master?filepath=sippycup-unit-1.ipynb
+   8. https://raw.githubusercontent.com/wcmac/sippycup/master/sippycup-unit-1.ipynb
+   9. https://nbviewer.jupyter.org/github/wcmac/sippycup/tree/master
+  10. https://nbviewer.jupyter.org/github/wcmac/sippycup/tree/master/sippycup-unit-1.ipynb
+  11. http://nlp.stanford.edu/~wcmac/
+  12. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb
+  13. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  14. http://en.wikipedia.org/wiki/syntactic_ambiguity
+  15. http://en.wikipedia.org/wiki/order_of_operations
+  16. http://en.wikipedia.org/wiki/lexical_ambiguity
+  17. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#example-inputs
+  18. https://github.com/cgpotts/annualreview-complearning
+  19. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  20. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#arithmetic-exercises
+  21. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb
+  22. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#semantic-representation-
+  23. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#designing-a-semantic-representation
+  24. http://en.wikipedia.org/wiki/binary_expression_tree
+  25. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#example-data-
+  26. http://en.wikipedia.org/wiki/id104
+  27. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/example.py
+  28. http://en.wikipedia.org/wiki/order_of_operations
+  29. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#syntactic-parsing
+  30. http://www.cs.colorado.edu/~martin/slp.html
+  31. http://en.wikipedia.org/wiki/phrase_structure_grammar
+  32. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#grammars-and-rules
+  33. http://en.wikipedia.org/wiki/context-free_grammar
+  34. http://en.wikipedia.org/wiki/chomsky_normal_form
+  35. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb
+  36. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#chart-parsing
+  37. http://en.wikipedia.org/wiki/cyk_algorithm
+  38. http://en.wikipedia.org/wiki/chart_parser
+  39. http://en.wikipedia.org/wiki/dynamic_programming
+  40. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb
+  41. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#adding-semantics
+  42. http://en.wikipedia.org/wiki/lexical_semantics
+  43. http://en.wikipedia.org/wiki/principle_of_compositionality
+  44. http://en.wikipedia.org/wiki/gottlob_frege
+  45. http://en.wikipedia.org/wiki/montague_grammar
+  46. http://en.wikipedia.org/wiki/simply_typed_lambda_calculus
+  47. http://en.wikipedia.org/wiki/currying
+  48. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/experiment.py
+  49. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/metrics.py
+  50. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#scoring-candidate-parses
+  51. http://en.wikipedia.org/wiki/order_of_operations
+  52. http://en.wikipedia.org/wiki/feature_(machine_learning)
+  53. http://en.wikipedia.org/wiki/dot_product
+  54. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#arithmetic-exercises
+  55. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#learning-the-scoring-model
+  56. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#learning-with-stochastic-gradient-descent-(sgd)
+  57. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  58. https://github.com/cgpotts/annualreview-complearning
+  59. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#learning-from-semantics
+  60. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/experiment.py
+  61. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#learning-from-denotations
+  62. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#arithmetic-example-data
+  63. http://www.cs.berkeley.edu/~jordan/papers/liang-jordan-klein-acl2011.pdf
+  64. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  65. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#arithmetic-exercises
+  66. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/arithmetic.py
+  67. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#inducing-the-lexicon
+  68. http://en.wikipedia.org/wiki/grammar_induction
+  69. http://people.csail.mit.edu/lsz/papers/zc-uai05.pdf
+  70. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  71. http://en.wikipedia.org/wiki/cartesian_product
+  72. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#exercises-
+  73. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb
+  74. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#straightforward
+  75. http://en.wikipedia.org/wiki/fraction_(mathematics)#proper_and_improper_fractions
+  76. http://en.wikipedia.org/wiki/fraction_(mathematics)#mixed_numbers
+  77. http://en.wikipedia.org/wiki/operator_associativity
+  78. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb#challenging
+  79. http://www.fastly.com/
+  80. https://developer.rackspace.com/?nbviewer=awesome
+  81. https://github.com/jupyter/nbviewer
+  82. https://github.com/jupyter/nbviewer/commit/33c4683164d5ee4c92dbcd53afac7f13ef033c54
+  83. https://github.com/jupyter/nbconvert/releases/tag/5.4.0

@@ -1,0 +1,379 @@
+    #[1]index [2]search [3]theano 1.0.0 documentation [4]tutorial
+   [5]conditions [6]more examples
+
+   [7]theano [theano_logo_allwhite_210x70.png]
+   1.0
+   ____________________
+     * [8]release notes
+     * [9]theano at a glance
+     * [10]requirements
+     * [11]installing theano
+     * [12]updating theano
+     * [13]tutorial
+          + [14]prerequisites
+          + [15]basics
+               o [16]baby steps - algebra
+               o [17]more examples
+               o [18]derivatives in theano
+                    # [19]computing gradients
+                    # [20]computing the jacobian
+                    # [21]computing the hessian
+                    # [22]jacobian times a vector
+                    # [23]hessian times a vector
+                    # [24]final pointers
+               o [25]conditions
+               o [26]loop
+               o [27]how shape information is handled by theano
+               o [28]broadcasting
+          + [29]advanced
+          + [30]advanced configuration and debugging
+          + [31]further readings
+     * [32]extending theano
+     * [33]developer start guide
+     * [34]optimizations
+     * [35]api documentation
+     * [36]troubleshooting
+     * [37]glossary
+     * [38]links
+     * [39]internal documentation
+     * [40]acknowledgements
+     * [41]license
+
+   [42]theano
+     * [43]docs   
+     * [44]tutorial   
+     * derivatives in theano
+     * [45]view page source
+     __________________________________________________________________
+
+derivatives in theano[46]  
+
+computing gradients[47]  
+
+   now let   s use theano for a slightly more sophisticated task: create a
+   function which computes the derivative of some expression y with
+   respect to its parameter x. to do this we will use the macro t.grad.
+   for instance, we can compute the gradient of x^2 with respect to x .
+   note that: d(x^2)/dx = 2 \cdot x .
+
+   here is the code to compute this gradient:
+>>> import numpy
+>>> import theano
+>>> import theano.tensor as t
+>>> from theano import pp
+>>> x = t.dscalar('x')
+>>> y = x ** 2
+>>> gy = t.grad(y, x)
+>>> pp(gy)  # print out the gradient prior to optimization
+'((fill((x ** tensorconstant{2}), tensorconstant{1.0}) * tensorconstant{2}) * (x
+ ** (tensorconstant{2} - tensorconstant{1})))'
+>>> f = theano.function([x], gy)
+>>> f(4)
+array(8.0)
+>>> numpy.allclose(f(94.2), 188.4)
+true
+
+   in this example, we can see from pp(gy) that we are computing the
+   correct symbolic gradient. fill((x ** 2), 1.0) means to make a matrix
+   of the same shape as x ** 2 and fill it with 1.0.
+
+   note
+
+   the optimizer simplifies the symbolic gradient expression. you can see
+   this by digging inside the internal properties of the compiled
+   function.
+pp(f.maker.fgraph.outputs[0])
+'(2.0 * x)'
+
+   after optimization there is only one apply node left in the graph,
+   which doubles the input.
+
+   we can also compute the gradient of complex expressions such as the
+   logistic function defined above. it turns out that the derivative of
+   the logistic is: ds(x)/dx = s(x) \cdot (1 - s(x)) .
+   ../_images/dlogistic.png
+
+   a plot of the gradient of the logistic function, with x on the x-axis
+   and ds(x)/dx on the y-axis.
+>>> x = t.dmatrix('x')
+>>> s = t.sum(1 / (1 + t.exp(-x)))
+>>> gs = t.grad(s, x)
+>>> dlogistic = theano.function([x], gs)
+>>> dlogistic([[0, 1], [-1, -2]])
+array([[ 0.25      ,  0.19661193],
+       [ 0.19661193,  0.10499359]])
+
+   in general, for any scalar expression s, t.grad(s, w) provides the
+   theano expression for computing \frac{\partial s}{\partial w} . in this
+   way theano can be used for doing efficient symbolic differentiation (as
+   the expression returned by t.grad will be optimized during
+   compilation), even for function with many inputs. (see [48]automatic
+   differentiation for a description of symbolic differentiation).
+
+   note
+
+   the second argument of t.grad can be a list, in which case the output
+   is also a list. the order in both lists is important: element i of the
+   output list is the gradient of the first argument of t.grad with
+   respect to the i-th element of the list given as second argument. the
+   first argument of t.grad has to be a scalar (a tensor of size 1). for
+   more information on the semantics of the arguments of t.grad and
+   details about the implementation, see [49]this section of the library.
+
+   additional information on the inner workings of differentiation may
+   also be found in the more advanced tutorial [50]extending theano.
+
+computing the jacobian[51]  
+
+   in theano   s parlance, the term jacobian designates the tensor
+   comprising the first partial derivatives of the output of a function
+   with respect to its inputs. (this is a generalization of to the
+   so-called jacobian matrix in mathematics.) theano implements the
+   [52]theano.gradient.jacobian() macro that does all that is needed to
+   compute the jacobian. the following text explains how to do it
+   manually.
+
+   in order to manually compute the jacobian of some function y with
+   respect to some parameter x we need to use scan. what we do is to loop
+   over the entries in y and compute the gradient of y[i] with respect to
+   x.
+
+   note
+
+   scan is a generic op in theano that allows writing in a symbolic manner
+   all kinds of recurrent equations. while creating symbolic loops (and
+   optimizing them for performance) is a hard task, effort is being done
+   for improving the performance of scan. we shall return to [53]scan
+   later in this tutorial.
+>>> import theano
+>>> import theano.tensor as t
+>>> x = t.dvector('x')
+>>> y = x ** 2
+>>> j, updates = theano.scan(lambda i, y, x : t.grad(y[i], x), sequences=t.arang
+e(y.shape[0]), non_sequences=[y, x])
+>>> f = theano.function([x], j, updates=updates)
+>>> f([4, 4])
+array([[ 8.,  0.],
+       [ 0.,  8.]])
+
+   what we do in this code is to generate a sequence of ints from 0 to
+   y.shape[0] using t.arange. then we loop through this sequence, and at
+   each step, we compute the gradient of element y[i] with respect to x.
+   scan automatically concatenates all these rows, generating a matrix
+   which corresponds to the jacobian.
+
+   note
+
+   there are some pitfalls to be aware of regarding t.grad. one of them is
+   that you cannot re-write the above expression of the jacobian as
+   theano.scan(lambda y_i,x: t.grad(y_i,x), sequences=y, non_sequences=x),
+   even though from the documentation of scan this seems possible. the
+   reason is that y_i will not be a function of x anymore, while y[i]
+   still is.
+
+computing the hessian[54]  
+
+   in theano, the term hessian has the usual mathematical meaning: it is
+   the matrix comprising the second order partial derivative of a function
+   with scalar output and vector input. theano implements
+   [55]theano.gradient.hessian() macro that does all that is needed to
+   compute the hessian. the following text explains how to do it manually.
+
+   you can compute the hessian manually similarly to the jacobian. the
+   only difference is that now, instead of computing the jacobian of some
+   expression y, we compute the jacobian of t.grad(cost,x), where cost is
+   some scalar.
+>>> x = t.dvector('x')
+>>> y = x ** 2
+>>> cost = y.sum()
+>>> gy = t.grad(cost, x)
+>>> h, updates = theano.scan(lambda i, gy,x : t.grad(gy[i], x), sequences=t.aran
+ge(gy.shape[0]), non_sequences=[gy, x])
+>>> f = theano.function([x], h, updates=updates)
+>>> f([4, 4])
+array([[ 2.,  0.],
+       [ 0.,  2.]])
+
+jacobian times a vector[56]  
+
+   sometimes we can express the algorithm in terms of jacobians times
+   vectors, or vectors times jacobians. compared to evaluating the
+   jacobian and then doing the product, there are methods that compute the
+   desired results while avoiding actual evaluation of the jacobian. this
+   can bring about significant performance gains. a description of one
+   such algorithm can be found here:
+     * barak a. pearlmutter,    fast exact multiplication by the hessian   ,
+       neural computation, 1994
+
+   while in principle we would want theano to identify these patterns
+   automatically for us, in practice, implementing such optimizations in a
+   generic manner is extremely difficult. therefore, we provide special
+   functions dedicated to these tasks.
+
+r-operator[57]  
+
+   the r operator is built to evaluate the product between a jacobian and
+   a vector, namely \frac{\partial f(x)}{\partial x} v . the formulation
+   can be extended even for x being a matrix, or a tensor in general, case
+   in which also the jacobian becomes a tensor and the product becomes
+   some kind of tensor product. because in practice we end up needing to
+   compute such expressions in terms of weight matrices, theano supports
+   this more generic form of the operation. in order to evaluate the
+   r-operation of expression y, with respect to x, multiplying the
+   jacobian with v you need to do something similar to this:
+>>> w = t.dmatrix('w')
+>>> v = t.dmatrix('v')
+>>> x = t.dvector('x')
+>>> y = t.dot(x, w)
+>>> jv = t.rop(y, w, v)
+>>> f = theano.function([w, v, x], jv)
+>>> f([[1, 1], [1, 1]], [[2, 2], [2, 2]], [0,1])
+array([ 2.,  2.])
+
+   [58]list of op that implement rop.
+
+l-operator[59]  
+
+   in similitude to the r-operator, the l-operator would compute a row
+   vector times the jacobian. the mathematical formula would be v
+   \frac{\partial f(x)}{\partial x} . the l-operator is also supported for
+   generic tensors (not only for vectors). similarly, it can be
+   implemented as follows:
+>>> w = t.dmatrix('w')
+>>> v = t.dvector('v')
+>>> x = t.dvector('x')
+>>> y = t.dot(x, w)
+>>> vj = t.lop(y, w, v)
+>>> f = theano.function([v,x], vj)
+>>> f([2, 2], [0, 1])
+array([[ 0.,  0.],
+       [ 2.,  2.]])
+
+   note
+
+   v, the point of evaluation, differs between the l-operator and the
+   r-operator. for the l-operator, the point of evaluation needs to have
+   the same shape as the output, whereas for the r-operator this point
+   should have the same shape as the input parameter. furthermore, the
+   results of these two operations differ. the result of the l-operator is
+   of the same shape as the input parameter, while the result of the
+   r-operator has a shape similar to that of the output.
+
+   [60]list of op with r op support.
+
+hessian times a vector[61]  
+
+   if you need to compute the hessian times a vector, you can make use of
+   the above-defined operators to do it more efficiently than actually
+   computing the exact hessian and then performing the product. due to the
+   symmetry of the hessian matrix, you have two options that will give you
+   the same result, though these options might exhibit differing
+   performances. hence, we suggest profiling the methods before using
+   either one of the two:
+>>> x = t.dvector('x')
+>>> v = t.dvector('v')
+>>> y = t.sum(x ** 2)
+>>> gy = t.grad(y, x)
+>>> vh = t.grad(t.sum(gy * v), x)
+>>> f = theano.function([x, v], vh)
+>>> f([4, 4], [2, 2])
+array([ 4.,  4.])
+
+   or, making use of the r-operator:
+>>> x = t.dvector('x')
+>>> v = t.dvector('v')
+>>> y = t.sum(x ** 2)
+>>> gy = t.grad(y, x)
+>>> hv = t.rop(gy, x, v)
+>>> f = theano.function([x, v], hv)
+>>> f([4, 4], [2, 2])
+array([ 4.,  4.])
+
+final pointers[62]  
+
+     * the grad function works symbolically: it receives and returns
+       theano variables.
+     * grad can be compared to a macro since it can be applied repeatedly.
+     * scalar costs only can be directly handled by grad. arrays are
+       handled through repeated applications.
+     * built-in functions allow to compute efficiently vector times
+       jacobian and vector times hessian.
+     * work is in progress on the optimizations required to compute
+       efficiently the full jacobian and the hessian matrix as well as the
+       jacobian times vector.
+
+   [63]next [64]previous
+     __________________________________________________________________
+
+      copyright 2008--2017, lisa lab. last updated on nov 21, 2017.
+   built with [65]sphinx using a [66]theme provided by [67]read the docs.
+
+references
+
+   1. http://deeplearning.net/software/theano/genindex.html
+   2. http://deeplearning.net/software/theano/search.html
+   3. http://deeplearning.net/software/theano/index.html
+   4. http://deeplearning.net/software/theano/tutorial/index.html
+   5. http://deeplearning.net/software/theano/tutorial/conditions.html
+   6. http://deeplearning.net/software/theano/tutorial/examples.html
+   7. http://deeplearning.net/software/theano/index.html
+   8. http://deeplearning.net/software/theano/news.html
+   9. http://deeplearning.net/software/theano/introduction.html
+  10. http://deeplearning.net/software/theano/requirements.html
+  11. http://deeplearning.net/software/theano/install.html
+  12. http://deeplearning.net/software/theano/updating.html
+  13. http://deeplearning.net/software/theano/tutorial/index.html
+  14. http://deeplearning.net/software/theano/tutorial/index.html#prerequisites
+  15. http://deeplearning.net/software/theano/tutorial/index.html#basics
+  16. http://deeplearning.net/software/theano/tutorial/adding.html
+  17. http://deeplearning.net/software/theano/tutorial/examples.html
+  18. http://deeplearning.net/software/theano/tutorial/gradients.html
+  19. http://deeplearning.net/software/theano/tutorial/gradients.html#computing-gradients
+  20. http://deeplearning.net/software/theano/tutorial/gradients.html#computing-the-jacobian
+  21. http://deeplearning.net/software/theano/tutorial/gradients.html#computing-the-hessian
+  22. http://deeplearning.net/software/theano/tutorial/gradients.html#jacobian-times-a-vector
+  23. http://deeplearning.net/software/theano/tutorial/gradients.html#hessian-times-a-vector
+  24. http://deeplearning.net/software/theano/tutorial/gradients.html#final-pointers
+  25. http://deeplearning.net/software/theano/tutorial/conditions.html
+  26. http://deeplearning.net/software/theano/tutorial/loop.html
+  27. http://deeplearning.net/software/theano/tutorial/shape_info.html
+  28. http://deeplearning.net/software/theano/tutorial/broadcasting.html
+  29. http://deeplearning.net/software/theano/tutorial/index.html#advanced
+  30. http://deeplearning.net/software/theano/tutorial/index.html#advanced-configuration-and-debugging
+  31. http://deeplearning.net/software/theano/tutorial/index.html#further-readings
+  32. http://deeplearning.net/software/theano/extending/index.html
+  33. http://deeplearning.net/software/theano/dev_start_guide.html
+  34. http://deeplearning.net/software/theano/optimizations.html
+  35. http://deeplearning.net/software/theano/library/index.html
+  36. http://deeplearning.net/software/theano/troubleshooting.html
+  37. http://deeplearning.net/software/theano/glossary.html
+  38. http://deeplearning.net/software/theano/links.html
+  39. http://deeplearning.net/software/theano/internal/index.html
+  40. http://deeplearning.net/software/theano/acknowledgement.html
+  41. http://deeplearning.net/software/theano/license.html
+  42. http://deeplearning.net/software/theano/index.html
+  43. http://deeplearning.net/software/theano/index.html
+  44. http://deeplearning.net/software/theano/tutorial/index.html
+  45. http://deeplearning.net/software/theano/_sources/tutorial/gradients.txt
+  46. http://deeplearning.net/software/theano/tutorial/gradients.html#derivatives-in-theano
+  47. http://deeplearning.net/software/theano/tutorial/gradients.html#computing-gradients
+  48. http://en.wikipedia.org/wiki/automatic_differentiation
+  49. http://deeplearning.net/software/theano/library/gradient.html#libdoc-gradient
+  50. http://deeplearning.net/software/theano/extending/index.html#extending
+  51. http://deeplearning.net/software/theano/tutorial/gradients.html#computing-the-jacobian
+  52. http://deeplearning.net/software/theano/library/gradient.html#theano.gradient.jacobian
+  53. http://deeplearning.net/software/theano/tutorial/loop.html#tutloop
+  54. http://deeplearning.net/software/theano/tutorial/gradients.html#computing-the-hessian
+  55. http://deeplearning.net/software/theano/library/gradient.html#theano.gradient.hessian
+  56. http://deeplearning.net/software/theano/tutorial/gradients.html#jacobian-times-a-vector
+  57. http://deeplearning.net/software/theano/tutorial/gradients.html#r-operator
+  58. http://deeplearning.net/software/theano/library/gradient.html#r-op-list
+  59. http://deeplearning.net/software/theano/tutorial/gradients.html#l-operator
+  60. http://deeplearning.net/software/theano/library/gradient.html#r-op-list
+  61. http://deeplearning.net/software/theano/tutorial/gradients.html#hessian-times-a-vector
+  62. http://deeplearning.net/software/theano/tutorial/gradients.html#final-pointers
+  63. http://deeplearning.net/software/theano/tutorial/conditions.html
+  64. http://deeplearning.net/software/theano/tutorial/examples.html
+  65. http://sphinx-doc.org/
+  66. https://github.com/snide/sphinx_rtd_theme
+  67. https://readthedocs.org/

@@ -1,0 +1,407 @@
+   #[1]curious insight
+
+[2]curious insight
+     __________________________________________________________________
+
+   technology, software, data science, machine learning, entrepreneurship,
+   investing, and various other topics
+
+tags
+     __________________________________________________________________
+
+   [3]about [4]machine learning [5]data visualization [6]data science
+   [7]big data [8]software development [9]emerging technology
+   [10]entrepreneurship [11]investing [12]strategy [13]book review
+   [14]random thoughts [15]curious insights
+
+   copyright    curious insight. 2019     all rights reserved.
+
+   proudly published with [16]ghost.
+     *
+     *
+     *
+     *
+     *
+     *
+
+[17]curious insight
+
+   [18]machine learning[19]data science[20]data visualization
+
+an intro to probablistic programming
+
+   [21]23rd september 2015
+     __________________________________________________________________
+
+   probablistic programming is an expressive and flexible way to build
+   bayesian statistical models in code. it's an entirely different mode of
+   programming that involves using stochastic variables defined using
+   id203 distributions instead of concrete, deterministic values.
+   stochastic variables can be composed together in expressions and
+   functions, just like in normal programming. but unlike regular
+   programming, we use these relationships to conduct id136 on the
+   data that the variables model. probablistic programming is gaining
+   significant traction as a paradigm for building next-generation
+   intelligent systems. in fact, there's a major research initiative
+   funded by darpa aimed at [22]advancing the state of the art in the
+   field. in this blog post we'll apply bayesian methods to solve a few
+   simple problems to illustrate the power probablistic programming. for
+   this exercise we'll be using pymc3.
+
+   (note: this blog post is partially adapted from the pymc3 "getting
+   started" tutorial at
+   [23]https://pymc-devs.github.io/pymc3/getting_started. pymc3 is
+   currently considered beta software and should be treated as such. the
+   source code for this post is available [24]here.)
+
+   for our first exercise we're going to implement multiple linear
+   regression using a very simple two-variable dataset that i'm borrowing
+   from an exercise i did for a machine learning course. the data is
+   related to home sales and contains independent variables for the size
+   of and number of bedrooms in a house, and a dependent variable for the
+   price of the house. let's load up and visualize the data.
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+%matplotlib inline
+
+path = os.getcwd() + '/data/ex1data2.txt'
+data = pd.read_csv(path, header=none, names=['size', 'bedrooms', 'price'])
+data.head()
+
+     size bedrooms price
+   0 2104 3        399900
+   1 1600 3        329900
+   2 2400 3        369000
+   3 1416 2        232000
+   4 3000 4        539900
+fig, ax = plt.subplots(1, 2, figsize=(15,6))
+ax[0].scatter(data.size, data.price)
+ax[1].scatter(data.bedrooms, data.price)
+ax[0].set_ylabel('price')
+ax[0].set_xlabel('size')
+ax[1].set_xlabel('bedrooms')
+
+   we also need a baseline id75 technique to compare to the
+   bayesian approach so we have an idea of how well it's performing. for
+   that we'll load up scikit-learn's id75 module. we'll use
+   squared error to evaluate the performance.
+from sklearn import linear_model
+model = linear_model.linearregression()
+
+# normalize features
+data = (data - data.mean()) / data.std()
+
+x = data[['size', 'bedrooms']].values
+y = data['price'].values
+
+model.fit(x, y)
+y_pred = model.predict(x)
+squared_error = ((y - y_pred) ** 2).sum()
+squared_error
+
+   12.284529170669948
+
+   for fun let's see what parameters it came up with too. we can also
+   compare these later on.
+model.intercept_, model.coef_
+
+   (-1.2033011196250568e-16, array([ 0.88476599, -0.05317882]))
+
+   okay, now we're ready to proceed. in order to define a model in pymc3,
+   we need to frame the problem in bayesian terms. this is no small task
+   for a beginner in bayesian statistics and takes some getting used to.
+   in the case of id75, we're interested in predicting
+   outcomes y as normally-distributed observations with an expected value
+      that is a linear function of two predictor variables, x1 and x2.
+   using this model,    is our expected value, alpha is our intercept, beta
+   is an array of coefficients, and sigma represents the observation
+   error. since these are all unknown, non-deterministic variables, we
+   need to specify a prior to instantiate them. we'll use normal
+   distributions with a mean of zero.
+
+   by the way, if any of the concepts i just mentioned sound completely
+   foreign, i encourage the reader to brush up on the basics of bayesian
+   statistics. there are some great resources online. in particular, i've
+   found [25]this book to be very helpful.
+from pymc3 import model, normal, halfnormal
+
+regression_model = model()
+with regression_model:
+    # priors for unknown model parameters
+    alpha = normal('alpha', mu=0, sd=10)
+    beta = normal('beta', mu=0, sd=10, shape=2)
+    sigma = halfnormal('sigma', sd=1)
+
+    # expected value of outcome
+    mu = alpha + beta[0] * x[:,0] + beta[1] * x[:,1]
+
+    # likelihood (sampling distribution) of observations
+    y_obs = normal('y_obs', mu=mu, sd=sigma, observed=y)
+
+   note that each variable is either declared with a prior representing
+   the distribution of that variable, or (in the case of   ) is a
+   deterministic outcome of other stochastic variables. also of note is
+   the y_obs variable, which is a special type of "observed" variable that
+   represents the data likelihood of the model. finally, observe that
+   we're mixing pymc variables with the variables holding the data. pymc's
+   models are very expressive and we could use a variety of mathematical
+   functions to define our variables.
+
+   now that we've specified the model, we need to obtain posterior
+   estimates for the unknown variables in the model. there are two
+   techniques we can leverage for this and they can be used to complement
+   each other. the first thing we're going to do is find the maximum a
+   priori estimate (map) for the model. the map is a point estimate for
+   the model parameters obtained using numerical optimization methods.
+from pymc3 import find_map
+from scipy import optimize
+
+map_estimate = find_map(model=regression_model, fmin=optimize.fmin_powell)
+print(map_estimate)
+
+   {'alpha': array(3.396023412944341e-09), 'beta': array([ 0.8846891,
+   -0.0531327]), 'sigma_log': array(-0.6630286280877248)}
+
+   in this case we're overriding the default optimization algorithm (bfgs)
+   and specifying our own, but we could have left it as the default too.
+   any optimization algorithm that minimizes the loss on the objective
+   function should work.
+
+   finding the map is a good starting point but it's not necessarily the
+   best answer we can find. to do that, we need to use a simulation-based
+   approach such as id115 (mcmc). pymc3 implements a
+   variety of mcmc sampling algorithms including the no-u-turn sampler
+   (nuts), which is especially good for models that have many continuous
+   variables because it uses gradient-based techniques to converge much
+   faster than traditional sampling algorithms.
+
+   let's use the map as a starting point and sample the posterior
+   distribution 1000 times using mcmc.
+from pymc3 import nuts, sample
+
+with regression_model:
+    # obtain starting values via map
+    start = find_map(fmin=optimize.fmin_powell)
+
+    # instantiate sampler
+    step = nuts(scaling=start)
+
+    # draw posterior samples
+    trace = sample(5000, step, start=start)
+
+   [-----------------100%-----------------] 5000 of 5000 complete in 11.4
+   sec
+
+   we can examine the trace object directly to see the sampled values for
+   each of the variables in the model.
+trace['alpha'][-5:]
+
+   array([ 0.07095636, -0.05955168, 0.09537584, 0.04383463, 0.10311347])
+
+   although the flexibility to inspect the values directly is useful,
+   pymc3 provides plotting and summarization functions for inspecting the
+   sampling output that tell us much more at a glance. a simple posterior
+   plot can be created using traceplot.
+from pymc3 import traceplot
+traceplot(trace)
+
+   there's also a text-based output available using the summary function.
+from pymc3 import summary
+summary(trace)
+
+alpha:
+
+  mean             sd               mc error         95% hpd interval
+  -------------------------------------------------------------------
+
+  0.002            0.080            0.001            [-0.154, 0.157]
+
+  posterior quantiles:
+  2.5            25             50             75             97.5
+  |--------------|==============|==============|--------------|
+
+  -0.152         -0.051         0.003          0.055          0.162
+
+
+beta:
+
+  mean             sd               mc error         95% hpd interval
+  -------------------------------------------------------------------
+
+  0.884            0.096            0.002            [0.688, 1.063]
+  -0.052           0.097            0.002            [-0.237, 0.139]
+
+  posterior quantiles:
+  2.5            25             50             75             97.5
+  |--------------|==============|==============|--------------|
+
+  0.697          0.821          0.884          0.946          1.076
+  -0.237         -0.118         -0.052         0.010          0.139
+
+
+sigma_log:
+
+  mean             sd               mc error         95% hpd interval
+  -------------------------------------------------------------------
+
+  -0.617           0.103            0.001            [-0.819, -0.425]
+
+  posterior quantiles:
+  2.5            25             50             75             97.5
+  |--------------|==============|==============|--------------|
+
+  -0.807         -0.688         -0.622         -0.549         -0.401
+
+
+sigma:
+
+  mean             sd               mc error         95% hpd interval
+  -------------------------------------------------------------------
+
+  0.543            0.057            0.001            [0.440, 0.653]
+
+  posterior quantiles:
+  2.5            25             50             75             97.5
+  |--------------|==============|==============|--------------|
+
+  0.446          0.502          0.537          0.578          0.669
+
+   so we now have posterior distributions for each of our model
+   parameters, but what do we do with them? remember our original task was
+   to find a model that minimizes the squared error of the training data.
+   we've created a probablistic model of the parameters in the linear
+   regression model, but we need to use point values to calculate the
+   squared error. the most straightforward approach would be to use the
+   mean, or expected value, of the parameters and plug those into the
+   id75 equation. let's try that.
+# so we can use vector math to compute the predictions at once
+data.insert(0, 'ones', 1)
+
+x = data.iloc[:, 0:3].values
+params = np.array([0, 0.883, -0.052])
+y_pred = np.dot(x, params.t)
+
+bayes_squared_error = ((y - y_pred) ** 2).sum()
+bayes_squared_error
+
+   12.284629306712745
+
+   total squared error probably isn't the best way to evaluate the
+   performance of a model. in a real scenario we'd be testing predictions
+   on unseen data, testing the robustness of the model, etc. but it's
+   still pretty interesting that the parameter means it found resulted in
+   a model with basically the exact same squared error as the scikit-learn
+   id75 model. fascinating stuff.
+
+   since linear models are pretty common, pymc3 also has a glm module that
+   makes specifying models in this format much easier. it uses patsy to
+   define model equations as a string (similar to r-style formulas) and
+   creates the necessary variables underneath.
+from pymc3 import glm
+
+with model() as model:
+    glm.glm('price ~ size + bedrooms', data)
+    start = find_map()
+    step = nuts(scaling=start)
+    trace = sample(5000, step, start=start)
+
+   [-----------------100%-----------------] 5000 of 5000 complete in 12.4
+   sec
+
+   the end result should look pretty similar to the trace that we obtained
+   from the first example.
+traceplot(trace)
+
+   so that's what bayesian id136 looks like when applied to multiple
+   id75. at this point it's worth asking - how would one use
+   this in the broader picture, especially on non-trivial problems? for
+   someone interested primarily in machine learning applications (vs.
+   scientific analysis), where does this fit in the toolbox? these are
+   questions that i'm still figuring out. i think the real power of
+   bayesian modeling comes from incorporating domain knowledge into
+   id114 such as what daphne koller teaches in her
+   [26]probablistic id114 class. i hope to explore this further
+   in a future notebook and attempt to apply it to a real machine learning
+   problem.
+
+   follow me on twitter to get new post updates.
+   [27]follow @jdwittenauer
+   [28]machine learning[29]data science[30]data visualization
+   author
+
+[31]john wittenauer
+
+   data scientist, engineer, author, investor, entrepreneur
+
+[32]curious insight
+
+   author
+
+[33]john wittenauer
+
+   data scientist, engineer, author, investor, entrepreneur
+
+share article
+     __________________________________________________________________
+
+   [34]twitter [35]facebook [36]google+ [37]reddit [38]linkedin
+   [39]pinterest
+
+   copyright    curious insight. 2015     all rights reserved.
+
+   proudly published with [40]ghost.
+
+references
+
+   visible links
+   1. https://www.johnwittenauer.net/rss/
+   2. https://www.johnwittenauer.net/
+   3. https://www.johnwittenauer.net/about/
+   4. https://www.johnwittenauer.net/tag/machine-learning/
+   5. https://www.johnwittenauer.net/tag/data-visualization/
+   6. https://www.johnwittenauer.net/tag/data-science/
+   7. https://www.johnwittenauer.net/tag/big-data/
+   8. https://www.johnwittenauer.net/tag/software-development/
+   9. https://www.johnwittenauer.net/tag/emerging-technology/
+  10. https://www.johnwittenauer.net/tag/entrepreneurship/
+  11. https://www.johnwittenauer.net/tag/investing/
+  12. https://www.johnwittenauer.net/tag/strategy/
+  13. https://www.johnwittenauer.net/tag/book-review/
+  14. https://www.johnwittenauer.net/tag/random-thoughts/
+  15. https://www.johnwittenauer.net/tag/curious-insights/
+  16. https://ghost.org/
+  17. https://www.johnwittenauer.net/
+  18. https://www.johnwittenauer.net/tag/machine-learning/
+  19. https://www.johnwittenauer.net/tag/data-science/
+  20. https://www.johnwittenauer.net/tag/data-visualization/
+  21. https://www.johnwittenauer.net/an-intro-to-probablistic-programming/
+  22. http://www.darpa.mil/program/probabilistic-programming-for-advancing-machine-learning
+  23. https://pymc-devs.github.io/pymc3/getting_started
+  24. https://github.com/jdwittenauer/ipython-notebooks
+  25. http://camdavidsonpilon.github.io/probabilistic-programming-and-bayesian-methods-for-hackers/
+  26. https://www.coursera.org/course/pgm
+  27. https://twitter.com/jdwittenauer
+  28. https://www.johnwittenauer.net/tag/machine-learning/
+  29. https://www.johnwittenauer.net/tag/data-science/
+  30. https://www.johnwittenauer.net/tag/data-visualization/
+  31. https://www.johnwittenauer.net/author/john/
+  32. https://www.johnwittenauer.net/
+  33. https://www.johnwittenauer.net/author/john/
+  34. http://twitter.com/share?text=an intro to probablistic programming&url=https://www.johnwittenauer.net/an-intro-to-probablistic-programming/
+  35. https://www.facebook.com/sharer/sharer.php?u=https://www.johnwittenauer.net/an-intro-to-probablistic-programming/
+  36. https://plus.google.com/share?url=https://www.johnwittenauer.net/an-intro-to-probablistic-programming/
+  37. http://www.reddit.com/submit?url=https://www.johnwittenauer.net/an-intro-to-probablistic-programming/&title=an intro to probablistic programming
+  38. http://www.linkedin.com/sharearticle?mini=true&url=https://www.johnwittenauer.net/an-intro-to-probablistic-programming/&title=an intro to probablistic programming
+  39. http://pinterest.com/pin/create/button/?url=https://www.johnwittenauer.net/an-intro-to-probablistic-programming/&description=an intro to probablistic programming
+  40. https://ghost.org/
+
+   hidden links:
+  42. mailto:jdwittenauer@gmail.com
+  43. https://twitter.com/jdwittenauer
+  44. http://www.linkedin.com/in/jdwittenauer
+  45. https://github.com/jdwittenauer
+  46. http://www.kaggle.com/jdwittenauer
+  47. https://www.johnwittenauer.net/rss/
+  48. https://www.johnwittenauer.net/an-intro-to-probablistic-programming/

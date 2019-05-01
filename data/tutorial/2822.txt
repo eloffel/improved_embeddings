@@ -1,0 +1,299 @@
+   #[1]colin_morris
+
+   [2]colin_morris
+
+   [3]blog [4]toys [5]about
+
+some notes on sampling from character-level rbms
+
+   aug 1, 2016
+
+   this is a (somewhat boring and technical) accompaniment to my blog post
+   [6]dreaming of github repositories with rbms. i was able to find lots
+   of great literature with practical tips on training rbms (my favourite
+   being geoff hinton   s [7]a practical guide to training restricted
+   id82s), but almost nothing on sampling from them. this may
+   reflect the fact that generative models have more often been used to
+   pretrain discriminative models rather than, y   know, generate stuff.
+
+   my hope is that these notes might help out any future ml archaeologists
+   who want to hack around with rbms. the tl;dr is:
+
+     simulated annealing is one honking great idea     let   s do more of
+     that!
+
+background - id150
+
+   (if you   re already familiar with rbms, feel free to skip this part.)
+
+   one of the fundamental operations we can perform on an rbm is called
+   id150.
+    def gibbs_sample(self, visible):
+        hidden = self.sample_hidden(visible)
+        return self.sample_visible(hidden)
+
+    def sample_hidden(self, visible):
+        """sample from p(h|v)"""
+        hidden_probs = logistic(np.dot(visible, self.w.t) + self.visible_bias)
+        return np.random.rand(hidden_probs.shape) < hidden_probs
+
+    def sample_visible(self, hidden):
+        """sample from p(v|h)"""
+        visible_probs = logistic(np.dot(hidden, self.w.t) + self.hidden_bias)
+        return np.random.rand(visible_probs.shape) < visible_probs
+
+   id150 starts from some configuration of one of the layers, and
+   essentially bounces back and forth between the visible and hidden
+   layers, continually asking    what hidden states go well with these
+   visible states?   , then    what visible states go well with these hidden
+   states?   .
+
+   here   s an example of how the state of the visible layer evolves during
+   repeated id150. this example uses a model trained on a dataset
+   of geographical place names:
+   i        visible        energy(visible)
+   1  tyxeavonam adhbufwij 35.4
+   2  tenrimilty in dlenic -19.2
+   3  gedromoold in foerna -21.0
+   4  eo wiogh in fulrsa   -21.7
+   5  cl biigs in fusrta   -24.2
+   6  lhgwiogs in filrma   -20.8
+   7  sogwiitt on fueeso   -29.2
+   8  mockiotd on lueera   -34.9
+   9  commaosy an luvera   -30.1
+   10 seroont on lemert    -35.8
+   11 g an sun lerort      -42.8
+   12 toon yan ferert      -55.6
+   13 doin ron forest      -61.0
+
+   it   s not a coincidence that the energy is going down over time, or that
+   the sample with the lowest energy is the one that looks most like a
+   real name. there   s a connection between how we do sampling and our
+   energy function above. the id203 of turning on a particular
+   hidden unit h_j, given a visible vector v is:
+1 / 1 + exp(-1 * (hidden_bias[j] + w[j]*v))
+
+   if the model doesn   t care about h_j and gives it a bias of 0, and all
+   its weights 0, then the exponent goes to 0, and the id203 of
+   turning on becomes 1/2. as we decrease the bias, or give it negative
+   weights at indices where v is turned on, then the energy associated
+   with that unit being on increases, and the id203 goes toward 0.
+   if we do the opposite, the effect on energy becomes negative, and the
+   id203 goes to 1. so, the id203 of turning on a hidden unit
+   is proportional to the negative energy difference associated with
+   turning it on. the same argument applies to visible units conditioned
+   on hidden vectors.
+
+   remember how rbms are trying to learn the distribution of our data? an
+   important property of rbms is that if we do id150 over and
+   over, our samples will approach the model   s estimation of that
+   distribution.
+
+softmax sampling
+
+   one thing to notice for character-level rbms in particular is that, for
+   every block of n visible units representing a character, there will
+   always be exactly one unit turned on - the id203 we assign to any
+   vector failing this criterion should be 0. we should help the network
+   out by giving it this information for free. we   ll do that by treating
+   each of those blocks as a single    softmax    unit. rather than sampling
+   each visible binary unit independently, and turning it on with some
+   id203 according to the sum of the incoming weights from the
+   hidden layer, we   ll sample using the [8]softmax function.
+
+   this isn   t strictly necessary, but i found it to greatly improve the
+   model (in terms of qualitative goodness of samples, and some metrics
+   that correlated well with quality of samples, such as
+   pseudolikelihood).
+
+drawing samples
+
+   once we   ve trained a model, we want to see what kinds of hilarious
+   garbage it dreams up. how do we do that? well, we know that if we start
+   anywhere and do id150 long enough, we   ll get something like
+   the model distribution. there   s even a proof of it in a drawer
+   somewhere! problem solved, right?
+
+   in practice,    long enough    might be a long, long time for some models.
+   an rbm (or, more generally, any markov chain) that takes a long time to
+   converge is said to have a low [9]mixing rate. such models may wallow
+   in valleys of (locally) low energy for a long time, and be very
+   sensitive to initial conditions.
+
+   [10]here   s (ugly html table warning) what a well-behaved model looks
+   like. each row represents a different starting point for the sampling,
+   and each line is a separate    fantasy particle   , sampled in parallel (if
+   you   re curious about the meaning of each row, check out the [11]visinit
+   enum here). the samples in the final column of each row (representing
+   10k iterations of sampling) are fairly similar, and there   s no evidence
+   of any particles getting stuck. after 10k iterations, the training
+   examples are substantially transformed.
+
+   [12]here   s what a bad mixing rate looks like. even after 10k
+   iterations, there are dramatic differences in samples depending on how
+   the chains were started. chunks/silhouettes/train look pretty
+   reasonable, but the chains started from zeroed-out vectors look like
+   noise. many of the chains started from training examples still look a
+   lot like their starting configuration - e.g.    carleton pond dam    ->
+      greslocd ponn dam   ,    southwestern college    ->    southordoure college   ).
+
+   one way to avoid the second scenario is to introduce a weight cost to
+   discourage large weights, which are associated with poor mixing rates.
+
+journey to goon remetery
+
+   let   s consider a sample from our well-behaved model:    goon remetery   .
+   ouch, so close. but remember that our procedure for sampling the
+   visible units is stochastic. it may be that we had p(   r   ) = 0.1,
+   p(   c   )=0.8 for index 5, and that we just got unlucky. to maximize the
+   quality of our samples, we could sample determnistically at the very
+   last round of sampling, always taking the character with the highest
+   id203.
+
+   this is actually how i drew samples initially, until a friend pointed
+   out to me that this is actually a (trivial) special case of
+   [13]simulated annealing. to take it further, we   ll need to introduce
+   the concept of    temperature    to the sampling process:
+    def sample_hidden(self, visible, temperature):
+        """sample from p(h|v)"""
+        hidden_probs = logistic(np.dot(visible, self.w.t/temperature) + self.vis
+ible_bias/temperature)
+        return np.random.rand(hidden_probs.shape) < hidden_probs
+
+   when temperature=1.0, we have our normal sampling procedure. other
+   temperature values will scale our weights and biases up or down. a high
+   temperature has the effect of flattening out the id203
+   distribution. in the limit, when t is infinite, we   ll ignore the
+   weights and biases, setting the hidden units with a coin flip (and
+   setting the visible units with the flip of a ~26-sided coin).
+
+   a low temperature has the effect of    sharpening    the id203
+   distribution, with the rich getting richer and the poor getting poorer.
+   t=0 leads to exactly the procedure we described earlier where we always
+   take the character with the highest score.
+
+simulated annealing
+
+   we can draw our samples with simulated annealing by starting our chain
+   at a high temperature and gradually lowering it. this is appealing for
+   a few reasons:
+
+   firstly, it defeats models with low mixing rates. recall that our
+   problem was fantasy particles stubbornly lying in local valleys.
+   turning up the heat will bounce them out and encourage them to explore
+   other regions.
+
+   it also lets us draw samples with much lower energy than what we would
+   get from repeated id150 at t=1 - even after many iterations.
+   and low energy samples tend to be qualitatively superior. we can no
+   longer pretend that we   re trying to draw from exactly the model
+   distribution - we may be drawing from a sharpened version of that
+   distribution that favours especially probable points. in practice,
+   we   re totally cool with this, as long as we still get some reasonable
+   variety.
+
+examples
+
+   here are some samples drawn after 1000 rounds of id150 on a
+   model trained on github repository names:
+  cyilagct-buarcs
+  dcg-arrales
+  mbd_ppp_scrip
+  coursers-nhsi_sic
+  orilingucoflr
+  jeadio_rubs
+  my-tant4.jl
+  getnei
+  kcsoolstorjs-domo
+  jx-nitkmesu
+
+   yikes!
+
+   here are samples from the same model, with the same number of
+   iterations, but annealing from t=1.5 to t=0.2:
+ cloud-pron-pyshin
+ learns_sample_app
+ simple-checking
+ vinital-config
+ openbone-backer
+ grunt-test
+ csci-2014
+ testrepose
+ io-libyanalysis
+ java-android-test
+
+   wow! quite the difference.
+
+   where did 1.5 and 0.2 come from? annealing schedules are kind of black
+   magic here. i tried a lot of them, and different models liked different
+   schedules. here   s one example of average energy over time for a bunch
+   of different annealing schedules:
+
+   [annealing1.png]
+
+   apologies for the messiness. it probably would have been a good idea to
+   label the lines, because i definitely can   t remember the temperatures
+   associated with each of those lines (but higher y-intercept -> higher
+   starting temperature, steeper slope -> lower ending temperature). the
+   important thing here is that the blue line is with no annealing. so
+   pretty much any reasonable annealing schedule trounces vanilla gibbs
+   sampling, if your goal is to get lower energy samples.
+
+   but getting low energy samples is probably not all you care about.
+   often a gentle annealing schedule will give the lowest average energy,
+   but lead to very low sample diversity. for example, here are some
+   samples taken over a gentle annealing period from a model trained on
+   names:
+aaron           lee
+mark            lee
+jan             man
+jess            lee
+adam            lee
+al              man
+jason           lee
+henry           lee
+leo             mana
+jason           mane
+
+   at this point, we   ve probably sharpened the distribution too much. we
+   probably want to cool a bit faster to before every particle has had a
+   chance to fall into the valley of the lees.
+
+   for reasons like this, i relied pretty much entirely on visual
+   inspection of samples when choosing annealing schedules.
+
+   tagged: [14]machine learning
+   please enable javascript to view the [15]comments powered by disqus.
+
+     * colin_morris
+     *
+
+     * [16]colinmorris
+     * [17]halfeatenscone
+
+   splashing around in the shallow end of the deep learning pool.
+
+references
+
+   visible links
+   1. http://colinmorris.github.io/feed.xml
+   2. https://colinmorris.github.io/
+   3. https://colinmorris.github.io/blog/
+   4. https://colinmorris.github.io/toys/
+   5. https://colinmorris.github.io/about/
+   6. https://colinmorris.github.io/blog/dreaming-rbms
+   7. https://www.cs.toronto.edu/~hinton/absps/guidetr.pdf
+   8. https://en.wikipedia.org/wiki/softmax_function
+   9. https://en.wikipedia.org/wiki/markov_chain_mixing_time
+  10. https://colinmorris.github.io/assets/rbm/tablesamples_usgeo_goodmix.html
+  11. https://github.com/colinmorris/char-rbm/blob/master/sampling.py
+  12. https://colinmorris.github.io/assets/rbm/tablesamples_usgeo_badmix.html
+  13. https://en.wikipedia.org/wiki/simulated_annealing
+  14. https://colinmorris.github.io/blog/tagged/machine-learning/
+  15. https://disqus.com/?ref_noscript
+  16. https://github.com/colinmorris
+  17. https://twitter.com/halfeatenscone
+
+   hidden links:
+  19. https://colinmorris.github.io/blog/rbm-sampling
+  20. mailto:/

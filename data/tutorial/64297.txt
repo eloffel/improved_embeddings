@@ -1,0 +1,340 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]huggingface
+     * [9]artificial intelligence
+     * [10]natural language processing
+     * [11]ios applications
+     * [12]get the app
+     __________________________________________________________________
+
+   how to train a neural coreference model    neuralcoref 2
+
+   [13]go to the profile of thomas wolf
+   [14]thomas wolf (button) blockedunblock (button) followfollowing
+   mar 23, 2018
+
+     links: [15]online demo github repo:
+     [16]https://github.com/huggingface/neuralcoref and our [17]previous
+     medium post.
+
+   the last months have been quite intense at huggingface      with crazy
+   usage growth      and everybody hard at work to keep up with it     , but we
+   finally managed to free some time and update our open-source library
+      [18]neuralcoref while publishing the training code at the same time.
+
+   since we launched v1 last summer, more than ten million      coreferences
+   have been resolved on hugging face. also, we are stoked that our
+   library is now used in production by a few other companies and some
+   really smart researchers, and our work was featured in the latest
+   session of [19]stanford   s nlp course!     
+
+   the training code has been updated to work with the latest releases of
+   both [20]pytorch (v0.3) and [21]spacy v2.0 while the pre-trained model
+   only depends on numpy and spacy v2.0.
+
+     this release   s major milestone: you will now be able to train    
+     neuralcoref on your own dataset         e.g., another language than
+     english!         provided you have an annotated dataset.
+
+   we have added a [22]special section to the readme about training on
+   another language, as well as [23]detailed instructions on how to get,
+   process and train the model on the english ontonotes 5.0 dataset.
+
+   as before,    neuralcoref is designed to strike a good balance between
+   accuracy and speed/simplicity, using a rule-based mention detection
+   module, a constrained number of features and a simple feed-forward
+   neural network that can be implemented easily in numpy.
+
+   in the rest of this blog post, i will describe how the coreference
+   resolution system works and how to train it. coreference resolution is
+   a rather complicated nlp task      so bare with me, you won   t regret it!
+
+let   s have a quick look at a (public) dataset     
+
+   a good quality public dataset you can use to train the model on english
+   is the conll 2012 dataset. it is one of the largest freely available
+   dataset with coreference annotations, having about 1.5m+ tokens
+   spanning many fields like newswire, broadcast and telephone
+   conversations as well as web data (blogs, newsgroups    ).
+
+   in the repo we explain [24]how to download and prepare this dataset if
+   you want to use it. once you are done with that, a typical conll file
+   will look like this:
+   [1*kgydwkcyp91hkseamwtima.png]
+   extract of conll 2012 dataset file    cctv_0005.v4_gold_conll   
+
+   this extract contains 2 sentences:    yes, i noticed that many friends,
+   around me received it    and    it seems that almost everyone received this
+   sms   
+
+   the sentences are tokenized and annotated with the tokens in column 4
+   and a large number of annotations: pos tags (col 5), parse tree (col
+   6), verbs lemma (col 7), speaker (col 10) and, what we are especially
+   interested in, co-reference labels in the last column (labels 12, 119
+   on lines 5, 12, 14, 23 & 24). in this extract,    i    is annotated as
+   co-referring with    me    (they have the same entity label 12) and    it    as
+   co-referring with    this sms    (label 119).
+
+   you can also notice that only the mentions that have at least one
+   co-reference are labelled in the dataset (i.e. at least a pair of
+   mentions referring to the same entity). single mentions of an entity,
+   with no other mention referring to the same entity, are not labelled.
+
+   this is somewhat annoying as it means we cannot fully evaluate (and
+   easily train) the mention identification module of our coreference
+   system (with precision, recall and f1 metrics). however, we can still
+   have a look at the recall of co-referring mentions [25]as we mention in
+   the github repo.
+
+the coreference module workflow     
+
+   the first step of our process is to extract potential mentions.
+      neuralcoref uses a rule-based mention-extraction function for this
+   operation and get, in our two-sentences example:
+   [1*2ngto-dq2dptq5rd8-zp9a.png]
+
+   depending on the selectivity of the rule-based mention extractor and
+   the parse-tree for our sentence, it may also capture a few bigger
+   mentions like    many friends, around me received it    or    almost everyone
+   received this sms   . let   s keep only the short mentions here for the
+   sake of simplicity.
+
+   each mention can co-refer with a various number of previous mentions.
+   we can gather all the mentions in a mention-pairs table to highlight
+   the co-referring pairs (in the table     means that a mention doesn   t
+   corefer with any previous mention).
+   [1*-jpy11oavigz2ayzais3pg.png]
+   a table of coreferring mention-pairs for our two-sentences example
+   (positive labels in red)
+
+   note that, their may be more than one co-referring antecedent for a
+   given mention (i.e. several red box on a single line on our table),
+   forming clusters of co-referring mentions (co-referrence resolution is
+   a id91 task).
+
+   we can already see some of the issues that will arise when training a
+   model on such data, namely that (i) each mention will have a varying
+   number of potential antecedents, complicating the batching (the size of
+   our mention-pairs vector will span all the range from 0 to n the total
+   number of mentions in a document), and (ii) the table of mention-pairs
+   will typically scale as cn where c in the average number of mentions in
+   each document of the dataset, and this can become quite large.
+
+     in practice, our rule-based mention-extractor identifies about 1
+     million potential mentions on the conll 2012 training set resulting
+     in about 130 millions mention-pairs to train our model on.
+
+   once we have identified potential mentions and labels for them (the red
+   box in our table), we can extract a set of features for each mention
+   and each pair of mentions. let   s see the features we extract:
+   [1*thl-uxeslepo7bge_hykag.png]
+   extracted features for mentions and pairs of mentions. span vectors are
+   pre-computed average of word vectors.
+
+   it may seem like we need a lot of features but one of the advantage of
+      neuralcoref is actually its reduced number of features         some
+   coreference resolution systems uses up to +120 features! another
+   advantage is that most of these features don   t depend on the parser or
+   additional databases (like word gender/number) and they are easy/fast
+   to compute.
+
+   practically, the features are a bunch of real-valued vectors (e.g. the
+   span vectors which are average over word vectors and won   t be trained),
+   integers (e.g. word indices in a dictionary, categorial indices), and
+   boolean (e.g.    nested?    indicates whether a pair mention is contained
+   in the other).
+
+   the mix of real values, integer and boolean features can give rise to
+   large numpy arrays if we simply gather them in a single array (integer
+   and boolean will be converted to floats). so we store them in separate
+   arrays and build the features arrays on-time while we feed the neural
+   net (see the dataloader code in [26]dataset.py).
+
+     we are done with the pre-processing steps. these steps are
+     implemented in [27]conllparser.py and [28]document.py in the code
+        neuralcoref.
+
+   now, let   s use these features to train our model!
+
+a quick look at the neural net model     
+
+   as always, the neural net model is a pleasure to write in pytorch so i
+   copy it here in full (i just removed weights initialization/loading
+   functions).
+
+   iframe: [29]/media/74cdda70ddc8cc1b83b5590a280f9b44?postid=7bb30c1abdfe
+
+   the model comprises a common embedding layer, self.embed, that
+   transforms words indices in word vectors and feed two parallel
+   feed-forward networks:
+   [1*uwhxkcj3o5vvi5cpzrhc-q.png]
+     * self.single takes as inputs word vectors, spans and additional
+       features (see above) of a mention and compute the score that it has
+       no other co-referring mention (score of     as label),
+     * self.pairs takes as inputs word vectors, spans and features of a
+       mention and an antecedent, together with pair features, and compute
+       the score that the pair of mentions are co-referring.
+
+   so, how do we train this beauty?
+
+training the coreference neural net     
+
+   first, a word about mini-batching. we talked about the problem of
+   having a varying number of pairs for each mention. one way to use
+   mini-batching in such conditions is to pack mini-batches as follows:
+     * sort the mentions in the training set by their number of potential
+       antecedents (the length of each line in our pair table),
+     * define a maximum number of pairs p for a mini-batch, and
+     * slice the sorted training set in mini-batches of size    p, padding
+       the mention-pairs in each mini-batch to the maximum number of pairs
+       in the mini-batch (the longest line, i.e. the last one in our
+       sorted dataset).
+
+   in    neuralcoref, this is done by the [30]dataset.py module which load
+   and construct a dataset and a dataloader with such padded mini-batches.
+   [1*3dvcngqq_iilmltklfp8kq.png]
+   example of neuralcoref evaluation metric during training
+
+   once our mini-batches are ready, we can start training.
+
+   the training goes through three successive training phases: all pairs,
+   top pairs and ranking.
+
+   we set up a very simple scheduling scheme to keep the training fast:
+   each time our metric on the dev set stops increasing, we move on to the
+   next stage.
+
+   the first two phases uses probabilistic loss (cross-id178) while the
+   last phase use a slack-rescaled ranking loss. more precisely, our
+   losses for each training phase look like this:
+   [1*6zfy_mw7tqs_x1k5y_jvqg.png]
+       (m) is the set of true antecedents of a mention m,     (m) the false
+   antecedents and     (m) all antecedents (including    ).
+
+   the all pairs loss is a standard cross-id178 loss on the full set of
+   mention-pairs. the top pairs loss is also a cross-id178 but is
+   restricted to the (currently) top-scoring true and false antecedents of
+   a mention. finally, the ranking loss is a max-margin loss with a slack
+   rescaled cost   .
+
+   to get more information, you should check the very nice work published
+   in 2016 by kevin clark and christopher manning (see [31]   deep
+   id23 for mention-ranking coreference models    by kevin
+   clark and christopher d. manning, emnlp 2016, [32]improving coreference
+   resolution by learning entity-level distributed representations by
+   kevin clark and christopher d. manning, acl 2016, and the references
+   therein), which our model is an adaptation of.
+
+   the full details and more are given in these publications which you
+   should definitely read if you are interested in this model.
+
+     this training is implemented in [33]learn.py in the code
+        neuralcoref.
+
+   so i hope this gives you some good intuitions on how this rather
+   uncommon beast works.
+
+   most important, we setup a really nice and fast demo, so don   t hesitate
+   to [34]try the coreference system for yourself!
+
+   and don   t hesitate to [35]fork the code and use it in your projects.
+   hope you liked it and let us know how you use it     
+
+     * [36]machine learning
+     * [37]nlp
+     * [38]deep learning
+     * [39]artificial intelligence
+     * [40]chatbots
+
+   (button)
+   (button)
+   (button) 755 claps
+   (button) (button) (button) 7 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [41]go to the profile of thomas wolf
+
+[42]thomas wolf
+
+   natural language processing, deep learning and computational
+   linguistics     science lead [43]@huggingface | thomwolf.io
+
+     (button) follow
+   [44]huggingface
+
+[45]huggingface
+
+   stories @ hugging face
+
+     * (button)
+       (button) 755
+     * (button)
+     *
+     *
+
+   [46]huggingface
+   never miss a story from huggingface, when you sign up for medium.
+   [47]learn more
+   never miss a story from huggingface
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/7bb30c1abdfe
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://medium.com/huggingface/how-to-train-a-neural-coreference-model-neuralcoref-2-7bb30c1abdfe&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://medium.com/huggingface/how-to-train-a-neural-coreference-model-neuralcoref-2-7bb30c1abdfe&source=--------------------------nav_reg&operation=register
+   8. https://medium.com/huggingface?source=logo-lo_tl0t4po42tj4---ba0dbdd23ac6
+   9. https://medium.com/huggingface/tagged/artificial-intelligence
+  10. https://medium.com/huggingface/tagged/nlp
+  11. https://medium.com/huggingface/tagged/ios
+  12. https://huggingface.co/
+  13. https://medium.com/@thomwolf?source=post_header_lockup
+  14. https://medium.com/@thomwolf
+  15. https://huggingface.co/coref/
+  16. https://github.com/huggingface/neuralcoref
+  17. https://medium.com/huggingface/state-of-the-art-neural-coreference-resolution-for-chatbots-3302365dcf30
+  18. https://github.com/huggingface/neuralcoref
+  19. http://web.stanford.edu/class/cs224n/syllabus.html
+  20. http://pytorch.org/
+  21. https://spacy.io/usage/
+  22. https://github.com/huggingface/neuralcoref/blob/master/readme.md#re-train-the-model--extend-to-another-language
+  23. https://github.com/huggingface/neuralcoref/blob/master/training.md
+  24. https://github.com/huggingface/neuralcoref/blob/master/training.md#get-the-data
+  25. https://github.com/huggingface/neuralcoref/blob/master/neuralcoref/train/training.md#some-details-on-the-training
+  26. https://github.com/huggingface/neuralcoref/blob/master/neuralcoref/dataset.py
+  27. https://github.com/huggingface/neuralcoref/blob/master/neuralcoref/conllparser.py
+  28. https://github.com/huggingface/neuralcoref/blob/master/neuralcoref/document.py
+  29. https://medium.com/media/74cdda70ddc8cc1b83b5590a280f9b44?postid=7bb30c1abdfe
+  30. https://github.com/huggingface/neuralcoref/blob/master/neuralcoref/dataset.py
+  31. http://cs.stanford.edu/people/kevclark/resources/clark-manning-emnlp2016-deep.pdf
+  32. http://cs.stanford.edu/people/kevclark/resources/clark-manning-acl16-improving.pdf
+  33. https://github.com/huggingface/neuralcoref/blob/master/neuralcoref/learn.py
+  34. https://huggingface.co/coref/
+  35. https://github.com/huggingface/neuralcoref
+  36. https://medium.com/tag/machine-learning?source=post
+  37. https://medium.com/tag/nlp?source=post
+  38. https://medium.com/tag/deep-learning?source=post
+  39. https://medium.com/tag/artificial-intelligence?source=post
+  40. https://medium.com/tag/chatbots?source=post
+  41. https://medium.com/@thomwolf?source=footer_card
+  42. https://medium.com/@thomwolf
+  43. http://twitter.com/huggingface
+  44. https://medium.com/huggingface?source=footer_card
+  45. https://medium.com/huggingface?source=footer_card
+  46. https://medium.com/huggingface
+  47. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  49. https://medium.com/p/7bb30c1abdfe/share/twitter
+  50. https://medium.com/p/7bb30c1abdfe/share/facebook
+  51. https://medium.com/p/7bb30c1abdfe/share/twitter
+  52. https://medium.com/p/7bb30c1abdfe/share/facebook

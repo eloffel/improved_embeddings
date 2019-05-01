@@ -1,0 +1,547 @@
+   [1]cs231n convolutional neural networks for visual recognition
+
+   table of contents:
+     * [2]introduction
+     * [3]visualizing the id168
+     * [4]optimization
+          + [5]strategy #1: random search
+          + [6]strategy #2: random local search
+          + [7]strategy #3: following the gradient
+     * [8]computing the gradient
+          + [9]numerically with finite differences
+          + [10]analytically with calculus
+     * [11]id119
+     * [12]summary
+
+introduction
+
+   in the previous section we introduced two key components in context of
+   the image classification task:
+    1. a (parameterized) score function mapping the raw image pixels to
+       class scores (e.g. a linear function)
+    2. a id168 that measured the quality of a particular set of
+       parameters based on how well the induced scores agreed with the
+       ground truth labels in the training data. we saw that there are
+       many ways and versions of this (e.g. softmax/id166).
+
+   concretely, recall that the linear function had the form \( f(x_i, w) =
+   w x_i \) and the id166 we developed was formulated as:
+
+   we saw that a setting of the parameters \(w\) that produced predictions
+   for examples \(x_i\) consistent with their ground truth labels \(y_i\)
+   would also have a very low loss \(l\). we are now going to introduce
+   the third and last key component: optimization. optimization is the
+   process of finding the set of parameters \(w\) that minimize the loss
+   function.
+
+   foreshadowing: once we understand how these three core components
+   interact, we will revisit the first component (the parameterized
+   function mapping) and extend it to functions much more complicated than
+   a linear mapping: first entire neural networks, and then convolutional
+   neural networks. the id168s and the optimization process will
+   remain relatively unchanged.
+
+visualizing the id168
+
+   the id168s we   ll look at in this class are usually defined over
+   very high-dimensional spaces (e.g. in cifar-10 a linear classifier
+   weight matrix is of size [10 x 3073] for a total of 30,730 parameters),
+   making them difficult to visualize. however, we can still gain some
+   intuitions about one by slicing through the high-dimensional space
+   along rays (1 dimension), or along planes (2 dimensions). for example,
+   we can generate a random weight matrix \(w\) (which corresponds to a
+   single point in the space), then march along a ray and record the loss
+   function value along the way. that is, we can generate a random
+   direction \(w_1\) and compute the loss along this direction by
+   evaluating \(l(w + a w_1)\) for different values of \(a\). this process
+   generates a simple plot with the value of \(a\) as the x-axis and the
+   value of the id168 as the y-axis. we can also carry out the
+   same procedure with two dimensions by evaluating the loss \( l(w + a
+   w_1 + b w_2) \) as we vary \(a, b\). in a plot, \(a, b\) could then
+   correspond to the x-axis and the y-axis, and the value of the loss
+   function can be visualized with a color:
+   [id1661d.png] [id166_one.jpg] [id166_all.jpg]
+   id168 landscape for the multiclass id166 (without id173)
+   for one single example (left,middle) and for a hundred examples (right)
+   in cifar-10. left: one-dimensional loss by only varying a. middle,
+   right: two-dimensional loss slice, blue = low loss, red = high loss.
+   notice the piecewise-linear structure of the id168. the losses
+   for multiple examples are combined with average, so the bowl shape on
+   the right is the average of many piece-wise linear bowls (such as the
+   one in the middle).
+
+   we can explain the piecewise-linear structure of the id168 by
+   examining the math. for a single example we have:
+
+   it is clear from the equation that the data loss for each example is a
+   sum of (zero-thresholded due to the \(\max(0,-)\) function) linear
+   functions of \(w\). moreover, each row of \(w\) (i.e. \(w_j\))
+   sometimes has a positive sign in front of it (when it corresponds to a
+   wrong class for an example), and sometimes a negative sign (when it
+   corresponds to the correct class for that example). to make this more
+   explicit, consider a simple dataset that contains three 1-dimensional
+   points and three classes. the full id166 loss (without id173)
+   becomes:
+
+   since these examples are 1-dimensional, the data \(x_i\) and weights
+   \(w_j\) are numbers. looking at, for instance, \(w_0\), some terms
+   above are linear functions of \(w_0\) and each is clamped at zero. we
+   can visualize this as follows:
+   [id166bowl.png]
+   1-dimensional illustration of the data loss. the x-axis is a single
+   weight and the y-axis is the loss. the data loss is a sum of multiple
+   terms, each of which is either independent of a particular weight, or a
+   linear function of it that is thresholded at zero. the full id166 data
+   loss is a 30,730-dimensional version of this shape.
+
+   as an aside, you may have guessed from its bowl-shaped appearance that
+   the id166 cost function is an example of a [13]convex function there is a
+   large amount of literature devoted to efficiently minimizing these
+   types of functions, and you can also take a stanford class on the topic
+   ( [14]id76 ). once we extend our score functions \(f\)
+   to neural networks our objective functions will become non-convex, and
+   the visualizations above will not feature bowls but complex, bumpy
+   terrains.
+
+   non-differentiable id168s. as a technical note, you can also
+   see that the kinks in the id168 (due to the max operation)
+   technically make the id168 non-differentiable because at these
+   kinks the gradient is not defined. however, the [15]subgradient still
+   exists and is commonly used instead. in this class will use the terms
+   subgradient and gradient interchangeably.
+
+optimization
+
+   to reiterate, the id168 lets us quantify the quality of any
+   particular set of weights w. the goal of optimization is to find w that
+   minimizes the id168. we will now motivate and slowly develop an
+   approach to optimizing the id168. for those of you coming to
+   this class with previous experience, this section might seem odd since
+   the working example we   ll use (the id166 loss) is a convex problem, but
+   keep in mind that our goal is to eventually optimize neural networks
+   where we can   t easily use any of the tools developed in the convex
+   optimization literature.
+
+strategy #1: a first very bad idea solution: random search
+
+   since it is so simple to check how good a given set of parameters w is,
+   the first (very bad) idea that may come to mind is to simply try out
+   many different random weights and keep track of what works best. this
+   procedure might look as follows:
+# assume x_train is the data where each column is an example (e.g. 3073 x 50,000
+)
+# assume y_train are the labels (e.g. 1d array of 50,000)
+# assume the function l evaluates the id168
+
+bestloss = float("inf") # python assigns the highest possible float value
+for num in xrange(1000):
+  w = np.random.randn(10, 3073) * 0.0001 # generate random parameters
+  loss = l(x_train, y_train, w) # get the loss over the entire training set
+  if loss < bestloss: # keep track of the best solution
+    bestloss = loss
+    bestw = w
+  print 'in attempt %d the loss was %f, best %f' % (num, loss, bestloss)
+
+# prints:
+# in attempt 0 the loss was 9.401632, best 9.401632
+# in attempt 1 the loss was 8.959668, best 8.959668
+# in attempt 2 the loss was 9.044034, best 8.959668
+# in attempt 3 the loss was 9.278948, best 8.959668
+# in attempt 4 the loss was 8.857370, best 8.857370
+# in attempt 5 the loss was 8.943151, best 8.857370
+# in attempt 6 the loss was 8.605604, best 8.605604
+# ... (trunctated: continues for 1000 lines)
+
+   in the code above, we see that we tried out several random weight
+   vectors w, and some of them work better than others. we can take the
+   best weights w found by this search and try it out on the test set:
+# assume x_test is [3073 x 10000], y_test [10000 x 1]
+scores = wbest.dot(xte_cols) # 10 x 10000, the class scores for all test example
+s
+# find the index with max score in each column (the predicted class)
+yte_predict = np.argmax(scores, axis = 0)
+# and calculate accuracy (fraction of predictions that are correct)
+np.mean(yte_predict == yte)
+# returns 0.1555
+
+   with the best w this gives an accuracy of about 15.5%. given that
+   guessing classes completely at random achieves only 10%, that   s not a
+   very bad outcome for a such a brain-dead random search solution!
+
+   core idea: iterative refinement. of course, it turns out that we can do
+   much better. the core idea is that finding the best set of weights w is
+   a very difficult or even impossible problem (especially once w contains
+   weights for entire complex neural networks), but the problem of
+   refining a specific set of weights w to be slightly better is
+   significantly less difficult. in other words, our approach will be to
+   start with a random w and then iteratively refine it, making it
+   slightly better each time.
+
+     our strategy will be to start with random weights and iteratively
+     refine them over time to get lower loss
+
+   blindfolded hiker analogy. one analogy that you may find helpful going
+   forward is to think of yourself as hiking on a hilly terrain with a
+   blindfold on, and trying to reach the bottom. in the example of
+   cifar-10, the hills are 30,730-dimensional, since the dimensions of w
+   are 10 x 3073. at every point on the hill we achieve a particular loss
+   (the height of the terrain).
+
+strategy #2: random local search
+
+   the first strategy you may think of is to try to extend one foot in a
+   random direction and then take a step only if it leads downhill.
+   concretely, we will start out with a random \(w\), generate random
+   perturbations \( \delta w \) to it and if the loss at the perturbed \(w
+   + \delta w\) is lower, we will perform an update. the code for this
+   procedure is as follows:
+w = np.random.randn(10, 3073) * 0.001 # generate random starting w
+bestloss = float("inf")
+for i in xrange(1000):
+  step_size = 0.0001
+  wtry = w + np.random.randn(10, 3073) * step_size
+  loss = l(xtr_cols, ytr, wtry)
+  if loss < bestloss:
+    w = wtry
+    bestloss = loss
+  print 'iter %d loss is %f' % (i, bestloss)
+
+   using the same number of id168 evaluations as before (1000),
+   this approach achieves test set classification accuracy of 21.4%. this
+   is better, but still wasteful and computationally expensive.
+
+strategy #3: following the gradient
+
+   in the previous section we tried to find a direction in the
+   weight-space that would improve our weight vector (and give us a lower
+   loss). it turns out that there is no need to randomly search for a good
+   direction: we can compute the best direction along which we should
+   change our weight vector that is mathematically guaranteed to be the
+   direction of the steepest descend (at least in the limit as the step
+   size goes towards zero). this direction will be related to the gradient
+   of the id168. in our hiking analogy, this approach roughly
+   corresponds to feeling the slope of the hill below our feet and
+   stepping down the direction that feels steepest.
+
+   in one-dimensional functions, the slope is the instantaneous rate of
+   change of the function at any point you might be interested in. the
+   gradient is a generalization of slope for functions that don   t take a
+   single number but a vector of numbers. additionally, the gradient is
+   just a vector of slopes (more commonly referred to as derivatives) for
+   each dimension in the input space. the mathematical expression for the
+   derivative of a 1-d function with respect its input is:
+
+   when the functions of interest take a vector of numbers instead of a
+   single number, we call the derivatives partial derivatives, and the
+   gradient is simply the vector of partial derivatives in each dimension.
+
+computing the gradient
+
+   there are two ways to compute the gradient: a slow, approximate but
+   easy way (numerical gradient), and a fast, exact but more error-prone
+   way that requires calculus (analytic gradient). we will now present
+   both.
+
+computing the gradient numerically with finite differences
+
+   the formula given above allows us to compute the gradient numerically.
+   here is a generic function that takes a function f, a vector x to
+   evaluate the gradient on, and returns the gradient of f at x:
+def eval_numerical_gradient(f, x):
+  """
+  a naive implementation of numerical gradient of f at x
+  - f should be a function that takes a single argument
+  - x is the point (numpy array) to evaluate the gradient at
+  """
+
+  fx = f(x) # evaluate function value at original point
+  grad = np.zeros(x.shape)
+  h = 0.00001
+
+  # iterate over all indexes in x
+  it = np.nditer(x, flags=['multi_index'], op_flags=['readwrite'])
+  while not it.finished:
+
+    # evaluate function at x+h
+    ix = it.multi_index
+    old_value = x[ix]
+    x[ix] = old_value + h # increment by h
+    fxh = f(x) # evalute f(x + h)
+    x[ix] = old_value # restore to previous value (very important!)
+
+    # compute the partial derivative
+    grad[ix] = (fxh - fx) / h # the slope
+    it.iternext() # step to next dimension
+
+  return grad
+
+   following the gradient formula we gave above, the code above iterates
+   over all dimensions one by one, makes a small change h along that
+   dimension and calculates the partial derivative of the id168
+   along that dimension by seeing how much the function changed. the
+   variable grad holds the full gradient in the end.
+
+   practical considerations. note that in the mathematical formulation the
+   gradient is defined in the limit as h goes towards zero, but in
+   practice it is often sufficient to use a very small value (such as 1e-5
+   as seen in the example). ideally, you want to use the smallest step
+   size that does not lead to numerical issues. additionally, in practice
+   it often works better to compute the numeric gradient using the
+   centered difference formula: \( [f(x+h) - f(x-h)] / 2 h \) . see
+   [16]wiki for details.
+
+   we can use the function given above to compute the gradient at any
+   point and for any function. lets compute the gradient for the cifar-10
+   id168 at some random point in the weight space:
+# to use the generic code above we want a function that takes a single argument
+# (the weights in our case) so we close over x_train and y_train
+def cifar10_loss_fun(w):
+  return l(x_train, y_train, w)
+
+w = np.random.rand(10, 3073) * 0.001 # random weight vector
+df = eval_numerical_gradient(cifar10_loss_fun, w) # get the gradient
+
+   the gradient tells us the slope of the id168 along every
+   dimension, which we can use to make an update:
+loss_original = cifar10_loss_fun(w) # the original loss
+print 'original loss: %f' % (loss_original, )
+
+# lets see the effect of multiple step sizes
+for step_size_log in [-10, -9, -8, -7, -6, -5,-4,-3,-2,-1]:
+  step_size = 10 ** step_size_log
+  w_new = w - step_size * df # new position in the weight space
+  loss_new = cifar10_loss_fun(w_new)
+  print 'for step size %f new loss: %f' % (step_size, loss_new)
+
+# prints:
+# original loss: 2.200718
+# for step size 1.000000e-10 new loss: 2.200652
+# for step size 1.000000e-09 new loss: 2.200057
+# for step size 1.000000e-08 new loss: 2.194116
+# for step size 1.000000e-07 new loss: 2.135493
+# for step size 1.000000e-06 new loss: 1.647802
+# for step size 1.000000e-05 new loss: 2.844355
+# for step size 1.000000e-04 new loss: 25.558142
+# for step size 1.000000e-03 new loss: 254.086573
+# for step size 1.000000e-02 new loss: 2539.370888
+# for step size 1.000000e-01 new loss: 25392.214036
+
+   update in negative gradient direction. in the code above, notice that
+   to compute w_new we are making an update in the negative direction of
+   the gradient df since we wish our id168 to decrease, not
+   increase.
+
+   effect of step size. the gradient tells us the direction in which the
+   function has the steepest rate of increase, but it does not tell us how
+   far along this direction we should step. as we will see later in the
+   course, choosing the step size (also called the learning rate) will
+   become one of the most important (and most headache-inducing)
+   hyperparameter settings in training a neural network. in our
+   blindfolded hill-descent analogy, we feel the hill below our feet
+   sloping in some direction, but the step length we should take is
+   uncertain. if we shuffle our feet carefully we can expect to make
+   consistent but very small progress (this corresponds to having a small
+   step size). conversely, we can choose to make a large, confident step
+   in an attempt to descend faster, but this may not pay off. as you can
+   see in the code example above, at some point taking a bigger step gives
+   a higher loss as we    overstep   .
+   [stepsize.jpg]
+   visualizing the effect of step size. we start at some particular spot w
+   and evaluate the gradient (or rather its negative - the white arrow)
+   which tells us the direction of the steepest decrease in the loss
+   function. small steps are likely to lead to consistent but slow
+   progress. large steps can lead to better progress but are more risky.
+   note that eventually, for a large step size we will overshoot and make
+   the loss worse. the step size (or as we will later call it - the
+   learning rate) will become one of the most important hyperparameters
+   that we will have to carefully tune.
+
+   a problem of efficiency. you may have noticed that evaluating the
+   numerical gradient has complexity linear in the number of parameters.
+   in our example we had 30730 parameters in total and therefore had to
+   perform 30,731 evaluations of the id168 to evaluate the
+   gradient and to perform only a single parameter update. this problem
+   only gets worse, since modern neural networks can easily have tens of
+   millions of parameters. clearly, this strategy is not scalable and we
+   need something better.
+
+computing the gradient analytically with calculus
+
+   the numerical gradient is very simple to compute using the finite
+   difference approximation, but the downside is that it is approximate
+   (since we have to pick a small value of h, while the true gradient is
+   defined as the limit as h goes to zero), and that it is very
+   computationally expensive to compute. the second way to compute the
+   gradient is analytically using calculus, which allows us to derive a
+   direct formula for the gradient (no approximations) that is also very
+   fast to compute. however, unlike the numerical gradient it can be more
+   error prone to implement, which is why in practice it is very common to
+   compute the analytic gradient and compare it to the numerical gradient
+   to check the correctness of your implementation. this is called a
+   gradient check.
+
+   lets use the example of the id166 id168 for a single datapoint:
+
+   we can differentiate the function with respect to the weights. for
+   example, taking the gradient with respect to \(w_{y_i}\) we obtain:
+
+   where \(\mathbb{1}\) is the indicator function that is one if the
+   condition inside is true or zero otherwise. while the expression may
+   look scary when it is written out, when you   re implementing this in
+   code you   d simply count the number of classes that didn   t meet the
+   desired margin (and hence contributed to the id168) and then
+   the data vector \(x_i\) scaled by this number is the gradient. notice
+   that this is the gradient only with respect to the row of \(w\) that
+   corresponds to the correct class. for the other rows where \(j \neq y_i
+   \) the gradient is:
+
+   once you derive the expression for the gradient it is straight-forward
+   to implement the expressions and use them to perform the gradient
+   update.
+
+id119
+
+   now that we can compute the gradient of the id168, the
+   procedure of repeatedly evaluating the gradient and then performing a
+   parameter update is called id119. its vanilla version looks
+   as follows:
+# vanilla id119
+
+while true:
+  weights_grad = evaluate_gradient(loss_fun, data, weights)
+  weights += - step_size * weights_grad # perform parameter update
+
+   this simple loop is at the core of all neural network libraries. there
+   are other ways of performing the optimization (e.g. lbfgs), but
+   id119 is currently by far the most common and established
+   way of optimizing neural network id168s. throughout the class
+   we will put some bells and whistles on the details of this loop (e.g.
+   the exact details of the update equation), but the core idea of
+   following the gradient until we   re happy with the results will remain
+   the same.
+
+   mini-batch id119. in large-scale applications (such as the
+   ilsvrc challenge), the training data can have on order of millions of
+   examples. hence, it seems wasteful to compute the full id168
+   over the entire training set in order to perform only a single
+   parameter update. a very common approach to addressing this challenge
+   is to compute the gradient over batches of the training data. for
+   example, in current state of the art convnets, a typical batch contains
+   256 examples from the entire training set of 1.2 million. this batch is
+   then used to perform a parameter update:
+# vanilla minibatch id119
+
+while true:
+  data_batch = sample_training_data(data, 256) # sample 256 examples
+  weights_grad = evaluate_gradient(loss_fun, data_batch, weights)
+  weights += - step_size * weights_grad # perform parameter update
+
+   the reason this works well is that the examples in the training data
+   are correlated. to see this, consider the extreme case where all 1.2
+   million images in ilsvrc are in fact made up of exact duplicates of
+   only 1000 unique images (one for each class, or in other words 1200
+   identical copies of each image). then it is clear that the gradients we
+   would compute for all 1200 identical copies would all be the same, and
+   when we average the data loss over all 1.2 million images we would get
+   the exact same loss as if we only evaluated on a small subset of 1000.
+   in practice of course, the dataset would not contain duplicate images,
+   the gradient from a mini-batch is a good approximation of the gradient
+   of the full objective. therefore, much faster convergence can be
+   achieved in practice by evaluating the mini-batch gradients to perform
+   more frequent parameter updates.
+
+   the extreme case of this is a setting where the mini-batch contains
+   only a single example. this process is called stochastic gradient
+   descent (sgd) (or also sometimes on-line id119). this is
+   relatively less common to see because in practice due to vectorized
+   code optimizations it can be computationally much more efficient to
+   evaluate the gradient for 100 examples, than the gradient for one
+   example 100 times. even though sgd technically refers to using a single
+   example at a time to evaluate the gradient, you will hear people use
+   the term sgd even when referring to mini-batch id119 (i.e.
+   mentions of mgd for    minibatch id119   , or bgd for    batch
+   id119    are rare to see), where it is usually assumed that
+   mini-batches are used. the size of the mini-batch is a hyperparameter
+   but it is not very common to cross-validate it. it is usually based on
+   memory constraints (if any), or set to some value, e.g. 32, 64 or 128.
+   we use powers of 2 in practice because many vectorized operation
+   implementations work faster when their inputs are sized in powers of 2.
+
+summary
+
+   [dataflow.jpeg]
+   summary of the information flow. the dataset of pairs of (x,y) is given
+   and fixed. the weights start out as random numbers and can change.
+   during the forward pass the score function computes class scores,
+   stored in vector f. the id168 contains two components: the data
+   loss computes the compatibility between the scores f and the labels y.
+   the id173 loss is only a function of the weights. during
+   id119, we compute the gradient on the weights (and
+   optionally on data if we wish) and use them to perform a parameter
+   update during id119.
+
+   in this section,
+     * we developed the intuition of the id168 as a
+       high-dimensional optimization landscape in which we are trying to
+       reach the bottom. the working analogy we developed was that of a
+       blindfolded hiker who wishes to reach the bottom. in particular, we
+       saw that the id166 cost function is piece-wise linear and
+       bowl-shaped.
+     * we motivated the idea of optimizing the id168 with
+       iterative refinement, where we start with a random set of weights
+       and refine them step by step until the loss is minimized.
+     * we saw that the gradient of a function gives the steepest ascent
+       direction and we discussed a simple but inefficient way of
+       computing it numerically using the finite difference approximation
+       (the finite difference being the value of h used in computing the
+       numerical gradient).
+     * we saw that the parameter update requires a tricky setting of the
+       step size (or the learning rate) that must be set just right: if it
+       is too low the progress is steady but slow. if it is too high the
+       progress can be faster, but more risky. we will explore this
+       tradeoff in much more detail in future sections.
+     * we discussed the tradeoffs between computing the numerical and
+       analytic gradient. the numerical gradient is simple but it is
+       approximate and expensive to compute. the analytic gradient is
+       exact, fast to compute but more error-prone since it requires the
+       derivation of the gradient with math. hence, in practice we always
+       use the analytic gradient and then perform a gradient check, in
+       which its implementation is compared to the numerical gradient.
+     * we introduced the id119 algorithm which iteratively
+       computes the gradient and performs a parameter update in loop.
+
+   coming up: the core takeaway from this section is that the ability to
+   compute the gradient of a id168 with respect to its weights
+   (and have some intuitive understanding of it) is the most important
+   skill needed to design, train and understand neural networks. in the
+   next section we will develop proficiency in computing the gradient
+   analytically using the chain rule, otherwise also referred to as
+   id26. this will allow us to efficiently optimize relatively
+   arbitrary id168s that express all kinds of neural networks,
+   including convolutional neural networks.
+
+     * [17]cs231n
+     * [18]cs231n
+     * [19]karpathy@cs.stanford.edu
+
+references
+
+   1. http://cs231n.github.io/
+   2. http://cs231n.github.io/optimization-1/#intro
+   3. http://cs231n.github.io/optimization-1/#vis
+   4. http://cs231n.github.io/optimization-1/#optimization
+   5. http://cs231n.github.io/optimization-1/#opt1
+   6. http://cs231n.github.io/optimization-1/#opt2
+   7. http://cs231n.github.io/optimization-1/#opt3
+   8. http://cs231n.github.io/optimization-1/#gradcompute
+   9. http://cs231n.github.io/optimization-1/#numerical
+  10. http://cs231n.github.io/optimization-1/#analytic
+  11. http://cs231n.github.io/optimization-1/#gd
+  12. http://cs231n.github.io/optimization-1/#summary
+  13. http://en.wikipedia.org/wiki/convex_function
+  14. http://stanford.edu/~boyd/cvxbook/
+  15. http://en.wikipedia.org/wiki/subderivative
+  16. http://en.wikipedia.org/wiki/numerical_differentiation
+  17. https://github.com/cs231n
+  18. https://twitter.com/cs231n
+  19. mailto:karpathy@cs.stanford.edu

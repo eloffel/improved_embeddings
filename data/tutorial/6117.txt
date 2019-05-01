@@ -1,0 +1,203 @@
+   #[1]openai
+
+     * [2]about
+     * [3]progress
+     * [4]resources
+     * [5]blog
+
+   (button)
+
+   (button)
+
+     * [6]about
+         ______________________________________________________________
+
+     * [7]progress
+         ______________________________________________________________
+
+     * [8]resources
+         ______________________________________________________________
+
+     * [9]blog
+         ______________________________________________________________
+
+     * [10]jobs
+     __________________________________________________________________
+
+   september 29, 2017     4 minute read
+
+nonlinear computation in deep linear networks
+     __________________________________________________________________
+
+   we've shown that deep linear networks     as implemented using
+   floating-point arithmetic     are not actually linear and can perform
+   nonlinear computation. we used [11]evolution strategies to find
+   parameters in linear networks that exploit this trait, letting us solve
+   non-trivial problems.
+
+   neural networks consist of stacks of a linear layer followed by a
+   nonlinearity like tanh or rectified linear unit. without the
+   nonlinearity, consecutive linear layers would be in theory
+   mathematically equivalent to a single linear layer. so it's a surprise
+   that floating point arithmetic is nonlinear enough to yield trainable
+   deep networks.
+
+background
+
+   numbers used by computers aren't perfect mathematical objects, but
+   approximate representations using finite numbers of bits. floating
+   point numbers are commonly used by computers to represent mathematical
+   objects. each floating point number is represented by a combination of
+   a fraction and an exponent. in the ieee's float32 standard, 23 bits are
+   used for the fraction and 8 for the exponent, and one for the sign.
+
+   image credit: [12]wikipedia
+
+   as a consequence of these conventions and the binary format used, the
+   smallest normal non-zero number (in binary) is 1.0..0 x 2^-126, which
+   we refer to as min going forward. however, the next representable
+   number is 1.0..01 x 2^-126, which we can write as min + 0.0..01 x
+   2^-126. it is evident that the gap between the 2nd number is by a
+   factor of 2^20 smaller than gap between 0 and min. in float32, when
+   numbers are smaller than the smallest representable number they get
+   mapped to zero. due to this 'underflow', around zero all computation
+   involving floating point numbers becomes nonlinear.
+
+   an exception to these restrictions is [13]denormal numbers, which can
+   be disabled on some computing hardware. while the gpu and cublas have
+   denormals enabled by default, tensorflow builds all its primitives with
+   denormals off (with the ftz=true flag set). this means that any
+   non-matrix multiply operation written in tensorflow has an implicit
+   non-linearity following it (provided the scale of computation is near
+   1e-38).
+
+   so, while in general the difference between any "mathematical" number
+   and their normal float representation is small, around zero there is a
+   large gap and the approximation error can be very significant.
+   [image1.png]
+
+   this can lead to some odd effects where the familiar rules of
+   mathematics stop applying. for instance, $(a + b) \times c$ becomes
+   unequal to $a \times c + b \times c$.
+
+   for example if you set $a = 0.4 \times min$, $b = 0.5 \times min$, and
+   $c = 1 / min$.
+
+   then: $(a+b) \times c = (0.4 \times min + 0.5 \times min) \times 1 /
+   min = (0 + 0) \times 1 / min = 0$.
+   however: $(a \times c) + (b \times c) = 0.4 \times min / min + 0.5
+   \times min \times 1 / min = 0.9$.
+
+   in another example, we can set $a = 2.5 \times min$, $b = -1.6 \times
+   min$, and $c = 1 \times min$.
+
+   then: $(a+b) + c = (0) + 1 \times min = min$.
+   however: $(b+c) + a = (0 \times min) + 2.5 \times min = 2.5 \times
+   min$.
+
+   at this smallest scale the fundamental addition operation has become
+   nonlinear!
+
+exploiting nonlinearities with evolution strategies
+
+   we wanted to know if this inherent nonlinearity could be exploited as a
+   computational nonlinearity, as this would let deep linear networks
+   perform nonlinear computations. the challenge is that modern
+   differentiation libraries are blind to these nonlinearities at the
+   smallest scale. as such, it would be difficult or impossible to train a
+   neural network to exploit them via id26.
+
+   we can use [14]evolution strategies (es) to estimate gradients without
+   having to rely on symbolic differentiation. using es we can indeed
+   exploit the near-zero behavior of float32 as a computational
+   nonlinearity. when trained on mnist a deep linear network trained via
+   id26 achieves a training accuracy of 94% and a testing
+   accuracy of 92%. in contrast, the same linear network can achieve >99%
+   training and 96.7% test accuracy when trained with es and ensuring that
+   the activations are sufficiently small to be in the nonlinear range of
+   float32. this increase in training performance is due to es exploiting
+   the nonlinearities in the float32 representation. these powerful
+   nonlinearities allow any layer to generate novel features which are
+   nonlinear combinations of lower level features. here is the network
+   structure:
+x = tf.placeholder(dtype=tf.float32, shape=[batch_size,784])
+y = tf.placeholder(dtype=tf.float32, shape=[batch_size,10])
+
+w1 = tf.variable(np.random.normal(scale=np.sqrt(2./784),size=[784,512]).astype(n
+p.float32))
+b1 = tf.variable(np.zeros(512,dtype=np.float32))
+w2 = tf.variable(np.random.normal(scale=np.sqrt(2./512),size=[512,512]).astype(n
+p.float32))
+b2 = tf.variable(np.zeros(512,dtype=np.float32))
+w3 = tf.variable(np.random.normal(scale=np.sqrt(2./512),size=[512,10]).astype(np
+.float32))
+b3 = tf.variable(np.zeros(10,dtype=np.float32))
+
+params = [w1,b1,w2,b2,w3,b3]
+nr_params = sum([np.prod(p.get_shape().as_list()) for p in params])
+scaling = 2**125
+
+def get_logits(par):
+    h1 = tf.nn.bias_add(tf.matmul(x , par[0]), par[1]) / scaling
+    h2 = tf.nn.bias_add(tf.matmul(h1, par[2]) , par[3] / scaling)
+    o =   tf.nn.bias_add(tf.matmul(h2, par[4]), par[5]/ scaling)*scaling
+    return o
+     __________________________________________________________________
+
+   beyond mnist, we think other interesting experiments could be extending
+   this work to recurrent neural networks, or to exploit nonlinear
+   computation to improve complex machine learning tasks like language
+   modeling and translation. we're excited to explore this capability with
+   our fellow researchers.
+     __________________________________________________________________
+
+   authors
+   [15]jakob foerster
+     __________________________________________________________________
+
+     * [16]about
+     * [17]progress
+     * [18]resources
+     * [19]blog
+     * [20]charter
+     * [21]jobs
+     * [22]press
+
+     *
+     *
+
+   sign up for our newsletter
+   ____________________ (button)
+   right
+
+references
+
+   visible links
+   1. https://openai.com/blog/rss/
+   2. https://openai.com/about/
+   3. https://openai.com/progress/
+   4. https://openai.com/resources/
+   5. https://openai.com/blog/
+   6. https://openai.com/about/
+   7. https://openai.com/progress/
+   8. https://openai.com/resources/
+   9. https://openai.com/blog/
+  10. https://openai.com/jobs/
+  11. https://openai.com/blog/nonlinear-computation-in-linear-networks/#es
+  12. https://en.wikipedia.org/wiki/single-precision_floating-point_format
+  13. https://en.wikipedia.org/wiki/denormal_number
+  14. https://blog.openai.com/evolution-strategies/
+  15. https://openai.com/blog/authors/jakob-foerster/
+  16. https://openai.com/about/
+  17. https://openai.com/progress/
+  18. https://openai.com/resources/
+  19. https://openai.com/blog/
+  20. https://openai.com/charter/
+  21. https://openai.com/jobs/
+  22. https://openai.com/press/
+
+   hidden links:
+  24. https://openai.com/
+  25. https://openai.com/
+  26. https://twitter.com/openai
+  27. https://www.facebook.com/openai.research

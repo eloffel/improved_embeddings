@@ -1,0 +1,853 @@
+   #[1]edwin chen's blog atom feed [2]edwin chen's blog rss feed
+
+[3]exploring lstms
+
+   lstms are behind a lot of the amazing achievements deep learning has
+   made in the past few years, and they're a fairly simple extension to
+   neural networks under the right view. so i'll try to present them as
+   intuitively as possible     in such a way that you could have discovered
+   them yourself.
+
+   but first, a picture:
+
+   lstm
+
+   aren't lstms beautiful? let's go.
+
+   (note: if you're already familiar with neural networks and lstms, skip
+   to the middle     the first half of this post is a tutorial.)
+
+neural networks
+
+   imagine we have a sequence of images from a movie, and we want to label
+   each image with an activity (is this a fight?, are the characters
+   talking?, are the characters eating?).
+
+   how do we do this?
+
+   one way is to ignore the sequential nature of the images, and build a
+   per-image classifier that considers each image in isolation. for
+   example, given enough images and labels:
+     * our algorithm might first learn to detect low-level patterns like
+       shapes and edges.
+     * with more data, it might learn to combine these patterns into more
+       complex ones, like faces (two circular things atop a triangular
+       thing atop an oval thing) or cats.
+     * and with even more data, it might learn to map these higher-level
+       patterns into activities themselves (scenes with mouths, steaks,
+       and forks are probably about eating).
+
+   this, then, is a deep neural network: it takes an image input, returns
+   an activity output, and     just as we might learn to detect patterns in
+   puppy behavior without knowing anything about dogs (after seeing enough
+   corgis, we discover common characteristics like fluffy butts and
+   drumstick legs; next, we learn advanced features like splooting)     in
+   between it learns to represent images through hidden layers of
+   representations.
+
+mathematically
+
+   i assume people are familiar with basic neural networks already, but
+   let's quickly review them.
+     * a neural network with a single hidden layer takes as input a vector
+       x, which we can think of as a set of neurons.
+     * each input neuron is connected to a hidden layer of neurons via a
+       set of learned weights.
+     * the jth hidden neuron outputs \(h_j = \phi(\sum_i w_{ij} x_i)\),
+       where \(\phi\) is an activation function.
+     * the hidden layer is fully connected to an output layer, and the jth
+       output neuron outputs \(y_j = \sum_i v_{ij} h_i\). if we need
+       probabilities, we can transform the output layer via a [4]softmax
+       function.
+
+   in matrix notation:
+   $$h = \phi(wx)$$
+   $$y = vh$$
+
+   where
+     * x is our input vector
+     * w is a weight matrix connecting the input and hidden layers
+     * v is a weight matrix connecting the hidden and output layers
+     * common id180 for \(\phi\) are the [5]sigmoid
+       function, \(\sigma(x)\), which squashes numbers into the range (0,
+       1); the [6]hyperbolic tangent, \(tanh(x)\), which squashes numbers
+       into the range (-1, 1), and the [7]rectified linear unit, \(relu(x)
+       = max(0, x)\).
+
+   here's a pictorial view:
+
+   neural network
+
+   (note: to make the notation a little cleaner, i assume x and h each
+   contain an extra bias neuron fixed at 1 for learning bias weights.)
+
+remembering information with id56s
+
+   ignoring the sequential aspect of the movie images is pretty ml 101,
+   though. if we see a scene of a beach, we should boost beach activities
+   in future frames: an image of someone in the water should probably be
+   labeled swimming, not bathing, and an image of someone lying with their
+   eyes closed is probably suntanning. if we remember that bob just
+   arrived at a supermarket, then even without any distinctive supermarket
+   features, an image of bob holding a slab of bacon should probably be
+   categorized as shopping instead of cooking.
+
+   so what we'd like is to let our model track the state of the world:
+    1. after seeing each image, the model outputs a label and also updates
+       the knowledge it's been learning. for example, the model might
+       learn to automatically discover and track information like location
+       (are scenes currently in a house or beach?), time of day (if a
+       scene contains an image of the moon, the model should remember that
+       it's nighttime), and within-movie progress (is this image the first
+       frame or the 100th?). importantly, just as a neural network
+       automatically discovers hidden patterns like edges, shapes, and
+       faces without being fed them, our model should automatically
+       discover useful information by itself.
+    2. when given a new image, the model should incorporate the knowledge
+       it's gathered to do a better job.
+
+   this, then, is a recurrent neural network. instead of simply taking an
+   image and returning an activity, an id56 also maintains internal
+   memories about the world (weights assigned to different pieces of
+   information) to help perform its classifications.
+
+mathematically
+
+   so let's add the notion of internal knowledge to our equations, which
+   we can think of as pieces of information that the network maintains
+   over time.
+
+   but this is easy: we know that the hidden layers of neural networks
+   already encode useful information about their inputs, so why not use
+   these layers as the memory passed from one time step to the next? this
+   gives us our id56 equations:
+   $$h_t = \phi(wx_t + uh_{t-1})$$
+   $$y_t = vh_t$$
+
+   note that the hidden state computed at time \(t\) (\(h_t\), our
+   internal knowledge) is fed back at the next time step. (also, i'll use
+   concepts like hidden state, knowledge, memories, and beliefs to
+   describe \(h_t\) interchangeably.)
+
+   id56
+
+longer memories through lstms
+
+   let's think about how our model updates its knowledge of the world. so
+   far, we've placed no constraints on this update, so its knowledge can
+   change pretty chaotically: at one frame it thinks the characters are in
+   the us, at the next frame it sees the characters eating sushi and
+   thinks they're in japan, and at the next frame it sees polar bears and
+   thinks they're on hydra island. or perhaps it has a wealth of
+   information to suggest that alice is an investment analyst, but decides
+   she's a professional assassin after seeing her cook.
+
+   this chaos means information quickly transforms and vanishes, and it's
+   difficult for the model to keep a long-term memory. so what we'd like
+   is for the network to learn how to update its beliefs (scenes without
+   bob shouldn't change bob-related information, scenes with alice should
+   focus on gathering details about her), in a way that its knowledge of
+   the world evolves more gently.
+
+   this is how we do it.
+    1. adding a forgetting mechanism. if a scene ends, for example, the
+       model should forget the current scene location, the time of day,
+       and reset any scene-specific information; however, if a character
+       dies in the scene, it should continue remembering that he's no
+       longer alive. thus, we want the model to learn a separate
+       forgetting/remembering mechanism: when new inputs come in, it needs
+       to know which beliefs to keep or throw away.
+    2. adding a saving mechanism. when the model sees a new image, it
+       needs to learn whether any information about the image is worth
+       using and saving. maybe your mom sent you an article about the
+       kardashians, but who cares?
+    3. so when new a input comes in, the model first forgets any long-term
+       information it decides it no longer needs. then it learns which
+       parts of the new input are worth using, and saves them into its
+       long-term memory.
+    4. focusing long-term memory into working memory. finally, the model
+       needs to learn which parts of its long-term memory are immediately
+       useful. for example, bob's age may be a useful piece of information
+       to keep in the long term (children are more likely to be crawling,
+       adults are more likely to be working), but is probably irrelevant
+       if he's not in the current scene. so instead of using the full
+       long-term memory all the time, it learns which parts to focus on
+       instead.
+
+   this, then, is an long short-term memory network. whereas an id56 can
+   overwrite its memory at each time step in a fairly uncontrolled
+   fashion, an lstm transforms its memory in a very precise way: by using
+   specific learning mechanisms for which pieces of information to
+   remember, which to update, and which to pay attention to. this helps it
+   keep track of information over longer periods of time.
+
+mathematically
+
+   let's describe the lstm additions mathematically.
+
+   at time \(t\), we receive a new input \(x_t\). we also have our
+   long-term and working memories passed on from the previous time step,
+   \(ltm_{t-1}\) and \(wm_{t-1}\) (both n-length vectors), which we want
+   to update.
+
+   we'll start with our long-term memory. first, we need to know which
+   pieces of long-term memory to continue remembering and which to
+   discard, so we want to use the new input and our working memory to
+   learn a remember gate of n numbers between 0 and 1, each of which
+   determines how much of a long-term memory element to keep. (a 1 means
+   to keep it, a 0 means to forget it entirely.)
+
+   naturally, we can use a small neural network to learn this remember
+   gate:
+   $$remember_t = \sigma(w_r x_t + u_r wm_{t-1}) $$
+
+   (notice the similarity to our previous network equations; this is just
+   a shallow neural network. also, we use a sigmoid activation because we
+   need numbers between 0 and 1.)
+
+   next, we need to compute the information we can learn from \(x_t\),
+   i.e., a candidate addition to our long-term memory:
+   $$ ltm'_t = \phi(w_l x_t + u_l wm_{t-1}) $$
+
+   \(\phi\) is an activation function, commonly chosen to be \(tanh\).
+
+   before we add the candidate into our memory, though, we want to learn
+   which parts of it are actually worth using and saving:
+   $$save_t = \sigma(w_s x_t + u_s wm_{t-1})$$
+
+   (think of what happens when you read something on the web. while a news
+   article might contain information about hillary, you should ignore it
+   if the source is breitbart.)
+
+   let's now combine all these steps. after forgetting memories we don't
+   think we'll ever need again and saving useful pieces of incoming
+   information, we have our updated long-term memory:
+   $$ltm_t = remember_t \circ ltm_{t-1} + save_t \circ ltm'_t$$
+
+   where \(\circ\) denotes element-wise multiplication.
+
+   next, let's update our working memory. we want to learn how to focus
+   our long-term memory into information that will be immediately useful.
+   (put differently, we want to learn what to move from an external hard
+   drive onto our working laptop.) so we learn a focus/attention vector:
+   $$focus_t = \sigma(w_f x_t + u_f wm_{t-1})$$
+
+   our working memory is then
+   $$wm_t = focus_t \circ \phi(ltm_t)$$
+
+   in other words, we pay full attention to elements where the focus is 1,
+   and ignore elements where the focus is 0.
+
+   and we're done! hopefully this made it into your long-term memory as
+   well.
+     __________________________________________________________________
+
+   to summarize, whereas a vanilla id56 uses one equation to update its
+   hidden state/memory:
+   $$h_t = \phi(wx_t + uh_{t-1})$$
+
+   an lstm uses several:
+   $$ltm_t = remember_t \circ ltm_{t-1} + save_t \circ ltm'_t$$
+   $$wm_t = focus_t \circ tanh(ltm_t)$$
+
+   where each memory/attention sub-mechanism is just a mini brain of its
+   own:
+   $$remember_t = \sigma(w_r x_t+ u_r wm_{t-1}) $$
+   $$save_t = \sigma(w_s x_t + u_s wm_{t-1})$$
+   $$focus_t = \sigma(w_f x_t + u_f wm_{t-1})$$
+   $$ ltm'_t = tanh(w_l x_t + u_l wm_{t-1}) $$
+
+   (note: the terminology and variable names i've been using are different
+   from the usual literature. here are the standard names, which i'll use
+   interchangeably from now on:
+     * the long-term memory, \(ltm_t\), is usually called the cell state,
+       denoted \(c_t\).
+     * the working memory, \(wm_t\), is usually called the hidden state,
+       denoted \(h_t\). this is analogous to the hidden state in vanilla
+       id56s.
+     * the remember vector, \(remember_t\), is usually called the forget
+       gate (despite the fact that a 1 in the forget gate still means to
+       keep the memory and a 0 still means to forget it), denoted \(f_t\).
+     * the save vector, \(save_t\), is usually called the input gate (as
+       it determines how much of the input to let into the cell state),
+       denoted \(i_t\).
+     * the focus vector, \(focus_t\), is usually called the output gate,
+       denoted \(o_t\). )
+
+   lstm
+
+snorlax
+
+   i could have caught a hundred pidgeys in the time it took me to write
+   this post, so here's a cartoon.
+
+neural networks
+
+   neural network
+
+recurrent neural networks
+
+   id56
+
+lstms
+
+   lstm
+
+learning to code
+
+   let's look at a few examples of what an lstm can do. following andrej
+   karpathy's [8]terrific post, i'll use character-level lstm models that
+   are fed sequences of characters and trained to predict the next
+   character in the sequence.
+
+   while this may seem a bit toyish, character-level models can actually
+   be very useful, even on top of word models. for example:
+     * imagine a code autocompleter smart enough to allow you to program
+       on your phone. an lstm could (in theory) track the return type of
+       the method you're currently in, and better suggest which variable
+       to return; it could also know without compiling whether you've made
+       a bug by returning the wrong type.
+     * nlp applications like machine translation often have trouble
+       dealing with rare terms. how do you translate a word you've never
+       seen before, or convert adjectives to adverbs? even if you know
+       what a tweet means, how do you generate a new hashtag to capture
+       it? character models can daydream new terms, so this is another
+       area with [9]interesting applications.
+
+   so to start, i spun up an ec2 p2.xlarge spot instance, and trained a
+   3-layer lstm on the [10]apache commons lang codebase. here's a program
+   it generates after a few hours.
+
+   while the code certainly isn't perfect, it's better than a lot of data
+   scientists i know. and we can see that the lstm has learned a lot of
+   interesting (and correct!) coding behavior:
+     * it knows how to structure classes: a license up top, followed by
+       packages and imports, followed by comments and a class definition,
+       followed by variables and methods. similarly, it knows how to
+       create methods: comments follow the correct orders (description,
+       then @param, then @return, etc.), decorators are properly placed,
+       and non-void methods end with appropriate return statements.
+       crucially, this behavior spans long ranges of code     see how giant
+       the blocks are!
+     * it can also track subroutines and nesting levels: indentation is
+       always correct, and if statements and for loops are always closed
+       out.
+     * it even knows how to create tests.
+
+   how does the model do this? let's look at a few of the hidden states.
+
+   here's a neuron that seems to track the code's outer level of
+   indentation:
+
+   (as the lstm moves through the sequence, its neurons fire at varying
+   intensities. the picture represents one particular neuron, where each
+   row is a sequence and characters are color-coded according to the
+   neuron's intensity; dark blue shades indicate large, positive
+   activations, and dark red shades indicate very negative activations.)
+
+   outer level of indentation
+
+   and here's a neuron that counts down the spaces between tabs:
+
+   tab spaces
+
+   for kicks, here's the output of a different 3-layer lstm trained on
+   tensorflow's codebase:
+
+   there are [11]plenty of other fun examples floating around the web, so
+   check them out if you want to see more.
+
+investigating lstm internals
+
+   let's dig a little deeper. we looked in the last section at examples of
+   hidden states, but i wanted to play with lstm cell states and their
+   other memory mechanisms too. do they fire when we expect, or are there
+   surprising patterns?
+
+counting
+
+   to investigate, let's start by teaching an lstm to count. (remember how
+   the java and python lstms were able to generate proper indentation!) so
+   i generated sequences of the form
+aaaaaxbbbbb
+
+   (n "a" characters, followed by a delimiter x, followed by n "b"
+   characters, where 1 <= n <= 10), and trained a single-layer lstm with
+   10 hidden neurons.
+
+   as expected, the lstm learns perfectly within its training range     and
+   can even generalize a few steps beyond it. (although it starts to fail
+   once we try to get it to count to 19.)
+aaaaaaaaaaaaaaaxbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaxbbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaaxbbbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaaaxbbbbbbbbbbbbbbbbbb
+aaaaaaaaaaaaaaaaaaaxbbbbbbbbbbbbbbbbbb # here it begins to fail: the model is gi
+ven 19 "a"s, but outputs only 18 "b"s.
+
+   we expect to find a hidden state neuron that counts the number of a's
+   if we look at its internals. and we do:
+
+   [12]neuron #2 hidden state
+
+   i built a [13]small web app to play around with lstms, and [14]neuron
+   #2 seems to be counting both the number of a's it's seen, as well as
+   the number of b's. (remember that cells are shaded according to the
+   neuron's activation, from dark red [-1] to dark blue [+1].)
+
+   what about the cell state? it behaves similarly:
+
+   [15]neuron #2 cell state
+
+   one interesting thing is that the working memory looks like a
+   "sharpened" version of the long-term memory. does this hold true in
+   general?
+
+   it does. (this is exactly as we would expect, since the long-term
+   memory gets squashed by the tanh activation function and the output
+   gate limits what gets passed on.) for example, here is an overview of
+   all 10 cell state nodes at once. we see plenty of light-colored cells,
+   representing values close to 0.
+
+   [16]counting lstm cell states
+
+   in contrast, the 10 working memory neurons look much more focused.
+   neurons 1, 3, 5, and 7 are even zeroed out entirely over the first half
+   of the sequence.
+
+   [17]counting lstm hidden states
+
+   let's go back to neuron #2. here are the candidate memory and input
+   gate. they're relatively constant over each half of the sequence     as
+   if the neuron is calculating a += 1 or b += 1 at each step.
+
+   [18]counting lstm candidate memory
+
+   [19]input gate
+
+   finally, here's an overview of all of neuron 2's internals:
+
+   [20]neuron 2 overview
+
+   if you want to investigate the different counting neurons yourself, you
+   can play around with the visualizer [21]here.
+
+   iframe: [22]http://blog.echen.me/lstm-explorer/#/network?file=counter
+
+   (note: this is far from the only way an lstm can learn to count, and
+   i'm anthropomorphizing quite a bit here. but i think viewing the
+   network's behavior is interesting and can help build better models    
+   after all, many of the ideas in neural networks come from analogies to
+   the human brain, and if we see unexpected behavior, we may be able to
+   design more efficient learning mechanisms.)
+
+count von count
+
+   let's look at a slightly more complicated counter. this time, i
+   generated sequences of the form
+aaxaxaaybbbbb
+
+   (n a's with x's randomly sprinkled in, followed by a delimiter y,
+   followed by n b's). the lstm still has to count the number of a's, but
+   this time needs to ignore the x's as well.
+
+   [23]here's the full lstm. we expect to see a counting neuron, but one
+   where the input gate is zero whenever it sees an x. and we do!
+
+   [24]counter 2 - cell state
+
+   above is the cell state of [25]neuron 20. it increases until it hits
+   the delimiter y, and then decreases to the end of the sequence     just
+   like it's calculating a num_bs_left_to_print variable that increments
+   on a's and decrements on b's.
+
+   if we look at its input gate, it is indeed ignoring the x's:
+
+   [26]counter 2 - input gate
+
+   interestingly, though, the candidate memory fully activates on the
+   irrelevant x's     which shows why the input gate is needed. (although,
+   if the input gate weren't part of the architecture, presumably the
+   network would have presumably learned to ignore the x's some other way,
+   at least for this simple example.)
+
+   [27]counter 2 - candidate memory
+
+   let's also look at [28]neuron 10.
+
+   [29]counter 2 - neuron 10
+
+   this neuron is interesting as it only activates when reading the
+   delimiter "y"     and yet it still manages to encode the number of a's
+   seen so far in the sequence. (it may be hard to tell from the picture,
+   but when reading y's belonging to sequences with the same number of
+   a's, all the cell states have values either identical or within 0.1% of
+   each other. you can see that y's with fewer a's are lighter than those
+   with more.) perhaps some other neuron sees neuron 10 slacking and helps
+   a buddy out.
+
+   iframe:
+   [30]http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&
+   layer=1&n=20
+
+remembering state
+
+   next, i wanted to look at how lstms remember state. i generated
+   sequences of the form
+axxxxxxya
+bxxxxxxyb
+
+   (i.e., an "a" or b", followed by 1-10 x's, then a delimiter "y", ending
+   with a lowercase version of the initial character). this way [31]the
+   network needs to remember whether it's in an "a" or "b" state.
+
+   we expect to find a neuron that fires when remembering that the
+   sequence started with an "a", and another neuron that fires when
+   remembering that it started with a "b". we do.
+
+   for example, here is an "a" neuron that activates when it reads an "a",
+   and remembers until it needs to generate the final character. notice
+   that the input gate ignores all the "x" characters in between.
+
+   [32]a neuron - #8
+
+   here is its "b" counterpart:
+
+   [33]b neuron - #17
+
+   one interesting point is that even though knowledge of the a vs. b
+   state isn't needed until the network reads the "y" delimiter, the
+   hidden state fires throughout all the intermediate inputs anyways. this
+   seems a bit "inefficient", but perhaps it's because the neurons are
+   doing a bit of double-duty in counting the number of x's as well.
+
+   iframe:
+   [34]http://blog.echen.me/lstm-explorer/#/neuron?file=state_memorizer&la
+   yer=1&n=8
+
+copy task
+
+   finally, let's look at how an lstm learns to copy information. (recall
+   that our java lstm was able to memorize and copy an apache license.)
+
+   (note: if you think about how lstms work, remembering lots of
+   individual, detailed pieces of information isn't something they're very
+   good at. for example, you may have noticed that one major flaw of the
+   lstm-generated code was that it often made use of undefined variables    
+   the lstms couldn't remember which variables were in scope. this isn't
+   surprising, since it's hard to use single cells to efficiently encode
+   multi-valued information like characters, and lstms don't have a
+   natural mechanism to chain adjacent memories to form words. [35]memory
+   networks and [36]id63s are two extensions to neural
+   networks that help fix this, by augmenting with external memory
+   components. so while copying isn't something lstms do very efficiently,
+   it's fun to see how they try anyways.)
+
+   for this copy task, i trained a tiny 2-layer lstm on sequences of the
+   form
+baaxbaa
+abcxabc
+
+   (i.e., a 3-character subsequence composed of a's, b's, and c's,
+   followed by a delimiter "x", followed by the same subsequence).
+
+   i wasn't sure what "copy neurons" would look like, so in order to find
+   neurons that were memorizing parts of the initial subsequence, i looked
+   at their hidden states when reading the delimiter x. since the network
+   needs to encode the initial subsequence, its states should exhibit
+   different patterns depending on what they're learning.
+
+   the graph below, for example, plots neuron 5's hidden state when
+   reading the "x" delimiter. the neuron is clearly able to distinguish
+   sequences beginning with a "c" from those that don't.
+
+   neuron 5
+
+   for another example, here is neuron 20's hidden state when reading the
+   "x". it looks like it picks out sequences beginning with a "b".
+
+   neuron 20 hidden state
+
+   interestingly, if we look at neuron 20's cell state, it almost seems to
+   capture the entire 3-character subsequence by itself (no small feat
+   given its one-dimensionality!):
+
+   neuron 20 cell state
+
+   here are [37]neuron 20's cell and hidden states, across the entire
+   sequence. notice that its hidden state is turned off over the entire
+   initial subsequence (perhaps expected, since its memory only needs to
+   be passively kept at that point).
+
+   [38]copy lstm - neuron 20 hidden and cell
+
+   however, if we look more closely, the neuron actually seems to be
+   firing whenever the next character is a "b". so rather than being a
+   "the sequence started with a b" neuron, it appears to be a "the next
+   character is a b" neuron.
+
+   as far as i can tell, this pattern holds across the network     all the
+   neurons seem to be predicting the next character, rather than
+   memorizing characters at specific positions. for example, [39]neuron 5
+   seems to be a "next character is a c" predictor.
+
+   [40]copy lstm - neuron 5
+
+   i'm not sure if this is the default kind of behavior lstms learn when
+   copying information, or what other copying mechanisms are available as
+   well.
+
+   iframe:
+   [41]http://blog.echen.me/lstm-explorer/#/network?file=copy_machine
+
+states and gates
+
+   to really hone in and understand the purpose of the different states
+   and gates in an lstm, let's repeat the previous section with a small
+   pivot.
+
+cell state and hidden state (memories)
+
+   we originally described the cell state as a long-term memory, and the
+   hidden state as a way to pull out and focus these memories when needed.
+
+   so when a memory is currently irrelevant, we expect the hidden state to
+   turn off     and that's exactly what happens for this sequence copying
+   neuron.
+
+   [42]copy machine
+
+forget gate
+
+   the forget gate discards information from the cell state (0 means to
+   completely forget, 1 means to completely remember), so we expect it to
+   fully activate when it needs to remember something exactly, and to turn
+   off when information is never going to be needed again.
+
+   that's what we see with this "a" memorizing neuron: the forget gate
+   fires hard to remember that it's in an "a" state while it passes
+   through the x's, and turns off once it's ready to generate the final
+   "a".
+
+   [43]forget gate
+
+input gate (save gate)
+
+   we described the job of the input gate (what i originally called the
+   save gate) as deciding whether or not to save information from a new
+   input. thus, it should turn off at useless information.
+
+   and that's what this selective counting neuron does: it counts the a's
+   and b's, but ignores the irrelevant x's.
+
+   [44]input gate
+
+   what's amazing is that nowhere in our lstm equations did we specify
+   that this is how the input (save), forget (remember), and output
+   (focus) gates should work. the network just learned what's best.
+
+extensions
+
+   now let's recap how you could have discovered lstms by yourself.
+
+   first, many of the problems we'd like to solve are sequential or
+   temporal of some sort, so we should incorporate past learnings into our
+   models. but we already know that the hidden layers of neural networks
+   encode useful information, so why not use these hidden layers as the
+   memories we pass from one time step to the next? and so we get id56s.
+
+   but we know from our own behavior that we don't keep track of knowledge
+   willy-nilly; when we read a new article about politics, we don't
+   immediately believe whatever it tells us and incorporate it into our
+   beliefs of the world. we selectively decide what information to save,
+   what information to discard, and what pieces of information to use to
+   make decisions the next time we read the news. thus, we want to learn
+   how to gather, update, and apply information     and why not learn these
+   things through their own mini neural networks? and so we get lstms.
+
+   and now that we've gone through this process, we can come up with our
+   own modifications.
+     * for example, maybe you think it's silly for lstms to distinguish
+       between long-term and working memories     why not have one? or maybe
+       you find separate remember gates and save gates kind of redundant    
+       anything we forget should be replaced by new information, and
+       vice-versa. and now you've come up with one popular lstm variant,
+       the [45]gru.
+     * or maybe you think that when deciding what information to remember,
+       save, and focus on, we shouldn't rely on our working memory alone    
+       why not use our long-term memory as well? and now you've discovered
+       [46]peephole lstms.
+
+making neural nets great again
+
+   let's look at one final example, using a 2-layer lstm trained on
+   trump's tweets. despite the [del: tiny :del] big dataset, it's enough
+   to learn a lot of patterns.
+
+   for example, here's a neuron that tracks its position within hashtags,
+   urls, and @mentions:
+
+   [47]hashtags, urls, @mentions
+
+   here's a proper noun detector (note that it's not simply firing at
+   capitalized words):
+
+   [48]proper nouns
+
+   here's an auxiliary verb + "to be" detector ("will be", "i've always
+   been", "has never been"):
+
+   [49]modal verbs
+
+   here's a quote attributor:
+
+   [50]quotes
+
+   there's even a maga and capitalization neuron:
+
+   [51]maga
+
+   and here are some of the proclamations the lstm generates (okay, one of
+   these is a real tweet):
+
+   [52]tweets [53]tweet
+
+   unfortunately, the lstm merely learned to ramble like a madman.
+
+recap
+
+   that's it. to summarize, here's what you've learned:
+
+   candidate memory
+
+   here's what you should save:
+
+   save
+
+   and now it's time for that donut.
+
+   thanks to [54]chen liang for some of the tensorflow code i used, ben
+   hamner and kaggle for the [55]trump dataset, and, of course,
+   schmidhuber and hochreiter for their [56]original paper. if you want to
+   explore the lstms yourself, feel free to [57]play around!
+
+   [58]edwin chen
+
+   ai, stats, data science, human computation.
+
+   math/cs/linguistics at mit, id103 at msr, quant trading at
+   clarium, ads at twitter, data science at dropbox, stats/ml at google.
+   [59]quora
+   [60]twitter
+   [61]github
+   [62]linkedin
+   [63]email
+
+recent posts
+
+   [64]exploring lstms
+   [65]moving beyond ctr: better recommendations through human evaluation
+   [66]propensity modeling, causal id136, and discovering drivers of
+   growth
+   [67]product insights for airbnb
+   [68]improving twitter search with real-time human computation
+   [69]edge prediction in a social graph: my solution to facebook's user
+   recommendation contest on kaggle
+   [70]soda vs. pop with twitter
+   [71]infinite mixture models with nonparametric bayes and the dirichlet
+   process
+   [72]instant interactive visualization with d3 + ggplot2
+   [73]movie recommendations and more via mapreduce and scalding
+   [74]quick introduction to ggplot2
+   [75]introduction to id49
+   [76]winning the netflix prize: a summary
+   [77]stuff harvard people like
+   [78]information transmission in a social network: dissecting the spread
+   of a quora post
+
+
+    proudly powered by [79]pelican, which takes great advantage of
+    [80]python.
+
+references
+
+   1. http://blog.echen.me/feeds/all.atom.xml
+   2. http://blog.echen.me/feeds/all.rss.xml
+   3. http://blog.echen.me/2017/05/30/exploring-lstms/
+   4. https://en.wikipedia.org/wiki/softmax_function
+   5. https://en.wikipedia.org/wiki/sigmoid_function
+   6. https://en.wikipedia.org/wiki/hyperbolic_function#standard_analytic_expressions
+   7. https://en.wikipedia.org/wiki/rectifier_(neural_networks)
+   8. http://karpathy.github.io/2015/05/21/id56-effectiveness/
+   9. https://arxiv.org/pdf/1508.07909.pdf
+  10. https://github.com/apache/commons-lang
+  11. http://karpathy.github.io/2015/05/21/id56-effectiveness/
+  12. http://blog.echen.me/lstm-explorer/#/neuron?file=counter&layer=1&n=2
+  13. http://blog.echen.me/lstm-explorer
+  14. http://blog.echen.me/lstm-explorer/#/neuron?file=counter&layer=1&n=2
+  15. http://blog.echen.me/lstm-explorer/#/neuron?file=counter&layer=1&n=2
+  16. http://blog.echen.me/lstm-explorer/#/network?file=counter&layer=1
+  17. http://blog.echen.me/lstm-explorer/#/network?file=counter&vector=hs&layer=1
+  18. http://blog.echen.me/lstm-explorer/#/neuron?file=counter&layer=1&n=2
+  19. http://blog.echen.me/lstm-explorer/#/neuron?file=counter&layer=1&n=2
+  20. http://blog.echen.me/lstm-explorer/#/neuron?file=counter&layer=1&n=2
+  21. http://blog.echen.me/lstm-explorer/#/network?file=counter
+  22. http://blog.echen.me/lstm-explorer/#/network?file=counter
+  23. http://blog.echen.me/lstm-explorer/#/network?file=selective_counter
+  24. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=20
+  25. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=20
+  26. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=20
+  27. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=20
+  28. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=10
+  29. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=10
+  30. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=20
+  31. http://blog.echen.me/lstm-explorer/#/network?file=state_memorizer
+  32. http://blog.echen.me/lstm-explorer/#/neuron?file=state_memorizer&layer=1&n=8
+  33. http://blog.echen.me/lstm-explorer/#/neuron?file=state_memorizer&layer=1&n=17
+  34. http://blog.echen.me/lstm-explorer/#/neuron?file=state_memorizer&layer=1&n=8
+  35. https://arxiv.org/abs/1503.08895
+  36. https://arxiv.org/abs/1410.5401
+  37. http://blog.echen.me/lstm-explorer/#/neuron?file=copy_machine&layer=1&n=20
+  38. http://blog.echen.me/lstm-explorer/#/neuron?file=copy_machine&layer=1&n=20
+  39. http://blog.echen.me/lstm-explorer/#/neuron?file=copy_machine&layer=1&n=5
+  40. http://blog.echen.me/lstm-explorer/#/neuron?file=copy_machine&layer=1&n=5
+  41. http://blog.echen.me/lstm-explorer/#/network?file=copy_machine
+  42. http://blog.echen.me/lstm-explorer/#/neuron?file=copy_machine&layer=1&n=5
+  43. http://blog.echen.me/lstm-explorer/#/neuron?file=state_memorizer&layer=1&n=8
+  44. http://blog.echen.me/lstm-explorer/#/neuron?file=selective_counter&layer=1&n=20
+  45. https://arxiv.org/abs/1412.3555
+  46. http://machinelearning.wustl.edu/mlpapers/paper_files/gersss02.pdf
+  47. http://i.imgur.com/ebjqlof.png
+  48. http://i.imgur.com/sc4xmhr.png
+  49. http://i.imgur.com/frdattw.png
+  50. http://i.imgur.com/wqa8h0q.png
+  51. http://i.imgur.com/1qdt0ms.png
+  52. http://i.imgur.com/ysvvwgp.png
+  53. http://i.imgur.com/rhw4ltb.png
+  54. https://github.com/crazydonkey200/tensorflow-char-id56
+  55. https://www.kaggle.com/benhamner/clinton-trump-tweets
+  56. http://www.bioinf.jku.at/publications/older/2604.pdf
+  57. http://blog.echen.me/lstm-explorer
+  58. http://blog.echen.me/
+  59. https://quora.com/edwin-chen-1
+  60. https://twitter.com/echen
+  61. https://github.com/echen
+  62. https://www.linkedin.com/in/edwinchen1
+  63. mailto:hello[  ]echen.me
+  64. http://blog.echen.me/2017/05/30/exploring-lstms/
+  65. http://blog.echen.me/2014/10/07/moving-beyond-ctr-better-recommendations-through-human-evaluation/
+  66. http://blog.echen.me/2014/08/15/propensity-modeling-causal-id136-and-discovering-drivers-of-growth/
+  67. http://blog.echen.me/2014/08/14/product-insights-for-airbnb/
+  68. http://blog.echen.me/2013/01/08/improving-twitter-search-with-real-time-human-computation
+  69. http://blog.echen.me/2012/07/31/edge-prediction-in-a-social-graph-my-solution-to-facebooks-user-recommendation-contest-on-kaggle/
+  70. http://blog.echen.me/2012/07/06/soda-vs-pop-with-twitter/
+  71. http://blog.echen.me/2012/03/20/infinite-mixture-models-with-nonparametric-bayes-and-the-dirichlet-process/
+  72. http://blog.echen.me/2012/03/05/instant-interactive-visualization-with-d3-and-ggplot2/
+  73. http://blog.echen.me/2012/02/09/movie-recommendations-and-more-via-mapreduce-and-scalding/
+  74. http://blog.echen.me/2012/01/17/quick-introduction-to-ggplot2/
+  75. http://blog.echen.me/2012/01/03/introduction-to-conditional-random-fields/
+  76. http://blog.echen.me/2011/10/24/winning-the-netflix-prize-a-summary/
+  77. http://blog.echen.me/2011/09/29/stuff-harvard-people-like/
+  78. http://blog.echen.me/2011/09/07/information-transmission-in-a-social-network-dissecting-the-spread-of-a-quora-post/
+  79. http://getpelican.com/
+  80. http://python.org/

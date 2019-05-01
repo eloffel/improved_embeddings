@@ -1,0 +1,254 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]become a member[7]sign in[8]get started
+     __________________________________________________________________
+
+id163         part 1: going on an adventure
+
+   [9]go to the profile of julien simon
+   [10]julien simon (button) blockedunblock (button) followfollowing
+   sep 19, 2017
+
+   when it comes to building image classifiers, [11]id163 is probably
+   the most well known data set. it   s also used for the annual [12]ilsvrc
+   competition, where researchers from all over the world compete to build
+   the most efficient models.
+
+   as [13]previously discussed, models are frequently trained on id163
+   before being fine-tuned on other image sets. fine-tuning is a much
+   faster process and a great way to get very good accuracy in just a few
+   epochs.
+
+   still, what does it take to actually grab id163 and prepare it for
+   training. let   s find out. we   ll start with [14]apache mxnet, but who
+   knows where we   ll end up?
+   [1*cvhqybb28thv5z18cjhcqw.jpeg]
+   you do know that there is a dragon under that mountain, don   t you?
+
+id163 in numbers
+
+   clocking in at 150 gb, id163 is quite a beast. it holds 1,281,167
+   images for training and 50,000 images for validation, organised in
+   1,000 categories. we   re pretty far from [15]mnist or [16]cifar-10!
+
+   this creates all kinds of interesting problems that need to be solved
+   before training even starts, namely:
+     * downloading the data set,
+     * organising the data set for training,
+     * creating recordio files to optimize i/o,
+     * backing up the data set, because who wants to download 150gb again?
+     * deploying the data set efficiently to gpu instances for training,
+
+   we   re going to look at all these steps. as always, the devil is in the
+   details.
+
+starting up a download instance
+
+   we need to download 150gb. that   s gonna take a while (think days) and
+   it   s gonna fill, well, just about 150gb of disk space. so you   d better
+   plan ahead.
+
+   here   s how i did it: i started a t2.large instance (but t2.micro should
+   work too), which is more than powerful enough to handle the download. i
+   also attached a 1000gb [17]ebs volume to it (because we   ll need
+   additional space later on). as i/o performance is not important here, i
+   picked the least expensive [18]volume type (sc1).
+
+   then i ssh   ed into the instance, formatted the volume, mounted it on
+   /data and chown   ed it recursively to ec2-user:ec2-user. i hope you
+   don   t need me to show you these steps, but here   s the [19]tutorial,
+   just in case ;)
+
+downloading the data set
+
+   it starts easy. head out to the [20]id163 website, register, accept
+   conditions and voila. you   ll get a username and an access key which
+   will let you download the data set, which is composed of several very
+   large files: no way we can right click and    save as   .
+
+   fortunately, one of the tensorflow [21]repositories includes a nice
+   download script, [22]download_id163.sh. it   s quite straightforward,
+   this is how to use it.
+
+   iframe: [23]/media/88ac500df26a881c23c6c63b786e7dbb?postid=c0a62976dc72
+
+   and then, you have to wait for a bit: my download took about 5 days   
+
+   once the script has completed, your directory should look like this.
+
+   iframe: [24]/media/09b049bc5afcb13a4d748fe021af4c8d?postid=c0a62976dc72
+
+organising the data set for training
+
+   let   s take a look at the data set. if you list the id163/train
+   directory, you   ll see 1,000 directories, each of them holding images
+   for a given id163 category. yes, they have weird names, which is why
+   you need to grab [25]this file to know what   s what, e.g. n02510455 is
+   the category for giant pandas.
+
+   if you list the id163/validation directory, you see 50,000 images in
+   a single directory. that   s not really practical, we   d like to have them
+   in 1,000 directories as well. [26]this script will take care of it:
+   simply run it inside the validation directory.
+
+creating recordio files to optimize i/o
+
+   during training, we could definitely load images from disk. however,
+   this would require a lot of i/o, especially when using multiple gpus:
+   these beasts are very hungry and you need to keep feeding them with
+   data at the proper throughout. failing to do so will stall the gpus and
+   your training speed will drop (more on this in a future post).
+
+   another problem arises when distributed training is used, i.e. when
+   multiple gpu instances are learning the same data set. sure, we could
+   copy the full data set to each instance, but that may be impractical
+   for huge ones.
+
+   in order to solve both issues, we   re going to convert the data set into
+   [27]recordio files. this compact format is both i/o efficient and
+   easily shareable across instances.
+
+   the process is pretty simple: we   re going to pack the training set and
+   the validation set in their own recordio file. we   re also going to
+   resize and compress the images a bit to save some space: this won   t
+   have any impact on training quality, since most of the id163 models
+   require 224x244 images. feel free to create plenty of threads to
+   maximize throughput :)
+
+   let   s start with the validation set. it only takes a couple of minutes.
+
+   iframe: [28]/media/740f69798c6252483222ba9e9ac65a49?postid=c0a62976dc72
+
+   now, let   s do the same thing for the training set. this is going to run
+   for a while (about 1h30 on my t2.xlarge).
+
+   iframe: [29]/media/f380903209966407a9a5904e53b17fbe?postid=c0a62976dc72
+
+backing up
+
+   at this point, losing all this would suck beyond belief, wouldn   t it?
+   let   s make sure we back everything up in s3. just create a bucket and
+   sync it with /data. yes, that   s going to take a while.
+
+   iframe: [30]/media/7e23e1bfc337a4e53355296eaf408b62?postid=c0a62976dc72
+
+   once the backup is over, you should:
+     * terminate the download instance,
+     * create a snapshot of the ebs volume: it   s another long operation
+       but better safe than sorry, plus it   s going to help us deploy the
+       data set to as many instances as we need, including [31]across
+       accounts and regions if needed.
+
+deploying the data set
+
+   deploying the data set to a new gpu instance is now as easy as:
+     * creating a new ebs volume from the snapshot (make sure you create
+       it in the same az as your instance),
+     * attaching it to the instance,
+     * mounting the filesystem.
+
+   this will only take a few seconds and can easily be scripted and scaled
+   to as many instances as needed (aws ec2 create volume, aws ec2
+   attach-volume). for full automation, you could perform these operations
+   as [32]user data commands at instance launch.
+
+conclusion
+
+   sure, it takes a while to download id163, but thanks to the
+   flexibility of ebs, we   re now able to deploy it as many times as needed
+   in just a few seconds. of course, you can easily apply this fast and
+   cost-effective technique to other data sets :)
+
+   in the next post, we   ll train a model from scratch and focus on making
+   sure that we get as much performance as possible from our gpu instance.
+
+   that   s it for today. as always, thank you for reading.
+     __________________________________________________________________
+
+   this article was written while listening to vintage ac/dc songs:    it   s
+   a long way to the top if you wanna    train id163    ;)
+
+     * [33]aws
+     * [34]artificial intelligence
+     * [35]deep learning
+     * [36]neural networks
+     * [37]open source
+
+   (button)
+   (button)
+   (button) 76 claps
+   (button) (button) (button) 2 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [38]go to the profile of julien simon
+
+[39]julien simon
+
+   hacker. headbanger. harley rider. hunter.
+   [40]https://aws.amazon.com/evangelists/julien-simon/
+
+     * (button)
+       (button) 76
+     * (button)
+     *
+     *
+
+   [41]go to the profile of julien simon
+   never miss a story from julien simon, when you sign up for medium.
+   [42]learn more
+   never miss a story from julien simon
+   (button) blockedunblock (button) followget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/c0a62976dc72
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/membership?source=upgrade_membership---nav_full
+   7. https://medium.com/m/signin?redirect=https://medium.com/@julsimon/id163-part-1-going-on-an-adventure-c0a62976dc72&source=--------------------------nav_reg&operation=login
+   8. https://medium.com/m/signin?redirect=https://medium.com/@julsimon/id163-part-1-going-on-an-adventure-c0a62976dc72&source=--------------------------nav_reg&operation=register
+   9. https://medium.com/@julsimon?source=post_header_lockup
+  10. https://medium.com/@julsimon
+  11. http://www.image-net.org/
+  12. http://www.image-net.org/challenges/lsvrc/
+  13. https://becominghuman.ai/training-mxnet-part-2-cifar-10-c7b0b729c33c
+  14. http://mxnet.io/
+  15. http://yann.lecun.com/exdb/mnist/
+  16. https://www.cs.toronto.edu/~kriz/cifar.html
+  17. https://aws.amazon.com/ebs/
+  18. https://docs.aws.amazon.com/awsec2/latest/userguide/ebsvolumetypes.html
+  19. https://docs.aws.amazon.com/awsec2/latest/userguide/ebs-using-volumes.html
+  20. http://www.image-net.org/
+  21. https://github.com/tensorflow/models/
+  22. https://github.com/tensorflow/models/tree/master/research/inception/inception/data/download_id163.sh
+  23. https://medium.com/media/88ac500df26a881c23c6c63b786e7dbb?postid=c0a62976dc72
+  24. https://medium.com/media/09b049bc5afcb13a4d748fe021af4c8d?postid=c0a62976dc72
+  25. https://github.com/juliensimon/aws/blob/master/mxnet/id163/synsets_with_descriptions.txt
+  26. https://github.com/juliensimon/aws/blob/master/mxnet/id163/build_validation_tree.sh
+  27. https://mxnet.incubator.apache.org/architecture/note_data_loading.html
+  28. https://medium.com/media/740f69798c6252483222ba9e9ac65a49?postid=c0a62976dc72
+  29. https://medium.com/media/f380903209966407a9a5904e53b17fbe?postid=c0a62976dc72
+  30. https://medium.com/media/7e23e1bfc337a4e53355296eaf408b62?postid=c0a62976dc72
+  31. https://docs.aws.amazon.com/awsec2/latest/userguide/ebs-modifying-snapshot-permissions.html
+  32. https://docs.aws.amazon.com/awsec2/latest/userguide/user-data.html
+  33. https://medium.com/tag/aws?source=post
+  34. https://medium.com/tag/artificial-intelligence?source=post
+  35. https://medium.com/tag/deep-learning?source=post
+  36. https://medium.com/tag/neural-networks?source=post
+  37. https://medium.com/tag/open-source?source=post
+  38. https://medium.com/@julsimon?source=footer_card
+  39. https://medium.com/@julsimon
+  40. https://aws.amazon.com/evangelists/julien-simon/
+  41. https://medium.com/@julsimon
+  42. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  44. https://medium.com/p/c0a62976dc72/share/twitter
+  45. https://medium.com/p/c0a62976dc72/share/facebook
+  46. https://medium.com/p/c0a62976dc72/share/twitter
+  47. https://medium.com/p/c0a62976dc72/share/facebook

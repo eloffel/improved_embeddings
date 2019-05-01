@@ -1,0 +1,1203 @@
+   #[1]computational linguistics    feed [2]computational linguistics   
+   comments feed [3]computational linguistics    a good pos tagger in about
+   200 lines of python comments feed [4]a simple extractive summarisation
+   system [5]parsing english with 500 lines of python [6]alternate
+   [7]alternate [8]computational linguistics [9]wordpress.com
+
+[10]computational linguistics
+
+demystifying nlp
+
+     * [11]home
+     * [12]about
+
+a good pos tagger in about 200 lines of python
+
+   update: for a fast and accurate text-processing from python, see
+   [13]http://honnibal.github.io/spacy
+
+   up-to-date knowledge about natural language processing is mostly locked
+   away in academia. and academics are mostly pretty self-conscious when
+   we write. we   re careful. we don   t want to stick our necks out too much.
+   but under-confident recommendations suck, so here   s how to write a good
+   [14]part-of-speech tagger.
+
+   there are a tonne of [15]   best known techniques    for id52, and
+   you should ignore the others and just use [16]averaged id88.
+
+   you should use two tags of history, and features derived from the brown
+   word clusters distributed [17]here.
+
+   if you only need the tagger to work on carefully edited text, you
+   should use case-sensitive features, but if you want a more robust
+   tagger you should avoid them because they   ll make you over-fit to the
+   conventions of your training domain. instead, features that ask    how
+   frequently is this word title-cased, in a large sample from the web?   
+   work well. then you can lower-case your comparatively tiny training
+   corpus.
+
+   for efficiency, you should figure out which frequent words in your
+   training data have unambiguous tags, so you don   t have to do anything
+   but output their tags when they come up. about 50% of the words can be
+   tagged that way.
+
+   and unless you really, really can   t do without an extra 0.1% of
+   accuracy, you probably shouldn   t bother with any kind of search
+   strategy     you should just use a greedy model.
+
+   if you do all that, you   ll find your tagger easy to write and
+   understand, and an efficient cython implementation will perform as
+   follows on the standard evaluation, 130,000 words of text from the wall
+   street journal:
+       tagger     accuracy time (130k words)
+   [18]cygreedyap 97.1%    4s
+
+   the 4s includes initialisation time     the actual per-token speed is
+   high enough to be irrelevant; it won   t be your bottleneck.
+
+   it   s tempting to look at 97% accuracy and say something similar, but
+   that   s not true. my parser is about 1% more accurate if the input has
+   hand-labelled pos tags, and the taggers all perform much worse on
+   out-of-domain data. unfortunately accuracies have been fairly flat for
+   the last ten years. that   s why my recommendation is to just use a
+   simple and fast tagger that   s roughly as good.
+
+   the thing is though, it   s very common to see people using taggers that
+   aren   t anywhere near that good!  for an example of what a non-expert is
+   likely to use, these were the two taggers wrapped by [19]textblob, a
+   new python api that i think is quite neat:
+     tagger    accuracy time (130k words)
+   [20]nltk    94.0%    3m56s
+   [21]pattern 93.5%    26s
+
+   both pattern and nltk are very robust and beautifully well documented,
+   so the appeal of using them is obvious. but pattern   s algorithms are
+   pretty crappy, and nltk carries tremendous baggage around in its
+   implementation because of its massive framework, and double-duty as a
+   teaching tool.
+
+   as a stand-alone tagger, my cython implementation is needlessly
+   complicated     it was written for my parser. so today i wrote a 200 line
+   version of my recommended algorithm for textblob. it gets:
+       tagger     accuracy time (130k words)
+   [22]pygreedyap 96.8%    12s
+
+   i traded some accuracy and a lot of efficiency to keep the
+   implementation simple. here   s a far-too-brief description of how it
+   works.
+
+averaged id88
+
+   id52 is a    supervised learning problem   . you   re given a table of
+   data, and you   re told that the values in the last column will be
+   missing during run-time. you have to find correlations from the other
+   columns to predict that value.
+
+   so for us, the missing column will be    part of speech at word i   . the
+   predictor columns (features) will be things like    part of speech at
+   word i-1   ,    last three letters of word at i+1   , etc
+
+   first, here   s what prediction looks like at run-time:
+
+  def predict(self, features):
+      '''dot-product the features and current weights and return the best class.
+'''
+      scores = defaultdict(float)
+      for feat in features:
+          if feat not in self.weights:
+              continue
+          weights = self.weights[feat]
+          for clas, weight in weights.items():
+              scores[clas] += weight
+      # do a secondary alphabetic sort, for stability
+      return max(self.classes, key=lambda clas: (scores[clas], clas))
+
+
+   earlier i described the learning problem as a table, with one of the
+   columns marked as missing-at-runtime. for nlp, our tables are always
+   exceedingly sparse. you have columns like    word i-1=parliament   , which
+   is almost always 0. so our    weight vectors    can pretty much never be
+   implemented as vectors. map-types are good though     here we use
+   dictionaries.
+
+   the input data, features, is a set with a member for every non-zero
+      column    in our    table        every active feature. usually this is
+   actually a dictionary, to let you set values for the features. but here
+   all my features are binary present-or-absent type deals.
+
+   the weights data-structure is a dictionary of dictionaries, that
+   ultimately associates feature/class pairs with some weight. you want to
+   structure it this way instead of the reverse because of [23]the way
+   word frequencies are distributed: most words are rare, frequent words
+   are very frequent.
+
+learning the weights
+
+   okay, so how do we get the values for the weights? we start with an
+   empty weights dictionary, and iteratively do the following:
+    1. receive a new (features, pos-tag) pair
+    2. guess the value of the pos tag given the current    weights    for the
+       features
+    3. if guess is wrong, add +1 to the weights associated with the
+       correct class for these features, and -1 to the weights for the
+       predicted class.
+
+   it   s one of the simplest learning algorithms. whenever you make a
+   mistake, increment the weights for the correct class, and penalise the
+   weights that led to your false prediction. in code:
+
+  def train(self, nr_iter, examples):
+      for i in range(nr_iter):
+          for features, true_tag in examples:
+              guess = self.predict(features)
+              if guess != true_tag:
+                  for f in features:
+                      self.weights[f][true_tag] += 1
+                      self.weights[f][guess] -= 1
+          random.shuffle(examples)
+
+
+   if you iterate over the same example this way, the weights for the
+   correct class would have to come out ahead, and you   d get the example
+   right. if you think about what happens with two examples, you should be
+   able to see that it will get them both right unless the features are
+   identical. in general the algorithm will converge so long as the
+   examples are linearly separable, although that doesn   t matter for our
+   purpose.
+
+averaging the weights
+
+   we need to do one more thing to make the id88 algorithm
+   competitive. the problem with the algorithm so far is that if you train
+   it twice on slightly different sets of examples, you end up with really
+   different models. it doesn   t generalise that smartly. and the problem
+   is really in the later iterations     if you let it run to convergence,
+   it   ll pay lots of attention to the few examples it   s getting wrong, and
+   mutate its whole model around them.
+
+   so, what we   re going to do is make the weights more `sticky        give the
+   model less chance to ruin all its hard work in the later rounds. and
+   we   re going to do that by returning the averaged weights, not the final
+   weights.
+
+   i doubt there are many people who are convinced that   s the most obvious
+   solution to the problem, but whatever. we   re not here to innovate, and
+   this way is time tested on lots of problems. if you have another idea,
+   run the experiments and tell us what you find. actually i   d love to see
+   more work on this, now that the averaged id88 has become such a
+   prominent learning algorithm in nlp.
+
+   okay. so this averaging. how   s that going to work? note that we don   t
+   want to just average after each outer-loop iteration. we want the
+   average of all the values     from the inner loop. so if we have 5,000
+   examples, and we train for 10 iterations, we   ll average across 50,000
+   values for each weight.
+
+   obviously we   re not going to store all those intermediate values.
+   instead, we   ll track an accumulator for each weight, and divide it by
+   the number of iterations at the end. again: we want the average weight
+   assigned to a feature/class pair during learning, so the key component
+   we need is the total weight it was assigned. but we also want to be
+   careful about how we compute that accumulator, too. on almost any
+   instance, we   re going to see a tiny fraction of active feature/class
+   pairs. all the other feature/class weights won   t change. so we
+   shouldn   t have to go back and add the unchanged value to our
+   accumulators anyway, like chumps.
+
+   since we   re not chumps, we   ll make the obvious improvement. we   ll
+   maintain another dictionary that tracks how long each weight has gone
+   unchanged. now when we do change a weight, we can do a fast-forwarded
+   update to the accumulator, for all those iterations where it lay
+   unchanged.
+
+   here   s what a weight update looks like now that we have to maintain the
+   totals and the time-stamps:
+
+  def update(self, truth, guess, features):
+      def upd_feat(c, f, v):
+          nr_iters_at_this_weight = self.i - self._timestamps[f][c]
+          self._totals[f][c] += nr_iters_at_this_weight * self.weights[f][c]
+          self.weights[f][c] += v
+          self._timestamps[f][c] = self.i
+
+      self.i += 1
+      for f in features:
+          upd_feat(truth, f, 1.0)
+          upd_feat(guess, f, -1.0)
+
+
+features and pre-processing
+
+   the id52 literature has tonnes of intricate features sensitive
+   to case, punctuation, etc. they help on the standard test-set, which is
+   from wall street journal articles from the 1980s, but i don   t see how
+   they   ll help us learn models that are useful on other text.
+
+   to help us learn a more general model, we   ll pre-process the data prior
+   to feature extraction, as follows:
+     * all words are lower cased;
+     * digits in the range 1800-2100 are represented as !year;
+     * other digit strings are represented as !digits
+
+   it would be better to have a module recognising dates, phone numbers,
+   emails, hash-tags, etc. but that will have to be pushed back into the
+   id121.
+
+   i played around with the features a little, and this seems to be a
+   reasonable bang-for-buck configuration in terms of getting the
+   development-data accuracy to 97% (where it typically converges anyway),
+   and having a smaller memory foot-print:
+    def _get_features(self, i, word, context, prev, prev2):
+        '''map tokens-in-contexts into a feature representation, implemented as
+a
+        set. if the features change, a new model must be trained.'''
+        def add(name, *args):
+            features.add('+'.join((name,) + tuple(args)))
+
+        features = set()
+        add('bias') # this acts sort of like a prior
+        add('i suffix', word[-3:])
+        add('i pref1', word[0])
+        add('i-1 tag', prev)
+        add('i-2 tag', prev2)
+        add('i tag+i-2 tag', prev, prev2)
+        add('i word', context[i])
+        add('i-1 tag+i word', prev, context[i])
+        add('i-1 word', context[i-1])
+        add('i-1 suffix', context[i-1][-3:])
+        add('i-2 word', context[i-2])
+        add('i+1 word', context[i+1])
+        add('i+1 suffix', context[i+1][-3:])
+        add('i+2 word', context[i+2])
+        return features
+
+   i haven   t added any features from external data, such as case frequency
+   statistics from the google web 1t corpus. i might add those later, but
+   for now i figured i   d keep things simple.
+
+what about search?
+
+   the model i   ve recommended commits to its predictions on each word, and
+   moves on to the next one. those predictions are then used as features
+   for the next word. there   s a potential problem here, but it turns out
+   it doesn   t matter much. it   s easy to fix with beam-search, but i say
+   it   s not really worth bothering. and it definitely doesn   t matter
+   enough to adopt a slow and complicated algorithm like conditional
+   random fields.
+
+   here   s the problem. the best indicator for the tag at position, say, 3
+   in a sentence is the word at position 3. but the next-best indicators
+   are the tags at positions 2 and 4. so there   s a chicken-and-egg
+   problem: we want the predictions for the surrounding words in hand
+   before we commit to a prediction for the current word. here   s an
+   example where search might matter:
+
+   their management plan reforms worked
+
+   depending on just what you   ve learned from your training data, you can
+   imagine making a different decision if you started at the left and
+   moved right, conditioning on your previous decisions, than if you   d
+   started at the right and moved left.
+
+   if that   s not obvious to you, think about it this way:    worked    is
+   almost surely a verb, so if you tag    reforms    with that in hand, you   ll
+   have a different idea of its tag than if you   d just come from    plan   ,
+   which you might have regarded as either a noun or a verb.
+
+   search can only help you when you make a mistake. it can prevent that
+   error from throwing off your subsequent decisions, or sometimes your
+   future choices will correct the mistake. and that   s why for pos
+   tagging, search hardly matters! your model is so good straight-up that
+   your past predictions are almost always true. so you really need the
+   planets to align for search to matter at all.
+
+   and as we improve our taggers, search will matter less and less.
+   instead of search, what we should be caring about is multi-tagging. if
+   we let the model be a bit uncertain, we can get over 99% accuracy
+   assigning an average of 1.05 tags per word [24](vadas et al, acl 2006).
+   the averaged id88 is rubbish at multi-tagging though. that   s its
+   big weakness. you really want a id203 distribution for that.
+
+   one caveat when doing greedy search, though. it   s very important that
+   your training data model the fact that the history will be imperfect at
+   run-time. otherwise, it will be way over-reliant on the tag-history
+   features. because the id88 is iterative, this is very easy.
+
+   here   s the training loop for the tagger:
+
+    def train(self, sentences, save_loc=none, nr_iter=5, quiet=false):
+        '''train a model from sentences, and save it at save_loc. nr_iter
+        controls the number of id88 training iterations.'''
+        self._make_tagdict(sentences, quiet=quiet)
+        self.model.classes = self.classes
+        prev, prev2 = start
+        for iter_ in range(nr_iter):
+            c = 0; n = 0
+            for words, tags in sentences:
+                context = start + [self._normalize(w) for w in words] + end
+                for i, word in enumerate(words):
+                    guess = self.tagdict.get(word)
+                    if not guess:
+                        feats = self._get_features(i, word, context, prev, prev2
+)
+                        guess = self.model.predict(feats)
+                        self.model.update(tags[i], guess, feats)
+                    # set the history features from the guesses, not the true ta
+gs
+                    prev2 = prev; prev = guess
+                    c += guess == tags[i]; n += 1
+            random.shuffle(sentences)
+            if not quiet:
+                print(&quot;iter %d: %d/%d=%.3f&quot; % (iter_, c, n, _pc(c, n))
+)
+        self.model.average_weights()
+        # pickle as a binary file
+        if save_loc is not none:
+            cpickle.dump((self.model.weights, self.tagdict, self.classes),
+                         open(save_loc, 'wb'), -1)
+
+
+   unlike the previous snippets, this one   s literal     i tended to edit the
+   previous ones to simplify. so if they have bugs, hopefully that   s why!
+
+   at the time of writing, i   m just finishing up the implementation before
+   i submit a pull request to textblob. you can see the rest of the source
+   here:
+
+   [25]https://github.com/sloria/textblob-aptagger/blob/master/textblob_ap
+   tagger/taggers.py
+   [26]https://github.com/sloria/textblob-aptagger/blob/master/textblob_ap
+   tagger/_id88.py
+
+a final comparison   
+
+   over the years i   ve seen a lot of cynicism about the wsj evaluation
+   methodology. the claim is that we   ve just been meticulously
+   over-fitting our methods to this data. actually the evidence doesn   t
+   really bear this out. mostly, if a technique is clearly better on one
+   evaluation, it improves others as well. still, it   s very reasonable to
+   want to know how these tools perform on other text. so i ran the
+   unchanged models over two other sections from the ontonotes corpus:
+     tagger   wsj  abc  web
+   pattern    93.5 90.7 88.1
+   nltk       94.0 91.5 88.4
+   pygreedyap 96.8 94.8 91.8
+
+   the abc section is broadcast news, web is text from the web (blogs etc
+       i haven   t looked at the data much).
+
+   as you can see, the order of the systems is stable across the three
+   comparisons, and the advantage of our averaged id88 tagger over
+   the other two is real enough. actually the pattern tagger does very
+   poorly on out-of-domain text. it mostly just looks up the words, so
+   it   s very domain dependent. i hadn   t realised it before, but it   s
+   obvious enough now that i think about it.
+
+   we can improve our score greatly by training on some of the foreign
+   data. the technique described in this paper ([27]daume iii, 2007) is
+   the first thing i try when i have to do that.
+
+   p.s. the format of these tables sucks. probably i should move off
+   wordpress.com to actual hosting, but in the meantime, any suggestions?
+   advertisements
+
+like this:
+
+   like loading...
+
+   [28]2013/09/11 - posted by [29]honnibal | [30]uncategorized
+
+45 comments [31]  
+
+    1. [   ] honnibal wrote a clear and detailed blog post about the
+       averaged perception and his implementation here. for this reason,
+       this post will focus on how to get and use the tagger without
+       providing [   ]
+       pingback by [32]tutorial: state-of-the-art part-of-speech tagging
+       in textblob | spider's space | 2013/09/17 | [33]reply
+    2. one of the most readable, clear, and just best posts i   ve ever seen
+       on cl. i wish the internet was always this good.
+       comment by [34]halgrimnlp | 2013/09/19 | [35]reply
+          + blush!
+            comment by [36]honnibal | 2013/09/19 | [37]reply
+    3. first of all congratulations on the nice python implementation for
+       average id88 and the clearly-written documentation!
+       it is true that academics (computer linguists) are careful. reasons
+       i see is that accuracy scores are domain-dependent, and that
+       training data is often licensed.
+       since the brill tagger is a    first-generation    tagger, it is also
+       true that more robust methods have been around for some time. if
+       nothing else, the brill tagger is (generally accepted to be) public
+       domain, making it compatible with pattern   s bsd license. since
+       trontagger (or pygreedyap) is now part of textblob (mit, free for
+       commercial use), did you check the license on your training data?
+       below are some tests i did, with accuracy scores and performance. i
+       used wsj section 20 and oanc (assorted sentences from
+       written_1/journal/, 180,000 words). the high score for brill on wsj
+       section 20 might be due to that it was trained on the same data, i
+       don   t know the details.
+       1) {word: tag} dictionary: 0.926 wsj (1s), 0.888 oanc (1.5s)
+       2) brill tagger (pattern): 0.965 wsj (32s), 0.925 oanc (124s)
+       3) brill tagger (textblob): 0.965 wsj (12s), 0.925 oanc (48s)
+       4) trontagger: 0.955 wsj (6s), 0.912 oanc (27s)
+       5) mbsp: 0.963 wsj (82s), 0.944 (920s)
+       6) dictionary + id166: 0.955 wsj (1.5s), 0.930 (3s)
+       the id166 (6) was trained on oanc following your steps. do you mind
+       sharing your test data? it might be interesting to continue along
+       this path to improve the pattern taggers.
+       cheers!
+       comment by tomdesmedt | 2013/09/19 | [38]reply
+          + hi tom,
+            thanks for running these tests!
+            the awkward thing about train/dev/test splits is that pos
+            taggers usually use 00-18/19-21/22-24, and parsers use
+            02-21/24/23, for historical reasons. so if a tagger was
+            trained as a pre-processor to a parser being tested in the
+            standard way, the tagger will be trained on 20. so i think
+            it   s probably safer to test on 22, 23 or 24.
+            about that oanc corpus, i   ve just had a quick google and the
+            pages are talking about the tags being automatically added. is
+            there a manually annotated subset?
+            finally, for the id166 model in 6, how did the tag history
+            features work? did you do some sort of boot-strapping, or did
+            the problem turn out not to matter?
+            comment by [39]honnibal | 2013/09/19 | [40]reply
+    4. ok you nerds, very impressive. i   m not a linguist (i thought cl
+       stood for craigslist) nor am i a programmer (i thought textblob
+       really was an upcoming movie). my (should have been) fleeting
+       curiosity to understand the    state and nature    of modern
+       spell-check/correction/suggestion techniques has led my to your
+       doorstep.
+       i have smoke coming out of my ears from my brain overheating as
+       i   ve reached the end of my breadcrumbs here        in this blog and
+       comment section. with posts and comments; and replys still dripping
+       wet ink     from you kingpins of cl. so i say;    f** it.    i   ll just
+       bite the bullet; admit i   m inferior in the face of greatness; throw
+       in the towel on my self-guided research; and just humbly ask you
+       guys to    dumb it down    for me; so i can quit chasing my tail.
+       i   ll try to explain (using english); and after some well deserved
+       ridicule, could you; would you; please   enlighten me on the
+       following paradigm.
+       i   m interested in live spell-check/grammar/correction/suggestion
+       methods used by modern smart devices, mostly for communication    
+       but not limited to it. t9 seemed to have it nearly perfected 10
+       years ago; but has since vanished from current implementations,
+       thanks to the phenomenal explosion of touchscreen devices.
+       touchscreen qwerty (thanks apple) obviously didn   t have any of the
+       strict limitations imposed by the t9 numeric keypad translator .
+       it   s a no-brainer; good riddance t9.
+       the issue i have is: it seems like we deal with more spelling
+       errors now; autosuggestion appear to be less accurate (more
+       breadth), ultimately requiring more effort than was typical with
+       the t9 predecessor i remember.
+       so the conundrum is     the fully qwerty touchscreen introduces the
+       opportunity for more mistakes, which require more effort than the
+       technically inferior t9 (quasi-wannabe-keyboard-numeric-keypad).
+       now granted; the qwerty is superior (maybe perfect) if you type and
+       spell flawlessly; but the touchscreen implementation almost
+       guarantees less than perfect typing     which increases
+       miss-spellings regardless of what a user    intended    to spell. this
+       explains the greater breadth of the autosuggestion set, a result of
+          miss-keying    compounded by miss-spelling. compared to t9, where
+       miss-spellings typically were confined to a more limited set of
+       alternatives, obviously this increased the likelihood of accurately
+       suggesting the correct word.
+       as far as    on-the-fly    autosuggestion/spell-checking/completion (is
+       there an acronym for this bs?) is concerned, it would appear the
+       textblob and nlp systems would fall short on accuracy because they
+       rely on training data has been through a few f7 cycles before going
+       to print at the wsj. as far as the saying goes    garbage in, garbage
+       out    the training data cited should be nearly ideal regarding
+       spelling and grammar. fair enough. but what happens to the systems
+       when forced to interpret    on the fly   ; with the heavy reality of
+       modern day messaging, complete with all of its miss-keyed
+       miss-spellings; ebonicized ghetto grammar, acronyms, and the
+       constantly evolving urban slang that surely drives 8th grade
+       english teachers to point of at least considering the purchase of
+       an ar-15 (for education purposes of course).
+       to their credit     the kids seem to have no issue communicating
+       amongst themselves with a drastically expanded vernacular that
+       propagates virally, and can morph overnight. shwag just ain   t what
+       it used to be, and you don   t even want to have to figure out what
+       it means when a 10 year old uses    merf    in a response to most
+       anything. who would have ever believed english
+       i found much less information regarding spellcheck(); but interpret
+       it to be a fairly robotic dictionary look-up, and seemingly less
+       important in the larger context of challenges imposed by nlp
+       algorithms. that being said; i   m very curious to know your thoughts
+       on how the recent discovery of the phenomenon typoglycemia is
+       utilized by spell-check/completion algorithms; if it all?
+       what is typoglycemia. this        i cdn   uolt blveiee taht i cluod
+       aulaclty uesdnatnrd waht i was rdanieg: the phaonmneel pweor of the
+       hmuan mnid. aoccdrnig to a rseearch taem at cmabrigde uinervtisy,
+       it deosn   t mttaer in waht oredr the ltteers in a wrod are, the olny
+       iprmoatnt tihng is taht the frist and lsat ltteer be in the rghit
+       pclae. the rset can be a taotl mses and you can sitll raed it
+       wouthit a porbelm. tihs is bcuseae the huamn mnid deos not raed
+       ervey lteter by istlef, but the wrod as a wlohe. scuh a cdonition
+       is arppoiatrely cllaed typoglycemia .
+          amzanig huh? yaeh and you awlyas thguoht slpeling was ipmorantt.   
+       it seems there is room for improvement. i have ideas to innovate in
+       this dimension; but since i   m a non-programming nlp noob; i figure
+       i   ll just ask you experts, rather than risking the effort of trying
+       to become one; only to learn that my ideas are juvenile at best;
+       stoopid at worst; and laughable at both.
+       can you offer some insight; tell me what i   ve missed; or just steer
+       me in the right direction to find the    ultimate    real-time
+       correction-suggestion engine? i   ve searched patents; programs;
+       everything on wiki; and tried most aftermarket keyboard android
+       apps. no doubt they qwerty was an abominable, reprehensible;
+       god-forsaken cruel joke and any remapping of characters could not
+       degrade it   s usability. however, no matter how logical a key
+       mapping is, the greatest strides in wpm will come from software
+       that    gets    what we   re    saying    without testing our ability to
+       spell, hunt, peck or correct.
+       a little known factoid: do you know what the single most common key
+       on every keyboard is??
+       backspace. (stretched right pinky). now real quick; without playing
+       through the movements tell me this: what 3 characters does your
+       index finger type. why?
+       ok, all done here, as you were.
+       comment by [41]john jacob jingle-heimer-smith (again) | 2013/09/20
+       | [42]reply
+          + hi,
+            mobile text entry   s an active research area. i think it   s
+            interesting, but i haven   t worked in it. if i were trying to
+            improve a mobile text entry system, i doubt i   d look into
+            part-of-speech tagging. i don   t think it would be very
+            helpful.
+            i think it   s primarily an hci (human computer interface)
+            issue, more than a language modelling issue. sure, a better
+            language model will give you better spelling suggestions, all
+            else being equal. but that   s a tiny factor compared to having
+            better design.
+            i came across this guy   s bibliography and found his ideas
+            quite interesting:
+            [43]http://scholar.google.com.au/citations?user=7z-f_aoaaaaj&h
+            l=en . i can   t say i   ve read any of it carefully, though.
+            comment by [44]honnibal | 2013/09/20 | [45]reply
+    5. very nice post & code!
+       i just implemented a id88 learner myself, and it   s
+       interesting to compare to your implementation.
+       most things are done quite similarly     however, i don   t understand
+       your remark
+          the weights data-structure is a dictionary of dictionaries, that
+       ultimately associates feature/class pairs with some weight. you
+       want to structure it this way instead of the reverse [   ]   
+       my data structure is    class -> (feature -> weight)   , and i don   t
+       see (but would like to see) why the other way is more inefficient   
+       thanks!
+       comment by ben | 2013/10/12 | [46]reply
+          + heya,
+            good question! that was a bad explanation for that issue     i
+            tried to keep the discussion moving, and that   s really not the
+            right way to think about that problem.
+            consider the prediction code, where the weights are
+            calculated:
+            [47]https://github.com/sloria/textblob/blob/dev/text/_perceptr
+            on.py#l35
+            what would this loop look like if we   d structured the weights
+            the other way around? well, what we   d be doing is looping
+            through every class for every feature.
+            most features will have been seen fewer than 100 times in the
+            training data. so it   s very unlikely they   ll have a non-zero
+            weight for every class. probably only 1-5 of the classes will
+            have a non-zero weight. and if we   ve never seen the feature at
+            all, we can skip the class-iteration entirely.
+            so it   s not really about zipf   s law, as such. i should rewrite
+            that bit.
+            comment by [48]honnibal | 2013/10/12 | [49]reply
+               o thanks for the additional explanation!
+                 comment by ben | 2013/10/12
+    6. though i don   t like python, sometime i get amazed with its brevity.
+       if you are going to implement same thing in java, it will probably
+       take much longer than to do that.
+       comment by [50]ajinkya | 2014/01/16 | [51]reply
+    7. excellent post, it inspired me to implement my own
+       ([52]https://github.com/cslu-nlp/id88ixpointnever). two quick
+       thoughts:
+       in the averaged id88, with weights structured the way you
+       have done them here, is there ultimately any reason to actually
+       divide? isn   t the normalizing divisor a constant, and if so, can   t
+       we just use the summed weights at id136 time?
+       i ended up structuring my weights as a dictionary of class (tag)
+       keys mapping to feature-weight key-value pairs (as @ben is saying).
+       i spent a lot of time arguing with myself about which made more
+       sense but ultimately settled on this. if there   s any optimization i
+       missed because of that, i don   t see it, but i   d be interested to
+       know.
+       comment by [53]kyle gorman | 2014/03/15 | [54]reply
+          + *blinks*
+            how the fuck did i miss that all these years? going to have to
+            run the experiment just to check i   m not dreaming, but you   re
+            surely right.
+            empirically, structuring the weights as feature-to-class is
+            much better for this problem.
+            we have 45 classes and lets say 15 active features per token.
+            if we iterate per class, we get back a dict and must make 15
+            lookups into it, most missing. if we iterate per feature, we
+            can get back a sparse array     we know we need every value
+            returned to us, we don   t have to look them up.
+            a nice, easy optimisation would be to update the features data
+            structure to map to a numpy sparse array on the inside instead
+            of a dict.
+            comment by [55]honnibal | 2014/03/15 | [56]reply
+               o please do correct me if i   m mistaken (as i surely am!),
+                 but if we use the sparse fast-forward updates for the
+                 accumulator fields, won   t we need to iterate over the
+                 features at the end of training anyway to    finalize    the
+                 accumulator values for features that weren   t present in
+                 the final example?
+                 while i agree that we could in principle use the raw
+                 accumulator values without dividing by the number of
+                 examples seen, it might be worthwhile to stick with
+                 convention if we   re already paying the cost of touching
+                 each feature at the end of training.
+                 of course, if you *don   t* do the final accumulator
+                 updates, my point is moot   . and perhaps the weird
+                 pseudo-id173 one gets from ignoring
+                 accumulations on the last update on each feature pleases
+                 the spirit of your data, and doesn   t even hurt
+                 performance too much     
+                 comment by ryan musa | 2014/07/21
+               o yeah, you   ll still need the accumulator updates.
+                 the upside of not averaging is that the weights can be
+                 integer-valued, rather than floats. that could be quite
+                 nice!
+                 on the other hand, it becomes more annoying to scale the
+                 weights against something else. the id88 actually
+                 approximates a log id203 estimate (in the sense
+                 that you can start from the idea that that   s what you   re
+                 trying to do, make some simplifying assumptions, and end
+                 up with the id88). it   s harder to interpret the
+                    weight-accumulated    id88 (as opposed to averaged
+                 id88) in that way.
+                 comment by [57]honnibal | 2014/07/21
+               o thanks for the quick reply! i agree that keeping
+                 everything integer-valued could be really helpful,
+                 especially if you   re only looking for the one-best
+                 solution during decoding.
+                 comment by ryan musa | 2014/07/22
+    8. this awesome post gave me idea for my master thesis topic. the goal
+       is to tag (and maybe even parse) a non-standard english (learner)
+       corpus. i just started digging into python, and only have previous
+       experience with web-development, hence have very humble
+       expectations of my own abilities to write a tagger/parser. but
+       because of the complications naturally connected with
+          non-standard    part, i am not sure i can reliably use any existing
+       taggers (and, gosh, nltk is massive!) and would probably need to
+       invent my own tags to identify mistakes etc. i still haven   t quite
+       figured out the learning algorithms though.
+       comment by elvina | 2014/03/20 | [58]reply
+          + thanks for the kind words.
+            there   s a growing literature on processing learner english. my
+            colleague at macquarie mark dras has done some of the early
+            work on this, with his student jojo wong. have a look for
+            their papers, and let me know if you have any questions.
+            cheers
+            matt.
+            comment by [59]honnibal | 2014/03/21 | [60]reply
+               o sorry for the noob question, but this type of tagger can
+                 be trained on non-stadrd english, which will result in
+                 similar value predictions?
+                 thanks,
+                 elvina
+                 comment by elvina | 2014/06/10
+    9. hey honnibal, great stuff, i   m working on a comparison of different
+       id52 methods. could you tell me how you got the wsj labelled
+       data? thanks.
+       comment by bryan | 2014/05/16 | [61]reply
+          + via the linguistic data consortium     the id32 2
+            corpus.
+            these days it   s better to obtain ontonotes 5 and the google
+            web treebank though; they   re substantially cheaper.
+            comment by [62]honnibal | 2014/05/16 | [63]reply
+   10. > when i train on wsj 0-21 and evaluate on 22-24, i get 98.01
+       accuracy on the training set and only 95.52 on the test set.
+       train on wsj 00-19 and use 22-24 to benchmark, and then run only
+       one or two tests on 19-21. the methodological discipline is
+       important   otherwise eventually you   ll fool yourself on your
+       benchmark evaluation, and not have a test set to catch the error.
+       > now, i tried to re-implement you algorithm for my lisp nlp
+       toolkit, and i can   t reproduce your results (well, you know, as
+       usual     
+       > what may i be doing wrong?
+       well   how should i know?     
+       what i would do in your situation is turn off all the features
+       except one or two, and see whether you get the same accuracies. if
+       you don   t, look at the feature values being spat out by both
+       models, and verify they   re the same. if they are, then look at the
+       weights being learned, and the predictions being made. if the two
+       classifiers do perform the same on the minimal feature set,
+       progressively re-add the features, until the scores diverge.
+       > also, you forgot to mention that a big part of speedup is due to
+       single tag dictionary lookup. i get 3.5 sec performance with it and
+       9.2 sec without it.
+       i think i said somewhere near the start that the tag dictionary
+       serves about half of the tokens. did you add the same thresholds as
+       i did? you don   t want to use the tag dict for rare words.
+       for tagging problems with many more classes, it   s good to use the
+       tag dictionary even for unambiguous words     you get the set of
+       possible classes, so that you only have to evaluate those ones.
+       (the trade-off is that [(k, dict[k]) for k in dict.keys()] is much
+       slower than dict.items()     so if the set of valid classes we
+       iterate through is on average close in size to the full dictionary,
+       we should just use dict.items(). which is what happens on this
+       problem.)
+       comment by [64]vsevolod (@vseloved) | 2014/07/01 | [65]reply
+          + you   ve replied inline to my comment, which may be misleading
+            to other users, probably, since i seem to be talking to myself
+                 anyway   
+            > train on wsj 00-19 and use 22-24
+            i   ve used 00-22 because you mentioned it in a previous
+            comment. ok, training on 00-18 gives the following result:
+            test     95.02
+            dev     94.8
+            train     98.03
+            do you use 5 training runs?
+            next i   ll try the long route of feature-to-feature comparison.
+            but can you also post or point to your evaluation code and the
+            functions you use to extract the gold dataset? i   m
+            particularily interested, wether you use original or predicted
+            tags in the feature vectors for the golden corpus.
+            > run only one or two tests on 19-21. the methodological
+            discipline is important   
+            i don   t think there   s any methodological problem here     i   m
+            just repeating your experiments.
+            > tagdicts: did you add the same thresholds as i did?
+            yes, i   m reproducing your approach, as you remeber. i   ve also
+            used your id172 routine, although i   ve seen it run
+            somewhat better (.1 or .2) using somewhat more advanced
+            id172 for numbers.
+            > for tagging problems with many more classes, it   s good to
+            use the tag dictionary even for unambiguous words.
+            indeed. from my experience i can only agree with you. it saves
+            a lot of embarassing errors in production     
+            > the trade-off is that [(k, dict[k]) for k in dict.keys()] is
+            much slower than dict.items()
+            that   s, probably, because you   re making new tuples here. try
+            either iterating the dict or a dict comprehension (it should
+            be optimized for such use case, although i   m not sure)
+            comment by [66]vsevolod (@vseloved) | 2014/07/02 | [67]reply
+               o oh i didn   t realise how that would show up on wp. crazy.
+                 anyway. i   m confused about your processing question, and
+                 i think this might be the problem with your accuracy.
+                 the training function takes the gold tags as input     how
+                 could it not? that   s what we   re supervising the parser to
+                 produce. but then as we train, we must use the tags we   ve
+                 previously predicted as features.
+                 try just turning off the pos tag features, training my
+                 tagger, and then training your tagger?
+                 about the dict iteration, i   m pretty sure the difference
+                 is that looking up into the dictionary a bunch of times
+                 is slower than just iterating through its contents, so
+                 long as you don   t care how the contents are ordered when
+                 you iterate. i don   t think it   s about the tuple creation.
+                 comment by [68]honnibal | 2014/07/02
+               o yeah, wp, is really a mess. now i can   t comment on your
+                 reply, just on mine.
+                 so, speaking about the pos tag features: i   ve implemented
+                 the training phase the way you describe, but i   m
+                 interested in the evaluation phase. during evaluation you
+                 give your classification function a vector of features,
+                 extracted from gold data. the question is, when you   re
+                 extracting the features, you can do it in 2 manners:
+                     the same as in training, running classify for each
+                 token, remembering the predicted pos tags, and using them
+                 as features for subsequent tokens
+                     or without the involvement of the classifier: just
+                 taking the pos tags available in the gold data
+                 which way did you choose?
+                 comment by [69]vsevolod (@vseloved) | 2014/07/02
+               o just a reminder about the number of training iterations
+                 question.
+                 i   ve also evaluated on abc and web from ontonotes 4, and
+                 got 94.03 and 90.12 accuracy. consistent lower numbers as
+                 with the wsj corpus.
+                 comment by [70]vsevolod (@vseloved) | 2014/07/02
+   11. it uses the predicted pos tags as features at the prediction phase.
+       if you run my code, do you get back the same numbers that i do?
+       comment by [71]honnibal | 2014/07/03 | [72]reply
+          + god, i can   t reply to your comment and can   t get it back. what
+            a mess.
+            [73]https://github.com/sloria/textblob-aptagger/blob/master/te
+            xtblob_aptagger/taggers.py#l38
+            this bit of code makes clear that the tag function consumes
+            plain text. note that there   s actually a bug here: we should
+            set prev1 and prev2 to start per sentence. the bug slightly
+            depresses accuracy   but only slightly.
+            comment by [74]honnibal | 2014/07/03 | [75]reply
+               o yes, i   ve seen the bug and didn   t reproduce it in my
+                 code. sorry, forgot to mention it.
+                 and your remark about plain text makes it clear: so, you
+                 don   t extract features directly for the evaluation step,
+                 but supply original sentences. makes sense. well, then we
+                 emply, basically, the same approach to evaluation. now, i
+                 need to dig deeper and compare the taggers with different
+                 feature sets as you suggest   
+                 comment by [76]vsevolod (@vseloved) | 2014/07/03
+               o ok, i have run the evaluation of your model in textblob
+                 ([77]https://github.com/sloria/textblob-aptagger) and got
+                 94.32%. here   s a link to the pretty-printed output of
+                 your tagger:
+                 [78]https://www.dropbox.com/s/8syrh4grq0cw091/wsj22-24.ta
+                 g
+                 one thing i   ve noticed is that due to nltk id121
+                 for some sentences i get a different number of tokens
+                 from the tagger, than originally in the treebank. here   s
+                 one example:
+                 original:
+                 the_dt complex_jj financing_nn plan_nn in_in the_dt
+                 s&l_nn bailout_nn law_nn includes_vbz raising_vbg $_$
+                 30_cd billion_cd from_in debt_nn issued_vbn by_in the_dt
+                 newly_rb created_vbn rtc_nnp ._.
+                 tagged as:
+                 the_dt complex_jj financing_nn plan_nn in_in the_dt s_nnp
+                 &_cc l_nnp bailout_nn law_nn includes_vbz raising_vbg $_$
+                 30_cd billion_cd from_in debt_nn issued_vbn by_in the_dt
+                 newly_rb created_vbn rtc_nnp ._.
+                 (s&l is split into 3 tokens)
+                 i used diff to caluclate the overlap, so, i believe,
+                 94.32% is the best number. with naive matching the result
+                 is 92.80%, because when the sequences of tags diverge
+                 you, obviously, get a mess.
+                 can you check it, please?
+                 comment by [79]vsevolod (@vseloved) | 2014/07/03
+               o what text are you even feeding in? i evaluate the tagger
+                 on pre-tokenized text because i   m not aware of any easy
+                 way to get back the original text from the ptb files.
+                 if your id121 ever mismatches your training data,
+                 your accuracy will tank. this sucks, and is one of the
+                 big    gotchas    in nlp. i   m working on a better tokenizer;
+                 the way we do this at the moment is stupid.
+                 comment by [80]honnibal | 2014/07/04
+               o well, i extract text from treebanked data (i.e. from the
+                 parse trees     they have an extension .parse in ontonnotes
+                 wsj).
+                 but how do you evaluate the tagger, if you don   t have
+                 tokenized sentences? where do you take the tags from?
+                 comment by [81]vsevolod (@vseloved) | 2014/07/04
+               o the treebanked data is already tokenized     you should
+                 just split it on whitespace, or consume a list of tokens.
+                 it doesn   t make sense to try to apply something like the
+                 nltk tokenizer to it.
+                 comment by [82]honnibal | 2014/07/05
+               o ok, i see. so you call tag() and compare the results to
+                 the treebanked tokenized sentences. that   s, basically,
+                 the same thing that i have done. so, the remaining
+                 question is that i still got 94.32% accuracy for your
+                 tagger instead of 96.8%. what am i doing wrong then?
+                 comment by [83]vsevolod (@vseloved) | 2014/07/05
+               o i hought you said s&l was being tokenized as s & l for
+                 you?
+                 comment by [84]honnibal | 2014/07/06
+               o yes, that   s true. but you said that you evaluate th
+                 etagger by giving raw strings to tag() function. i did
+                 the same. i assume, you should get the same result. if
+                 not, then you either evaluate your tagger differently, or
+                 you use some other version of nltk/nltk models. that   s
+                 why i was asking for your evaluation procedure from the
+                 beginning.
+                 comment by [85]vsevolod (@vseloved) | 2014/07/08
+               o well what i meant was that the strings aren   t pos tagged.
+                 they still have the ptb id121 and sentence
+                 boundary detection.
+                 comment by [86]honnibal | 2014/07/08
+               o ok, but the situation with    s&l    in the sentence    the_dt
+                 complex_jj financing_nn plan_nn in_in the_dt s&l_nn
+                 bailout_nn law_nn includes_vbz raising_vbg $_$ 30_cd
+                 billion_cd from_in debt_nn issued_vbn by_in the_dt
+                 newly_rb created_vbn rtc_nnp ._.    is that i pass the
+                 strings tokenized as is (i.e. as in the treebank), but
+                 the tagger (using nltk tokenizer) splits the word    s&l   .
+                 how do i tell the tagger to just use the original
+                 id121 (i.e. split on spaces, i assume)?
+                 comment by [87]vsevolod (@vseloved) | 2014/07/08
+   12. =/
+       [88]https://github.com/sloria/textblob-aptagger/blob/master/textblo
+       b_aptagger/taggers.py#l38
+       pass the flag tokenize=false
+       this tells it to use the function lambda t: t.split() to tokenize
+       the sentence, instead of the function nltk.word_tokenize.
+       comment by [89]honnibal | 2014/07/09 | [90]reply
+          + ok, thanks. sorry, i   ve missed that part of the code.
+            anyway, now the result is 94.34%. basically, the same as
+            before. studying the differenences i see, that    -    is
+            tokenized as    :    while in the treebank i have it as    hyph   .
+            counting    -    as properly tokenized i can get the number up to
+            95.55%. alsmost exatcly the same number i got for my model
+            (95.52%). looks like we   ve converged, but not at 96.8,
+            unfortunately. what do you think?
+            comment by [91]vsevolod (@vseloved) | 2014/07/09 | [92]reply
+               o there are probably some other trivial differences, about
+                 how the brackets or punctuation are spelled. i don   t
+                 know.
+                 comment by [93]honnibal | 2014/07/09
+               o the only other significant artifact i see is that    to    is
+                 always tagged as to, while in the treebank there   s a lot
+                 of instances of to/in. however, i would say that to/in is
+                 a more proper tagging in those situations, although i   ve
+                 seen most of the taggers unconditionally mark it as to.
+                 comment by [94]vsevolod (@vseloved) | 2014/07/09
+               o it sounds like you   ve got a different version of the
+                 treebank. you should re-train on your data. in the ptb3,
+                 which i trained on,    to    always receives the tag    to   .
+                 comment by [95]honnibal | 2014/07/10
+               o ok, i   ll try to do it. i   ve used the version of the
+                 treebank in ontonnotes 4 (section nw/wsj), assuming it is
+                 the same, but, maybe, it was updated. i   ll try to use the
+                 original ptb 3.
+                 at the same time this brings us to the question of how
+                 well we can trust the results of such evaluation if even
+                 minor differences in the training data cause rather
+                 substantial (>1%) differences in accuracy   
+                 comment by [96]vsevolod (@vseloved) | 2014/07/10
+               o ok, on ptb 3.7 i got 96.21% (or 96.50% if you ignore
+                 wrong tagging of    (    and    )        somehow they are not
+                 written as -lrb- and -rrb- like in ontonotes, and i   m not
+                 sure what your tagger expects). pretty close, but still
+                 not quite it. maybe, you used yet another version of ptb?
+                 comment by [97]vsevolod (@vseloved) | 2014/07/11
+
+leave a reply [98]cancel reply
+
+   enter your comment here...
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+
+   fill in your details below or click an icon to log in:
+     *
+     *
+     *
+
+       iframe: [99]googleplus-sign-in
+
+     *
+     *
+
+   [100]gravatar
+   email (required) (address never made public)
+   ____________________
+   name (required)
+   ____________________
+   website
+   ____________________
+   wordpress.com logo
+
+   you are commenting using your wordpress.com account. ( [101]log out /
+   [102]change )
+   google photo
+
+   you are commenting using your google account. ( [103]log out /
+   [104]change )
+   twitter picture
+
+   you are commenting using your twitter account. ( [105]log out /
+   [106]change )
+   facebook photo
+
+   you are commenting using your facebook account. ( [107]log out /
+   [108]change )
+   [109]cancel
+
+   connecting to %s
+
+   [ ] notify me of new comments via email.
+
+   post comment
+
+   [110]   previous | [111]next   
+
+about
+
+   my name is matthew honnibal. i develop nlp libraries and do research.
+   in particular, if you   re doing nlp with python, you should use my
+   library, spacy: [112]http://spacy.io/
+
+   publications here:
+   [113]http://scholar.google.com.au/citations?user=fxwlnmaaaaaj&hl=en
+
+   code here: [114]http://github.com/honnibal/
+
+   my gmail is honnibal.
+   advertisements
+     * recent
+          + [115]alpha release of spacy: a library for industrial-strength
+            nlp with python/cython
+          + [116]writing c in cython
+          + [117]parsing english with 500 lines of python
+          + [118]a good pos tagger in about 200 lines of python
+          + [119]a simple extractive summarisation system
+     * links
+          + [120]wordpress.com
+          + [121]wordpress.org
+
+     * archives
+          + [122]january 2015 (1)
+          + [123]october 2014 (1)
+          + [124]december 2013 (1)
+          + [125]september 2013 (1)
+          + [126]november 2009 (1)
+     * categories
+          + [127]uncategorized
+     * rss [128]entries rss
+       [129]comments rss
+
+site info
+
+   computational linguistics
+   [130]blog at wordpress.com.
+
+   close and accept privacy & cookies: this site uses cookies. by
+   continuing to use this website, you agree to their use.
+   to find out more, including how to control cookies, see here:
+   [131]cookie policy
+
+   iframe: [132]likes-master
+
+   %d bloggers like this:
+
+references
+
+   visible links
+   1. https://honnibal.wordpress.com/feed/
+   2. https://honnibal.wordpress.com/comments/feed/
+   3. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/feed/
+   4. https://honnibal.wordpress.com/2009/11/18/a-simple-extractive-summarisation-system/
+   5. https://honnibal.wordpress.com/2013/12/18/a-simple-fast-algorithm-for-natural-language-dependency-parsing/
+   6. https://public-api.wordpress.com/oembed/?format=json&url=https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/&for=wpcom-auto-discovery
+   7. https://public-api.wordpress.com/oembed/?format=xml&url=https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/&for=wpcom-auto-discovery
+   8. https://honnibal.wordpress.com/osd.xml
+   9. https://s1.wp.com/opensearch.xml
+  10. https://honnibal.wordpress.com/
+  11. https://honnibal.wordpress.com/
+  12. https://honnibal.wordpress.com/about/
+  13. http://honnibal.github.io/spacy
+  14. https://en.wikipedia.org/wiki/part-of-speech_tagging
+  15. http://aclweb.org/aclwiki/index.php?title=pos_tagging_(state_of_the_art)
+  16. http://ciml.info/dl/v0_8/ciml-v0_8-ch03.pdf
+  17. http://metaoptimize.com/projects/wordreprs/
+  18. https://github.com/syllog1sm/redshift/blob/develop/redshift/tagger.pyx#l60
+  19. https://github.com/sloria/textblob
+  20. https://github.com/sloria/textblob/blob/master/text/nltk/tag/sequential.py#l488
+  21. https://github.com/clips/pattern/blob/master/pattern/text/__init__.py#l913
+  22. https://github.com/sloria/textblob-aptagger/blob/master/textblob_aptagger/taggers.py
+  23. https://en.wikipedia.org/wiki/zipf's_law
+  24. http://aclweb.org/anthology/p/p06/p06-1088.pdf
+  25. https://github.com/sloria/textblob-aptagger/blob/master/textblob_aptagger/taggers.py
+  26. https://github.com/sloria/textblob-aptagger/blob/master/textblob_aptagger/_id88.py
+  27. http://acl.ldc.upenn.edu/p/p07/p07-1033.pdf
+  28. https://honnibal.wordpress.com/2013/09/11/
+  29. https://honnibal.wordpress.com/author/honnibal/
+  30. https://honnibal.wordpress.com/category/uncategorized/
+  31. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/#postcomment
+  32. http://spiderspace.wordpress.com/2013/09/17/tutorial-state-of-the-art-part-of-speech-tagging-in-textblob/
+  33. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=80#respond
+  34. http://clinicalnlp.wordpress.com/
+  35. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=81#respond
+  36. https://honnibal.wordpress.com/
+  37. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=82#respond
+  38. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=83#respond
+  39. https://honnibal.wordpress.com/
+  40. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=84#respond
+  41. http://bit.ly/1fd4fwn
+  42. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=86#respond
+  43. http://scholar.google.com.au/citations?user=7z-f_aoaaaaj&hl=en
+  44. https://honnibal.wordpress.com/
+  45. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=87#respond
+  46. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=116#respond
+  47. https://github.com/sloria/textblob/blob/dev/text/_id88.py#l35
+  48. https://honnibal.wordpress.com/
+  49. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=117#respond
+  50. http://javarevisited.blogspot.com/
+  51. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=155#respond
+  52. https://github.com/cslu-nlp/id88ixpointnever
+  53. http://www.csee.ogi.edu/~gormanky/
+  54. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=181#respond
+  55. https://honnibal.wordpress.com/
+  56. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=182#respond
+  57. https://honnibal.wordpress.com/
+  58. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=184#respond
+  59. https://honnibal.wordpress.com/
+  60. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=185#respond
+  61. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=255#respond
+  62. https://honnibal.wordpress.com/
+  63. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=256#respond
+  64. http://twitter.com/vseloved
+  65. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=314#respond
+  66. http://twitter.com/vseloved
+  67. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=317#respond
+  68. https://honnibal.wordpress.com/
+  69. http://twitter.com/vseloved
+  70. http://twitter.com/vseloved
+  71. https://honnibal.wordpress.com/
+  72. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=322#respond
+  73. https://github.com/sloria/textblob-aptagger/blob/master/textblob_aptagger/taggers.py#l38
+  74. https://honnibal.wordpress.com/
+  75. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=323#respond
+  76. http://twitter.com/vseloved
+  77. https://github.com/sloria/textblob-aptagger
+  78. https://www.dropbox.com/s/8syrh4grq0cw091/wsj22-24.tag
+  79. http://twitter.com/vseloved
+  80. https://honnibal.wordpress.com/
+  81. http://twitter.com/vseloved
+  82. https://honnibal.wordpress.com/
+  83. http://twitter.com/vseloved
+  84. https://honnibal.wordpress.com/
+  85. http://twitter.com/vseloved
+  86. https://honnibal.wordpress.com/
+  87. http://twitter.com/vseloved
+  88. https://github.com/sloria/textblob-aptagger/blob/master/textblob_aptagger/taggers.py#l38
+  89. https://honnibal.wordpress.com/
+  90. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=341#respond
+  91. http://twitter.com/vseloved
+  92. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/?replytocom=342#respond
+  93. https://honnibal.wordpress.com/
+  94. http://twitter.com/vseloved
+  95. https://honnibal.wordpress.com/
+  96. http://twitter.com/vseloved
+  97. http://twitter.com/vseloved
+  98. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/#respond
+  99. https://public-api.wordpress.com/connect/?googleplus-sign-in=https://honnibal.wordpress.com&color_scheme=light
+ 100. https://gravatar.com/site/signup/
+ 101. javascript:highlandercomments.doexternallogout( 'wordpress' );
+ 102. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/
+ 103. javascript:highlandercomments.doexternallogout( 'googleplus' );
+ 104. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/
+ 105. javascript:highlandercomments.doexternallogout( 'twitter' );
+ 106. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/
+ 107. javascript:highlandercomments.doexternallogout( 'facebook' );
+ 108. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/
+ 109. javascript:highlandercomments.cancelexternalwindow();
+ 110. https://honnibal.wordpress.com/2009/11/18/a-simple-extractive-summarisation-system/
+ 111. https://honnibal.wordpress.com/2013/12/18/a-simple-fast-algorithm-for-natural-language-dependency-parsing/
+ 112. http://spacy.io/
+ 113. http://scholar.google.com.au/citations?user=fxwlnmaaaaaj&hl=en
+ 114. http://github.com/honnibal/
+ 115. https://honnibal.wordpress.com/2015/01/25/alpha-release-of-spacy-a-library-for-industrial-strength-nlp-with-pythoncython/
+ 116. https://honnibal.wordpress.com/2014/10/21/writing-c-in-cython/
+ 117. https://honnibal.wordpress.com/2013/12/18/a-simple-fast-algorithm-for-natural-language-dependency-parsing/
+ 118. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/
+ 119. https://honnibal.wordpress.com/2009/11/18/a-simple-extractive-summarisation-system/
+ 120. http://wordpress.com/
+ 121. http://wordpress.org/
+ 122. https://honnibal.wordpress.com/2015/01/
+ 123. https://honnibal.wordpress.com/2014/10/
+ 124. https://honnibal.wordpress.com/2013/12/
+ 125. https://honnibal.wordpress.com/2013/09/
+ 126. https://honnibal.wordpress.com/2009/11/
+ 127. https://honnibal.wordpress.com/category/uncategorized/
+ 128. https://honnibal.wordpress.com/feed/
+ 129. https://honnibal.wordpress.com/comments/feed/
+ 130. https://wordpress.com/?ref=footer_blog
+ 131. https://automattic.com/cookies
+ 132. https://widgets.wp.com/likes/master.html?ver=20190321#ver=20190321
+
+   hidden links:
+ 134. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/#comment-form-guest
+ 135. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/#comment-form-load-service:wordpress.com
+ 136. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/#comment-form-load-service:twitter
+ 137. https://honnibal.wordpress.com/2013/09/11/a-good-part-of-speechpos-tagger-in-about-200-lines-of-python/#comment-form-load-service:facebook

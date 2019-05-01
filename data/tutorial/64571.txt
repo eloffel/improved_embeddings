@@ -1,0 +1,572 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]towards data science
+     * [9]data science
+     * [10]machine learning
+     * [11]programming
+     * [12]visualization
+     * [13]ai
+     * [14]data journalism
+     * [15]contribute
+     __________________________________________________________________
+
+   [1*5nq2sdmfto9hfpdkcqaynw.jpeg]
+
+time series analysis in python: an introduction
+
+   [16]go to the profile of will koehrsen
+   [17]will koehrsen (button) blockedunblock (button) followfollowing
+   jan 12, 2018
+
+   additive models for time series modeling
+
+   time series are one of the most common data types encountered in daily
+   life. financial prices, weather, home energy usage, and even weight are
+   all examples of data that can be collected at regular intervals. almost
+   every data scientist will encounter time series in their daily work and
+   learning how to model them is an important skill in the data science
+   toolbox. one powerful yet simple method for analyzing and predicting
+   periodic data is the [18]additive model. the idea is straightforward:
+   represent a time-series as a combination of patterns at different
+   scales such as daily, weekly, seasonally, and yearly, along with an
+   overall trend. your energy use might rise in the summer and decrease in
+   the winter, but have an overall decreasing trend as you increase the
+   energy efficiency of your home. an additive model can show us both
+   patterns/trends and make predictions based on these observations.
+
+   the following image shows an additive model decomposition of a
+   time-series into an overall trend, yearly trend, and weekly trend.
+   [1*p5l_ekg4we5d8gdzc6o_gg.png]
+   example of additive model decomposition
+
+   this post will walk through an introductory example of creating an
+   additive model for financial time-series data using python and the
+   [19]prophet forecasting package developed by facebook. along the way,
+   we will cover some data manipulation using pandas, accessing
+   [20]financial data using the quandl library and, and [21]plotting with
+   matplotlib. i have included code where it is instructive, and i
+   encourage anyone to check out the [22]jupyter notebook on github for
+   the full analysis. this introduction will show you all the steps needed
+   to start modeling time-series on your own!
+
+   disclaimer: now comes the boring part when i have to mention that when
+   it comes to financial data, [23]past performance is no indicator of
+   future performance and you cannot use the methods here to get rich. i
+   chose to use stock data because it is easily available on a daily
+   frequency and fun to play around with. if you really want to become
+   wealthy, learning data science is a better choice than playing the
+   stock market!
+
+retrieving financial data
+
+   usually, about 80% of the time spent on a data science project is
+   getting and cleaning data. thanks to the quandl financial library, that
+   was reduced to about 5% for this project. quandl can be installed with
+   pip from the command line, lets you access thousands of financial
+   indicators with a single line of python, and allows up to 50 requests a
+   day without signing up. if you sign up for a free account, you get an
+   api key that allows unlimited requests.
+
+   first, we import the required libraries and get some data. quandl
+   automatically puts our data into a pandas dataframe, the data structure
+   of choice for data science. (for other companies, just replace the
+      tsla    or    gm    with the stock ticker. you can also specify a date
+   range).
+# quandl for financial data
+import quandl
+# pandas for data manipulation
+import pandas as pd
+quandl.apiconfig.api_key = 'getyourownkey!'
+# retrieve tsla data from quandl
+tesla = quandl.get('wiki/tsla')
+# retrieve the gm data from quandl
+gm = quandl.get('wiki/gm')
+gm.head(5)
+
+   [1*ixt_rnazvnxh-zkxkb2fmg.png]
+   snapshot of gm data from quandl
+
+   there is an almost unlimited amount of data on quandl, but i wanted to
+   focus on comparing two companies within the same industry, namely tesla
+   and general motors. tesla is a fascinating company not only because it
+   is the first [24]successful american car start-up in 111 years, but
+   also because at times in [25]2017 it was the most valuable car company
+   in america despite only selling 4 different cars. the other contender
+   for the title of most valuable car company is general motors which
+   recently has shown signs of embracing the future of cars by building
+   some pretty cool (but not cool-looking) all-electric vehicles.
+   [1*fqcibhw_xhhgdge1s74cia.jpeg]
+   not a very hard choice
+
+   we could easily have spent hours searching for this data and
+   downloading it as csv spreadsheet files, but instead, thanks to quandl,
+   we have all the data we need in a few seconds!
+
+data exploration
+
+   before we can jump into modeling, it   s best to get an idea of the
+   structure and ranges by making a few exploratory plots. this will also
+   allows us to look for outliers or missing values that need to be
+   corrected.
+
+   pandas dataframes can be easily plotted with matplotlib. if any of the
+   graphing code looks intimidating, don   t worry. i also find matplotlib
+   to be unintuitive and often copy and paste examples from stack overflow
+   or documentation to get the graph i want. one of the rules of
+   programming is don   t reinvent a solution that already exists!
+# the adjusted close accounts for stock splits, so that is what we should graph
+plt.plot(gm.index, gm['adj. close'])
+plt.title('gm stock price')
+plt.ylabel('price ($)');
+plt.show()
+plt.plot(tesla.index, tesla['adj. close'], 'r')
+plt.title('tesla stock price')
+plt.ylabel('price ($)');
+plt.show();
+
+   [1*0o-f4tesouk_hs95ldnw4w.png]
+   raw stock prices
+
+   comparing the two companies on stock prices alone does not show which
+   is more valuable because the total value of a company (market
+   capitalization) also depends on the number of shares (market cap= share
+   price * number of shares). quandl does not have number of shares data,
+   but i was able to find average yearly stock shares for both companies
+   with a quick google search. is is not exact, but will be accurate
+   enough for our analysis. sometimes we have to make do with imperfect
+   data!
+
+   to create a column of market cap in our dataframe,we use a few tricks
+   with pandas, such as moving the index to a column (reset_index) and
+   simultaneously indexing and altering values in the dataframe [26]using
+   ix.
+# yearly average number of shares outstanding for tesla and gm
+tesla_shares = {2018: 168e6, 2017: 162e6, 2016: 144e6, 2015: 128e6, 2014: 125e6,
+ 2013: 119e6, 2012: 107e6, 2011: 100e6, 2010: 51e6}
+gm_shares = {2018: 1.42e9, 2017: 1.50e9, 2016: 1.54e9, 2015: 1.59e9, 2014: 1.61e
+9, 2013: 1.39e9, 2012: 1.57e9, 2011: 1.54e9, 2010:1.50e9}
+# create a year column
+tesla['year'] = tesla.index.year
+# take dates from index and move to date column
+tesla.reset_index(level=0, inplace = true)
+tesla['cap'] = 0
+# calculate market cap for all years
+for i, year in enumerate(tesla['year']):
+    # retrieve the shares for the year
+    shares = tesla_shares.get(year)
+
+    # update the cap column to shares times the price
+    tesla.ix[i, 'cap'] = shares * tesla.ix[i, 'adj. close']
+
+   this creates a    cap    column for tesla. we do the same process with the
+   gm data and then merge the two. [27]merging is an essential part of a
+   data science workflow because it allows us to join datasets on a shared
+   column. in this case, we have stock prices for two different companies
+   on the same dates and we therefore want to join the data on the date
+   column. we perform an    inner    merge to save only date entries that are
+   present in both dataframes. after merging, we rename the columns so we
+   know which one goes with which car company.
+# merge the two datasets and rename the columns
+cars = gm.merge(tesla, how='inner', on='date')
+cars.rename(columns={'cap_x': 'gm_cap', 'cap_y': 'tesla_cap'}, inplace=true)
+# select only the relevant columns
+cars = cars.ix[:, ['date', 'gm_cap', 'tesla_cap']]
+# divide to get market cap in billions of dollars
+cars['gm_cap'] = cars['gm_cap'] / 1e9
+cars['tesla_cap'] = cars['tesla_cap'] / 1e9
+cars.head()
+
+   [1*kynrnpfmkb8i4vkwdvmwnq.png]
+   merged market capitalization dataframe
+
+   the market cap is in billions of dollars. we can see general motors
+   started off our period of analysis with a market cap about 30 times
+   that of tesla! do things stay that way over the entire timeline?
+plt.figure(figsize=(10, 8))
+plt.plot(cars['date'], cars['gm_cap'], 'b-', label = 'gm')
+plt.plot(cars['date'], cars['tesla_cap'], 'r-', label = 'tesla')
+plt.xlabel('date'); plt.ylabel('market cap (billions $)'); plt.title('market cap
+ of gm and tesla')
+plt.legend();
+
+   [1*ja-_juvv1b6b2tgrwnfeig.png]
+   market capitalization historical data
+
+   we observe a meteoric rise for tesla and a minor increase for general
+   motors over the course of the data. tesla even surpasses gm in value
+   during 2017!
+import numpy as np
+# find the first and last time tesla was valued higher than gm
+first_date = cars.ix[np.min(list(np.where(cars['tesla_cap'] > cars['gm_cap'])[0]
+)), 'date']
+last_date = cars.ix[np.max(list(np.where(cars['tesla_cap'] > cars['gm_cap'])[0])
+), 'date']
+print("tesla was valued higher than gm from {} to {}.".format(first_date.date(),
+ last_date.date()))
+tesla was valued higher than gm from 2017-04-10 to 2017-09-21.
+
+   during that period, tesla sold about [28]48,000 cars while [29]gm sold
+   1,500,000. gm was valued less than tesla during a period in which it
+   sold 30 times more cars! this definitely displays the power of a
+   persuasive executive and a high-quality         if extremely
+   low-quantity         product. although the value of tesla is now lower than
+   gm, a good question might be, can we expect tesla to again surpass gm?
+   when will this happen? for that we turn to additive models for
+   forecasting, or in other words, predicting the future.
+
+modeling with prophet
+
+   [30]the facebook prophet package was released in 2017 for python and r,
+   and data scientists around the world rejoiced. prophet is designed for
+   analyzing time series with daily observations that display patterns on
+   different time scales. it also has advanced capabilities for modeling
+   the effects of holidays on a time-series and implementing custom
+   changepoints, but we will stick to the basic functions to get a model
+   up and running. prophet, like quandl, can be installed with pip from
+   the command line.
+
+   we first import prophet and rename the columns in our data to the
+   correct format. the date column must be called    ds    and the value
+   column we want to predict    y   . we then create prophet models and fit
+   them to the data, much like a scikit-learn machine learning model:
+import fbprophet
+# prophet requires columns ds (date) and y (value)
+gm = gm.rename(columns={'date': 'ds', 'cap': 'y'})
+# put market cap in billions
+gm['y'] = gm['y'] / 1e9
+# make the prophet model and fit on the data
+gm_prophet = fbprophet.prophet(changepoint_prior_scale=0.15)
+gm_prophet.fit(gm)
+
+   when creating the prophet models, i set the changepoint prior to 0.15,
+   up from the default value of 0.05. this hyperparameter is used to
+   control [31]how sensitive the trend is to changes, with a higher value
+   being more sensitive and a lower value less sensitive. this value is
+   used to combat one of the most fundamental trade-offs in machine
+   learning: [32]bias vs. variance.
+
+   if we fit too closely to our training data, called[33] overfitting, we
+   have too much variance and our model will not be able to generalize
+   well to new data. on the other hand, if our model does not capture the
+   trends in our training data it is underfitting and has too much bias.
+   when a model is underfitting, increasing the changepoint prior allows
+   more flexibility for the model to fit the data, and if the model is
+   overfitting, decreasing the prior limits the amount of flexibility. the
+   effect of the changepoint prior scale can be illustrated by graphing
+   predictions made with a range of values:
+   [1*jefolncknbj8cpqsbqdkta.png]
+
+   the higher the changepoint prior scale, the more flexible the model and
+   the closer it fits to the training data. this may seem like exactly
+   what we want, but learning the training data too well can lead to
+   overfitting and an inability to accurately make predictions on new
+   data. we therefore need to find the right balance of fitting the
+   training data and being able to generalize to new data. as stocks vary
+   from day-to-day, and we want our model to capture this, i increased the
+   flexibility after experimenting with a range of values.
+
+   in the call to create a prophet model, we can also specify
+   changepoints, which occur when a time-series goes from increasing to
+   decreasing, or from increasing slowly to increasing rapidly (they are
+   located [34]where the rate change in the time series is greatest).
+   changepoints can correspond to significant events such as product
+   launches or macroeconomic swings in the market. if we do not specify
+   changepoints, prophet will calculate them for us.
+
+   to make forecasts, we need to create what is called a future dataframe.
+   we specify the number of future periods to predict (two years) and the
+   frequency of predictions (daily). we then make predictions with the
+   prophet model we created and the future dataframe:
+# make a future dataframe for 2 years
+gm_forecast = gm_prophet.make_future_dataframe(periods=365 * 2, freq='d')
+# make predictions
+gm_forecast = gm_prophet.predict(gm_forecast)
+
+   our future dataframes contain the estimated market cap of tesla and gm
+   for the next two years. we can visualize predictions with the prophet
+   plot function.
+gm_prophet.plot(gm_forecast, xlabel = 'date', ylabel = 'market cap (billions $)'
+)
+plt.title('market cap of gm');
+
+   [1*osw5xszx-emefhkxjhicuw.png]
+
+   the black dots represent the actual values (notice how they stop at the
+   beginning of 2018), the blue line indicates the forecasted values, and
+   the light blue shaded region is the uncertainty ([35]always a critical
+   part of any prediction). the region of uncertainty increases the
+   further out in the future the prediction is made because initial
+   uncertainty propagates and grows over time. this is observed in
+   [36]weather forecasts which get less accurate the further out in time
+   they are made.
+
+   we can also inspect changepoints identified by the model. again,
+   changepoints represent when the time series growth rate significantly
+   changes (goes from increasing to decreasing for example).
+tesla_prophet.changepoints[:10]
+61    2010-09-24
+122   2010-12-21
+182   2011-03-18
+243   2011-06-15
+304   2011-09-12
+365   2011-12-07
+425   2012-03-06
+486   2012-06-01
+547   2012-08-28
+608   2012-11-27
+
+   for comparison, we can look at the [37]google search trends for tesla
+   over this time range to see if the changes line up. we plot the
+   changepoints (vertical lines) and search trends on the same graph:
+# load in the data
+tesla_search = pd.read_csv('data/tesla_search_terms.csv')
+# convert month to a datetime
+tesla_search['month'] = pd.to_datetime(tesla_search['month'])
+tesla_changepoints = [str(date) for date in tesla_prophet.changepoints]
+# plot the search frequency
+plt.plot(tesla_search['month'], tesla_search['search'], label = 'searches')
+# plot the changepoints
+plt.vlines(tesla_changepoints, ymin = 0, ymax= 100, colors = 'r', linewidth=0.6,
+ linestyles = 'dashed', label = 'changepoints')
+# formatting of plot
+plt.grid('off'); plt.ylabel('relative search freq'); plt.legend()
+plt.title('tesla search terms and changepoints');
+
+   [1*rsunyepha9lvqedclgl5xa.png]
+   tesla search frequency and stock changepoints
+
+   some of the changepoints in the market value of tesla align with
+   changes in frequency of tesla searches, but not all of them. from this,
+   i would say that relative google search frequency is not a great
+   indicator of stock changes.
+
+   we still need to figure out when the market capitalization of tesla
+   will surpass that of general motors. since we have both predictions for
+   the next two years we can plot both companies on the same graph after
+   merging the dataframes. before merging, we rename the columns to keep
+   track of the data.
+gm_names = ['gm_%s' % column for column in gm_forecast.columns]
+tesla_names = ['tesla_%s' % column for column in tesla_forecast.columns]
+# dataframes to merge
+merge_gm_forecast = gm_forecast.copy()
+merge_tesla_forecast = tesla_forecast.copy()
+# rename the columns
+merge_gm_forecast.columns = gm_names
+merge_tesla_forecast.columns = tesla_names
+# merge the two datasets
+forecast = pd.merge(merge_gm_forecast, merge_tesla_forecast, how = 'inner', left
+_on = 'gm_ds', right_on = 'tesla_ds')
+# rename date column
+forecast = forecast.rename(columns={'gm_ds': 'date'}).drop('tesla_ds', axis=1)
+
+   first we will plot just the estimate. the estimate (called    yhat    in
+   the prophet package) smooths out some of the noise in the data so it
+   looks a little different than the raw plots. the level of smoothness
+   will depend on the changepoint prior scale         higher priors mean a more
+   flexible model and more ups and downs.
+   [1*wtxxjtjk2j9mqffkygyhwa.png]
+   gm and tesla predicted market capitalization
+
+   our model thinks the brief surpassing of gm by tesla in 2017 was just
+   noise, and it is not until early 2018 that tesla beats out gm for good
+   in the forecast. the exact date is january 27, 2018, so if that
+   happens, i will gladly take credit for predicting the future!
+
+   when making the above graph, we left out the most important part of a
+   forecast: the uncertainty! we can use matplotlib (see [38]notebook) to
+   show the regions of doubt:
+   [1*0rt_w8nzofg_wq0i9mncyg.png]
+
+   this is a better representation of the prediction. it shows the value
+   of both companies is expected to increase, but tesla will increase more
+   rapidly than general motors. again, the uncertainty increases over time
+   as expected for a prediction and the lower bound of tesla is below the
+   upper bound of gm in 2020 meaning gm might retain the lead.
+
+trends and patterns
+
+   the last step of the market capitalization analysis is looking at the
+   overall trend and patterns. prophet allows us to easily visualize the
+   overall trend and the component patterns:
+# plot the trends and patterns
+gm_prophet.plot_components(gm_forecast)
+
+   [1*tuwwhcvj8thleptgegyyrq.png]
+   general motors time series decomposition
+
+   the trend is pretty clear: gm stock is rising and going to keep rising.
+   the yearly pattern is interesting because it seems to suggest gm
+   increases in value at the end of the year with a long slow decline into
+   the summer. we can try to determine if there is a correlation between
+   the yearly market cap and the average monthly sales of gm over the time
+   period. i first gathered the monthly vehicle sales from google and then
+   averaged over the months using groupby. this is another critical data
+   science operation, because often we want to compare stats between
+   categories, such as users of a specific age group, or vehicles from one
+   manufacturer. in this case, we want to calculate average sales in each
+   month, so we group the months together and then average the sales.
+gm_sales_grouped = gm_sales.groupby('month').mean()
+
+   [1*8sxnjfi4xbainxgvqiundg.png]
+
+   it does not look like monthly sales are correlated with the market cap.
+   the monthly sales are second highest in august, which is right at the
+   lowest point for the market cap!
+
+   looking at the weekly trend, there does not appear to be any meaningful
+   signal (there are no stock prices recorded on the weekends so we look
+   at the change during the week).this is to be expected as the [39]random
+   walk theory in economics states there is no predictable pattern in
+   stock prices on a daily basis. as evidenced by our analysis, in the
+   long run, stocks tend to increase, but on a day-to-day scale, there is
+   almost no pattern that we can take advantage of even with the best
+   models.
+
+   a simple look at the [40]dow jones industrial average (a market index
+   of the 30 largest companies on the stock exchange) nicely illustrates
+   this point:
+   [1*5ohpavp_w5g7jccqj8oyaa.png]
+   dow jones industrial average ([41]source)
+
+   clearly, the message is to go back to 1900 and invest your money! or in
+   reality, when the market drops, don   t withdraw because it will go back
+   up according to history. on the overall scale, the day-to-day
+   fluctuations are too small to even be seen and if we are thinking like
+   data scientists, we realize that playing daily stocks is foolish
+   compared to investing in the entire market and holding for long periods
+   of time.
+
+   prophet can also be applied to larger-scale data measures, such as
+   gross domestic product, a measure of the overall size of a country   s
+   economy. i made the following forecast by creating prophet models based
+   on the historical gdp of the us and china.
+   [1*1i9g9ek3oxmus2fa9kvf9g.png]
+
+   the exact date china will surpass the us in gdp is 2036! this model is
+   limited because of the low frequency of the observations (gdp is
+   measured once per quarter but prophet works best with daily data), but
+   it provides a basic prediction with no macroeconomic knowledge
+   required.
+
+   there are many ways to model time-series, from [42]simple linear
+   regression to [43]recurrent neural networks with lstm cells. additive
+   models are useful because they are quick to develop, fast to train,
+   provide interpretable patterns, and make predictions with
+   uncertainties. the capabilities of prophet are impressive and we have
+   only scratched the surface here. i encourage you to use this article
+   and the notebook to explore some of the [44]data offered by quandl or
+   your own time series. stay tuned for future work on time series
+   analysis, and for an application of prophet to my daily life, see my
+   post on [45]using these techniques to model and predict weight change.
+   as a first step in exploring time-series, additive models in python are
+   the way to go!
+
+   as always, i welcome feedback and constructive criticism. i can be
+   reached at wjk68@case.edu.
+
+     * [46]data science
+     * [47]data
+     * [48]programming
+     * [49]python
+     * [50]towards data science
+
+   (button)
+   (button)
+   (button) 4.4k claps
+   (button) (button) (button) 16 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [51]go to the profile of will koehrsen
+
+[52]will koehrsen
+
+   data scientist at cortex intel, data science communicator
+
+     (button) follow
+   [53]towards data science
+
+[54]towards data science
+
+   sharing concepts, ideas, and codes.
+
+     * (button)
+       (button) 4.4k
+     * (button)
+     *
+     *
+
+   [55]towards data science
+   never miss a story from towards data science, when you sign up for
+   medium. [56]learn more
+   never miss a story from towards data science
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://towardsdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/70d5a5b1d52a
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://towardsdatascience.com/time-series-analysis-in-python-an-introduction-70d5a5b1d52a&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://towardsdatascience.com/time-series-analysis-in-python-an-introduction-70d5a5b1d52a&source=--------------------------nav_reg&operation=register
+   8. https://towardsdatascience.com/?source=logo-lo_07vcteznn7eg---7f60cf5620c9
+   9. https://towardsdatascience.com/data-science/home
+  10. https://towardsdatascience.com/machine-learning/home
+  11. https://towardsdatascience.com/programming/home
+  12. https://towardsdatascience.com/data-visualization/home
+  13. https://towardsdatascience.com/artificial-intelligence/home
+  14. https://towardsdatascience.com/data-journalism/home
+  15. https://towardsdatascience.com/contribute/home
+  16. https://towardsdatascience.com/@williamkoehrsen?source=post_header_lockup
+  17. https://towardsdatascience.com/@williamkoehrsen
+  18. https://en.wikipedia.org/wiki/additive_model
+  19. https://research.fb.com/prophet-forecasting-at-scale/
+  20. https://www.quandl.com/tools/python
+  21. https://matplotlib.org/
+  22. https://github.com/willkoehrsen/data-analysis/tree/master/additive_models
+  23. https://seekingalpha.com/article/2453345-past-performance-is-not-an-indicator-of-future-results
+  24. http://www.businessinsider.com/tesla-the-origin-story-2014-10
+  25. https://www.recode.net/2017/8/2/16085822/tesla-ford-gm-worth-car-manufacturer-elon-musk-earnings
+  26. https://pandas.pydata.org/pandas-docs/stable/generated/pandas.dataframe.ix.html
+  27. https://pandas.pydata.org/pandas-docs/stable/generated/pandas.dataframe.merge.html
+  28. https://en.wikipedia.org/wiki/tesla,_inc.#production_and_sales
+  29. http://gmauthority.com/blog/gm/general-motors-sales-numbers/
+  30. https://facebook.github.io/prophet/docs/quick_start.html
+  31. https://facebook.github.io/prophet/docs/trend_changepoints.html
+  32. https://en.wikipedia.org/wiki/bias   variance_tradeoff
+  33. https://elitedatascience.com/overfitting-in-machine-learning
+  34. https://facebook.github.io/prophet/docs/trend_changepoints.html
+  35. https://medium.com/@williamkoehrsen/a-theory-of-prediction-10cb335cc3f2
+  36. http://www.nytimes.com/2012/09/09/magazine/the-weatherman-is-not-a-moron.html
+  37. https://trends.google.com/trends/explore?date=2010-09-01 2013-01-01&q=tesla motors
+  38. https://github.com/willkoehrsen/data-analysis/blob/master/additive_models/additive models for prediction.ipynb
+  39. https://www.investopedia.com/terms/r/randomwalktheory.asp
+  40. https://en.wikipedia.org/wiki/dow_jones_industrial_average
+  41. http://www.cityam.com/257792/dow-jones-industrial-average-breaks-20000-first-time
+  42. https://onlinecourses.science.psu.edu/stat501/node/250
+  43. http://colah.github.io/posts/2015-08-understanding-lstms/
+  44. https://www.quandl.com/search?query=
+  45. https://towardsdatascience.com/data-science-a-practical-application-7056ec22d004
+  46. https://towardsdatascience.com/tagged/data-science?source=post
+  47. https://towardsdatascience.com/tagged/data?source=post
+  48. https://towardsdatascience.com/tagged/programming?source=post
+  49. https://towardsdatascience.com/tagged/python?source=post
+  50. https://towardsdatascience.com/tagged/towards-data-science?source=post
+  51. https://towardsdatascience.com/@williamkoehrsen?source=footer_card
+  52. https://towardsdatascience.com/@williamkoehrsen
+  53. https://towardsdatascience.com/?source=footer_card
+  54. https://towardsdatascience.com/?source=footer_card
+  55. https://towardsdatascience.com/
+  56. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  58. https://medium.com/p/70d5a5b1d52a/share/twitter
+  59. https://medium.com/p/70d5a5b1d52a/share/facebook
+  60. https://medium.com/p/70d5a5b1d52a/share/twitter
+  61. https://medium.com/p/70d5a5b1d52a/share/facebook

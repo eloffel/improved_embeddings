@@ -1,0 +1,2664 @@
+   #[1]google developers blog - atom [2]google developers blog - rss
+   [3]google developers blog - atom
+
+   [4][w55ib4qoq6b-l6hop-rnd-cxwb4t_m3hc797pbozam4qi9sqbnao8ta3cxhbvouh5a4
+   kxa-w1wfoy66qvf8zcxjn-ndf6wnbye8tp-oayas=s0-d]
+   blog of our latest news, updates, and stories for developers
+
+[5]introduction to tensorflow datasets and estimators
+
+   tuesday, september 12, 2017
+   posted by the tensorflow team
+
+   datasets and estimators are two key tensorflow features you should use:
+     * datasets: the best practice way of creating input pipelines (that
+       is, reading data into your program).
+
+     * estimators: a high-level way to create tensorflow models.
+       estimators include pre-made models for common machine learning
+       tasks, but you can also use them to create your own custom models.
+
+   below you can see how they fit in the tensorflow architecture.
+   combined, they offer an easy way to create tensorflow models and to
+   feed data to them:
+   [6][image6.png]
+
+our example model
+
+   to explore these features we're going to build a model and show you
+   relevant code snippets. the complete code is available [7]here,
+   including instructions for getting the training and test files. note
+   that the code was written to demonstrate how datasets and estimators
+   work functionally, and was not optimized for maximum performance.
+
+   the trained model categorizes iris flowers based on four botanical
+   features ([8]sepal length, sepal width, [9]petal length, and petal
+   width). so, during id136, you can provide values for those four
+   features and the model will predict that the flower is one of the
+   following three beautiful variants:
+   [10][image4.jpg]
+   from left to right: [11]iris setosa (by [12]radomil, cc by-sa 3.0),
+   [13]iris versicolor (by [14]dlanglois, cc by-sa 3.0), and [15]iris
+   virginica(by [16]frank mayfield, cc by-sa 2.0).
+
+   we're going to train a deep neural network classifier with the below
+   structure. all input and output values will be float32, and the sum of
+   the output values will be 1 (as we are predicting the id203 for
+   each individual iris type):
+   [17][image3.jpg]
+
+   for example, an output result might be 0.05 for iris setosa, 0.9 for
+   iris versicolor, and 0.05 for iris virginica, which indicates a 90%
+   id203 that this is an iris versicolor.
+
+   alright! now that we have defined the model, let's look at how we can
+   use datasets and estimators to train it and make predictions.
+
+introducing the datasets
+
+   since release 1.4, datasets is a new way to create input pipelines to
+   tensorflow models. this api is much more performant than using
+   feed_dict or the queue-based pipelines, and it's cleaner and easier to
+   use.
+
+   at a high-level, the datasets consists of the following classes:
+   [18][image7.jpg]
+
+   where:
+     * dataset: base class containing methods to create and transform
+       datasets. also allows you initialize a dataset from data in memory,
+       or from a python generator.
+     * textlinedataset: reads lines from text files.
+     * tfrecorddataset: reads records from tfrecord files.
+     * fixedlengthrecorddataset: reads fixed size records from binary
+       files.
+     * iterator: provides a way to access one dataset element at a time.
+
+our dataset
+
+   to get started, let's first look at the dataset we will use to feed our
+   model. we'll read data from a csv file, where each row will contain
+   five values-the four input values, plus the label:
+   [19][image5.jpg]
+
+   the label will be:
+     * 0 for iris setosa
+     * 1 for versicolor
+     * 2 for virginica.
+
+representing our dataset
+
+   to describe our dataset, we first create a list of our features:
+feature_names = [
+    'sepallength',
+    'sepalwidth',
+    'petallength',
+    'petalwidth']
+
+   when we train our model, we'll need a function that reads the input
+   file and returns the feature and label data. estimators requires that
+   you create a function of the following format:
+def input_fn():
+    ...<code>...
+    return ({ 'sepallength':[values], ..<etc>.., 'petalwidth':[values] },
+            [irisflowertype])
+
+   the return value must be a two-element tuple organized as follows: :
+     * the first element must be a dict in which each input feature is a
+       key, and then a list of values for the training batch.
+     * the second element is a list of labels for the training batch.
+
+   since we are returning a batch of input features and training labels,
+   it means that all lists in the return statement will have equal
+   lengths. technically speaking, whenever we referred to "list" here, we
+   actually mean a 1-d tensorflow tensor.
+
+   to allow simple reuse of the input_fn we're going to add some arguments
+   to it. this allows us to build input functions with different settings.
+   the arguments are pretty straightforward:
+     * file_path: the data file to read.
+     * perform_shuffle: whether the record order should be randomized.
+     * repeat_count: the number of times to iterate over the records in
+       the dataset. for example, if we specify 1, then each record is read
+       once. if we specify none, iteration will continue forever.
+
+   here's how we can implement this function using the dataset api. we
+   will wrap this in an "input function" that is suitable when feeding our
+   estimator model later on:
+def my_input_fn(file_path, perform_shuffle=false, repeat_count=1):
+   def decode_csv(line):
+       parsed_line = tf.decode_csv(line, [[0.], [0.], [0.], [0.], [0]])
+       label = parsed_line[-1:] # last element is the label
+       del parsed_line[-1] # delete last element
+       features = parsed_line # everything (but last element) are the features
+       d = dict(zip(feature_names, features)), label
+       return d
+
+   dataset = (tf.data.textlinedataset(file_path) # read text file
+       .skip(1) # skip header row
+       .map(decode_csv)) # transform each elem by applying decode_csv fn
+   if perform_shuffle:
+       # randomizes input using a window of 256 elements (read into memory)
+       dataset = dataset.shuffle(buffer_size=256)
+   dataset = dataset.repeat(repeat_count) # repeats dataset this # times
+   dataset = dataset.batch(32)  # batch size to use
+   iterator = dataset.make_one_shot_iterator()
+   batch_features, batch_labels = iterator.get_next()
+   return batch_features, batch_labels
+
+   note the following: :
+     * textlinedataset: the dataset api will do a lot of memory management
+       for you when you're using its file-based datasets. you can, for
+       example, read in dataset files much larger than memory or read in
+       multiple files by specifying a list as argument.
+     * shuffle: reads buffer_size records, then shuffles (randomizes)
+       their order.
+     * map: calls the decode_csv function with each element in the dataset
+       as an argument (since we are using textlinedataset, each element
+       will be a line of csv text). then we apply decode_csv to each of
+       the lines.
+     * decode_csv: splits each line into fields, providing the default
+       values if necessary. then returns a dict with the field keys and
+       field values. the map function updates each elem (line) in the
+       dataset with the dict.
+
+   that's an introduction to datasets! just for fun, we can now use this
+   function to print the first batch:
+next_batch = my_input_fn(file, true) # will return 32 random elements
+
+# now let's try it out, retrieving and printing one batch of data.
+# although this code looks strange, you don't need to understand
+# the details.
+with tf.session() as sess:
+    first_batch = sess.run(next_batch)
+print(first_batch)
+
+# output
+({'sepallength': array([ 5.4000001, ...<repeat to 32 elems>], dtype=float32),
+  'petalwidth': array([ 0.40000001, ...<repeat to 32 elems>], dtype=float32),
+  ...
+ },
+ [array([[2], ...<repeat to 32 elems>], dtype=int32) # labels
+)
+
+   that's actually all we need from the dataset api to implement our
+   model. datasets have a lot more capabilities though; please see the end
+   of this post where we have collected more resources.
+
+introducing estimators
+
+   estimators is a high-level api that reduces much of the boilerplate
+   code you previously needed to write when training a tensorflow model.
+   estimators are also very flexible, allowing you to override the default
+   behavior if you have specific requirements for your model.
+
+   there are two possible ways you can build your model using estimators:
+     * pre-made estimator - these are predefined estimators, created to
+       generate a specific type of model. in this blog post, we will use
+       the dnnclassifier pre-made estimator.
+     * estimator (base class) - gives you complete control of how your
+       model should be created by using a model_fn function. we will cover
+       how to do this in a separate blog post.
+
+   here is the class diagram for estimators:
+   [20][image2.jpg]
+
+   we hope to add more pre-made estimators in future releases.
+
+   as you can see, all estimators make use of input_fn that provides the
+   estimator with input data. in our case, we will reuse my_input_fn,
+   which we defined for this purpose.
+
+   the following code instantiates the estimator that predicts the iris
+   flower type:
+# create the feature_columns, which specifies the input to our model.
+# all our input features are numeric, so use numeric_column for each one.
+feature_columns = [tf.feature_column.numeric_column(k) for k in feature_names]
+
+# create a deep neural network regression classifier.
+# use the dnnclassifier pre-made estimator
+classifier = tf.estimator.dnnclassifier(
+   feature_columns=feature_columns, # the input features to our model
+   hidden_units=[10, 10], # two layers, each with 10 neurons
+   n_classes=3,
+   model_dir=path) # path to where checkpoints etc are stored
+
+   we now have a estimator that we can start to train.
+
+training the model
+
+   training is performed using a single line of tensorflow code:
+# train our model, use the previously function my_input_fn
+# input to training is a file with training example
+# stop training after 8 iterations of train data (epochs)
+classifier.train(
+   input_fn=lambda: my_input_fn(file_train, true, 8))
+
+   but wait a minute... what is this "lambda: my_input_fn(file_train,
+   true, 8)" stuff? that is where we hook up datasets with the estimators!
+   estimators needs data to perform training, evaluation, and prediction,
+   and it uses the input_fn to fetch the data. estimators require an
+   input_fn with no arguments, so we create a function with no arguments
+   using lambda, which calls our input_fn with the desired arguments: the
+   file_path, shuffle setting, and repeat_count. in our case, we use our
+   my_input_fn, passing it:
+     * file_train, which is the training data file.
+     * true, which tells the estimator to shuffle the data.
+     * 8, which tells the estimator to and repeat the dataset 8 times.
+
+evaluating our trained model
+
+   ok, so now we have a trained model. how can we evaluate how well it's
+   performing? fortunately, every estimator contains an evaluate method:
+# evaluate our model using the examples contained in file_test
+# return value will contain evaluation_metrics such as: loss & average_loss
+evaluate_result = estimator.evaluate(
+   input_fn=lambda: my_input_fn(file_test, false, 4)
+print("evaluation results")
+for key in evaluate_result:
+   print("   {}, was: {}".format(key, evaluate_result[key]))
+
+   in our case, we reach an accuracy of about ~93%. there are various ways
+   of improving this accuracy, of course. one way is to simply run the
+   program over and over. since the state of the model is persisted (in
+   model_dir=path above), the model will improve the more iterations you
+   train it, until it settles. another way would be to adjust the number
+   of hidden layers or the number of nodes in each hidden layer. feel free
+   to experiment with this; please note, however, that when you make a
+   change, you need to remove the directory specified in model_dir=path,
+   since you are changing the structure of the dnnclassifier.
+
+making predictions using our trained model
+
+   and that's it! we now have a trained model, and if we are happy with
+   the evaluation results, we can use it to predict an iris flower based
+   on some input. as with training, and evaluation, we make predictions
+   using a single function call:
+# predict the type of some iris flowers.
+# let's predict the examples in file_test, repeat only once.
+predict_results = classifier.predict(
+    input_fn=lambda: my_input_fn(file_test, false, 1))
+print("predictions on test file")
+for prediction in predict_results:
+   # will print the predicted class, i.e: 0, 1, or 2 if the prediction
+   # is iris sentosa, vericolor, virginica, respectively.
+   print prediction["class_ids"][0]
+
+making predictions on data in memory
+
+   the preceding code specified file_test to make predictions on data
+   stored in a file, but how could we make predictions on data residing in
+   other sources, for example, in memory? as you may guess, this does not
+   actually require a change to our predict call. instead, we configure
+   the dataset api to use a memory structure as follows:
+# let create a memory dataset for prediction.
+# we've taken the first 3 examples in file_test.
+prediction_input = [[5.9, 3.0, 4.2, 1.5],  # -> 1, iris versicolor
+                    [6.9, 3.1, 5.4, 2.1],  # -> 2, iris virginica
+                    [5.1, 3.3, 1.7, 0.5]]  # -> 0, iris sentosa
+def new_input_fn():
+   def decode(x):
+       x = tf.split(x, 4) # need to split into our 4 features
+       # when predicting, we don't need (or have) any labels
+       return dict(zip(feature_names, x)) # then build a dict from them
+
+   # the from_tensor_slices function will use a memory structure as input
+   dataset = tf.data.dataset.from_tensor_slices(prediction_input)
+   dataset = dataset.map(decode)
+   iterator = dataset.make_one_shot_iterator()
+   next_feature_batch = iterator.get_next()
+   return next_feature_batch, none # in prediction, we have no labels
+
+# predict all our prediction_input
+predict_results = classifier.predict(input_fn=new_input_fn)
+
+# print results
+print("predictions on memory data")
+for idx, prediction in enumerate(predict_results):
+   type = prediction["class_ids"][0] # get the predicted class (index)
+   if type == 0:
+       print("i think: {}, is iris sentosa".format(prediction_input[idx]))
+   elif type == 1:
+       print("i think: {}, is iris versicolor".format(prediction_input[idx]))
+   else:
+       print("i think: {}, is iris virginica".format(prediction_input[idx])
+
+   dataset.from_tensor_slides() is designed for small datasets that fit in
+   memory. when using textlinedataset as we did for training and
+   evaluation, you can have arbitrarily large files, as long as your
+   memory can manage the shuffle buffer and batch sizes.
+
+freebies
+
+   using a pre-made estimator like dnnclassifier provides a lot of value.
+   in addition to being easy to use, pre-made estimators also provide
+   built-in id74, and create summaries you can see in
+   tensorboard. to see this reporting, start tensorboard from your
+   command-line as follows:
+# replace path with the actual path passed as model_dir argument when the
+# dnnregressor estimator was created.
+tensorboard --logdir=path
+
+   the following diagrams show some of the data that tensorboard will
+   provide:
+   [21][image1.jpg]
+
+summary
+
+   in this this blogpost, we explored datasets and estimators. these are
+   important apis for defining input data streams and creating models, so
+   investing time to learn them is definitely worthwhile!
+
+   for more details, be sure to check out
+     * the complete source code used in this blogpost is available
+       [22]here.
+     * [23]josh gordon's excellent jupyter notebook on the matter. using
+       that notebook, you will learn how to run a more extensive example
+       that has many different types of features (inputs). as you recall
+       from our model, we just used numeric features.
+     * for datasets, see a new chapter in the [24]programmer's guide and
+       [25]reference documentation.
+     * for estimators, see a new chapter in the [26]programmer's guide and
+       [27]reference documentation.
+
+   but it doesn't stop here. we will shortly publish more posts that
+   describe how these apis work, so stay tuned for that!
+
+   until then, happy tensorflow coding!
+   share on twitter share on facebook
+   [28]google
+   labels: [29]datasets , [30]estimators , [31]tensorflow
+
+1 comment :
+
+    1. [32]                [33]september 15, 2017 at 12:35 am
+       i just want to know if there is a subtle difference in the
+       performance of dataset api between v1.2 and 1.3?
+       reply[34]delete
+       replies
+            reply
+
+   add comment
+   load more...
+
+   [35]    [36]    [37]   
+   ____________________
+   [ncccficb87qzqmia5fsjfoui0zmnmrvipu1ormhquxgtxusaccflxjqblbln4uoafglw8b
+   katws5ec6cbebwvcshbiivxbkgqrcvbadii4uktabsesvgwgb9ezht3+tnwyo0qa9soiytv
+   aqyaqdjhawwemecaaaaasuvork5cyii=]
+
+labels
+
+      
+     * [38].app
+     * [39].dev
+     * [40]#aiy
+     * [41]#devfest18 #devfeststories #gdg #googledevelopers #developers
+       #community
+     * [42]#freeandopen
+     * [43]#googleplay #androiddevstory #playstore #developerconsole
+       #storelistingexperiments
+     * [44]#growwithgoogle
+     * [45]#io12
+     * [46]#io13
+     * [47]#io14
+     * [48]#io15
+     * [49]#io16
+     * [50]#io17
+     * [51]#io18
+     * [52]#io2012
+     * [53]#io2013
+     * [54]#io2014
+     * [55]+1
+     * [56]20% project
+     * [57]3d
+     * [58]3d face mesh
+     * [59]about.com
+     * [60]accelerator
+     * [61]accessibility
+     * [62]actions
+     * [63]actions on google
+     * [64]actionsongoogle
+     * [65]activity
+     * [66]administrative apis
+     * [67]admob
+     * [68]adobe
+     * [69]ads
+     * [70]adsense
+     * [71]advanced
+     * [72]advogato
+     * [73]adwords
+     * [74]africa
+     * [75]agency program
+     * [76]agpl
+     * [77]ai
+     * [78]ai principles
+     * [79]aiy
+     * [80]aiy projects
+     * [81]aiyprojects
+     * [82]ajax
+     * [83]ajax apis
+     * [84]ajax search
+     * [85]ajax search books news apis
+     * [86]all for good
+     * [87]amarok
+     * [88]amp
+     * [89]amp cache
+     * [90]analytics
+     * [91]and assistant
+     * [92]android
+     * [93]android developer certification
+     * [94]android developers
+     * [95]android development
+     * [96]android studio
+     * [97]android things
+     * [98]android wear
+     * [99]animation
+     * [100]announcement
+     * [101]announcements
+     * [102]apache
+     * [103]api
+     * [104]api.ai
+     * [105]apis
+     * [106]apis console
+     * [107]apis explorer
+     * [108]apis. charts
+     * [109]app
+     * [110]app design
+     * [111]app dev
+     * [112]app development
+     * [113]app engine
+     * [114]app indexing
+     * [115]app indexing api
+     * [116]app invites
+     * [117]apple
+     * [118]application development
+     * [119]apps
+     * [120]apps script
+     * [121]ar
+     * [122]arcore
+     * [123]area 120
+     * [124]artifact management
+     * [125]artificial intelligence
+     * [126]asia
+     * [127]assistant
+     * [128]atom publishing protocol
+     * [129]audio
+     * [130]augmented images
+     * [131]augmented reality
+     * [132]australia
+     * [133]auth
+     * [134]authentication
+     * [135]authsub
+     * [136]automatic id103
+     * [137]awards
+     * [138]axsjax
+     * [139]barcodes
+     * [140]beacon
+     * [141]beacons
+     * [142]belarus
+     * [143]bespin
+     * [144]best practices
+     * [145]beta
+     * [146]bigquery
+     * [147]bitcoin
+     * [148]blockly
+     * [149]blogger
+     * [150]book search
+     * [151]books api
+     * [152]bootcamp
+     * [153]brazil
+     * [154]british english
+     * [155]brotli
+     * [156]browser
+     * [157]build out
+     * [158]building ajax apps
+     * [159]buildout
+     * [160]bulgaria
+     * [161]business
+     * [162]buzz
+     * [163]c++
+     * [164]cache
+     * [165]caja
+     * [166]caldav
+     * [167]calendar
+     * [168]camino
+     * [169]campfire one
+     * [170]caption
+     * [171]cardboard
+     * [172]carddav
+     * [173]cast
+     * [174]certification
+     * [175]certification award
+     * [176]channel
+     * [177]chinese
+     * [178]chrome
+     * [179]chrome apps
+     * [180]chrome dev summit
+     * [181]chrome devtools
+     * [182]chrome experiment
+     * [183]chrome extensions
+     * [184]chrome os
+     * [185]chrome web store
+     * [186]chromecast
+     * [187]chromium
+     * [188]chronoscope
+     * [189]cifs
+     * [190]classes
+     * [191]classroom api
+     * [192]client libraries
+     * [193]closure tools
+     * [194]cloud
+     * [195]cloud anchor
+     * [196]cloud datastore
+     * [197]cloud functions for firebase
+     * [198]cloud next
+     * [199]cloud platform
+     * [200]cloud portability
+     * [201]cloud services
+     * [202]cloud sql
+     * [203]cloud storage
+     * [204]cms
+     * [205]coca cola
+     * [206]cocoapods
+     * [207]code for educators
+     * [208]code jam
+     * [209]code review
+     * [210]code-in
+     * [211]codeedu
+     * [212]codelabs
+     * [213]coffee with a googler
+     * [214]colaboratory
+     * [215]collada
+     * [216]color
+     * [217]colt mcanlis
+     * [218]commerce
+     * [219]community
+     * [220]community connectors
+     * [221]competition
+     * [222]compilers
+     * [223]compression
+     * [224]compressorhead
+     * [225]id161
+     * [226]computing heritage
+     * [227]conferences
+     * [228]contacts api
+     * [229]containers
+     * [230]contest
+     * [231]contextual gadgets
+     * [232]conversation design
+     * [233]conversations
+     * [234]coral
+     * [235]core ml
+     * [236]couchdb
+     * [237]countdown to i/o 2012
+     * [238]courses
+     * [239]cpu
+     * [240]crash course
+     * [241]crash reporting
+     * [242]crashlytics
+     * [243]creative commons
+     * [244]cricket
+     * [245]crisis response
+     * [246]croatia
+     * [247]cryptocurrency
+     * [248]cryptography
+     * [249]css
+     * [250]css3
+     * [251]custom search
+     * [252]custom search api
+     * [253]czechia
+     * [254]danish linux forum
+     * [255]dart
+     * [256]data compression
+     * [257]data visualization
+     * [258]database
+     * [259]databases
+     * [260]dataset
+     * [261]datasets
+     * [262]datastore
+     * [263]dataviz
+     * [264]daydream
+     * [265]deprecation
+     * [266]design
+     * [267]devart
+     * [268]develop
+     * [269]developer
+     * [270]developer communities
+     * [271]developer expert
+     * [272]developer features
+     * [273]developer keynote
+     * [274]developer relations
+     * [275]developers
+     * [276]developers. meetup
+     * [277]devfest
+     * [278]devfest developer chrome maps social wave apps
+     * [279]devfest18
+     * [280]devfeststories
+     * [281]dfp
+     * [282]dialogflow
+     * [283]discovery service
+     * [284]diversity
+     * [285]django
+     * [286]dns
+     * [287]do-it-yourself
+     * [288]docker
+     * [289]docs
+     * [290]documentation
+     * [291]documents list api
+     * [292]dojo
+     * [293]domains
+     * [294]doodles
+     * [295]dot net
+     * [296]doubleclick
+     * [297]dreamweaver
+     * [298]drive
+     * [299]drupal
+     * [300]dynamic links
+     * [301]earn
+     * [302]earth
+     * [303]eclipse
+     * [304]eclipsecon
+     * [305]eddystone
+     * [306]edge tpu
+     * [307]edge tpu accelerator
+     * [308]edge tpu dev board
+     * [309]educatio
+     * [310]education
+     * [311]email
+     * [312]emea
+     * [313]endpoints
+     * [314]enterprise
+     * [315]entrepreneurs
+     * [316]estimator
+     * [317]estimators
+     * [318]estonia
+     * [319]ethics
+     * [320]europe
+     * [321]event
+     * [322]events
+     * [323]evolution
+     * [324]execution api
+     * [325]extensions
+     * [326]fabric
+     * [327]fairness
+     * [328]fairness in machine learning
+     * [329]faster web
+     * [330]fcm
+     * [331]featured
+     * [332]feeds
+     * [333]finance
+     * [334]fintech
+     * [335]firebase
+     * [336]firebase analytics
+     * [337]firebase cloud messaging
+     * [338]firebase dynamic links
+     * [339]firebug
+     * [340]firefox
+     * [341]firestore
+     * [342]firevox
+     * [343]firstbeta
+     * [344]fitness
+     * [345]flutter
+     * [346]flutter 1.2
+     * [347]flutter live
+     * [348]flutter release preview 1
+     * [349]flutter release preview 2
+     * [350]font api
+     * [351]fonts
+     * [352]fosdem
+     * [353]freebsd
+     * [354]freenet
+     * [355]fridaygram
+     * [356]fusion tables
+     * [357]g suite
+     * [358]g+
+     * [359]gadgets
+     * [360]game developers conference
+     * [361]games
+     * [362]gaming
+     * [363]gcc
+     * [364]gci
+     * [365]gcp
+     * [366]gda
+     * [367]gdata
+     * [368]gdc17
+     * [369]gdd
+     * [370]gdd07
+     * [371]gdd08
+     * [372]gdd09
+     * [373]gdd11
+     * [374]gde
+     * [375]gdg
+     * [376]gdl
+     * [377]gdl weekly
+     * [378]gears
+     * [379]geo
+     * [380]geolocation
+     * [381]geoserver
+     * [382]getpaid
+     * [383]ghop
+     * [384]git
+     * [385]github
+     * [386]gke
+     * [387]gmail
+     * [388]gmail apis
+     * [389]gmtc
+     * [390]gnome
+     * [391]gnome women's summer outreach program
+     * [392]go
+     * [393]goo.gl
+     * [394]google
+     * [395]google ai
+     * [396]google apis
+     * [397]google apps
+     * [398]google apps api
+     * [399]google apps for your domain
+     * [400]google apps marketplace
+     * [401]google ar
+     * [402]google assistant
+     * [403]google assistant sdk
+     * [404]google brain
+     * [405]google buzz
+     * [406]google cast
+     * [407]google chart api
+     * [408]google checkout
+     * [409]google chrome
+     * [410]google cloud
+     * [411]google cloud messaging
+     * [412]google cloud platform
+     * [413]google cloud storage
+     * [414]google code
+     * [415]google code project hosting
+     * [416]google code search
+     * [417]google code university
+     * [418]google compute engine
+     * [419]google coral
+     * [420]google data apis
+     * [421]google data protocol
+     * [422]google data studio
+     * [423]google developer day
+     * [424]google developer days
+     * [425]google developer scholarship
+     * [426]google developers
+     * [427]google developers academy
+     * [428]google developers certification
+     * [429]google developers community groups
+     * [430]google developers groups
+     * [431]google developers live
+     * [432]google developers site
+     * [433]google developers university consortium
+     * [434]google docs
+     * [435]google docs api
+     * [436]google doctype
+     * [437]google domains
+     * [438]google drive
+     * [439]google drive sdk
+     * [440]google earth
+     * [441]google fit
+     * [442]google fonts
+     * [443]google friend connect
+     * [444]google gadgets
+     * [445]google gears
+     * [446]google grants
+     * [447]google groups settings
+     * [448]google health
+     * [449]google i/o
+     * [450]google identity platform
+     * [451]google in asia
+     * [452]google io
+     * [453]google maps
+     * [454]google maps platform
+     * [455]google mashup editor
+     * [456]google noto fonts
+     * [457]google photos
+     * [458]google platform
+     * [459]google play
+     * [460]google play developer api
+     * [461]google play services
+     * [462]google registry
+     * [463]google scholarships
+     * [464]google science fair
+     * [465]google sheets
+     * [466]google sheets api
+     * [467]google slides
+     * [468]google slides api
+     * [469]google space
+     * [470]google spreadsheets api
+     * [471]google storage
+     * [472]google summer of code
+     * [473]google tech talk
+     * [474]google technology
+     * [475]google technoloy user groups
+     * [476]google tv
+     * [477]google visualization api
+     * [478]google wallet
+     * [479]google wave
+     * [480]google web elements
+     * [481]google web toolkit
+     * [482]google.org
+     * [483]google+
+     * [484]googleassistant
+     * [485]googlecast
+     * [486]googledevelopers
+     * [487]googleio
+     * [488]googlenew
+     * [489]googleplay
+     * [490]googlewebelements googleio
+     * [491]gpe
+     * [492]gpgs c++ games
+     * [493]gpt
+     * [494]green linux
+     * [495]groups api
+     * [496]grow
+     * [497]grow with google
+     * [498]gsoc
+     * [499]gsuite
+     * [500]gtags
+     * [501]gtug
+     * [502]guest post
+     * [503]guice
+     * [504]gulp
+     * [505]gwsop
+     * [506]gwt
+     * [507]gzip
+     * [508]hackathon
+     * [509]hacking
+     * [510]hackthon
+     * [511]hamilton
+     * [512]hangouts
+     * [513]hangouts chat
+     * [514]hangouts chat api
+     * [515]haproxy
+     * [516]hg
+     * [517]hibernate
+     * [518]howto
+     * [519]hpux
+     * [520]html
+     * [521]html5
+     * [522]http
+     * [523]i/o
+     * [524]i/o 17
+     * [525]i/o 2017
+     * [526]i/o extended
+     * [527]i/o live
+     * [528]ical
+     * [529]identity
+     * [530]ietf
+     * [531]ignite
+     * [532]igoogle
+     * [533]iguanas
+     * [534]iiw
+     * [535]image compression
+     * [536]image search
+     * [537]imara
+     * [538]in-app billing
+     * [539]in-app payments
+     * [540]in-app purchase
+     * [541]incubator
+     * [542]india
+     * [543]indie
+     * [544]indie games accelerator
+     * [545]information visualization
+     * [546]intelligentwire
+     * [547]interactive music
+     * [548]internationalization
+     * [549]internet explorer
+     * [550]internet of things
+     * [551]interviews
+     * [552]io17
+     * [553]io18
+     * [554]io2017
+     * [555]ios
+     * [556]ios sdk
+     * [557]iot
+     * [558]ipad
+     * [559]iphone
+     * [560]iphone development
+     * [561]israel
+     * [562]issue tracker
+     * [563]jaiku
+     * [564]japanese
+     * [565]java
+     * [566]javascript
+     * [567]jetpack
+     * [568]joomla
+     * [569]joomladayus2007
+     * [570]joomladayusa
+     * [571]json
+     * [572]karaoke
+     * [573]kde
+     * [574]kde 4.0
+     * [575]keras
+     * [576]kernel
+     * [577]kernel summit
+     * [578]keynote
+     * [579]khronos
+     * [580]kids
+     * [581]kids coding
+     * [582]kids coding team
+     * [583]kml
+     * [584]korean
+     * [585]krakow
+     * [586]kubernetes
+     * [587]labs
+     * [588]lanchpad
+     * [589]languages
+     * [590]latam accelerator
+     * [591]latam startups
+     * [592]latitude
+     * [593]latvia
+     * [594]launch
+     * [595]launchpad
+     * [596]launchpad accelerator
+     * [597]launchpad studio
+     * [598]lca
+     * [599]leadership
+     * [600]learning
+     * [601]lens
+     * [602]lessons
+     * [603]licenses
+     * [604]linux
+     * [605]linux foundation
+     * [606]linux summit
+     * [607]linux virtual server
+     * [608]linuxconf eu
+     * [609]lithuania
+     * [610]localization
+     * [611]loco
+     * [612]london
+     * [613]mac
+     * [614]macfuse
+     * [615]machine
+     * [616]machine intelligence
+     * [617]machine learning
+     * [618]machine learning accelerator
+     * [619]maker
+     * [620]makers
+     * [621]malware
+     * [622]maps
+     * [623]maps apis
+     * [624]marketplace
+     * [625]material
+     * [626]material components
+     * [627]material design
+     * [628]mdl
+     * [629]meetup
+     * [630]mercurial
+     * [631]mexico startups
+     * [632]mit csail
+     * [633]mit media lab
+     * [634]ml
+     * [635]ml kit
+     * [636]mlcc
+     * [637]mobile
+     * [638]mobile app development
+     * [639]mobile design
+     * [640]mobile development
+     * [641]mobile performance
+     * [642]mobile sites
+     * [643]mobile speed
+     * [644]mobile ux
+     * [645]mobile web
+     * [646]mobile world congress
+     * [647]mod_pagespeed
+     * [648]moderator
+     * [649]monetize
+     * [650]mooc
+     * [651]mozilla
+     * [652]mylar
+     * [653]myspace
+     * [654]mysql
+     * [655]mythtv
+     * [656]named
+     * [657]narratives
+     * [658]native ads
+     * [659]native client
+     * [660]nearby
+     * [661]netbsd
+     * [662]non-profit
+     * [663]nonsense
+     * [664]nosql
+     * [665]notifications
+     * [666]noto serif cjk
+     * [667]nss
+     * [668]nvidia
+     * [669]o3d
+     * [670]oauth
+     * [671]oauth playground
+     * [672]oauth2
+     * [673]objective-c
+     * [674]ocaml
+     * [675]ocr
+     * [676]odf
+     * [677]office hours
+     * [678]oha
+     * [679]ooxml
+     * [680]open data
+     * [681]open source
+     * [682]open source blog
+     * [683]open source releases
+     * [684]open web
+     * [685]openajax alliance
+     * [686]opengl
+     * [687]openid
+     * [688]opensocial
+     * [689]openssh
+     * [690]openssl
+     * [691]optimization
+     * [692]oreilly
+     * [693]orkut
+     * [694]oscon
+     * [695]oscon2007
+     * [696]osi
+     * [697]oss devs
+     * [698]ossjam
+     * [699]osx
+     * [700]pactester
+     * [701]page speed
+     * [702]pagespeed
+     * [703]palette
+     * [704]payments
+     * [705]peer bonus program
+     * [706]performance
+     * [707]phone
+     * [708]photos
+     * [709]picasa
+     * [710]picasa web
+     * [711]places api
+     * [712]play services
+     * [713]playground
+     * [714]plone
+     * [715]plone sprint
+     * [716]podcast
+     * [717]poland
+     * [718]poly
+     * [719]polymer
+     * [720]polymer summit
+     * [721]portugal
+     * [722]posix
+     * [723]powermeter api
+     * [724]prediction api
+     * [725]preview
+     * [726]prizes
+     * [727]programming
+     * [728]progressive web app
+     * [729]project hosting
+     * [730]project loon
+     * [731]project tango
+     * [732]prototype
+     * [733]proximity
+     * [734]pubsubhubbub
+     * [735]pwa
+     * [736]py3k
+     * [737]python
+     * [738]python sprint
+     * [739]rails
+     * [740]random hacks of kindness
+     * [741]rasberry pi
+     * [742]reader
+     * [743]releases
+     * [744]remote config
+     * [745]research
+     * [746]reserve seats
+     * [747]responsible ai
+     * [748]result snippets
+     * [749]reto meier
+     * [750]rewarded ads
+     * [751]rewarded video ads
+     * [752]rhino
+     * [753]saatchi
+     * [754]safety & security
+     * [755]safety and security
+     * [756]salesforce
+     * [757]samba
+     * [758]sample dialogs
+     * [759]sandbox
+     * [760]santa tracker
+     * [761]scalability
+     * [762]scale-ups
+     * [763]sceneform
+     * [764]schedule
+     * [765]scholarship
+     * [766]scholarships
+     * [767]scratch
+     * [768]screencast
+     * [769]sdk
+     * [770]sdks
+     * [771]search
+     * [772]security
+     * [773]serbia
+     * [774]serif
+     * [775]service worker
+     * [776]sessions
+     * [777]seurat
+     * [778]shape
+     * [779]sheets api
+     * [780]shindig
+     * [781]shopping
+     * [782]shoreline amphitheatre
+     * [783]showcase
+     * [784]sidewiki
+     * [785]sign-in
+     * [786]silverstripe
+     * [787]simd
+     * [788]sitemaps
+     * [789]sites api
+     * [790]sixapart
+     * [791]sketchup
+     * [792]slides api
+     * [793]small business
+     * [794]small businesses
+     * [795]smart lock for passwords
+     * [796]soap search api
+     * [797]soc
+     * [798]social
+     * [799]social graph
+     * [800]solaris
+     * [801]souders
+     * [802]spa2007
+     * [803]space
+     * [804]spdy
+     * [805]speakers
+     * [806]speech
+     * [807]speed
+     * [808]speed tracer
+     * [809]stable release
+     * [810]standards
+     * [811]startup
+     * [812]startup accelerator
+     * [813]startups
+     * [814]stem
+     * [815]storage
+     * [816]street view
+     * [817]student programs
+     * [818]students
+     * [819]stuff
+     * [820]style
+     * [821]subscribed links
+     * [822]subscription
+     * [823]subversion
+     * [824]summer of code
+     * [825]sundar pichai
+     * [826]svg
+     * [827]sxsw
+     * [828]syndication
+     * [829]tasks api
+     * [830]team drives (new)
+     * [831]techmakers
+     * [832]templates
+     * [833]tensorflow
+     * [834]tensorflow dev summit
+     * [835]tensorflow lite
+     * [836]tensorflow research cloud
+     * [837]tensorrt
+     * [838]test lab
+     * [839]testing
+     * [840]text embedding models
+     * [841]tfdevsummit
+     * [842]tflite
+     * [843]themes
+     * [844]thought leadership
+     * [845]tool
+     * [846]tools
+     * [847]topp
+     * [848]tpu
+     * [849]training
+     * [850]tranparency
+     * [851]transit
+     * [852]translate
+     * [853]translation
+     * [854]tutorials
+     * [855]tv
+     * [856]ubiquitous computing
+     * [857]ubiquity
+     * [858]ubucon
+     * [859]ubuntu
+     * [860]udacity
+     * [861]ui
+     * [862]ukraine
+     * [863]unicode
+     * [864]unit test
+     * [865]unity
+     * [866]universal
+     * [867]universal app campaigns
+     * [868]university
+     * [869]unix
+     * [870]url
+     * [871]url shortener
+     * [872]urls
+     * [873]ux
+     * [874]video
+     * [875]videos
+     * [876]vim
+     * [877]virtual keyboard
+     * [878]virtual reality
+     * [879]visualization
+     * [880]voice
+     * [881]voice kit
+     * [882]voice user interface
+     * [883]vr
+     * [884]vui
+     * [885]wattpad
+     * [886]wearables
+     * [887]weave
+     * [888]web
+     * [889]web animations api
+     * [890]web apps
+     * [891]web components
+     * [892]web design
+     * [893]web designer
+     * [894]web development
+     * [895]web exponents
+     * [896]web fonts
+     * [897]web performance
+     * [898]web platform docs
+     * [899]web registry
+     * [900]webfonts
+     * [901]webgl
+     * [902]webmaster
+     * [903]webp
+     * [904]website optimizer
+     * [905]webvr
+     * [906]weekly roundup
+     * [907]whitehouse.gov
+     * [908]who's at google i/o
+     * [909]win
+     * [910]windows
+     * [911]windows programming
+     * [912]winter of code
+     * [913]women tech makers
+     * [914]women techmakers
+     * [915]writing
+     * [916]wtm
+     * [917]xauth
+     * [918]yahoo
+     * [919]young makers
+     * [920]youtube
+     * [921]zlib
+     * [922]zurich
+     * [923]zxing
+
+      
+
+archive
+
+      
+     *     [924]      [925]2019
+          + [926]mar
+          + [927]feb
+          + [928]jan
+
+     *     [929]      [930]2018
+          + [931]dec
+          + [932]nov
+          + [933]oct
+          + [934]sep
+          + [935]aug
+          + [936]jul
+          + [937]jun
+          + [938]may
+          + [939]apr
+          + [940]mar
+          + [941]feb
+          + [942]jan
+
+     *     [943]      [944]2017
+          + [945]dec
+          + [946]nov
+          + [947]oct
+          + [948]sep
+          + [949]aug
+          + [950]jul
+          + [951]jun
+          + [952]may
+          + [953]apr
+          + [954]mar
+          + [955]feb
+          + [956]jan
+
+     *     [957]      [958]2016
+          + [959]dec
+          + [960]nov
+          + [961]oct
+          + [962]sep
+          + [963]aug
+          + [964]jul
+          + [965]jun
+          + [966]may
+          + [967]apr
+          + [968]mar
+          + [969]feb
+          + [970]jan
+
+     *     [971]      [972]2015
+          + [973]dec
+          + [974]nov
+          + [975]oct
+          + [976]sep
+          + [977]aug
+          + [978]jul
+          + [979]jun
+          + [980]may
+          + [981]apr
+          + [982]mar
+          + [983]feb
+
+     *     [984]      [985]2014
+          + [986]dec
+          + [987]nov
+          + [988]oct
+          + [989]sep
+          + [990]aug
+          + [991]jul
+          + [992]jun
+          + [993]may
+          + [994]apr
+          + [995]mar
+          + [996]feb
+          + [997]jan
+
+     *     [998]      [999]2013
+          + [1000]dec
+          + [1001]nov
+          + [1002]oct
+          + [1003]sep
+          + [1004]aug
+          + [1005]jul
+          + [1006]jun
+          + [1007]may
+          + [1008]apr
+          + [1009]mar
+          + [1010]feb
+          + [1011]jan
+
+     *     [1012]      [1013]2012
+          + [1014]dec
+          + [1015]nov
+          + [1016]oct
+          + [1017]sep
+          + [1018]aug
+          + [1019]jul
+          + [1020]jun
+          + [1021]may
+          + [1022]apr
+          + [1023]mar
+          + [1024]feb
+          + [1025]jan
+
+     *     [1026]      [1027]2011
+          + [1028]dec
+          + [1029]nov
+          + [1030]oct
+          + [1031]sep
+          + [1032]aug
+          + [1033]jul
+          + [1034]jun
+          + [1035]may
+          + [1036]apr
+          + [1037]mar
+          + [1038]feb
+          + [1039]jan
+
+     *     [1040]      [1041]2010
+          + [1042]dec
+          + [1043]nov
+          + [1044]oct
+          + [1045]sep
+          + [1046]aug
+          + [1047]jul
+          + [1048]jun
+          + [1049]may
+          + [1050]apr
+          + [1051]mar
+          + [1052]feb
+          + [1053]jan
+
+     *     [1054]      [1055]2009
+          + [1056]dec
+          + [1057]nov
+          + [1058]oct
+          + [1059]sep
+          + [1060]aug
+          + [1061]jul
+          + [1062]jun
+          + [1063]may
+          + [1064]apr
+          + [1065]mar
+          + [1066]feb
+          + [1067]jan
+
+     *     [1068]      [1069]2008
+          + [1070]dec
+          + [1071]nov
+          + [1072]oct
+          + [1073]sep
+          + [1074]aug
+          + [1075]jul
+          + [1076]jun
+          + [1077]may
+          + [1078]apr
+          + [1079]mar
+          + [1080]feb
+          + [1081]jan
+
+     *     [1082]      [1083]2007
+          + [1084]dec
+          + [1085]nov
+          + [1086]oct
+          + [1087]sep
+          + [1088]aug
+          + [1089]jul
+          + [1090]jun
+          + [1091]may
+          + [1092]apr
+          + [1093]mar
+          + [1094]feb
+          + [1095]jan
+
+     *     [1096]      [1097]2006
+          + [1098]dec
+          + [1099]nov
+          + [1100]oct
+          + [1101]sep
+          + [1102]aug
+          + [1103]jul
+          + [1104]jun
+          + [1105]may
+          + [1106]apr
+          + [1107]mar
+          + [1108]feb
+          + [1109]jan
+
+     *     [1110]      [1111]2005
+          + [1112]dec
+          + [1113]nov
+          + [1114]oct
+          + [1115]sep
+          + [1116]aug
+          + [1117]jul
+          + [1118]jun
+          + [1119]may
+          + [1120]apr
+          + [1121]mar
+
+   [1122][feed-icon.gif] [1123]subscribe
+   (button) follow @googledevs
+   visit [1124]google developers for docs, event info, and more.
+
+company-wide
+
+     * [1125]official google blog
+     * [1126]public policy blog
+     * [1127]student blog
+
+products
+
+     * [1128]google for work blog
+     * [1129]chrome blog
+     * [1130]official android blog
+
+developers
+
+     * [1131]ads developer blog
+     * [1132]android developers blog
+     * [1133]developers blog
+
+   [1134][p2daydaadwwawgawgg8fgmbgmbopbydd2cf8imaddrgoqte+e9aaaaabjru5erkj
+   ggg==]
+     * [1135]google
+     * [1136]privacy
+     * [1137]terms
+
+references
+
+   visible links
+   1. https://developers.googleblog.com/feeds/posts/default
+   2. https://developers.googleblog.com/feeds/posts/default?alt=rss
+   3. https://developers.googleblog.com/feeds/6097493071170690647/comments/default
+   4. https://developers.googleblog.com/
+   5. https://developers.googleblog.com/2017/09/introducing-tensorflow-datasets.html
+   6. https://3.bp.blogspot.com/-l2ut45wgdyw/wbe7au1nfwi/aaaaaaaad1i/geqcquuweziiaffrcimillx2eydg49c0wclcbgas/s1600/image6.png
+   7. https://github.com/tensorflow/models/blob/master/samples/outreach/blogs/blog_estimators_dataset.py
+   8. https://en.wikipedia.org/wiki/sepal
+   9. https://en.wikipedia.org/wiki/petal
+  10. https://4.bp.blogspot.com/-ey8wxehufvk/wbe7htjmp0i/aaaaaaaad1m/wflisiir9jiahk4wedm0chdtorrhi3leaclcbgas/s1600/image4.jpg
+  11. https://commons.wikimedia.org/w/index.php?curid=170298
+  12. https://commons.wikimedia.org/wiki/user:radomil
+  13. https://commons.wikimedia.org/w/index.php?curid=248095
+  14. https://commons.wikimedia.org/wiki/user:dlanglois
+  15. https://www.flickr.com/photos/33397993@n05/3352169862
+  16. https://www.flickr.com/photos/33397993@n05
+  17. https://1.bp.blogspot.com/-eedrk1mk1qq/wbe7qpweczi/aaaaaaaad1q/fjnpgiiriostz3yupkgikjvabtpg8kvgwclcbgas/s1600/image3.jpg
+  18. https://4.bp.blogspot.com/-av_qqudrvzi/wbfwxte0cji/aaaaaaaad1s/bjwnv9siuoi92qo3taefaumb2s5bvfygwclcbgas/s1600/image7.jpg
+  19. https://2.bp.blogspot.com/-_mo8qp5mc40/wbfw__cw9pi/aaaaaaaad1w/ioye8ehyczabeeqq9-ik0iivea_p91vsaclcbgas/s1600/image5.jpg
+  20. https://1.bp.blogspot.com/-njttnjoq_ce/wbe772urrgi/aaaaaaaad1y/h1mwj6mgszyg_kduvxwbyenqa4z5wrspaclcbgas/s1600/image2.jpg
+  21. https://4.bp.blogspot.com/-8fagwln5otc/wbe8fap8lti/aaaaaaaad1c/esu7q5mdmh4zoansdxa3o6gvtr5lfenfqclcbgas/s1600/image1.jpg
+  22. https://github.com/tensorflow/models/blob/master/samples/outreach/blogs/blog_estimators_dataset.py
+  23. https://github.com/tensorflow/workshops/blob/master/notebooks/07_structured_data.ipynb
+  24. https://www.tensorflow.org/programmers_guide/datasets
+  25. https://www.tensorflow.org/api_docs/python/tf/contrib/data
+  26. https://www.tensorflow.org/programmers_guide/estimators
+  27. https://www.tensorflow.org/versions/master/api_docs/python/tf/estimator
+  28. https://plus.google.com/112374322230920073195
+  29. https://developers.googleblog.com/search/label/datasets
+  30. https://developers.googleblog.com/search/label/estimators
+  31. https://developers.googleblog.com/search/label/tensorflow
+  32. https://www.blogger.com/profile/10893005773910109511
+  33. https://developers.googleblog.com/2017/09/introducing-tensorflow-datasets.html?showcomment=1505460937385#c8472874798004361454
+  34. https://www.blogger.com/delete-comment.g?blogid=596098824972435195&postid=8472874798004361454
+  35. https://developers.googleblog.com/
+  36. https://developers.googleblog.com/2017/09/actions-on-google-in-australia.html
+  37. https://developers.googleblog.com/2017/09/making-google-developers-documentation.html
+  38. https://developers.googleblog.com/search/label/.app
+  39. https://developers.googleblog.com/search/label/.dev
+  40. https://developers.googleblog.com/search/label/#aiy
+  41. https://developers.googleblog.com/search/label/#devfest18 #devfeststories #gdg #googledevelopers #developers #community
+  42. https://developers.googleblog.com/search/label/#freeandopen
+  43. https://developers.googleblog.com/search/label/#googleplay #androiddevstory #playstore #developerconsole #storelistingexperiments
+  44. https://developers.googleblog.com/search/label/#growwithgoogle
+  45. https://developers.googleblog.com/search/label/#io12
+  46. https://developers.googleblog.com/search/label/#io13
+  47. https://developers.googleblog.com/search/label/#io14
+  48. https://developers.googleblog.com/search/label/#io15
+  49. https://developers.googleblog.com/search/label/#io16
+  50. https://developers.googleblog.com/search/label/#io17
+  51. https://developers.googleblog.com/search/label/#io18
+  52. https://developers.googleblog.com/search/label/#io2012
+  53. https://developers.googleblog.com/search/label/#io2013
+  54. https://developers.googleblog.com/search/label/#io2014
+  55. https://developers.googleblog.com/search/label/+1
+  56. https://developers.googleblog.com/search/label/20% project
+  57. https://developers.googleblog.com/search/label/3d
+  58. https://developers.googleblog.com/search/label/3d face mesh
+  59. https://developers.googleblog.com/search/label/about.com
+  60. https://developers.googleblog.com/search/label/accelerator
+  61. https://developers.googleblog.com/search/label/accessibility
+  62. https://developers.googleblog.com/search/label/actions
+  63. https://developers.googleblog.com/search/label/actions on google
+  64. https://developers.googleblog.com/search/label/actionsongoogle
+  65. https://developers.googleblog.com/search/label/activity
+  66. https://developers.googleblog.com/search/label/administrative apis
+  67. https://developers.googleblog.com/search/label/admob
+  68. https://developers.googleblog.com/search/label/adobe
+  69. https://developers.googleblog.com/search/label/ads
+  70. https://developers.googleblog.com/search/label/adsense
+  71. https://developers.googleblog.com/search/label/advanced
+  72. https://developers.googleblog.com/search/label/advogato
+  73. https://developers.googleblog.com/search/label/adwords
+  74. https://developers.googleblog.com/search/label/africa
+  75. https://developers.googleblog.com/search/label/agency program
+  76. https://developers.googleblog.com/search/label/agpl
+  77. https://developers.googleblog.com/search/label/ai
+  78. https://developers.googleblog.com/search/label/ai principles
+  79. https://developers.googleblog.com/search/label/aiy
+  80. https://developers.googleblog.com/search/label/aiy projects
+  81. https://developers.googleblog.com/search/label/aiyprojects
+  82. https://developers.googleblog.com/search/label/ajax
+  83. https://developers.googleblog.com/search/label/ajax apis
+  84. https://developers.googleblog.com/search/label/ajax search
+  85. https://developers.googleblog.com/search/label/ajax search books news apis
+  86. https://developers.googleblog.com/search/label/all for good
+  87. https://developers.googleblog.com/search/label/amarok
+  88. https://developers.googleblog.com/search/label/amp
+  89. https://developers.googleblog.com/search/label/amp cache
+  90. https://developers.googleblog.com/search/label/analytics
+  91. https://developers.googleblog.com/search/label/and assistant
+  92. https://developers.googleblog.com/search/label/android
+  93. https://developers.googleblog.com/search/label/android developer certification
+  94. https://developers.googleblog.com/search/label/android developers
+  95. https://developers.googleblog.com/search/label/android development
+  96. https://developers.googleblog.com/search/label/android studio
+  97. https://developers.googleblog.com/search/label/android things
+  98. https://developers.googleblog.com/search/label/android wear
+  99. https://developers.googleblog.com/search/label/animation
+ 100. https://developers.googleblog.com/search/label/announcement
+ 101. https://developers.googleblog.com/search/label/announcements
+ 102. https://developers.googleblog.com/search/label/apache
+ 103. https://developers.googleblog.com/search/label/api
+ 104. https://developers.googleblog.com/search/label/api.ai
+ 105. https://developers.googleblog.com/search/label/apis
+ 106. https://developers.googleblog.com/search/label/apis console
+ 107. https://developers.googleblog.com/search/label/apis explorer
+ 108. https://developers.googleblog.com/search/label/apis. charts
+ 109. https://developers.googleblog.com/search/label/app
+ 110. https://developers.googleblog.com/search/label/app design
+ 111. https://developers.googleblog.com/search/label/app dev
+ 112. https://developers.googleblog.com/search/label/app development
+ 113. https://developers.googleblog.com/search/label/app engine
+ 114. https://developers.googleblog.com/search/label/app indexing
+ 115. https://developers.googleblog.com/search/label/app indexing api
+ 116. https://developers.googleblog.com/search/label/app invites
+ 117. https://developers.googleblog.com/search/label/apple
+ 118. https://developers.googleblog.com/search/label/application development
+ 119. https://developers.googleblog.com/search/label/apps
+ 120. https://developers.googleblog.com/search/label/apps script
+ 121. https://developers.googleblog.com/search/label/ar
+ 122. https://developers.googleblog.com/search/label/arcore
+ 123. https://developers.googleblog.com/search/label/area 120
+ 124. https://developers.googleblog.com/search/label/artifact management
+ 125. https://developers.googleblog.com/search/label/artificial intelligence
+ 126. https://developers.googleblog.com/search/label/asia
+ 127. https://developers.googleblog.com/search/label/assistant
+ 128. https://developers.googleblog.com/search/label/atom publishing protocol
+ 129. https://developers.googleblog.com/search/label/audio
+ 130. https://developers.googleblog.com/search/label/augmented images
+ 131. https://developers.googleblog.com/search/label/augmented reality
+ 132. https://developers.googleblog.com/search/label/australia
+ 133. https://developers.googleblog.com/search/label/auth
+ 134. https://developers.googleblog.com/search/label/authentication
+ 135. https://developers.googleblog.com/search/label/authsub
+ 136. https://developers.googleblog.com/search/label/automatic id103
+ 137. https://developers.googleblog.com/search/label/awards
+ 138. https://developers.googleblog.com/search/label/axsjax
+ 139. https://developers.googleblog.com/search/label/barcodes
+ 140. https://developers.googleblog.com/search/label/beacon
+ 141. https://developers.googleblog.com/search/label/beacons
+ 142. https://developers.googleblog.com/search/label/belarus
+ 143. https://developers.googleblog.com/search/label/bespin
+ 144. https://developers.googleblog.com/search/label/best practices
+ 145. https://developers.googleblog.com/search/label/beta
+ 146. https://developers.googleblog.com/search/label/bigquery
+ 147. https://developers.googleblog.com/search/label/bitcoin
+ 148. https://developers.googleblog.com/search/label/blockly
+ 149. https://developers.googleblog.com/search/label/blogger
+ 150. https://developers.googleblog.com/search/label/book search
+ 151. https://developers.googleblog.com/search/label/books api
+ 152. https://developers.googleblog.com/search/label/bootcamp
+ 153. https://developers.googleblog.com/search/label/brazil
+ 154. https://developers.googleblog.com/search/label/british english
+ 155. https://developers.googleblog.com/search/label/brotli
+ 156. https://developers.googleblog.com/search/label/browser
+ 157. https://developers.googleblog.com/search/label/build out
+ 158. https://developers.googleblog.com/search/label/building ajax apps
+ 159. https://developers.googleblog.com/search/label/buildout
+ 160. https://developers.googleblog.com/search/label/bulgaria
+ 161. https://developers.googleblog.com/search/label/business
+ 162. https://developers.googleblog.com/search/label/buzz
+ 163. https://developers.googleblog.com/search/label/c++
+ 164. https://developers.googleblog.com/search/label/cache
+ 165. https://developers.googleblog.com/search/label/caja
+ 166. https://developers.googleblog.com/search/label/caldav
+ 167. https://developers.googleblog.com/search/label/calendar
+ 168. https://developers.googleblog.com/search/label/camino
+ 169. https://developers.googleblog.com/search/label/campfire one
+ 170. https://developers.googleblog.com/search/label/caption
+ 171. https://developers.googleblog.com/search/label/cardboard
+ 172. https://developers.googleblog.com/search/label/carddav
+ 173. https://developers.googleblog.com/search/label/cast
+ 174. https://developers.googleblog.com/search/label/certification
+ 175. https://developers.googleblog.com/search/label/certification award
+ 176. https://developers.googleblog.com/search/label/channel
+ 177. https://developers.googleblog.com/search/label/chinese
+ 178. https://developers.googleblog.com/search/label/chrome
+ 179. https://developers.googleblog.com/search/label/chrome apps
+ 180. https://developers.googleblog.com/search/label/chrome dev summit
+ 181. https://developers.googleblog.com/search/label/chrome devtools
+ 182. https://developers.googleblog.com/search/label/chrome experiment
+ 183. https://developers.googleblog.com/search/label/chrome extensions
+ 184. https://developers.googleblog.com/search/label/chrome os
+ 185. https://developers.googleblog.com/search/label/chrome web store
+ 186. https://developers.googleblog.com/search/label/chromecast
+ 187. https://developers.googleblog.com/search/label/chromium
+ 188. https://developers.googleblog.com/search/label/chronoscope
+ 189. https://developers.googleblog.com/search/label/cifs
+ 190. https://developers.googleblog.com/search/label/classes
+ 191. https://developers.googleblog.com/search/label/classroom api
+ 192. https://developers.googleblog.com/search/label/client libraries
+ 193. https://developers.googleblog.com/search/label/closure tools
+ 194. https://developers.googleblog.com/search/label/cloud
+ 195. https://developers.googleblog.com/search/label/cloud anchor
+ 196. https://developers.googleblog.com/search/label/cloud datastore
+ 197. https://developers.googleblog.com/search/label/cloud functions for firebase
+ 198. https://developers.googleblog.com/search/label/cloud next
+ 199. https://developers.googleblog.com/search/label/cloud platform
+ 200. https://developers.googleblog.com/search/label/cloud portability
+ 201. https://developers.googleblog.com/search/label/cloud services
+ 202. https://developers.googleblog.com/search/label/cloud sql
+ 203. https://developers.googleblog.com/search/label/cloud storage
+ 204. https://developers.googleblog.com/search/label/cms
+ 205. https://developers.googleblog.com/search/label/coca cola
+ 206. https://developers.googleblog.com/search/label/cocoapods
+ 207. https://developers.googleblog.com/search/label/code for educators
+ 208. https://developers.googleblog.com/search/label/code jam
+ 209. https://developers.googleblog.com/search/label/code review
+ 210. https://developers.googleblog.com/search/label/code-in
+ 211. https://developers.googleblog.com/search/label/codeedu
+ 212. https://developers.googleblog.com/search/label/codelabs
+ 213. https://developers.googleblog.com/search/label/coffee with a googler
+ 214. https://developers.googleblog.com/search/label/colaboratory
+ 215. https://developers.googleblog.com/search/label/collada
+ 216. https://developers.googleblog.com/search/label/color
+ 217. https://developers.googleblog.com/search/label/colt mcanlis
+ 218. https://developers.googleblog.com/search/label/commerce
+ 219. https://developers.googleblog.com/search/label/community
+ 220. https://developers.googleblog.com/search/label/community connectors
+ 221. https://developers.googleblog.com/search/label/competition
+ 222. https://developers.googleblog.com/search/label/compilers
+ 223. https://developers.googleblog.com/search/label/compression
+ 224. https://developers.googleblog.com/search/label/compressorhead
+ 225. https://developers.googleblog.com/search/label/id161
+ 226. https://developers.googleblog.com/search/label/computing heritage
+ 227. https://developers.googleblog.com/search/label/conferences
+ 228. https://developers.googleblog.com/search/label/contacts api
+ 229. https://developers.googleblog.com/search/label/containers
+ 230. https://developers.googleblog.com/search/label/contest
+ 231. https://developers.googleblog.com/search/label/contextual gadgets
+ 232. https://developers.googleblog.com/search/label/conversation design
+ 233. https://developers.googleblog.com/search/label/conversations
+ 234. https://developers.googleblog.com/search/label/coral
+ 235. https://developers.googleblog.com/search/label/core ml
+ 236. https://developers.googleblog.com/search/label/couchdb
+ 237. https://developers.googleblog.com/search/label/countdown to i/o 2012
+ 238. https://developers.googleblog.com/search/label/courses
+ 239. https://developers.googleblog.com/search/label/cpu
+ 240. https://developers.googleblog.com/search/label/crash course
+ 241. https://developers.googleblog.com/search/label/crash reporting
+ 242. https://developers.googleblog.com/search/label/crashlytics
+ 243. https://developers.googleblog.com/search/label/creative commons
+ 244. https://developers.googleblog.com/search/label/cricket
+ 245. https://developers.googleblog.com/search/label/crisis response
+ 246. https://developers.googleblog.com/search/label/croatia
+ 247. https://developers.googleblog.com/search/label/cryptocurrency
+ 248. https://developers.googleblog.com/search/label/cryptography
+ 249. https://developers.googleblog.com/search/label/css
+ 250. https://developers.googleblog.com/search/label/css3
+ 251. https://developers.googleblog.com/search/label/custom search
+ 252. https://developers.googleblog.com/search/label/custom search api
+ 253. https://developers.googleblog.com/search/label/czechia
+ 254. https://developers.googleblog.com/search/label/danish linux forum
+ 255. https://developers.googleblog.com/search/label/dart
+ 256. https://developers.googleblog.com/search/label/data compression
+ 257. https://developers.googleblog.com/search/label/data visualization
+ 258. https://developers.googleblog.com/search/label/database
+ 259. https://developers.googleblog.com/search/label/databases
+ 260. https://developers.googleblog.com/search/label/dataset
+ 261. https://developers.googleblog.com/search/label/datasets
+ 262. https://developers.googleblog.com/search/label/datastore
+ 263. https://developers.googleblog.com/search/label/dataviz
+ 264. https://developers.googleblog.com/search/label/daydream
+ 265. https://developers.googleblog.com/search/label/deprecation
+ 266. https://developers.googleblog.com/search/label/design
+ 267. https://developers.googleblog.com/search/label/devart
+ 268. https://developers.googleblog.com/search/label/develop
+ 269. https://developers.googleblog.com/search/label/developer
+ 270. https://developers.googleblog.com/search/label/developer communities
+ 271. https://developers.googleblog.com/search/label/developer expert
+ 272. https://developers.googleblog.com/search/label/developer features
+ 273. https://developers.googleblog.com/search/label/developer keynote
+ 274. https://developers.googleblog.com/search/label/developer relations
+ 275. https://developers.googleblog.com/search/label/developers
+ 276. https://developers.googleblog.com/search/label/developers. meetup
+ 277. https://developers.googleblog.com/search/label/devfest
+ 278. https://developers.googleblog.com/search/label/devfest developer chrome maps social wave apps
+ 279. https://developers.googleblog.com/search/label/devfest18
+ 280. https://developers.googleblog.com/search/label/devfeststories
+ 281. https://developers.googleblog.com/search/label/dfp
+ 282. https://developers.googleblog.com/search/label/dialogflow
+ 283. https://developers.googleblog.com/search/label/discovery service
+ 284. https://developers.googleblog.com/search/label/diversity
+ 285. https://developers.googleblog.com/search/label/django
+ 286. https://developers.googleblog.com/search/label/dns
+ 287. https://developers.googleblog.com/search/label/do-it-yourself
+ 288. https://developers.googleblog.com/search/label/docker
+ 289. https://developers.googleblog.com/search/label/docs
+ 290. https://developers.googleblog.com/search/label/documentation
+ 291. https://developers.googleblog.com/search/label/documents list api
+ 292. https://developers.googleblog.com/search/label/dojo
+ 293. https://developers.googleblog.com/search/label/domains
+ 294. https://developers.googleblog.com/search/label/doodles
+ 295. https://developers.googleblog.com/search/label/dot net
+ 296. https://developers.googleblog.com/search/label/doubleclick
+ 297. https://developers.googleblog.com/search/label/dreamweaver
+ 298. https://developers.googleblog.com/search/label/drive
+ 299. https://developers.googleblog.com/search/label/drupal
+ 300. https://developers.googleblog.com/search/label/dynamic links
+ 301. https://developers.googleblog.com/search/label/earn
+ 302. https://developers.googleblog.com/search/label/earth
+ 303. https://developers.googleblog.com/search/label/eclipse
+ 304. https://developers.googleblog.com/search/label/eclipsecon
+ 305. https://developers.googleblog.com/search/label/eddystone
+ 306. https://developers.googleblog.com/search/label/edge tpu
+ 307. https://developers.googleblog.com/search/label/edge tpu accelerator
+ 308. https://developers.googleblog.com/search/label/edge tpu dev board
+ 309. https://developers.googleblog.com/search/label/educatio
+ 310. https://developers.googleblog.com/search/label/education
+ 311. https://developers.googleblog.com/search/label/email
+ 312. https://developers.googleblog.com/search/label/emea
+ 313. https://developers.googleblog.com/search/label/endpoints
+ 314. https://developers.googleblog.com/search/label/enterprise
+ 315. https://developers.googleblog.com/search/label/entrepreneurs
+ 316. https://developers.googleblog.com/search/label/estimator
+ 317. https://developers.googleblog.com/search/label/estimators
+ 318. https://developers.googleblog.com/search/label/estonia
+ 319. https://developers.googleblog.com/search/label/ethics
+ 320. https://developers.googleblog.com/search/label/europe
+ 321. https://developers.googleblog.com/search/label/event
+ 322. https://developers.googleblog.com/search/label/events
+ 323. https://developers.googleblog.com/search/label/evolution
+ 324. https://developers.googleblog.com/search/label/execution api
+ 325. https://developers.googleblog.com/search/label/extensions
+ 326. https://developers.googleblog.com/search/label/fabric
+ 327. https://developers.googleblog.com/search/label/fairness
+ 328. https://developers.googleblog.com/search/label/fairness in machine learning
+ 329. https://developers.googleblog.com/search/label/faster web
+ 330. https://developers.googleblog.com/search/label/fcm
+ 331. https://developers.googleblog.com/search/label/featured
+ 332. https://developers.googleblog.com/search/label/feeds
+ 333. https://developers.googleblog.com/search/label/finance
+ 334. https://developers.googleblog.com/search/label/fintech
+ 335. https://developers.googleblog.com/search/label/firebase
+ 336. https://developers.googleblog.com/search/label/firebase analytics
+ 337. https://developers.googleblog.com/search/label/firebase cloud messaging
+ 338. https://developers.googleblog.com/search/label/firebase dynamic links
+ 339. https://developers.googleblog.com/search/label/firebug
+ 340. https://developers.googleblog.com/search/label/firefox
+ 341. https://developers.googleblog.com/search/label/firestore
+ 342. https://developers.googleblog.com/search/label/firevox
+ 343. https://developers.googleblog.com/search/label/firstbeta
+ 344. https://developers.googleblog.com/search/label/fitness
+ 345. https://developers.googleblog.com/search/label/flutter
+ 346. https://developers.googleblog.com/search/label/flutter 1.2
+ 347. https://developers.googleblog.com/search/label/flutter live
+ 348. https://developers.googleblog.com/search/label/flutter release preview 1
+ 349. https://developers.googleblog.com/search/label/flutter release preview 2
+ 350. https://developers.googleblog.com/search/label/font api
+ 351. https://developers.googleblog.com/search/label/fonts
+ 352. https://developers.googleblog.com/search/label/fosdem
+ 353. https://developers.googleblog.com/search/label/freebsd
+ 354. https://developers.googleblog.com/search/label/freenet
+ 355. https://developers.googleblog.com/search/label/fridaygram
+ 356. https://developers.googleblog.com/search/label/fusion tables
+ 357. https://developers.googleblog.com/search/label/g suite
+ 358. https://developers.googleblog.com/search/label/g+
+ 359. https://developers.googleblog.com/search/label/gadgets
+ 360. https://developers.googleblog.com/search/label/game developers conference
+ 361. https://developers.googleblog.com/search/label/games
+ 362. https://developers.googleblog.com/search/label/gaming
+ 363. https://developers.googleblog.com/search/label/gcc
+ 364. https://developers.googleblog.com/search/label/gci
+ 365. https://developers.googleblog.com/search/label/gcp
+ 366. https://developers.googleblog.com/search/label/gda
+ 367. https://developers.googleblog.com/search/label/gdata
+ 368. https://developers.googleblog.com/search/label/gdc17
+ 369. https://developers.googleblog.com/search/label/gdd
+ 370. https://developers.googleblog.com/search/label/gdd07
+ 371. https://developers.googleblog.com/search/label/gdd08
+ 372. https://developers.googleblog.com/search/label/gdd09
+ 373. https://developers.googleblog.com/search/label/gdd11
+ 374. https://developers.googleblog.com/search/label/gde
+ 375. https://developers.googleblog.com/search/label/gdg
+ 376. https://developers.googleblog.com/search/label/gdl
+ 377. https://developers.googleblog.com/search/label/gdl weekly
+ 378. https://developers.googleblog.com/search/label/gears
+ 379. https://developers.googleblog.com/search/label/geo
+ 380. https://developers.googleblog.com/search/label/geolocation
+ 381. https://developers.googleblog.com/search/label/geoserver
+ 382. https://developers.googleblog.com/search/label/getpaid
+ 383. https://developers.googleblog.com/search/label/ghop
+ 384. https://developers.googleblog.com/search/label/git
+ 385. https://developers.googleblog.com/search/label/github
+ 386. https://developers.googleblog.com/search/label/gke
+ 387. https://developers.googleblog.com/search/label/gmail
+ 388. https://developers.googleblog.com/search/label/gmail apis
+ 389. https://developers.googleblog.com/search/label/gmtc
+ 390. https://developers.googleblog.com/search/label/gnome
+ 391. https://developers.googleblog.com/search/label/gnome women's summer outreach program
+ 392. https://developers.googleblog.com/search/label/go
+ 393. https://developers.googleblog.com/search/label/goo.gl
+ 394. https://developers.googleblog.com/search/label/google
+ 395. https://developers.googleblog.com/search/label/google ai
+ 396. https://developers.googleblog.com/search/label/google apis
+ 397. https://developers.googleblog.com/search/label/google apps
+ 398. https://developers.googleblog.com/search/label/google apps api
+ 399. https://developers.googleblog.com/search/label/google apps for your domain
+ 400. https://developers.googleblog.com/search/label/google apps marketplace
+ 401. https://developers.googleblog.com/search/label/google ar
+ 402. https://developers.googleblog.com/search/label/google assistant
+ 403. https://developers.googleblog.com/search/label/google assistant sdk
+ 404. https://developers.googleblog.com/search/label/google brain
+ 405. https://developers.googleblog.com/search/label/google buzz
+ 406. https://developers.googleblog.com/search/label/google cast
+ 407. https://developers.googleblog.com/search/label/google chart api
+ 408. https://developers.googleblog.com/search/label/google checkout
+ 409. https://developers.googleblog.com/search/label/google chrome
+ 410. https://developers.googleblog.com/search/label/google cloud
+ 411. https://developers.googleblog.com/search/label/google cloud messaging
+ 412. https://developers.googleblog.com/search/label/google cloud platform
+ 413. https://developers.googleblog.com/search/label/google cloud storage
+ 414. https://developers.googleblog.com/search/label/google code
+ 415. https://developers.googleblog.com/search/label/google code project hosting
+ 416. https://developers.googleblog.com/search/label/google code search
+ 417. https://developers.googleblog.com/search/label/google code university
+ 418. https://developers.googleblog.com/search/label/google compute engine
+ 419. https://developers.googleblog.com/search/label/google coral
+ 420. https://developers.googleblog.com/search/label/google data apis
+ 421. https://developers.googleblog.com/search/label/google data protocol
+ 422. https://developers.googleblog.com/search/label/google data studio
+ 423. https://developers.googleblog.com/search/label/google developer day
+ 424. https://developers.googleblog.com/search/label/google developer days
+ 425. https://developers.googleblog.com/search/label/google developer scholarship
+ 426. https://developers.googleblog.com/search/label/google developers
+ 427. https://developers.googleblog.com/search/label/google developers academy
+ 428. https://developers.googleblog.com/search/label/google developers certification
+ 429. https://developers.googleblog.com/search/label/google developers community groups
+ 430. https://developers.googleblog.com/search/label/google developers groups
+ 431. https://developers.googleblog.com/search/label/google developers live
+ 432. https://developers.googleblog.com/search/label/google developers site
+ 433. https://developers.googleblog.com/search/label/google developers university consortium
+ 434. https://developers.googleblog.com/search/label/google docs
+ 435. https://developers.googleblog.com/search/label/google docs api
+ 436. https://developers.googleblog.com/search/label/google doctype
+ 437. https://developers.googleblog.com/search/label/google domains
+ 438. https://developers.googleblog.com/search/label/google drive
+ 439. https://developers.googleblog.com/search/label/google drive sdk
+ 440. https://developers.googleblog.com/search/label/google earth
+ 441. https://developers.googleblog.com/search/label/google fit
+ 442. https://developers.googleblog.com/search/label/google fonts
+ 443. https://developers.googleblog.com/search/label/google friend connect
+ 444. https://developers.googleblog.com/search/label/google gadgets
+ 445. https://developers.googleblog.com/search/label/google gears
+ 446. https://developers.googleblog.com/search/label/google grants
+ 447. https://developers.googleblog.com/search/label/google groups settings
+ 448. https://developers.googleblog.com/search/label/google health
+ 449. https://developers.googleblog.com/search/label/google i/o
+ 450. https://developers.googleblog.com/search/label/google identity platform
+ 451. https://developers.googleblog.com/search/label/google in asia
+ 452. https://developers.googleblog.com/search/label/google io
+ 453. https://developers.googleblog.com/search/label/google maps
+ 454. https://developers.googleblog.com/search/label/google maps platform
+ 455. https://developers.googleblog.com/search/label/google mashup editor
+ 456. https://developers.googleblog.com/search/label/google noto fonts
+ 457. https://developers.googleblog.com/search/label/google photos
+ 458. https://developers.googleblog.com/search/label/google platform
+ 459. https://developers.googleblog.com/search/label/google play
+ 460. https://developers.googleblog.com/search/label/google play developer api
+ 461. https://developers.googleblog.com/search/label/google play services
+ 462. https://developers.googleblog.com/search/label/google registry
+ 463. https://developers.googleblog.com/search/label/google scholarships
+ 464. https://developers.googleblog.com/search/label/google science fair
+ 465. https://developers.googleblog.com/search/label/google sheets
+ 466. https://developers.googleblog.com/search/label/google sheets api
+ 467. https://developers.googleblog.com/search/label/google slides
+ 468. https://developers.googleblog.com/search/label/google slides api
+ 469. https://developers.googleblog.com/search/label/google space
+ 470. https://developers.googleblog.com/search/label/google spreadsheets api
+ 471. https://developers.googleblog.com/search/label/google storage
+ 472. https://developers.googleblog.com/search/label/google summer of code
+ 473. https://developers.googleblog.com/search/label/google tech talk
+ 474. https://developers.googleblog.com/search/label/google technology
+ 475. https://developers.googleblog.com/search/label/google technoloy user groups
+ 476. https://developers.googleblog.com/search/label/google tv
+ 477. https://developers.googleblog.com/search/label/google visualization api
+ 478. https://developers.googleblog.com/search/label/google wallet
+ 479. https://developers.googleblog.com/search/label/google wave
+ 480. https://developers.googleblog.com/search/label/google web elements
+ 481. https://developers.googleblog.com/search/label/google web toolkit
+ 482. https://developers.googleblog.com/search/label/google.org
+ 483. https://developers.googleblog.com/search/label/google+
+ 484. https://developers.googleblog.com/search/label/googleassistant
+ 485. https://developers.googleblog.com/search/label/googlecast
+ 486. https://developers.googleblog.com/search/label/googledevelopers
+ 487. https://developers.googleblog.com/search/label/googleio
+ 488. https://developers.googleblog.com/search/label/googlenew
+ 489. https://developers.googleblog.com/search/label/googleplay
+ 490. https://developers.googleblog.com/search/label/googlewebelements googleio
+ 491. https://developers.googleblog.com/search/label/gpe
+ 492. https://developers.googleblog.com/search/label/gpgs c++ games
+ 493. https://developers.googleblog.com/search/label/gpt
+ 494. https://developers.googleblog.com/search/label/green linux
+ 495. https://developers.googleblog.com/search/label/groups api
+ 496. https://developers.googleblog.com/search/label/grow
+ 497. https://developers.googleblog.com/search/label/grow with google
+ 498. https://developers.googleblog.com/search/label/gsoc
+ 499. https://developers.googleblog.com/search/label/gsuite
+ 500. https://developers.googleblog.com/search/label/gtags
+ 501. https://developers.googleblog.com/search/label/gtug
+ 502. https://developers.googleblog.com/search/label/guest post
+ 503. https://developers.googleblog.com/search/label/guice
+ 504. https://developers.googleblog.com/search/label/gulp
+ 505. https://developers.googleblog.com/search/label/gwsop
+ 506. https://developers.googleblog.com/search/label/gwt
+ 507. https://developers.googleblog.com/search/label/gzip
+ 508. https://developers.googleblog.com/search/label/hackathon
+ 509. https://developers.googleblog.com/search/label/hacking
+ 510. https://developers.googleblog.com/search/label/hackthon
+ 511. https://developers.googleblog.com/search/label/hamilton
+ 512. https://developers.googleblog.com/search/label/hangouts
+ 513. https://developers.googleblog.com/search/label/hangouts chat
+ 514. https://developers.googleblog.com/search/label/hangouts chat api
+ 515. https://developers.googleblog.com/search/label/haproxy
+ 516. https://developers.googleblog.com/search/label/hg
+ 517. https://developers.googleblog.com/search/label/hibernate
+ 518. https://developers.googleblog.com/search/label/howto
+ 519. https://developers.googleblog.com/search/label/hpux
+ 520. https://developers.googleblog.com/search/label/html
+ 521. https://developers.googleblog.com/search/label/html5
+ 522. https://developers.googleblog.com/search/label/http
+ 523. https://developers.googleblog.com/search/label/i/o
+ 524. https://developers.googleblog.com/search/label/i/o 17
+ 525. https://developers.googleblog.com/search/label/i/o 2017
+ 526. https://developers.googleblog.com/search/label/i/o extended
+ 527. https://developers.googleblog.com/search/label/i/o live
+ 528. https://developers.googleblog.com/search/label/ical
+ 529. https://developers.googleblog.com/search/label/identity
+ 530. https://developers.googleblog.com/search/label/ietf
+ 531. https://developers.googleblog.com/search/label/ignite
+ 532. https://developers.googleblog.com/search/label/igoogle
+ 533. https://developers.googleblog.com/search/label/iguanas
+ 534. https://developers.googleblog.com/search/label/iiw
+ 535. https://developers.googleblog.com/search/label/image compression
+ 536. https://developers.googleblog.com/search/label/image search
+ 537. https://developers.googleblog.com/search/label/imara
+ 538. https://developers.googleblog.com/search/label/in-app billing
+ 539. https://developers.googleblog.com/search/label/in-app payments
+ 540. https://developers.googleblog.com/search/label/in-app purchase
+ 541. https://developers.googleblog.com/search/label/incubator
+ 542. https://developers.googleblog.com/search/label/india
+ 543. https://developers.googleblog.com/search/label/indie
+ 544. https://developers.googleblog.com/search/label/indie games accelerator
+ 545. https://developers.googleblog.com/search/label/information visualization
+ 546. https://developers.googleblog.com/search/label/intelligentwire
+ 547. https://developers.googleblog.com/search/label/interactive music
+ 548. https://developers.googleblog.com/search/label/internationalization
+ 549. https://developers.googleblog.com/search/label/internet explorer
+ 550. https://developers.googleblog.com/search/label/internet of things
+ 551. https://developers.googleblog.com/search/label/interviews
+ 552. https://developers.googleblog.com/search/label/io17
+ 553. https://developers.googleblog.com/search/label/io18
+ 554. https://developers.googleblog.com/search/label/io2017
+ 555. https://developers.googleblog.com/search/label/ios
+ 556. https://developers.googleblog.com/search/label/ios sdk
+ 557. https://developers.googleblog.com/search/label/iot
+ 558. https://developers.googleblog.com/search/label/ipad
+ 559. https://developers.googleblog.com/search/label/iphone
+ 560. https://developers.googleblog.com/search/label/iphone development
+ 561. https://developers.googleblog.com/search/label/israel
+ 562. https://developers.googleblog.com/search/label/issue tracker
+ 563. https://developers.googleblog.com/search/label/jaiku
+ 564. https://developers.googleblog.com/search/label/japanese
+ 565. https://developers.googleblog.com/search/label/java
+ 566. https://developers.googleblog.com/search/label/javascript
+ 567. https://developers.googleblog.com/search/label/jetpack
+ 568. https://developers.googleblog.com/search/label/joomla
+ 569. https://developers.googleblog.com/search/label/joomladayus2007
+ 570. https://developers.googleblog.com/search/label/joomladayusa
+ 571. https://developers.googleblog.com/search/label/json
+ 572. https://developers.googleblog.com/search/label/karaoke
+ 573. https://developers.googleblog.com/search/label/kde
+ 574. https://developers.googleblog.com/search/label/kde 4.0
+ 575. https://developers.googleblog.com/search/label/keras
+ 576. https://developers.googleblog.com/search/label/kernel
+ 577. https://developers.googleblog.com/search/label/kernel summit
+ 578. https://developers.googleblog.com/search/label/keynote
+ 579. https://developers.googleblog.com/search/label/khronos
+ 580. https://developers.googleblog.com/search/label/kids
+ 581. https://developers.googleblog.com/search/label/kids coding
+ 582. https://developers.googleblog.com/search/label/kids coding team
+ 583. https://developers.googleblog.com/search/label/kml
+ 584. https://developers.googleblog.com/search/label/korean
+ 585. https://developers.googleblog.com/search/label/krakow
+ 586. https://developers.googleblog.com/search/label/kubernetes
+ 587. https://developers.googleblog.com/search/label/labs
+ 588. https://developers.googleblog.com/search/label/lanchpad
+ 589. https://developers.googleblog.com/search/label/languages
+ 590. https://developers.googleblog.com/search/label/latam accelerator
+ 591. https://developers.googleblog.com/search/label/latam startups
+ 592. https://developers.googleblog.com/search/label/latitude
+ 593. https://developers.googleblog.com/search/label/latvia
+ 594. https://developers.googleblog.com/search/label/launch
+ 595. https://developers.googleblog.com/search/label/launchpad
+ 596. https://developers.googleblog.com/search/label/launchpad accelerator
+ 597. https://developers.googleblog.com/search/label/launchpad studio
+ 598. https://developers.googleblog.com/search/label/lca
+ 599. https://developers.googleblog.com/search/label/leadership
+ 600. https://developers.googleblog.com/search/label/learning
+ 601. https://developers.googleblog.com/search/label/lens
+ 602. https://developers.googleblog.com/search/label/lessons
+ 603. https://developers.googleblog.com/search/label/licenses
+ 604. https://developers.googleblog.com/search/label/linux
+ 605. https://developers.googleblog.com/search/label/linux foundation
+ 606. https://developers.googleblog.com/search/label/linux summit
+ 607. https://developers.googleblog.com/search/label/linux virtual server
+ 608. https://developers.googleblog.com/search/label/linuxconf eu
+ 609. https://developers.googleblog.com/search/label/lithuania
+ 610. https://developers.googleblog.com/search/label/localization
+ 611. https://developers.googleblog.com/search/label/loco
+ 612. https://developers.googleblog.com/search/label/london
+ 613. https://developers.googleblog.com/search/label/mac
+ 614. https://developers.googleblog.com/search/label/macfuse
+ 615. https://developers.googleblog.com/search/label/machine
+ 616. https://developers.googleblog.com/search/label/machine intelligence
+ 617. https://developers.googleblog.com/search/label/machine learning
+ 618. https://developers.googleblog.com/search/label/machine learning accelerator
+ 619. https://developers.googleblog.com/search/label/maker
+ 620. https://developers.googleblog.com/search/label/makers
+ 621. https://developers.googleblog.com/search/label/malware
+ 622. https://developers.googleblog.com/search/label/maps
+ 623. https://developers.googleblog.com/search/label/maps apis
+ 624. https://developers.googleblog.com/search/label/marketplace
+ 625. https://developers.googleblog.com/search/label/material
+ 626. https://developers.googleblog.com/search/label/material components
+ 627. https://developers.googleblog.com/search/label/material design
+ 628. https://developers.googleblog.com/search/label/mdl
+ 629. https://developers.googleblog.com/search/label/meetup
+ 630. https://developers.googleblog.com/search/label/mercurial
+ 631. https://developers.googleblog.com/search/label/mexico startups
+ 632. https://developers.googleblog.com/search/label/mit csail
+ 633. https://developers.googleblog.com/search/label/mit media lab
+ 634. https://developers.googleblog.com/search/label/ml
+ 635. https://developers.googleblog.com/search/label/ml kit
+ 636. https://developers.googleblog.com/search/label/mlcc
+ 637. https://developers.googleblog.com/search/label/mobile
+ 638. https://developers.googleblog.com/search/label/mobile app development
+ 639. https://developers.googleblog.com/search/label/mobile design
+ 640. https://developers.googleblog.com/search/label/mobile development
+ 641. https://developers.googleblog.com/search/label/mobile performance
+ 642. https://developers.googleblog.com/search/label/mobile sites
+ 643. https://developers.googleblog.com/search/label/mobile speed
+ 644. https://developers.googleblog.com/search/label/mobile ux
+ 645. https://developers.googleblog.com/search/label/mobile web
+ 646. https://developers.googleblog.com/search/label/mobile world congress
+ 647. https://developers.googleblog.com/search/label/mod_pagespeed
+ 648. https://developers.googleblog.com/search/label/moderator
+ 649. https://developers.googleblog.com/search/label/monetize
+ 650. https://developers.googleblog.com/search/label/mooc
+ 651. https://developers.googleblog.com/search/label/mozilla
+ 652. https://developers.googleblog.com/search/label/mylar
+ 653. https://developers.googleblog.com/search/label/myspace
+ 654. https://developers.googleblog.com/search/label/mysql
+ 655. https://developers.googleblog.com/search/label/mythtv
+ 656. https://developers.googleblog.com/search/label/named
+ 657. https://developers.googleblog.com/search/label/narratives
+ 658. https://developers.googleblog.com/search/label/native ads
+ 659. https://developers.googleblog.com/search/label/native client
+ 660. https://developers.googleblog.com/search/label/nearby
+ 661. https://developers.googleblog.com/search/label/netbsd
+ 662. https://developers.googleblog.com/search/label/non-profit
+ 663. https://developers.googleblog.com/search/label/nonsense
+ 664. https://developers.googleblog.com/search/label/nosql
+ 665. https://developers.googleblog.com/search/label/notifications
+ 666. https://developers.googleblog.com/search/label/noto serif cjk
+ 667. https://developers.googleblog.com/search/label/nss
+ 668. https://developers.googleblog.com/search/label/nvidia
+ 669. https://developers.googleblog.com/search/label/o3d
+ 670. https://developers.googleblog.com/search/label/oauth
+ 671. https://developers.googleblog.com/search/label/oauth playground
+ 672. https://developers.googleblog.com/search/label/oauth2
+ 673. https://developers.googleblog.com/search/label/objective-c
+ 674. https://developers.googleblog.com/search/label/ocaml
+ 675. https://developers.googleblog.com/search/label/ocr
+ 676. https://developers.googleblog.com/search/label/odf
+ 677. https://developers.googleblog.com/search/label/office hours
+ 678. https://developers.googleblog.com/search/label/oha
+ 679. https://developers.googleblog.com/search/label/ooxml
+ 680. https://developers.googleblog.com/search/label/open data
+ 681. https://developers.googleblog.com/search/label/open source
+ 682. https://developers.googleblog.com/search/label/open source blog
+ 683. https://developers.googleblog.com/search/label/open source releases
+ 684. https://developers.googleblog.com/search/label/open web
+ 685. https://developers.googleblog.com/search/label/openajax alliance
+ 686. https://developers.googleblog.com/search/label/opengl
+ 687. https://developers.googleblog.com/search/label/openid
+ 688. https://developers.googleblog.com/search/label/opensocial
+ 689. https://developers.googleblog.com/search/label/openssh
+ 690. https://developers.googleblog.com/search/label/openssl
+ 691. https://developers.googleblog.com/search/label/optimization
+ 692. https://developers.googleblog.com/search/label/oreilly
+ 693. https://developers.googleblog.com/search/label/orkut
+ 694. https://developers.googleblog.com/search/label/oscon
+ 695. https://developers.googleblog.com/search/label/oscon2007
+ 696. https://developers.googleblog.com/search/label/osi
+ 697. https://developers.googleblog.com/search/label/oss devs
+ 698. https://developers.googleblog.com/search/label/ossjam
+ 699. https://developers.googleblog.com/search/label/osx
+ 700. https://developers.googleblog.com/search/label/pactester
+ 701. https://developers.googleblog.com/search/label/page speed
+ 702. https://developers.googleblog.com/search/label/pagespeed
+ 703. https://developers.googleblog.com/search/label/palette
+ 704. https://developers.googleblog.com/search/label/payments
+ 705. https://developers.googleblog.com/search/label/peer bonus program
+ 706. https://developers.googleblog.com/search/label/performance
+ 707. https://developers.googleblog.com/search/label/phone
+ 708. https://developers.googleblog.com/search/label/photos
+ 709. https://developers.googleblog.com/search/label/picasa
+ 710. https://developers.googleblog.com/search/label/picasa web
+ 711. https://developers.googleblog.com/search/label/places api
+ 712. https://developers.googleblog.com/search/label/play services
+ 713. https://developers.googleblog.com/search/label/playground
+ 714. https://developers.googleblog.com/search/label/plone
+ 715. https://developers.googleblog.com/search/label/plone sprint
+ 716. https://developers.googleblog.com/search/label/podcast
+ 717. https://developers.googleblog.com/search/label/poland
+ 718. https://developers.googleblog.com/search/label/poly
+ 719. https://developers.googleblog.com/search/label/polymer
+ 720. https://developers.googleblog.com/search/label/polymer summit
+ 721. https://developers.googleblog.com/search/label/portugal
+ 722. https://developers.googleblog.com/search/label/posix
+ 723. https://developers.googleblog.com/search/label/powermeter api
+ 724. https://developers.googleblog.com/search/label/prediction api
+ 725. https://developers.googleblog.com/search/label/preview
+ 726. https://developers.googleblog.com/search/label/prizes
+ 727. https://developers.googleblog.com/search/label/programming
+ 728. https://developers.googleblog.com/search/label/progressive web app
+ 729. https://developers.googleblog.com/search/label/project hosting
+ 730. https://developers.googleblog.com/search/label/project loon
+ 731. https://developers.googleblog.com/search/label/project tango
+ 732. https://developers.googleblog.com/search/label/prototype
+ 733. https://developers.googleblog.com/search/label/proximity
+ 734. https://developers.googleblog.com/search/label/pubsubhubbub
+ 735. https://developers.googleblog.com/search/label/pwa
+ 736. https://developers.googleblog.com/search/label/py3k
+ 737. https://developers.googleblog.com/search/label/python
+ 738. https://developers.googleblog.com/search/label/python sprint
+ 739. https://developers.googleblog.com/search/label/rails
+ 740. https://developers.googleblog.com/search/label/random hacks of kindness
+ 741. https://developers.googleblog.com/search/label/rasberry pi
+ 742. https://developers.googleblog.com/search/label/reader
+ 743. https://developers.googleblog.com/search/label/releases
+ 744. https://developers.googleblog.com/search/label/remote config
+ 745. https://developers.googleblog.com/search/label/research
+ 746. https://developers.googleblog.com/search/label/reserve seats
+ 747. https://developers.googleblog.com/search/label/responsible ai
+ 748. https://developers.googleblog.com/search/label/result snippets
+ 749. https://developers.googleblog.com/search/label/reto meier
+ 750. https://developers.googleblog.com/search/label/rewarded ads
+ 751. https://developers.googleblog.com/search/label/rewarded video ads
+ 752. https://developers.googleblog.com/search/label/rhino
+ 753. https://developers.googleblog.com/search/label/saatchi
+ 754. https://developers.googleblog.com/search/label/safety & security
+ 755. https://developers.googleblog.com/search/label/safety and security
+ 756. https://developers.googleblog.com/search/label/salesforce
+ 757. https://developers.googleblog.com/search/label/samba
+ 758. https://developers.googleblog.com/search/label/sample dialogs
+ 759. https://developers.googleblog.com/search/label/sandbox
+ 760. https://developers.googleblog.com/search/label/santa tracker
+ 761. https://developers.googleblog.com/search/label/scalability
+ 762. https://developers.googleblog.com/search/label/scale-ups
+ 763. https://developers.googleblog.com/search/label/sceneform
+ 764. https://developers.googleblog.com/search/label/schedule
+ 765. https://developers.googleblog.com/search/label/scholarship
+ 766. https://developers.googleblog.com/search/label/scholarships
+ 767. https://developers.googleblog.com/search/label/scratch
+ 768. https://developers.googleblog.com/search/label/screencast
+ 769. https://developers.googleblog.com/search/label/sdk
+ 770. https://developers.googleblog.com/search/label/sdks
+ 771. https://developers.googleblog.com/search/label/search
+ 772. https://developers.googleblog.com/search/label/security
+ 773. https://developers.googleblog.com/search/label/serbia
+ 774. https://developers.googleblog.com/search/label/serif
+ 775. https://developers.googleblog.com/search/label/service worker
+ 776. https://developers.googleblog.com/search/label/sessions
+ 777. https://developers.googleblog.com/search/label/seurat
+ 778. https://developers.googleblog.com/search/label/shape
+ 779. https://developers.googleblog.com/search/label/sheets api
+ 780. https://developers.googleblog.com/search/label/shindig
+ 781. https://developers.googleblog.com/search/label/shopping
+ 782. https://developers.googleblog.com/search/label/shoreline amphitheatre
+ 783. https://developers.googleblog.com/search/label/showcase
+ 784. https://developers.googleblog.com/search/label/sidewiki
+ 785. https://developers.googleblog.com/search/label/sign-in
+ 786. https://developers.googleblog.com/search/label/silverstripe
+ 787. https://developers.googleblog.com/search/label/simd
+ 788. https://developers.googleblog.com/search/label/sitemaps
+ 789. https://developers.googleblog.com/search/label/sites api
+ 790. https://developers.googleblog.com/search/label/sixapart
+ 791. https://developers.googleblog.com/search/label/sketchup
+ 792. https://developers.googleblog.com/search/label/slides api
+ 793. https://developers.googleblog.com/search/label/small business
+ 794. https://developers.googleblog.com/search/label/small businesses
+ 795. https://developers.googleblog.com/search/label/smart lock for passwords
+ 796. https://developers.googleblog.com/search/label/soap search api
+ 797. https://developers.googleblog.com/search/label/soc
+ 798. https://developers.googleblog.com/search/label/social
+ 799. https://developers.googleblog.com/search/label/social graph
+ 800. https://developers.googleblog.com/search/label/solaris
+ 801. https://developers.googleblog.com/search/label/souders
+ 802. https://developers.googleblog.com/search/label/spa2007
+ 803. https://developers.googleblog.com/search/label/space
+ 804. https://developers.googleblog.com/search/label/spdy
+ 805. https://developers.googleblog.com/search/label/speakers
+ 806. https://developers.googleblog.com/search/label/speech
+ 807. https://developers.googleblog.com/search/label/speed
+ 808. https://developers.googleblog.com/search/label/speed tracer
+ 809. https://developers.googleblog.com/search/label/stable release
+ 810. https://developers.googleblog.com/search/label/standards
+ 811. https://developers.googleblog.com/search/label/startup
+ 812. https://developers.googleblog.com/search/label/startup accelerator
+ 813. https://developers.googleblog.com/search/label/startups
+ 814. https://developers.googleblog.com/search/label/stem
+ 815. https://developers.googleblog.com/search/label/storage
+ 816. https://developers.googleblog.com/search/label/street view
+ 817. https://developers.googleblog.com/search/label/student programs
+ 818. https://developers.googleblog.com/search/label/students
+ 819. https://developers.googleblog.com/search/label/stuff
+ 820. https://developers.googleblog.com/search/label/style
+ 821. https://developers.googleblog.com/search/label/subscribed links
+ 822. https://developers.googleblog.com/search/label/subscription
+ 823. https://developers.googleblog.com/search/label/subversion
+ 824. https://developers.googleblog.com/search/label/summer of code
+ 825. https://developers.googleblog.com/search/label/sundar pichai
+ 826. https://developers.googleblog.com/search/label/svg
+ 827. https://developers.googleblog.com/search/label/sxsw
+ 828. https://developers.googleblog.com/search/label/syndication
+ 829. https://developers.googleblog.com/search/label/tasks api
+ 830. https://developers.googleblog.com/search/label/team drives (new)
+ 831. https://developers.googleblog.com/search/label/techmakers
+ 832. https://developers.googleblog.com/search/label/templates
+ 833. https://developers.googleblog.com/search/label/tensorflow
+ 834. https://developers.googleblog.com/search/label/tensorflow dev summit
+ 835. https://developers.googleblog.com/search/label/tensorflow lite
+ 836. https://developers.googleblog.com/search/label/tensorflow research cloud
+ 837. https://developers.googleblog.com/search/label/tensorrt
+ 838. https://developers.googleblog.com/search/label/test lab
+ 839. https://developers.googleblog.com/search/label/testing
+ 840. https://developers.googleblog.com/search/label/text embedding models
+ 841. https://developers.googleblog.com/search/label/tfdevsummit
+ 842. https://developers.googleblog.com/search/label/tflite
+ 843. https://developers.googleblog.com/search/label/themes
+ 844. https://developers.googleblog.com/search/label/thought leadership
+ 845. https://developers.googleblog.com/search/label/tool
+ 846. https://developers.googleblog.com/search/label/tools
+ 847. https://developers.googleblog.com/search/label/topp
+ 848. https://developers.googleblog.com/search/label/tpu
+ 849. https://developers.googleblog.com/search/label/training
+ 850. https://developers.googleblog.com/search/label/tranparency
+ 851. https://developers.googleblog.com/search/label/transit
+ 852. https://developers.googleblog.com/search/label/translate
+ 853. https://developers.googleblog.com/search/label/translation
+ 854. https://developers.googleblog.com/search/label/tutorials
+ 855. https://developers.googleblog.com/search/label/tv
+ 856. https://developers.googleblog.com/search/label/ubiquitous computing
+ 857. https://developers.googleblog.com/search/label/ubiquity
+ 858. https://developers.googleblog.com/search/label/ubucon
+ 859. https://developers.googleblog.com/search/label/ubuntu
+ 860. https://developers.googleblog.com/search/label/udacity
+ 861. https://developers.googleblog.com/search/label/ui
+ 862. https://developers.googleblog.com/search/label/ukraine
+ 863. https://developers.googleblog.com/search/label/unicode
+ 864. https://developers.googleblog.com/search/label/unit test
+ 865. https://developers.googleblog.com/search/label/unity
+ 866. https://developers.googleblog.com/search/label/universal
+ 867. https://developers.googleblog.com/search/label/universal app campaigns
+ 868. https://developers.googleblog.com/search/label/university
+ 869. https://developers.googleblog.com/search/label/unix
+ 870. https://developers.googleblog.com/search/label/url
+ 871. https://developers.googleblog.com/search/label/url shortener
+ 872. https://developers.googleblog.com/search/label/urls
+ 873. https://developers.googleblog.com/search/label/ux
+ 874. https://developers.googleblog.com/search/label/video
+ 875. https://developers.googleblog.com/search/label/videos
+ 876. https://developers.googleblog.com/search/label/vim
+ 877. https://developers.googleblog.com/search/label/virtual keyboard
+ 878. https://developers.googleblog.com/search/label/virtual reality
+ 879. https://developers.googleblog.com/search/label/visualization
+ 880. https://developers.googleblog.com/search/label/voice
+ 881. https://developers.googleblog.com/search/label/voice kit
+ 882. https://developers.googleblog.com/search/label/voice user interface
+ 883. https://developers.googleblog.com/search/label/vr
+ 884. https://developers.googleblog.com/search/label/vui
+ 885. https://developers.googleblog.com/search/label/wattpad
+ 886. https://developers.googleblog.com/search/label/wearables
+ 887. https://developers.googleblog.com/search/label/weave
+ 888. https://developers.googleblog.com/search/label/web
+ 889. https://developers.googleblog.com/search/label/web animations api
+ 890. https://developers.googleblog.com/search/label/web apps
+ 891. https://developers.googleblog.com/search/label/web components
+ 892. https://developers.googleblog.com/search/label/web design
+ 893. https://developers.googleblog.com/search/label/web designer
+ 894. https://developers.googleblog.com/search/label/web development
+ 895. https://developers.googleblog.com/search/label/web exponents
+ 896. https://developers.googleblog.com/search/label/web fonts
+ 897. https://developers.googleblog.com/search/label/web performance
+ 898. https://developers.googleblog.com/search/label/web platform docs
+ 899. https://developers.googleblog.com/search/label/web registry
+ 900. https://developers.googleblog.com/search/label/webfonts
+ 901. https://developers.googleblog.com/search/label/webgl
+ 902. https://developers.googleblog.com/search/label/webmaster
+ 903. https://developers.googleblog.com/search/label/webp
+ 904. https://developers.googleblog.com/search/label/website optimizer
+ 905. https://developers.googleblog.com/search/label/webvr
+ 906. https://developers.googleblog.com/search/label/weekly roundup
+ 907. https://developers.googleblog.com/search/label/whitehouse.gov
+ 908. https://developers.googleblog.com/search/label/who's at google i/o
+ 909. https://developers.googleblog.com/search/label/win
+ 910. https://developers.googleblog.com/search/label/windows
+ 911. https://developers.googleblog.com/search/label/windows programming
+ 912. https://developers.googleblog.com/search/label/winter of code
+ 913. https://developers.googleblog.com/search/label/women tech makers
+ 914. https://developers.googleblog.com/search/label/women techmakers
+ 915. https://developers.googleblog.com/search/label/writing
+ 916. https://developers.googleblog.com/search/label/wtm
+ 917. https://developers.googleblog.com/search/label/xauth
+ 918. https://developers.googleblog.com/search/label/yahoo
+ 919. https://developers.googleblog.com/search/label/young makers
+ 920. https://developers.googleblog.com/search/label/youtube
+ 921. https://developers.googleblog.com/search/label/zlib
+ 922. https://developers.googleblog.com/search/label/zurich
+ 923. https://developers.googleblog.com/search/label/zxing
+ 924. javascript:void(0)
+ 925. https://developers.googleblog.com/2019/
+ 926. https://developers.googleblog.com/2019/03/
+ 927. https://developers.googleblog.com/2019/02/
+ 928. https://developers.googleblog.com/2019/01/
+ 929. javascript:void(0)
+ 930. https://developers.googleblog.com/2018/
+ 931. https://developers.googleblog.com/2018/12/
+ 932. https://developers.googleblog.com/2018/11/
+ 933. https://developers.googleblog.com/2018/10/
+ 934. https://developers.googleblog.com/2018/09/
+ 935. https://developers.googleblog.com/2018/08/
+ 936. https://developers.googleblog.com/2018/07/
+ 937. https://developers.googleblog.com/2018/06/
+ 938. https://developers.googleblog.com/2018/05/
+ 939. https://developers.googleblog.com/2018/04/
+ 940. https://developers.googleblog.com/2018/03/
+ 941. https://developers.googleblog.com/2018/02/
+ 942. https://developers.googleblog.com/2018/01/
+ 943. javascript:void(0)
+ 944. https://developers.googleblog.com/2017/
+ 945. https://developers.googleblog.com/2017/12/
+ 946. https://developers.googleblog.com/2017/11/
+ 947. https://developers.googleblog.com/2017/10/
+ 948. https://developers.googleblog.com/2017/09/
+ 949. https://developers.googleblog.com/2017/08/
+ 950. https://developers.googleblog.com/2017/07/
+ 951. https://developers.googleblog.com/2017/06/
+ 952. https://developers.googleblog.com/2017/05/
+ 953. https://developers.googleblog.com/2017/04/
+ 954. https://developers.googleblog.com/2017/03/
+ 955. https://developers.googleblog.com/2017/02/
+ 956. https://developers.googleblog.com/2017/01/
+ 957. javascript:void(0)
+ 958. https://developers.googleblog.com/2016/
+ 959. https://developers.googleblog.com/2016/12/
+ 960. https://developers.googleblog.com/2016/11/
+ 961. https://developers.googleblog.com/2016/10/
+ 962. https://developers.googleblog.com/2016/09/
+ 963. https://developers.googleblog.com/2016/08/
+ 964. https://developers.googleblog.com/2016/07/
+ 965. https://developers.googleblog.com/2016/06/
+ 966. https://developers.googleblog.com/2016/05/
+ 967. https://developers.googleblog.com/2016/04/
+ 968. https://developers.googleblog.com/2016/03/
+ 969. https://developers.googleblog.com/2016/02/
+ 970. https://developers.googleblog.com/2016/01/
+ 971. javascript:void(0)
+ 972. https://developers.googleblog.com/2015/
+ 973. https://developers.googleblog.com/2015/12/
+ 974. https://developers.googleblog.com/2015/11/
+ 975. https://developers.googleblog.com/2015/10/
+ 976. https://developers.googleblog.com/2015/09/
+ 977. https://developers.googleblog.com/2015/08/
+ 978. https://developers.googleblog.com/2015/07/
+ 979. https://developers.googleblog.com/2015/06/
+ 980. https://developers.googleblog.com/2015/05/
+ 981. https://developers.googleblog.com/2015/04/
+ 982. https://developers.googleblog.com/2015/03/
+ 983. https://developers.googleblog.com/2015/02/
+ 984. javascript:void(0)
+ 985. https://developers.googleblog.com/2014/
+ 986. https://developers.googleblog.com/2014/12/
+ 987. https://developers.googleblog.com/2014/11/
+ 988. https://developers.googleblog.com/2014/10/
+ 989. https://developers.googleblog.com/2014/09/
+ 990. https://developers.googleblog.com/2014/08/
+ 991. https://developers.googleblog.com/2014/07/
+ 992. https://developers.googleblog.com/2014/06/
+ 993. https://developers.googleblog.com/2014/05/
+ 994. https://developers.googleblog.com/2014/04/
+ 995. https://developers.googleblog.com/2014/03/
+ 996. https://developers.googleblog.com/2014/02/
+ 997. https://developers.googleblog.com/2014/01/
+ 998. javascript:void(0)
+ 999. https://developers.googleblog.com/2013/
+1000. https://developers.googleblog.com/2013/12/
+1001. https://developers.googleblog.com/2013/11/
+1002. https://developers.googleblog.com/2013/10/
+1003. https://developers.googleblog.com/2013/09/
+1004. https://developers.googleblog.com/2013/08/
+1005. https://developers.googleblog.com/2013/07/
+1006. https://developers.googleblog.com/2013/06/
+1007. https://developers.googleblog.com/2013/05/
+1008. https://developers.googleblog.com/2013/04/
+1009. https://developers.googleblog.com/2013/03/
+1010. https://developers.googleblog.com/2013/02/
+1011. https://developers.googleblog.com/2013/01/
+1012. javascript:void(0)
+1013. https://developers.googleblog.com/2012/
+1014. https://developers.googleblog.com/2012/12/
+1015. https://developers.googleblog.com/2012/11/
+1016. https://developers.googleblog.com/2012/10/
+1017. https://developers.googleblog.com/2012/09/
+1018. https://developers.googleblog.com/2012/08/
+1019. https://developers.googleblog.com/2012/07/
+1020. https://developers.googleblog.com/2012/06/
+1021. https://developers.googleblog.com/2012/05/
+1022. https://developers.googleblog.com/2012/04/
+1023. https://developers.googleblog.com/2012/03/
+1024. https://developers.googleblog.com/2012/02/
+1025. https://developers.googleblog.com/2012/01/
+1026. javascript:void(0)
+1027. https://developers.googleblog.com/2011/
+1028. https://developers.googleblog.com/2011/12/
+1029. https://developers.googleblog.com/2011/11/
+1030. https://developers.googleblog.com/2011/10/
+1031. https://developers.googleblog.com/2011/09/
+1032. https://developers.googleblog.com/2011/08/
+1033. https://developers.googleblog.com/2011/07/
+1034. https://developers.googleblog.com/2011/06/
+1035. https://developers.googleblog.com/2011/05/
+1036. https://developers.googleblog.com/2011/04/
+1037. https://developers.googleblog.com/2011/03/
+1038. https://developers.googleblog.com/2011/02/
+1039. https://developers.googleblog.com/2011/01/
+1040. javascript:void(0)
+1041. https://developers.googleblog.com/2010/
+1042. https://developers.googleblog.com/2010/12/
+1043. https://developers.googleblog.com/2010/11/
+1044. https://developers.googleblog.com/2010/10/
+1045. https://developers.googleblog.com/2010/09/
+1046. https://developers.googleblog.com/2010/08/
+1047. https://developers.googleblog.com/2010/07/
+1048. https://developers.googleblog.com/2010/06/
+1049. https://developers.googleblog.com/2010/05/
+1050. https://developers.googleblog.com/2010/04/
+1051. https://developers.googleblog.com/2010/03/
+1052. https://developers.googleblog.com/2010/02/
+1053. https://developers.googleblog.com/2010/01/
+1054. javascript:void(0)
+1055. https://developers.googleblog.com/2009/
+1056. https://developers.googleblog.com/2009/12/
+1057. https://developers.googleblog.com/2009/11/
+1058. https://developers.googleblog.com/2009/10/
+1059. https://developers.googleblog.com/2009/09/
+1060. https://developers.googleblog.com/2009/08/
+1061. https://developers.googleblog.com/2009/07/
+1062. https://developers.googleblog.com/2009/06/
+1063. https://developers.googleblog.com/2009/05/
+1064. https://developers.googleblog.com/2009/04/
+1065. https://developers.googleblog.com/2009/03/
+1066. https://developers.googleblog.com/2009/02/
+1067. https://developers.googleblog.com/2009/01/
+1068. javascript:void(0)
+1069. https://developers.googleblog.com/2008/
+1070. https://developers.googleblog.com/2008/12/
+1071. https://developers.googleblog.com/2008/11/
+1072. https://developers.googleblog.com/2008/10/
+1073. https://developers.googleblog.com/2008/09/
+1074. https://developers.googleblog.com/2008/08/
+1075. https://developers.googleblog.com/2008/07/
+1076. https://developers.googleblog.com/2008/06/
+1077. https://developers.googleblog.com/2008/05/
+1078. https://developers.googleblog.com/2008/04/
+1079. https://developers.googleblog.com/2008/03/
+1080. https://developers.googleblog.com/2008/02/
+1081. https://developers.googleblog.com/2008/01/
+1082. javascript:void(0)
+1083. https://developers.googleblog.com/2007/
+1084. https://developers.googleblog.com/2007/12/
+1085. https://developers.googleblog.com/2007/11/
+1086. https://developers.googleblog.com/2007/10/
+1087. https://developers.googleblog.com/2007/09/
+1088. https://developers.googleblog.com/2007/08/
+1089. https://developers.googleblog.com/2007/07/
+1090. https://developers.googleblog.com/2007/06/
+1091. https://developers.googleblog.com/2007/05/
+1092. https://developers.googleblog.com/2007/04/
+1093. https://developers.googleblog.com/2007/03/
+1094. https://developers.googleblog.com/2007/02/
+1095. https://developers.googleblog.com/2007/01/
+1096. javascript:void(0)
+1097. https://developers.googleblog.com/2006/
+1098. https://developers.googleblog.com/2006/12/
+1099. https://developers.googleblog.com/2006/11/
+1100. https://developers.googleblog.com/2006/10/
+1101. https://developers.googleblog.com/2006/09/
+1102. https://developers.googleblog.com/2006/08/
+1103. https://developers.googleblog.com/2006/07/
+1104. https://developers.googleblog.com/2006/06/
+1105. https://developers.googleblog.com/2006/05/
+1106. https://developers.googleblog.com/2006/04/
+1107. https://developers.googleblog.com/2006/03/
+1108. https://developers.googleblog.com/2006/02/
+1109. https://developers.googleblog.com/2006/01/
+1110. javascript:void(0)
+1111. https://developers.googleblog.com/2005/
+1112. https://developers.googleblog.com/2005/12/
+1113. https://developers.googleblog.com/2005/11/
+1114. https://developers.googleblog.com/2005/10/
+1115. https://developers.googleblog.com/2005/09/
+1116. https://developers.googleblog.com/2005/08/
+1117. https://developers.googleblog.com/2005/07/
+1118. https://developers.googleblog.com/2005/06/
+1119. https://developers.googleblog.com/2005/05/
+1120. https://developers.googleblog.com/2005/04/
+1121. https://developers.googleblog.com/2005/03/
+1122. http://googledevelopers.blogspot.com/atom.xml
+1123. http://googledevelopers.blogspot.com/atom.xml
+1124. http://developers.google.com/
+1125. https://googleblog.blogspot.com/
+1126. https://googlepublicpolicy.blogspot.com/
+1127. https://googleforstudents.blogspot.com/
+1128. https://googleforwork.blogspot.com/
+1129. https://chrome.blogspot.com/
+1130. https://officialandroid.blogspot.com/
+1131. https://googleadsdeveloper.blogspot.com/
+1132. https://android-developers.blogspot.com/
+1133. https://googledevelopers.blogspot.com/
+1134. https://www.google.com/
+1135. https://www.google.com/
+1136. https://www.google.com/policies/privacy/
+1137. https://www.google.com/policies/terms/
+
+   hidden links:
+1139. https://www.blogger.com/comment-iframe.g?blogid=596098824972435195&postid=6097493071170690647
+1140. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html7&action=editwidget&sectionid=sidebar-top
+1141. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=label&widgetid=label1&action=editwidget&sectionid=sidebar
+1142. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=blogarchive&widgetid=blogarchive1&action=editwidget&sectionid=sidebar
+1143. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html6&action=editwidget&sectionid=sidebar
+1144. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html1&action=editwidget&sectionid=sidebar-bottom
+1145. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html9&action=editwidget&sectionid=sidebar-bottom
+1146. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html2&action=editwidget&sectionid=footer-1
+1147. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html3&action=editwidget&sectionid=footer-2
+1148. https://www.blogger.com/rearrange?blogid=596098824972435195&widgettype=html&widgetid=html4&action=editwidget&sectionid=footer-3

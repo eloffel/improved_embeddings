@@ -1,0 +1,445 @@
+     *
+     *
+     *
+     *
+
+     * [1]home
+     * [2]publications
+     * [3]blog
+     * [4]contact
+
+id197
+
+   thomas kipf, 30 september 2016
+   multi-layer graph convolutional network (id197) with first-order filters.
+
+   multi-layer graph convolutional network (id197) with first-order filters.
+   [5]tweet [6]0
+   [7]share
+
+overview
+
+   many important real-world datasets come in the form of graphs or
+   networks: social networks, id13s, protein-interaction
+   networks, the world wide web, etc. (just to name a few). yet, until
+   recently, very little attention has been devoted to the generalization
+   of neural network models to such structured datasets.
+
+   in the last couple of years, a number of papers re-visited this problem
+   of generalizing neural networks to work on arbitrarily structured
+   graphs ([8]bruna et al., iclr 2014; [9]henaff et al., 2015;
+   [10]duvenaud et al., nips 2015; [11]li et al., iclr 2016;
+   [12]defferrard et al., nips 2016; [13]kipf & welling, iclr 2017), some
+   of them now achieving very promising results in domains that have
+   previously been dominated by, e.g., kernel-based methods, graph-based
+   id173 techniques and others.
+
+   in this post, i will give a brief overview of recent developments in
+   this field and point out strengths and drawbacks of various approaches.
+   the discussion here will mainly focus on two recent papers:
+     * kipf & welling (iclr 2017), [14]semi-supervised classification with
+       id197 (disclaimer: i'm the first author)
+     * defferrard et al. (nips 2016), [15]convolutional neural networks on
+       graphs with fast localized spectral filtering
+
+   and a review/discussion post by ferenc huszar: [16]how powerful are
+   graph convolutions? that discusses some limitations of these kinds of
+   models. i wrote a short comment on ferenc's review [17]here (at the
+   very end of this post).
+
+outline
+
+     * short introduction to neural network models on graphs
+     * spectral graph convolutions and id197 (id197s)
+     * demo: graph embeddings with a simple 1st-order id197 model
+     * id197s as differentiable generalization of the weisfeiler-lehman
+       algorithm
+
+   if you're already familiar with id197s and related methods, you might
+   want to jump directly to [18]embedding the karate club network.
+
+how powerful are id197?
+
+recent literature
+
+   generalizing well-established neural models like id56s or id98s to work
+   on arbitrarily structured graphs is a challenging problem. some recent
+   papers introduce problem-specific specialized architectures (e.g.
+   [19]duvenaud et al., nips 2015; [20]li et al., iclr 2016; [21]jain et
+   al., cvpr 2016), others make use of graph convolutions known from
+   spectral id207[22]^1 ([23]bruna et al., iclr 2014; [24]henaff et
+   al., 2015) to define parameterized filters that are used in a
+   multi-layer neural network model, akin to "classical" id98s that we know
+   and love.
+
+   more recent work focuses on bridging the gap between fast heuristics
+   and the slow[25]^2, but somewhat more principled, spectral approach.
+   [26]defferrard et al. (nips 2016) approximate smooth filters in the
+   spectral domain using chebyshev polynomials with free parameters that
+   are learned in a neural network-like model. they achieve convincing
+   results on regular domains (like mnist), closely approaching those of a
+   simple 2d id98 model.
+
+   in [27]kipf & welling (iclr 2017), we take a somewhat similar approach
+   and start from the framework of spectral graph convolutions, yet
+   introduce simplifications (we will get to those later in the post) that
+   in many cases allow both for significantly faster training times and
+   higher predictive accuracy, reaching state-of-the-art classification
+   results on a number of benchmark graph datasets.
+
+id197s part i: definitions
+
+   currently, most graph neural network models have a somewhat universal
+   architecture in common. i will refer to these models as graph
+   convolutional networks (id197s); convolutional, because filter parameters
+   are typically shared over all locations in the graph (or a subset
+   thereof as in [28]duvenaud et al., nips 2015).
+
+   for these models, the goal is then to learn a function of
+   signals/features on a graph \(\mathcal{g}=(\mathcal{v}, \mathcal{e})\)
+   which takes as input:
+     * a feature description \(x_i\) for every node \(i\); summarized in a
+       \(n\times d\) feature matrix \(x\) (\(n\): number of nodes, \(d\):
+       number of input features)
+     * a representative description of the graph structure in matrix form;
+       typically in the form of an adjacency matrix \(a\) (or some
+       function thereof)
+
+   and produces a node-level output \(z\) (an \(n\times f\) feature
+   matrix, where \(f\) is the number of output features per node).
+   graph-level outputs can be modeled by introducing some form of pooling
+   operation (see, e.g. [29]duvenaud et al., nips 2015).
+
+   every neural network layer can then be written as a non-linear function
+   \[ h^{(l+1)} = f(h^{(l)}, a) \, ,\] with \(h^{(0)} = x\) and \(h^{(l)}
+   = z\) (or \(z\) for graph-level outputs), \(l\) being the number of
+   layers. the specific models then differ only in how \(f(\cdot, \cdot)\)
+   is chosen and parameterized.
+
+id197s part ii: a simple example
+
+   as an example, let's consider the following very simple form of a
+   layer-wise propagation rule:
+
+   \[f(h^{(l)}, a) = \sigma\left( ah^{(l)}w^{(l)}\right) \, ,\]
+
+   where \(w^{(l)}\) is a weight matrix for the \(l\)-th neural network
+   layer and \(\sigma(\cdot)\) is a non-linear activation function like
+   the \(\text{relu}\). despite its simplicity this model is already quite
+   powerful (we'll come to that in a moment).
+
+   but first, let us address two limitations of this simple model:
+   multiplication with \(a\) means that, for every node, we sum up all the
+   feature vectors of all neighboring nodes but not the node itself
+   (unless there are self-loops in the graph). we can "fix" this by
+   enforcing self-loops in the graph: we simply add the identity matrix to
+   \(a\).
+
+   the second major limitation is that \(a\) is typically not normalized
+   and therefore the multiplication with \(a\) will completely change the
+   scale of the feature vectors (we can understand that by looking at the
+   eigenvalues of \(a\)). normalizing \(a\) such that all rows sum to one,
+   i.e. \(d^{-1}a\), where \(d\) is the diagonal node degree matrix, gets
+   rid of this problem. multiplying with \(d^{-1}a\) now corresponds to
+   taking the average of neighboring node features. in practice, dynamics
+   get more interesting when we use a symmetric id172, i.e.
+   \(d^{-\frac{1}{2}}ad^{-\frac{1}{2}}\) (as this no longer amounts to
+   mere averaging of neighboring nodes). combining these two tricks, we
+   essentially arrive at the propagation rule introduced in [30]kipf &
+   welling (iclr 2017):
+
+   \[f(h^{(l)}, a) = \sigma\left(
+   \hat{d}^{-\frac{1}{2}}\hat{a}\hat{d}^{-\frac{1}{2}}h^{(l)}w^{(l)}\right
+   ) \, ,\]
+
+   with \(\hat{a} = a + i\), where \(i\) is the identity matrix and
+   \(\hat{d}\) is the diagonal node degree matrix of \(\hat{a}\).
+
+   in the next section, we will take a closer look at how this type of
+   model operates on a very simple example graph: zachary's karate club
+   network (make sure to check out the [31]wikipedia article!).
+
+id197s part iii: embedding the karate club network
+
+   karate club graph, colors denote communities obtained via
+   modularity-based id91 (brandes et al., 2008).
+
+   karate club graph, colors denote communities obtained via
+   modularity-based id91 ([32]brandes et al., 2008).
+
+   let's take a look at how our simple id197 model (see previous section or
+   [33]kipf & welling, iclr 2017) works on a well-known graph dataset:
+   zachary's karate club network (see figure above).
+
+   we take a 3-layer id197 with randomly initialized weights. now, even
+   before training the weights, we simply insert the adjacency matrix of
+   the graph and \(x = i\) (i.e. the identity matrix, as we don't have any
+   node features) into the model. the 3-layer id197 now performs three
+   propagation steps during the forward pass and effectively convolves the
+   3rd-order neighborhood of every node (all nodes up to 3 "hops" away).
+   remarkably, the model produces an embedding of these nodes that closely
+   resembles the community-structure of the graph (see figure below).
+   remember that we have initialized the weights completely at random and
+   have not yet performed any training updates (so far)!
+   id197 embedding (with random weights) for nodes in the karate club
+   network.
+
+   id197 embedding (with random weights) for nodes in the karate club
+   network.
+
+   this might seem somewhat surprising. a recent paper on a model called
+   deepwalk ([34]perozzi et al., kdd 2014) showed that they can learn a
+   very similar embedding in a complicated unsupervised training
+   procedure. how is it possible to get such an embedding more or less
+   "for free" using our simple untrained id197 model?
+
+   we can shed some light on this by interpreting the id197 model as a
+   generalized, differentiable version of the well-known weisfeiler-lehman
+   algorithm on graphs. the (1-dimensional) weisfeiler-lehman algorithm
+   works as follows[35]^3:
+
+   for all nodes \(v_i\in \mathcal{g}\):
+     * get features[36]^4 \(\{h_{v_j}\}\) of neighboring nodes \(\{v_j\}\)
+     * update node feature \(h_{v_i} \leftarrow \text{hash}\left(\sum_j
+       h_{v_j}\right)\), where \(\text{hash}(\cdot)\) is (ideally) an
+       injective hash function
+
+   repeat for \(k\) steps or until convergence.
+
+   in practice, the weisfeiler-lehman algorithm assigns a unique set of
+   features for most graphs. this means that every node is assigned a
+   feature that uniquely describes its role in the graph. exceptions are
+   highly regular graphs like grids, chains, etc. for most irregular
+   graphs, this feature assignment can be used as a check for graph
+   isomorphism (i.e. whether two graphs are identical, up to a permutation
+   of the nodes).
+
+   going back to our graph convolutional layer-wise propagation rule (now
+   in vector form):
+
+   \[h^{(l+1)}_{v_i} = \sigma \left( \sum_{j}
+   \frac{1}{c_{ij}}h^{(l)}_{v_j}w^{(l)} \right) \, ,\]
+
+   where \(j\) indexes the neighboring nodes of \(v_i\). \(c_{ij}\) is a
+   id172 constant for the edge \((v_i,v_j)\) which originates from
+   using the symmetrically normalized adjacency matrix
+   \(d^{-\frac{1}{2}}ad^{-\frac{1}{2}}\) in our id197 model. we now see that
+   this propagation rule can be interpreted as a differentiable and
+   parameterized (with \(w^{(l)}\)) variant of the hash function used in
+   the original weisfeiler-lehman algorithm. if we now choose an
+   appropriate non-linearity and initialize the random weight matrix such
+   that it is orthogonal (or e.g. using the initialization from [37]glorot
+   & bengio, aistats 2010), this update rule becomes stable in practice
+   (also thanks to the id172 with \(c_{ij}\)). and we make the
+   remarkable observation that we get meaningful smooth embeddings where
+   we can interpret distance as (dis-)similarity of local graph
+   structures!
+
+id197s part iv: semi-supervised learning
+
+   since everything in our model is differentiable and parameterized, we
+   can add some labels, train the model and observe how the embeddings
+   react. we can use the semi-supervised learning algorithm for id197s
+   introduced in [38]kipf & welling (iclr 2017). we simply label one node
+   per class/community (highlighted nodes in the video below) and start
+   training for a couple of iterations[39]^5:
+
+   semi-supervised classification with id197s: latent space dynamics for 300
+   training iterations with a single label per class. labeled nodes are
+   highlighted.
+
+   note that the model directly produces a 2-dimensional latent space
+   which we can immediately visualize. we observe that the 3-layer id197
+   model manages to linearly separate the communities, given only one
+   labeled example per class. this is a somewhat remarkable result, given
+   that the model received no feature description of the nodes. at the
+   same time, initial node features could be provided, which is exactly
+   what we do in the experiments described in our paper ([40]kipf &
+   welling, iclr 2017) to achieve state-of-the-art classification results
+   on a number of graph datasets.
+
+conclusion
+
+   research on this topic is just getting started. the past several months
+   have seen exciting developments, but we have probably only scratched
+   the surface of these types of models so far. it remains to be seen how
+   neural networks on graphs can be further taylored to specific types of
+   problems, like, e.g., learning on directed or relational graphs, and
+   how one can use learned graph embeddings for further tasks down the
+   line, etc. this list is by no means exhaustive and i expect further
+   interesting applications and extensions to pop up in the near future.
+   let me know in the comments below if you have some exciting ideas or
+   questions to share!
+
+thanks to the following people:
+
+   max welling, taco cohen, chris louizos and karen ullrich (for many
+   discussions and feedback both on the paper and this blog post). also
+   i'd like to thank ferenc huszar for highlighting some drawbacks of
+   these kinds of models.
+
+a note on completeness
+
+   this blog post constitutes by no means an exhaustive review of the
+   field of neural networks on graphs. i have left out a number of both
+   recent and older papers to make this post more readable and to give it
+   a coherent story line. the papers that i mentioned here will
+   nonetheless serve as a good start if you want to dive deeper into this
+   topic and get a complete overview of what is around and what has been
+   tried so far.
+
+citation
+
+   if you want to use some of this in your own work, you can cite our
+   [41]paper on id197:
+@article{kipf2016semi,
+  title={semi-supervised classification with id197},
+  author={kipf, thomas n and welling, max},
+  journal={arxiv preprint arxiv:1609.02907},
+  year={2016}
+}
+
+source code
+
+   we have released the code for id197 on github:
+   [42]https://github.com/tkipf/id197.
+
+   you can follow me on [43]twitter for future updates.
+   [44]tweet [45]0
+   [46]share
+     __________________________________________________________________
+
+the issue with regular graphs
+
+   in the following, i will briefly comment on the statements made in
+   [47]how powerful are graph convolutions?, a recent blog post by ferenc
+   huszar that provides a slightly negative view on some of the models
+   discussed here. ferenc considers the special case of regular graphs. he
+   correctly points out that id197 (as introduced
+   in this blog post) reduce to rather trivial operations on regular
+   graphs when compared to models that are specifically designed for this
+   domain (like "classical" 2d id98s for images). it is indeed important to
+   note that current graph neural network models that apply to arbitrarily
+   structured graphs typically share some form of shortcoming when applied
+   to regular graphs (like grids, chains, fully-connected graphs etc.). a
+   localized spectral treatment (like in [48]defferrard et al., nips
+   2016), for example, reduces to rotationally symmetric filters and can
+   never imitate the operation of a "classical" 2d id98 on a grid (exluding
+   border-effects). in the same way, the weisfeiler-lehman algorithm will
+   not converge on regular graphs. what this tells us, is that we should
+   probably look beyond regular grids when trying to evaluate the
+   usefulness of a specific graph neural network model, as there are
+   specific trade-offs that have to be made when designing such models for
+   arbitary graphs (yet it is of course important to make people aware of
+   these trade-offs) - that is, unless we can come up with a universally
+   powerful model at some point, of course.
+     __________________________________________________________________
+
+    1. a spectral graph convolution is defined as the multiplication of a
+       signal with a filter in the fourier space of a graph. a graph
+       fourier transform is defined as the multiplication of a graph
+       signal \(x\) (i.e. feature vectors for every node) with the
+       eigenvector matrix \(u\) of the graph laplacian \(l\). the
+       (normalized) graph laplacian can be easily computed from the
+       symmetrically normalized graph adjacency matrix \(\tilde{a}\): \(l
+       = i - \tilde{a}\).[49]   
+    2. using a spectral approach comes at a price: filters have to be
+       defined in fourier space and a graph fourier transform is expensive
+       to compute (it requires multiplication of node features with the
+       eigenvector matrix of the graph laplacian, which is a \(o(n^2)\)
+       operation for a graph with \(n\) nodes; computing the eigenvector
+       matrix in the first place is even more expensive).[50]   
+    3. i'm simplifying things here. for an extensive mathematical
+       discussion of the weisfeiler-lehman algorithm, have a look at the
+       paper by [51]douglas (2011).[52]   
+    4. node features for the weisfeiler-lehman algorithm are typically
+       chosen as scalar integers and are often referred to as colors.[53]   
+    5. as we don't anneal the learning rate in this example, things become
+       quite "jiggly" once the model has converged to a good
+       solution.[54]   
+
+   please enable javascript to view the [55]comments powered by disqus.
+
+get in touch
+
+   thomas [dot] kipf [at] gmail [dot] com
+   amsterdam machine learning lab, university of amsterdam
+   science park 904, 1098 xh amsterdam, the netherlands
+
+     *
+     *
+     *
+     *
+
+     *    2018 thomas kipf
+     * design: [56]templated
+
+references
+
+   visible links
+   1. http://tkipf.github.io/
+   2. http://tkipf.github.io/#two
+   3. http://tkipf.github.io/graph-convolutional-networks/
+   4. http://tkipf.github.io/graph-convolutional-networks/#footer
+   5. https://twitter.com/share
+   6. http://leadstories.com/opensharecount
+   7. https://www.facebook.com/sharer/sharer.php?u=http://tkipf.github.io%graph-convolutional-networks/&src=sdkpreparse
+   8. http://arxiv.org/abs/1312.6203
+   9. http://arxiv.org/abs/1506.05163
+  10. http://papers.nips.cc/paper/5954-convolutional-networks-on-graphs-for-learning-molecular-fingerprints
+  11. https://arxiv.org/abs/1511.05493
+  12. https://arxiv.org/abs/1606.09375
+  13. http://arxiv.org/abs/1609.02907
+  14. http://arxiv.org/abs/1609.02907
+  15. https://arxiv.org/abs/1606.09375
+  16. http://www.id136.vc/how-powerful-are-graph-convolutions-review-of-kipf-welling-2016-2/
+  17. http://tkipf.github.io/graph-convolutional-networks/#the-issue-with-regular-graphs
+  18. http://tkipf.github.io/graph-convolutional-networks/#id197s-part-iii-embedding-the-karate-club-network
+  19. http://papers.nips.cc/paper/5954-convolutional-networks-on-graphs-for-learning-molecular-fingerprints
+  20. https://arxiv.org/abs/1511.05493
+  21. https://arxiv.org/abs/1511.05298
+  22. http://tkipf.github.io/graph-convolutional-networks/#fn1
+  23. http://arxiv.org/abs/1312.6203
+  24. http://arxiv.org/abs/1506.05163
+  25. http://tkipf.github.io/graph-convolutional-networks/#fn2
+  26. https://arxiv.org/abs/1606.09375
+  27. http://arxiv.org/abs/1609.02907
+  28. http://papers.nips.cc/paper/5954-convolutional-networks-on-graphs-for-learning-molecular-fingerprints
+  29. http://papers.nips.cc/paper/5954-convolutional-networks-on-graphs-for-learning-molecular-fingerprints
+  30. http://arxiv.org/abs/1609.02907
+  31. https://en.wikipedia.org/wiki/zachary's_karate_club
+  32. http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.68.6623
+  33. http://arxiv.org/abs/1609.02907
+  34. https://arxiv.org/abs/1403.6652
+  35. http://tkipf.github.io/graph-convolutional-networks/#fn3
+  36. http://tkipf.github.io/graph-convolutional-networks/#fn4
+  37. http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+  38. http://arxiv.org/abs/1609.02907
+  39. http://tkipf.github.io/graph-convolutional-networks/#fn5
+  40. http://arxiv.org/abs/1609.02907
+  41. http://arxiv.org/abs/1609.02907
+  42. https://github.com/tkipf/id197
+  43. https://twitter.com/thomaskipf
+  44. https://twitter.com/share
+  45. http://leadstories.com/opensharecount
+  46. https://www.facebook.com/sharer/sharer.php?u=http://tkipf.github.io%graph-convolutional-networks/&src=sdkpreparse
+  47. http://www.id136.vc/how-powerful-are-graph-convolutions-review-of-kipf-welling-2016-2/
+  48. https://arxiv.org/abs/1606.09375
+  49. http://tkipf.github.io/graph-convolutional-networks/#fnref1
+  50. http://tkipf.github.io/graph-convolutional-networks/#fnref2
+  51. https://arxiv.org/abs/1101.5211
+  52. http://tkipf.github.io/graph-convolutional-networks/#fnref3
+  53. http://tkipf.github.io/graph-convolutional-networks/#fnref4
+  54. http://tkipf.github.io/graph-convolutional-networks/#fnref5
+  55. https://disqus.com/?ref_noscript
+  56. http://templated.co/
+
+   hidden links:
+  58. https://scholar.google.com/citations?user=83hl5fwaaaaj
+  59. https://github.com/tkipf
+  60. https://twitter.com/thomaskipf
+  61. https://www.linkedin.com/in/thomas-kipf-6b260410a
+  62. https://scholar.google.com/citations?user=83hl5fwaaaaj
+  63. https://github.com/tkipf
+  64. https://twitter.com/thomaskipf
+  65. https://www.linkedin.com/in/thomas-kipf-6b260410a

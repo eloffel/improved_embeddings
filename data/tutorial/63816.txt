@@ -1,0 +1,471 @@
+   #[1]rss feed
+
+   [tr?id=1853843318208763&ev=pageview&noscript=1]
+
+     * [2]home
+     * [3]blog
+     * [4]research
+     * [5]cv
+     * [6]photography
+          + [7]arches
+          + [8]berlin
+          + [9]lindau
+          + [10]munich
+          + [11]people taking pictures
+
+     * menu
+
+[12]brian dolhansky
+
+   ml     code     photography
+
+     * [13]home
+     * [14]blog
+     * [15]research
+     * [16]cv
+     * photography
+          + [17]arches
+          + [18]berlin
+          + [19]lindau
+          + [20]munich
+          + [21]people taking pictures
+
+[22]id158s: matrix form (part 5)
+
+   [23]december 14, 2014 in [24]ml primers, [25]neural networks
+
+   to actually implement a multilayer id88 learning algorithm, we do
+   not want to hard code the update rules for each weight. instead, we can
+   formulate both feedforward propagation and id26 as a series
+   of matrix multiplies.  this is what leads to the impressive performance
+   of neural nets - pushing matrix multiplies to a graphics card allows
+   for massive parallelization and large amounts of data.
+
+   this tutorial will cover how to build a matrix-based neural network. it
+   builds heavily off of the theory in part 4 of this series, so make sure
+   you understand the math there!
+
+theory
+
+the feedforward step
+
+   consider the following network:
+   general_network.png general_network.png
+   from now on, i'm going to index matrices by using $a^{(i)}$, where $a$
+   refers to the type of matrix and $(i)$ is an index of the position of
+   the matrix in the network (we can also have $(i\rightarrow j)$ for a
+   weight matrix connected layer $i$ to layer $j$). the only exceptions
+   are the input data matrix $x$ and the output of the network $\hat{y}$.
+   i denote the value of an element in row $i$ and column $j$ of some
+   matrix $a^{(k)}$ with $a^{(k)}_{ij}$.
+   let's look at the low-level operations needed for the feedforward step
+   as we go from the input $x$ to the first layer $l^{(1)}$. if we want to
+   compute the input for a single unit $j$ in layer $l_1$ for a single
+   example $x$, without using matrices, we would carry out the following
+   operation: \begin{align} s_j^{(1)} =& \sum_{i} x_{i} w^{(in\rightarrow
+   1)}_{i\rightarrow j} \end{align} that is, for each component $x_{i}$ in
+   the example $x$, we multiply it by the weight that goes from unit $i$
+   in the input layer to unit $j$ in layer 1. if we want to compute the
+   input to the hidden layer $l^{(2)}$, the only change is that we now
+   include the id180 of the units in $l^{(1)}$:
+   \begin{align} s_j^{(2)} =& \sum_{i} f^{(1)}(s_i^{(1)}) w^{(1\rightarrow
+   2)}_{i\rightarrow j}\\ s_j^{(2)} =& \sum_{i} z_i^{(1)} w^{(1\rightarrow
+   2)}_{i\rightarrow j} \end{align} however, for both of these cases, we
+   must repeat this for every unit $j$ in the layer. in addition, if we
+   have $n$ examples in a minibatch, then we also need to repeat these
+   operations $n$ times, which ultimately leads to a cubic complexity.
+   nested for loops are generally less efficient than using vectorized
+   code (which can be optimized by handing it off to a blas library). a
+   matrix multiply still has cubic complexity, but it is easier to
+   parallelize with a gpu.
+   because of this, we will instead formulate our problem as a series of
+   matrix multiplies, where we stuff all of our values into matrices and
+   let the compiler decide how to optimize it. typically, the rows in our
+   data matrices correspond to items in a minibatch, while columns
+   correspond to a values of these items (such as the value of $s_i$ for
+   all items in the minibatch). weight matrices have the same number of
+   rows as units in the previous layer, and the same number of columns as
+   units in the next layer.
+   consider instead the same network shown above, but with the weights,
+   examples, and unit inputs and outputs all represented in matrix form:
+   matrix_network.png matrix_network.png
+   our input (in blue) is now represented with an $n\times m$ matrix,
+   where we have $n$ examples with $m$ features each. the weight matrices
+   are shown in green. each row $i$ of a weight matrix corresponds to the
+   weights leading from unit $i$ in the previous layer to all of the units
+   $j$ in the next layer. the layers themselves are shown in yellow and
+   orange, with the $s$ matrices representing the $s_i$'s leading to each
+   of the units $i$ in a layer, and for each of the $n$ examples. applying
+   the elementwise activation function to the matrix $s$ generates the
+   layer outputs $z$.
+   to compute the input activations for $s^{(1)}$ during the feed forward
+   step, we now use the following operation: \begin{align} s^{(1)} =&
+   xw^{(in\rightarrow 1)} \end{align} let's check the math here.
+   $xw^{(in\rightarrow 1)}$ is an $n\times a$ matrix, so it matches the
+   dimensions of $s^{(1)}$. based on how we defined our matrices, the
+   value of the element $s^{(1)}_{ij}$ corresponds to the activation of
+   unit $j$ in layer 1 for example $x_i$ in our minibatch. in addition, by
+   the definition of id127: \begin{align} s^{(1)}_{ij} =&\
+   \sum_{k=1}^m x_{ik}w^{(in\rightarrow 1)}_{kj}\\ \end{align} now if we
+   were to just examine a single row $x$ in $x$ (a single example in our
+   minibatch), we could rewrite this as: \begin{align} s^{(1)}_{ij} =&\
+   \sum_{i=1}^m x_i w^{(in\rightarrow 1)}_{ij}\\ \end{align} this is
+   equivalent of forward propagation for the non-matrix case:
+   \begin{align} s_j^{(1)} =& \sum_{i} x_{i} w^{(in\rightarrow
+   1)}_{i\rightarrow j} \end{align} thus, if we repeat this over all rows
+   in $x$ (i.e. perform a full id127), we'll end up with
+   all of the activations for layer 1 for each item in the minibatch.
+   these values are stored in the matrix $s^{(1)}$.
+   thus we can propagate the input forward through this network with a
+   series of matrix multiplies: \begin{align} s^{(1)} =&\
+   xw^{(in\rightarrow 1)}\\ z^{(1)} =&\ f_1(s^{(1)})\\ s^{(2)} =&\
+   z^{(1)}w^{(1\rightarrow 2)}\\ z^{(2)} =&\ f_2(s^{(2)})\\ \hat{y} =&\
+   f_{out}\left(z^{(2)}w^{(2\rightarrow out)}\right) \end{align}
+
+id26
+
+   recall that for id26, for each of the weight updates, we
+   need to calculate the error signal $\delta_i$ for each unit $i$ in the
+   network. thus, the main thing we'll be concerned with during the matrix
+   form of id26 is making sure we correctly compute each
+   $\delta_i$ for each unit and for each item in the minibatch. we then
+   use these error signals to compute the gradient. a schematic of
+   id26 with matrices is shown here:
+   recall that we computed (and stored) the inputs $s$ and outputs $z$ of
+   each layer during forward propagation. during the feedforward step, we
+   should also compute the element-wise derivative of the activation
+   functions for each layer. we create $d^{(out)}$ by computing
+   $\delta_{out}$ for each of the output units and for each of the items
+   in the minibatch. we then feed these deltas backward through the
+   network, much like we did in the forward propagation step.
+   again we should check the operations specified in the above schematic
+   to make sure this setup is correct. recall the general definition of
+   $\delta_j$ for some hidden unit $j$: \begin{align*} \delta_j =&
+   f'_j(s_j)\sum_{k\in\text{outs}(j)}\delta_k w_{j\rightarrow k}
+   \end{align*} now let's look at how we compute the matrix $d_1$ for the
+   $i$th example in the minibatch (where $\odot$ denotes element-wise
+   multiplication): \begin{align*} d^{(1)} =&\ f'^{(1)}\odot
+   d^{(2)}w^{(1\rightarrow 2)}\\ d^{(1)}_{ij} =&\
+   f'^{(1)}_{ij}\sum_{k=1}^bd^{(2)}_{ik}w^{(1\rightarrow 2)}_{kj}\\ =&\
+   f'^{(1)}_{ij}(s^{(1)}_{ij})\sum_{k\in\text{outs}(j)}\delta^{(2)}_{ik}w_
+   {j\rightarrow k}^{(1\rightarrow 2)} \end{align*} we see here that the
+   matrix operations are computing the correct values.
+
+weight updates
+
+   the final step is to compute the weight updates themselves. recall the
+   weight update rule that we derived in the last section: \begin{align}
+   \delta w_{i\rightarrow j} =&\
+   -\eta\sum_{x_i}\delta_{j}^{(x_i)}z_{i}^{(x_i)} \end{align} let's derive
+   the matrix form of the updates for the weight matrix $w^{(1\rightarrow
+   2)}$. recall that this matrix has dimensions $a\times b$, so we need to
+   end up with a final matrix with the same dimensions so that we can
+   perform an element-wise update of the weights. in addition, the updates
+   use $z_i$ (which are stacked in the matrix $z^{(1)}$ with dimensions
+   $n\times a$) and $\delta_j$ (which are stacked in matrix $d^{(2)}$ with
+   dimensions $n\times b$). the matrix form of the weight update will be:
+   \begin{align} \delta w^{(1\rightarrow 2)} =&\ -\eta
+   (z^{(1)})^td^{(2)}\\ \delta w^{(1\rightarrow 2)}_{ij}=&\ -\eta
+   \sum_{k=1}^n (z^{(1)})^t_{ik}d^{(2)}_{kj}\\ =&\ -\eta \sum_{x_i}
+   \delta_{j}^{(x_i)}z_i^{(x_i)} \end{align} here we see that during the
+   matrix mulitply, we multiply each $\delta_j^{(x_i)}$ by $z_i^{(x_i)}$
+   and sum over all of the examples in the minibatch. this is the exact
+   weight update computed in the previous section.
+
+algorithm summary
+
+   we've derived the matrix form of forward and id26, as well
+   as the weight updates themselves. the full neural network procedure can
+   be summarized with the following algorithm:
+    1. forward propagation:
+         a. propagate the input to the first layer with $s^{(1)} =
+            xw^{(in\rightarrow 1)}$.
+         b. for each of the hidden layers (that go from index $i$ to $j$)
+            compute $z^{(i)} = f_i\left(s^{(i)}\right)$ and $s^{(j)} =
+            z^{(i)}w^{(i\rightarrow j)}$. store the activation derivatives
+            for the id26 step, $f^{(i)} =
+            \left(f'_i(s^{(i)})\right)^t$. also store $z^{(i)}$.
+         c. at the output, for the softmax activation function, we have
+            $p(y_i = y) = z^{(out)}_{iy}$.
+    2. id26:
+         a. set $d^{(out)} = (z^{(out)} - y)^t$.
+         b. for each of the hidden layers going from index $i$ to $j$, set
+            $d^{(i)} = f^{(i)}\odot w^{(i)}d^{(j)}$.
+    3. weight updates:
+         a. for the weights going from the input to the output, use
+            $\delta w^{(in\rightarrow 1)} = -\eta (d^{(1)}x)^t$.
+         b. for the weights leaving a hidden layer $i$ going to layer $j$,
+            use $\delta w^{(i\rightarrow j)} = -\eta (d^{(j)}z^{(i)})^t$.
+
+implementation
+
+   in this final section of the series, we'll go over the details on how
+   to implement a fully extensible multilayer id88. formulating the
+   problem as a series of matrix multiplies makes the implementation
+   straightforward - in fact, most of the code here is a direct
+   translation from the theory section. let's dive in!
+
+getting the code
+
+   you can either check out the latest version of my code from my machine
+   learning git repository [26]here (the repository is still a bit
+   unorganized), or i've created a stand-alone bundle that you can
+   download [27]here.
+
+the data
+
+   for this tutorial, i'll be using mnist, which is a standard benchmark
+   in the deep learning community. most state of the art methods can
+   achieve near-perfect performance on this dataset, so in practice other
+   datasets are used for a fuller comparison, but mnist is great for a
+   sanity check. we can get pretty good results using a relatively small
+   network.
+   mnist is a collection of handwritten digits from 0 to 9, so this is a
+   multiclass classification problem. each instance is a 28 by 28 image
+   unwrapped into a rows of 784 pixels each. you can download the dataset
+   in a format that this code uses [28]here, courtesy of deeplearning.net.
+   the top-level script unpacks this data and chunks it into minibatches:
+f = gzip.open('/path/to/mnist.pkl.gz')
+train_set, valid_set, test_set = cpickle.load(f)
+f.close()
+
+minibatch_size = 100
+print "creating data..."
+train_data, train_labels = create_minibatches(train_set[0], train_set[1],
+                                              minibatch_size,
+                                              create_bit_vector=true)
+valid_data, valid_labels = create_minibatches(valid_set[0], valid_set[1],
+                                              minibatch_size,
+                                              create_bit_vector=true)
+print "done!"
+
+initializing the network
+
+   for this relatively simple example, the only tunable parameters are the
+   network size and the minibatch size (which is typically set to 100).
+   when using mnist, the input layer must have 784 units and the output
+   layer must have 10 units. you can specify a network size with a list in
+   the form [784, a, b, 10], where a is the number of units in the first
+   hidden layer and b is the number of units in the second. however, you
+   are free to play around with the number of units (or even the number of
+   layers)!
+   i have purposefully left out a tunable learning rate, because selecting
+   the proper rate is an art in itself. instead, i've found a learning
+   rate that works for smaller 2-layer networks. the learning rate does
+   not change during training, nor is there any "momentum," which are both
+   techniques used for more complicated networks.
+   when we initialized our mlp, we create the input, hidden, and output
+   layers in the file neural_networks.py:
+class layer:
+    def __init__(self, size, minibatch_size, is_input=false, is_output=false,
+                 activation=f_sigmoid):
+        self.is_input = is_input
+        self.is_output = is_output
+
+        # z is the matrix that holds output values
+        self.z = np.zeros((minibatch_size, size[0]))
+        # the activation function is an externally defined function (with a
+        # derivative) that is stored here
+        self.activation = activation
+
+        # w is the outgoing weight matrix for this layer
+        self.w = none
+        # s is the matrix that holds the inputs to this layer
+        self.s = none
+        # d is the matrix that holds the deltas for this layer
+        self.d = none
+        # fp is the matrix that holds the derivatives of the activation function
+        self.fp = none
+
+        if not is_input:
+            self.s = np.zeros((minibatch_size, size[0]))
+            self.d = np.zeros((minibatch_size, size[0]))
+
+        if not is_output:
+            self.w = np.random.normal(size=size, scale=1e-4)
+
+        if not is_input and not is_output:
+            self.fp = np.zeros((size[0], minibatch_size))
+
+   we have some edge cases to consider during this initialization - there
+   are no error signals propagated to the input layer, and the output
+   layer does not have any outgoing weights. other than that, we
+   initialize our matrices with the proper dimensions according to the
+   algorithm we derived in the theory section. a technique that often
+   helps is to randomly initialize the weights of our network, which we do
+   when initializing the matrix w.
+
+id180
+
+   during training, we need to compute the activation function values for
+   each layer in addition to their derivatives. i define global versions
+   of these id180 so if you wanted to use something other
+   than a sigmoid, like a rectified linear function, it's relatively easy
+   to plug them in.
+def f_sigmoid(x, deriv=false):
+    if not deriv:
+        return 1 / (1 + np.exp(-x))
+    else:
+        return f_sigmoid(x)*(1 - f_sigmoid(x))
+
+def f_softmax(x):
+    z = np.sum(np.exp(x), axis=1)
+    z = z.reshape(z.shape[0], 1)
+    return np.exp(x) / z
+
+   note that we do not need to compute the derivative of the softmax
+   function here. in fact, the error signal at the output is still
+   $\delta_o = (\hat{y} - y)$, the same as in the linear case. this is
+   because we use a 1-of-k coding scheme, and we specify a different loss
+   function than in the linear case (if you're interested in more
+   information about this, read the discussion [29]here).
+
+forward propagation
+
+   forward propagation is a straightforward translation of the matrix
+   multiplies we derived in the theory section. to begin, in the mlp
+   class, we set the output of the input layer to the input data itself.
+   for each of the successive layers, we perform forward propagation. i
+   did not cover bias values in the theory section, but adding bias values
+   is as simple as adding an additional hidden unit that always outputs 1,
+   and connecting it to the next layer.
+        # we need to be sure to add bias values to the input
+        self.layers[0].z = np.append(data, np.ones((data.shape[0], 1)), axis=1)
+
+        for i in range(self.num_layers-1):
+            self.layers[i+1].s = self.layers[i].forward_propagate()
+        return self.layers[-1].forward_propagate()
+
+   within the layer class, we perform the matrix multiply itself:
+    def forward_propagate(self):
+        if self.is_input:
+            return self.z.dot(self.w)
+
+        self.z = self.activation(self.s)
+        if self.is_output:
+            return self.z
+        else:
+            # for hidden layers, we add the bias values here
+            self.z = np.append(self.z, np.ones((self.z.shape[0], 1)), axis=1)
+            self.fp = self.activation(self.s, deriv=true).t
+            return self.z.dot(self.w)
+
+   at the input layer, there is no activation function, so we simply
+   propagate the input data forward through the input layer's weights. if
+   the layer is an output layer, we directly return the value of its
+   output. otherwise, if we are in a hidden layer, we append a bias
+   weight, compute the activation function derivative, and return the next
+   layer's inputs.
+
+id26
+
+   id26 is also fairly straightforward, and is carried out
+   within the mlp class:
+    def backpropagate(self, yhat, labels):
+        self.layers[-1].d = (yhat - labels).t
+        for i in range(self.num_layers-2, 0, -1):
+            # we do not calculate deltas for the bias values
+            w_nobias = self.layers[i].w[0:-1, :]
+
+            self.layers[i].d = w_nobias.dot(self.layers[i+1].d) * \
+                               self.layers[i].fp
+
+   we first compute the error signal at the output, $\delta_o = (\hat{y} -
+   y)$. we then propagate this error signal backwards through each of the
+   hidden layers.
+
+weight updates
+
+   after we've calculated the error signals for each layer, all that's
+   left is to update the weights. again, we directly use the formula given
+   in the algorithm summary section:
+    def update_weights(self, eta):
+        for i in range(0, self.num_layers-1):
+            w_grad = -eta*(self.layers[i+1].d.dot(self.layers[i].z)).t
+            self.layers[i].w += w_grad
+
+running the code
+
+   for the sake of space, i've omitted a large amount of boilerplate and
+   evaluation code. to run the network, simply run the script
+   mnist_mlp.py. you can change the layer configuration in the mlp
+   initialization on line 20. here's what the output looks like after an
+   run with a layer configuration of [784, 100, 100, 10]:
+creating data...
+done!
+initializing input layer with size 784.
+initializing hidden layer with size 100.
+initializing hidden layer with size 100.
+initializing output layer with size 10.
+done!
+training for 50 epochs...
+[   0]  training error: 0.57362 test error: 0.57510
+[   1]  training error: 0.09442 test error: 0.08670
+[   2]  training error: 0.07088 test error: 0.06610
+[   3]  training error: 0.04640 test error: 0.04660
+[   4]  training error: 0.03870 test error: 0.04260
+...
+[  46]  training error: 0.00008 test error: 0.02670
+[  47]  training error: 0.00006 test error: 0.02660
+[  48]  training error: 0.00006 test error: 0.02670
+[  49]  training error: 0.00004 test error: 0.02690
+
+   you can see the training and test error slowly decreasing. around epoch
+   50, we begin to severely overfit the training data. however, we're only
+   making about 270 errors on the validation set, which isn't too shabby!
+   to compare, hinton's landmark dropout paper achieved about 130 errors,
+   beating the previous record of 160 errors. more recent techniques have
+   pushed the rate to well below 100 errors. for such a relatively simple
+   network, we achieve good performance.
+
+conclusion
+
+   i hope this series helped your understanding and gave you a solid
+   foundation to begin understanding more recent deep learning papers.
+   given enough time, i may write an additional bonus post on some
+   technique used in practice to achieve even better performance (such as
+   dropout, momentum, weight decay, etc.). if you have any questions,
+   please leave a comment!
+
+   tags: [30]deep learning, [31]neural network, [32]machine learning,
+   [33]mnist
+
+   [34]prev / [35]next
+
+references
+
+   1. http://www.briandolhansky.com/blog?format=rss
+   2. http://www.briandolhansky.com/
+   3. http://www.briandolhansky.com/blog
+   4. http://www.briandolhansky.com/research
+   5. http://www.briandolhansky.com/cv-online
+   6. http://www.briandolhansky.com/photography
+   7. http://www.briandolhansky.com/arches
+   8. http://www.briandolhansky.com/berlin
+   9. http://www.briandolhansky.com/lindau
+  10. http://www.briandolhansky.com/munich
+  11. http://www.briandolhansky.com/people-taking-pictures
+  12. http://www.briandolhansky.com/
+  13. http://www.briandolhansky.com/
+  14. http://www.briandolhansky.com/blog
+  15. http://www.briandolhansky.com/research
+  16. http://www.briandolhansky.com/cv-online
+  17. http://www.briandolhansky.com/arches
+  18. http://www.briandolhansky.com/berlin
+  19. http://www.briandolhansky.com/lindau
+  20. http://www.briandolhansky.com/munich
+  21. http://www.briandolhansky.com/people-taking-pictures
+  22. http://www.briandolhansky.com/blog/2014/10/30/artificial-neural-networks-matrix-form-part-5
+  23. http://www.briandolhansky.com/blog/2014/10/30/artificial-neural-networks-matrix-form-part-5
+  24. http://www.briandolhansky.com/blog?category=ml primers
+  25. http://www.briandolhansky.com/blog?category=neural networks
+  26. https://github.com/bdol/bdol-ml/tree/master/neural_networks/matrix_mlp
+  27. http://www.briandolhansky.com/s/matrix_nn.zip
+  28. http://deeplearning.net/tutorial/gettingstarted.html
+  29. http://stats.stackexchange.com/questions/79454/softmax-layer-in-a-neural-network
+  30. http://www.briandolhansky.com/blog?tag=deep+learning#show-archive
+  31. http://www.briandolhansky.com/blog?tag=neural+network#show-archive
+  32. http://www.briandolhansky.com/blog?tag=machine+learning#show-archive
+  33. http://www.briandolhansky.com/blog?tag=mnist#show-archive
+  34. http://www.briandolhansky.com/blog/2019/1/4/math-display-fixed
+  35. http://www.briandolhansky.com/blog/2013/9/27/artificial-neural-networks-id26-part-4

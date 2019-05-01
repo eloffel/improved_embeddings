@@ -1,0 +1,413 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]become a member[7]sign in[8]get started
+     __________________________________________________________________
+
+neural networks for algorithmic trading. correct time series forecasting +
+backtesting
+
+   go to the profile of alexandr honchar
+   [9]alexandr honchar (button) blockedunblock (button) followfollowing
+   may 11, 2017
+   [0*heei3dtbrzgk9orq.jpg]
+   not that good, right?
+
+   hi everyone! some time ago i published a [10]small tutorial on
+   financial time series forecasting which was interesting, but in some
+   moments wrong. i have spent some time working with different time
+   series of different nature (applying nns mostly) in [11]hpa, that
+   particularly focuses on financial analytics, and in this post i want to
+   describe more correct way of working with financial data. comparing to
+   previous post, i want to show different way of data normalizing and
+   discuss more issues of overfitting (which definitely appears while
+   working with data that has stochastic nature). we won   t compare
+   different architectures (id98, lstm), you can check them in [12]previous
+   post. but even working only with simple feed-forward neural nets we
+   will see important things. if you want to jump directly to the
+   code         check out [13]ipython notebook. for russian speaking readers,
+   it   s a translation of [14]my post here and you can check [15]webinar on
+   backtesting here.
+
+   other posts are here:
+    1. [16]simple time series forecasting (and mistakes done)
+    2. [17]correct 1d time series forecasting + backtesting
+    3. [18]multivariate time series forecasting
+    4. [19]volatility forecasting and custom losses
+    5. [20]multitask and multimodal learning
+    6. [21]hyperparameters optimization
+    7. [22]enhancing classical strategies with neural nets
+    8. [23]probabilistic programming and pyro forecasts
+
+data preparation
+
+   let   s take historical time series of apple stock prices starting from
+   2005 till today. you can easily download them from [24]yahoo finance
+   as .csv file. in this file data is in    reversed    order         from 2017 till
+   2005, so we need to reverse it back first and have a look:
+data = pd.read_csv('./data/aapl.csv')[::-1]
+close_price = data.ix[:, 'adj close'].tolist()
+plt.plot(close_price)
+plt.show()
+
+   [0*cl-6m2xfa8lpnh0f.png]
+
+   as we discussed in previous post, we can treat problem of financial
+   time series forecasting in two different ways (let   s omit volatility
+   forecasting, anomaly detection and other interesting things for now):
+
+     we will consider our problem as 1) regression problem (trying to
+     forecast exactly close price or return next day) 2) binary
+     classification problem (price will go up [1; 0] or down [0; 1]).
+
+     first let   s prepare our data for training. we want to predict t+1
+     value based on n previous days information. for example, having
+     close prices from past 30 days on the market we want to predict,
+     what price will be tomorrow, on the 31st day. we use first 90% of
+     time series as training set (consider it as historical data) and
+     last 10% as testing set for model evaluation.
+
+   the main problem of financial time series         they   re not stationary,
+   which means, that their statistical properties (mean, variance, maximal
+   and minimal values) change over time and we can check it with augmented
+   [25]dickey-fuller test. and because of this we can   t use classical data
+   id172 methods like [26]minmax or [27]z-score id172.
+
+   in our case, we will cheat a bit for classification problem. we don   t
+   need to predict some exact value, so expected value and variance of the
+   future isn   t very interesting for us         we just need to predict the
+   movement up or down. that   s why we will risk and normalize our 30-days
+   windows only by their mean and variance (z-score id172),
+   supposing that just during single time window they don   t change much
+   and not touching information from the future:
+x = [(np.array(x)     np.mean(x)) / np.std(x) for x in x]
+
+   for regression problem we already can   t cheat like this, so will use
+   returns (percentage of how much price changed comparing to yesterday)
+   with pandas and it looks like:
+close_price_diffs = close.price.pct_change()
+
+   [0*5f3g_6ewiasv-ug8.png]
+   daily returns of apple stock over time
+
+   as we can see, this data is already normalized and lies from -0.5 to
+   0.5.
+
+neural network architecture
+
+   as i said before, we will work only with mlps in this article to show
+   how easy to overfit neural networks on financial data (and actually
+   what happened in previous post) and how to prevent it. expand these
+   ideas on id98s or id56s will be relatively easy, but it   s much more
+   important to understand the concept. as before, we use [28]keras as
+   main framework for neural nets prototyping.
+
+   our first net will look like this:
+model = sequential()
+model.add(dense(64, input_dim=30))
+model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(2))
+model.add(activation('softmax'))
+
+   i can suggest always use batch id172 after every affine or
+   convolutional layer and leaky relu as basic activation function, just
+   because it   s already became    industrial standard            they help to train
+   nets way much faster. other nice thing is reducing learning rate during
+   training, keras makes this with reducelronplateau:
+reduce_lr = reducelronplateau(monitor='val_loss', factor=0.9, patience=5, min_lr
+=0.000001, verbose=1)
+model.compile(optimizer=opt,                loss='categorical_crossid178', met
+rics=['accuracy'])
+
+   this is how we launch training:
+history = model.fit(x_train, y_train, nb_epoch = 50,            batch_size = 128
+, verbose=1, validation_data=(x_test, y_test),           shuffle=true, callbacks
+=[reduce_lr])
+
+   and this is how we will visualize results (let   s judge loss and
+   accuracy plots)
+plt.figure()
+plt.plot(history.history['loss']) plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='best')
+
+     important moment: in last post we trained our nets only for 10
+     epochs         it   s completely wrong. even we can see 55% of accuracy, it
+     doesn   t really mean that we can predict future better than random.
+     most probably, in our dataset we just have 55% of time windows with
+     one behavior (up) and 45% with another (down). and our network only
+     learn this distribution of training data. so it   s better to learn
+     them fro 20   50   100 epochs and if it   s too much to use early
+     stopping.
+
+classification
+
+   [0*pfwvtgz5havvmpqn.png]
+   first network loss
+   [0*dsz8h9ilhcwf6cio.png]
+   first network accuracy
+
+   the results aren   t good at all, our test loss doesn   t change at all, we
+   can see clear overfit, let   s make a deeper network and try it:
+model = sequential()
+model.add(dense(64, input_dim=30))
+model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(16))
+model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(2)) model.add(activation('softmax'))
+
+   here are results:
+   [0*zxfuf9wiiz5qxbbu.png]
+   second network loss
+   [0*teqjd4vg5gmrfmq8.png]
+   second network accuracy
+
+   here we see more or less the same, even worse    it   s time to add some
+   id173 to the model, starting with adding l2 norm on sum of
+   weights:
+model = sequential()
+model.add(dense(64, input_dim=30,                 activity_regularizer=regulariz
+ers.l2(0.01))) model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(16,                 activity_regularizer=regularizers.l2(0.01)))
+ model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(2))
+model.add(activation('softmax'))
+
+   it works better, but still not good enough (even loss is decreasing,
+   but accuracy is bad). it   s happening very often while working with
+   financial data         it   s [29]explained very nicely here
+   [0*io64vnfl25gqx86o.png]
+   regularized network loss
+   [0*l3ewjyfnq015q-me.png]
+   regularized network accuracy
+
+   the next thing i want to do looks very weird, but we gonna regularize
+   already regularized network adding hardcore dropout with 0.5 rate (it   s
+   random ignoring some weights while id26 to avoid neurons
+   coadaptation and therefore overfitting):
+model = sequential()
+model.add(dense(64, input_dim=30,                 activity_regularizer=regulariz
+ers.l2(0.01))) model.add(batchid172())
+model.add(leakyrelu())
+model.add(dropout(0.5))
+model.add(dense(16,                 activity_regularizer=regularizers.l2(0.01)))
+ model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(2))
+model.add(activation('softmax'))
+
+   [0*skzmc3rt7s_n9h7z.png]
+   hardcore regularized network loss
+   [0*08pxqgcmvxekfus2.png]
+   hardcore regularized network accuracy
+
+   as we can see, plots look more or less adequate and we can report about
+   58% of accuracy, which is slightly better than random guessing.
+
+     try just for fun to learn network to forecast movement not the next
+     day, but in five days (is the price higher or lower in 5 days
+     comparing to today). does it work better? if it works better         why?
+
+regression
+
+   for regression, we will use returns data, previous successful neural
+   network architecture (but without dropouts) and check how regression
+   works:
+model = sequential()
+model.add(dense(64, input_dim=30,                 activity_regularizer=regulariz
+ers.l2(0.01))) model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(16,                 activity_regularizer=regularizers.l2(0.01)))
+ model.add(batchid172())
+model.add(leakyrelu())
+model.add(dense(1))
+model.add(activation('linear'))
+
+   and here is code for plotting forecasts visually:
+pred = model.predict(np.array(x_test))
+original = y_test
+predicted = pred
+plt.plot(original, color='black', label = 'original data') plt.plot(predicted, c
+olor='blue', label = 'predicted data') plt.legend(loc='best')
+plt.title('actual and predicted')
+plt.show()
+
+   [0*muq4ena5k9amzwq0.png]
+   returns forecast
+
+   it works simply bad, even isn   t worth to comment it. i will tell some
+   tips that can help with regression problem in conclusion part.
+
+backtesting
+
+   let   s remember why are we messing with all these time series in
+   general? we want to build a trading system, which means, it has to make
+   some deals         buy, sell stocks and, hopefully, grow your portfolio.
+
+   there are a lot of good ready solutions to backtest your strategies
+   (like [30]quantopian), but i decided to learn how they   re built from
+   inside and bought the [31]following book with details of implementation
+   (not a product placement ahahah):
+   [0*8-l4kxsccjhqtrue.png]
+
+   the strategy i   ve tested is extremely simple: if our network says that
+   price will go up, we buy the stock and sell it only after network says
+   that price will go down and will wait for the next buying signal. the
+   logic looks like:
+if np.argmax(pred) == 0 and not self.long_market:
+     self.long_market = true
+     signal = signalevent(1, sym, dt, 'long', 1.0)
+     self.events.put(signal)
+     print pred, 'long'
+if np.argmax(pred) == 1 and self.long_market:
+     self.long_market = false
+     signal = signalevent(1, sym, dt, 'exit', 1.0)
+     self.events.put(signal)
+     print pred, 'exit'
+
+   here are the results of training classification network on data from
+   2012 to 2016 and testing from 2016 to the may of 2017:
+   [0*vpojvhyaogc5qrfe.jpg]
+   trading results
+
+   blue plot shows portfolio value growth (wow, 3% in 1.5 years), black
+   shows    activity    and red one         drawdowns (periods of losing money).
+
+discussion
+
+   on the first glimpse, results are bad. horrible regression and not
+   really amazing classification (58% of accuracy) are asking us to leave
+   this idea. and after seeing that    incredible    3% income (it would be
+   easier just to buy apple stocks and hold, they grew in 20% for that
+   time) you maybe want to close laptop and do something that doesn   t
+   involve finance or machine learning. but there are lot of ways to
+   improve our results (and what people do in funds):
+     * use high frequency data (hourly, minute ticks)         machine learning
+       algorithms need more data and predict better on short distance
+     * do smart hyperparameter optimization including not only neural
+       network optimization and training parameters, but also historical
+       time window(s) you train on
+     * use better architectures of neural networks like id98s or id56s
+     * use not only closing price or returns, but all ohlcv tuple for
+       every day; if it   s possible         collect information about n most
+       correlated compamies, sector financial status, economical variables
+       etc. it   s impossible to build good forecasting model relying on
+       that simple data we used
+     * use more sophisticated, maybe assymetric, [32]id168s. for
+       example mse that we used for regression is invariant to the sign,
+       which is crucial for our task.
+
+conclusion
+
+   forecasting of financial data is extremely complicated. it   s easy to
+   overfit, we don   t know correct historical range to train on and it   s
+   difficult to get all data needed. but as we can see, it works, and even
+   can give some profits. this article can be good starting point and
+   pipeline for further research and discovery.
+
+   in next posts i plan to show automated hyperparameter search process,
+   add more data (full ohlcv and financial indicators), apply
+   id23 to learn the strategy and check if reinforcement
+   agent will trust our predictions. stay tuned!
+
+   p.s.
+   follow me also in [33]facebook for ai articles that are too short for
+   medium, [34]instagram for personal stuff and [35]linkedin!
+
+     * [36]machine learning
+     * [37]trading ideas
+     * [38]deep neural networks
+     * [39]finance
+     * [40]deep learning
+
+   (button)
+   (button)
+   (button) 1.1k claps
+   (button) (button) (button) 8 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   go to the profile of alexandr honchar
+
+[41]alexandr honchar
+
+   medium member since oct 2018
+
+                     developing ai for biosignal analysis and finance, consulting,
+   giving public speeches and blogging. contact me to collaborate
+   [42]rachnogstyle@gmail.com
+
+     * (button)
+       (button) 1.1k
+     * (button)
+     *
+     *
+
+   go to the profile of alexandr honchar
+   never miss a story from alexandr honchar, when you sign up for medium.
+   [43]learn more
+   never miss a story from alexandr honchar
+   (button) blockedunblock (button) followget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/9776bfd9e589
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/membership?source=upgrade_membership---nav_full
+   7. https://medium.com/m/signin?redirect=https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-1-2-correct-time-series-forecasting-backtesting-9776bfd9e589&source=--------------------------nav_reg&operation=login
+   8. https://medium.com/m/signin?redirect=https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-1-2-correct-time-series-forecasting-backtesting-9776bfd9e589&source=--------------------------nav_reg&operation=register
+   9. https://medium.com/@alexrachnog
+  10. https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-part-one-simple-time-series-forecasting-f992daa1045a
+  11. https://medium.com/@hp_analytics
+  12. https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-part-one-simple-time-series-forecasting-f992daa1045a
+  13. https://github.com/rachnog/deep-trading/blob/master/habrahabr.ipynb
+  14. https://habrahabr.ru/post/327022/
+  15. https://www.youtube.com/watch?v=c-nuadcpigy
+  16. https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-part-one-simple-time-series-forecasting-f992daa1045a
+  17. https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-1-2-correct-time-series-forecasting-backtesting-9776bfd9e589
+  18. https://medium.com/@alexrachnog/neural-networks-for-algorithmic-trading-2-1-multivariate-time-series-ab016ce70f57
+  19. https://codeburst.io/neural-networks-for-algorithmic-trading-volatility-forecasting-and-custom-loss-functions-c030e316ea7e
+  20. https://becominghuman.ai/neural-networks-for-algorithmic-trading-multimodal-and-multitask-deep-learning-5498e0098caf
+  21. https://medium.com/machine-learning-world/neural-networks-for-algorithmic-trading-hyperparameters-optimization-cb2b4a29b8ee
+  22. https://medium.com/machine-learning-world/neural-networks-for-algorithmic-trading-enhancing-classic-strategies-a517f43109bf
+  23. https://medium.com/@alexrachnog/financial-forecasting-with-probabilistic-programming-and-pyro-db68ab1a1dba
+  24. https://finance.yahoo.com/quote/aapl/history?period1=1104534000&period2=1491775200&interval=1d&filter=history&frequency=1d
+  25. https://en.wikipedia.org/wiki/dickey   fuller_test
+  26. https://stats.stackexchange.com/questions/70801/how-to-normalize-data-to-0-1-range
+  27. https://en.wikipedia.org/wiki/standard_score
+  28. http://keras.io/
+  29. https://www.quora.com/loss-cross-id178-is-decreasing-but-accuracy-remains-the-same-while-training-convolutional-neural-networks-how-can-it-happen
+  30. http://quantopian.com/
+  31. https://www.quantstart.com/successful-algorithmic-trading-ebook
+  32. https://stats.stackexchange.com/questions/37955/how-to-design-and-implement-an-asymmetric-loss-function-for-regression
+  33. https://www.facebook.com/rachnogstyle.blog
+  34. http://instagram.com/rachnogstyle
+  35. https://www.linkedin.com/in/alexandr-honchar-4423b962/
+  36. https://medium.com/tag/machine-learning?source=post
+  37. https://medium.com/tag/trading-ideas?source=post
+  38. https://medium.com/tag/deep-neural-networks?source=post
+  39. https://medium.com/tag/finance?source=post
+  40. https://medium.com/tag/deep-learning?source=post
+  41. https://medium.com/@alexrachnog
+  42. mailto:rachnogstyle@gmail.com
+  43. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  45. https://medium.com/@alexrachnog?source=post_header_lockup
+  46. https://medium.com/p/9776bfd9e589/share/twitter
+  47. https://medium.com/p/9776bfd9e589/share/facebook
+  48. https://medium.com/@alexrachnog?source=footer_card
+  49. https://medium.com/p/9776bfd9e589/share/twitter
+  50. https://medium.com/p/9776bfd9e589/share/facebook
+  51. https://medium.com/@alexrachnog

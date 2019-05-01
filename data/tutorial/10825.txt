@@ -1,0 +1,643 @@
+6
+1
+0
+2
+ 
+c
+e
+d
+7
+1
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+4
+0
+1
+5
+0
+
+.
+
+1
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+under review as a conference paper at iclr 2017
+
+a way out of the odyssey: analyzing and com-
+bining recent insights for lstms
+
+shayne longpre
+salesforce research
+palo alto, california
+slongpre@cs.stanford.edu
+
+sabeek pradhan
+stanford university
+palo alto, california
+sabeekp@cs.stanford.edu
+
+caiming xiong, richard socher
+salesforce research
+palo alto, california
+{cxiong,rsocher}@salesforce.com
+
+abstract
+
+lstms have become a basic building block for many deep nlp models. in recent
+years, many improvements and variations have been proposed for deep sequence
+models in general, and lstms in particular. we propose and analyze a series of
+augmentations and modi   cations to id137 resulting in improved perfor-
+mance for text classi   cation datasets. we observe compounding improvements on
+traditional lstms using monte carlo test-time model averaging, average pooling,
+and residual connections, along with four other suggested modi   cations. our
+analysis provides a simple, reliable, and high quality baseline model.
+
+1
+
+introduction
+
+when exploring a new problem, having a simple yet competitive off-the-shelf baseline is fundamental
+to new research. for instance, caruana et al. (2008) showed id79s to be a strong baseline for
+many high-dimensional supervised learning tasks. for id161, off-the-shelf convolutional
+neural networks (id98s) have earned their reputation as a strong baseline (sharif razavian et al.,
+2014) and basic building block for more complex models like visual id53 (xiong
+et al., 2016). for natural language processing (nlp) and other sequential modeling tasks, recurrent
+neural networks (id56s), and in particular long short-term memory (lstm) networks, with a
+linear projection layer at the end have begun to attain a similar status. however, the standard lstm
+is in many ways lacking as a baseline. zaremba (2015), gal (2015), and others show that large
+improvements are possible using a forget bias, inverted dropout id173 or bidirectionality. we
+add three major additions with similar improvements to off-the-shelf lstms: monte carlo model
+averaging, embed average pooling, and residual connections. we analyze these and other more
+common improvements.
+
+2 lstm network
+
+id137 are among the most commonly used models for tasks involving variable-length
+sequences of data, such as text classi   cation. the basic lstm layer consists of six equations:
+
+it = tanh (wixt + riht   1 + bi)
+jt =    (wjxt + rjht   1 + bj)
+ft =    (wf xt + rf ht   1 + bf )
+ot = tanh (woxt + roht   1 + bo)
+ct = it (cid:12) jt + ft (cid:12) ct   1
+ht = ot (cid:12) tanh (ct)
+
+1
+
+(1)
+(2)
+(3)
+(4)
+(5)
+(6)
+
+under review as a conference paper at iclr 2017
+
+(a) monte carlo for sst    ne-grained error
+
+(b) monte carlo for imdb binary error
+
+figure 1: a comparison of the performance of monte carlo averaging, over sample size, to regular
+single-sample inverted dropout at test-time.
+
+where    is the sigmoid function, (cid:12) is element-wise multiplication, and vt is the value of variable v
+at timestep t. each layer receives xt from the layer that came before it and ht   1 and ct   1 from the
+previous timestep, and it outputs ht to the layer that comes after it and ht and ct to the next timestep.
+the c and h values jointly constitute the recurrent state of the lstm that is passed from one timestep
+to the next. since the h value completely updates at each timestep while the c value maintains part of
+its own value through multiplication by the forget gate f, h and c complement each other very well,
+with h forming a    fast    state that can quickly adapt to new information and c forming a    slow    state
+that allows information to be retained over longer periods of time (zaremba, 2015). while various
+papers have tried to systematically experiment with the 6 core equations constituting an lstm (greff
+et al., 2015; zaremba, 2015), in general the basic lstm equations have proven extremely resilient
+and, if not optimal, at least a local maximum.
+
+3 monte carlo model averaging
+
+it is common practice when applying dropout in neural networks to scale the weights up at train
+time (inverted dropout). this ensures that the expected magnitude of the inputs to any given layer
+are equivalent between train and test, allowing for an ef   cient computation of test-time predictions.
+however, for a model trained with dropout, test-time predictions generated without dropout merely
+approximate the ensemble of smaller models that dropout is meant to provide. a higher    delity
+method requires that test-time dropout be conducted in a manner consistent with how the model was
+trained. to achieve this, we sample k neural nets with dropout applied for each test example and
+average the predictions. with suf   ciently large k this monte carlo average should approach the true
+model average (srivastava et al., 2014). we show in figure 1 that this technique can yield more
+accurate predictions on test-time data than the standard practice. this is demonstrated over a number
+of datasets, suggesting its applicability to many types of sequential architectures. while running
+multiple monte carlo samples is more computationally expensive, the overall increase is minimal
+as the process is only run on test-time forward passes and is highly parallelizable. we show that
+higher performance can be achieved with relatively few monte carlo samples, and that this number
+of samples is similar across different nlp datasets and tasks.
+we encountered one ambiguity of monte carlo model averaging that to our knowledge remains
+unaddressed in prior literature: there is relatively little exploration as to where and how the model
+averaging is most appropriately handled. we investigated averaging over the output of the    nal
+recurrent layer (just before the projection layer), over the output of the projection layer (the pre-
+softmax unnormalized logits), and the post-softmax normalized probabilities, which is the approach
+taken by gal (2015) for id38. we saw no discernible difference in performance
+between averaging the pre-projection and post-projection outputs. averaging over the post-softmax
+probabilities showed marginal improvements over these two methods, but interestingly only for
+bidirectional models. we also explored using majority voting among the sampled models. this
+
+2
+
+020406080100120140160180200monte carlo samples0.4950.5000.5050.5100.5150.5200.525sst 5-class error ratemonte carlo sstmonte carlo errorinverted dropout error020406080100120140160180200monte carlo samples0.1120.1140.1160.1180.1200.1220.1240.1260.1280.130binary error rateimdb: monte carlomonte carlo errorinverted dropout errorunder review as a conference paper at iclr 2017
+
+figure 2: an illustration of the embed average pooling extension to a standard id56 model. the
+output of the multilayer id88 is concatenated to the    nal hidden state output by the id56.
+
+involves tallying the maximum post-softmax probabilities and selecting the class that received the
+most votes. this method differs from averaging the post-softmax probabilities in the same way
+max-margin differs from id113 (id113), de-emphasizing the points well
+inside the decision boundary or the models that predicted a class with extremely high id203.
+with suf   ciently large k, this voting method seemed to work best of the averaging methods we tried,
+and thus all of our displayed models use this technique. however, for classi   cation problems with
+more classes, more monte carlo samples might be necessary to guarantee a meaningful plurality of
+class predictions. we conclude that the majority-vote monte carlo averaging method is preferable
+in the case where the ratio of monte carlo samples to number of classi   cation labels is large
+(k/output size).
+the monte carlo model averaging experiments, shown in figure 1, were conducted as follows. we
+drew k = 400 separate test samples for each example, differentiated by their dropout masks. for each
+sample size p (whose values, plotted on the x-axis, were in the range from 2 to 200 with step-size
+2) we selected p of our k samples randomly without replacement and performed the relevant monte
+carlo averaging technique for that task, as discussed above. we do this m = 20 times for each point,
+to establish the mean and variance for that number of monte carlo iterations/samples p. the variance
+is used to visualize the 90% con   dence interval in blue, while the red line denotes the test accuracy
+computed using the traditional approximation method (inverted dropout at train-time, and no dropout
+at test-time).
+
+4 embed average pooling
+
+reliably retaining long-range information is a well documented weakness of id137
+(karpathy et al., 2015). this is especially the case for very long sequences like the imdb sentiment
+dataset (maas et al., 2011), where deep sequential models fail to capture uni- and bi-gram occurrences
+over long sequences. this is likely why id165 based models, such as a bi-gram nbid166 (wang
+and manning, 2012), outperform id56 models on such datasetes. it was shown by iyyer et al. (2015)
+and others that for general nlp classi   cation tasks, the use of a deep, unordered composition (or bag-
+of-words) of a sequence can yield strong results. their solution, the deep averaging network (dan),
+combines the observed effectiveness of depth, with the unreasonable effectiveness of unordered
+representations of long sequences.
+we suspect that the primary advantage of dans is their ability to keep track of information that
+would have otherwise been forgotten by a sequential model, such as information early in the sequence
+for a unidirectional id56 or information in the middle of the sequence for a bidirectional id56. our
+embed average pooling supplements the bidirectional id56 with the information from a dan at a
+relatively negligible computational cost.
+
+3
+
+embed   id56softmaxw2w2w3w3wn 1wn 1wnwnmlpnxi=1winnxi=1winaverage word vectorsw1w1wn 2wn 2under review as a conference paper at iclr 2017
+
+(a) res-v1: an illustration of vertical residual connec-
+tions
+
+(b) res-v2: an illustration of vertical and lateral resid-
+ual connections
+
+figure 3: an illustration of vertical (resv) and lateral residual (resl) connections added to a 3-layer
+id56. a model with only vertical residuals is denoted res-v1, whereas a model with vertical and
+lateral residuals is denoted    res-v2   .
+
+as shown in figure 2, embed average pooling works by averaging the sequence of word vectors and
+passing this average through an mlp. the averaging is similar to an average pooling layer in a id98
+(hence the name), but with the averaging being done temporally rather than spatially. the output of
+this mlp is concatenated to the    nal output of the id56, and the combined vector is then passed
+into the projection and softmax layer. we apply the same dropout mask to the word vectors when
+passing them to the id56 as when averaging them, and we apply a different dropout mask on the
+output of the mlp. we experimented with applying the mlp before rather than after averaging the
+word vectors but found the latter to be most effective.
+
+5 residual connections
+
+for feed-forward convolutional neural networks used in id161 tasks, residual networks, or
+resnets, have obtained state of the art results (he et al., 2015). rather than having each layer learn a
+wholly new representation of the data, as is customary for neural networks, resnets have each layer
+(or group of layers) learn a residual which is added to the layer   s input and then passed on to the next
+layer. more formally, if the input to a layer (or group of layers) is x and the output of that layer (or
+group of layers) is f (x), then the input to the next layer (or group of layers) is x + f (x), whereas it
+would be f (x) in a conventional neural network. this architecture allows the training of far deeper
+models. he et al. (2015) trained convolutional neural networks as deep as 151 layers, compared to 16
+layers used in vggnets (simonyan and zisserman, 2014) or 22 layers used in googlenet (szegedy
+et al., 2015), and won the 2015 id163 challenge. since then, various papers have tried to build
+upon the resnet paradigm (huang et al., 2016; szegedy et al., 2016), and various others have tried to
+create convincing theoretical reasons for resnet   s success (liao and poggio, 2016; veit et al., 2016).
+
+4
+
+lstmlstmlstmsoftmaxh(1)th(1)th(2)th(2)th(3)th(3)txtxt      xt+1xt+1xt 1xt 1h(1)t 1h(1)t 1h(1)th(1)th(2)t 1h(2)t 1h(3)t 1h(3)t 1h(2)th(2)th(3)th(3)tlstmlstmlstmsoftmax      xtxtxt 1xt 1xt+1xt+1h(1)t 1h(1)t 1h(1)th(1)th(1)th(1)th(2)t 1h(2)t 1h(2)th(2)th(2)th(2)th(3)t 1h(3)t 1h(3)th(3)th(3)th(3)tunder review as a conference paper at iclr 2017
+
+we explored many different ways to incorporate residual connections in an id56. the two most
+successful ones, which we call res-v1 and res-v2 are depicted in figure 6. res-v1 incorporates
+only vertical residuals, while res-v2 incorporates both vertical and lateral residuals. with vertical
+residual connections, the input to a layer is added to its output and then passed to the next layer,
+as is done in feed-forward resnets. thus, whereas the input to a layer is normally the ht from
+the previous layer, with vertical residuals the input becomes the ht + xt from the previous layer.
+this maintains many of the attractive properties of resnets (e.g. unimpeded gradient    ow across
+layers, adding/averaging the contributions of each layer) and thus lends itself naturally to deeper
+networks. however, it can interact unpredictably with the lstm architecture, as the    fast    state of
+the lstm no longer re   ects the network   s full representation of the data at that point. to mitigate this
+unpredictability, res-v2 also includes lateral residual connections. with lateral residual connections,
+the input to a layer is added to its output and then passed to the next timestep as the fast state of the
+lstm. it is equivalent to replacing equation 6 with ht = ot (cid:12) tanh (ct) + xt. thus, applying both
+vertical and lateral residuals ensures that the same value is passed both to the next layer as input and
+to the next timestep as the    fast    state.
+in addition to these two, we explored various other, ultimately less successful, ways of adding residual
+connections to an lstm, the primary one being horizontal residual connections. in this architecture,
+rather than adding the input from the previous layer to a layer   s output, we added the fast state
+from the previous timestep. the hope was that adding residual connections across timesteps would
+allow information to    ow more effectively across timesteps and thus improve the performance of
+id56s that are deep across timesteps, much as resnets do for networks that are deep across layers.
+thus, we believed horizontal residual connections could solve the problem of lstms not learning
+long-term dependencies, the same problem we also hoped to mitigate with embed average pooling.
+unfortunately, horizontal residuals failed, possibly because they blurred the distinction between
+the lstm   s    fast    state and    slow    state and thus prevented the lstm from quickly adapting to
+new data. alternate combinations of horizontal, vertical, and lateral residual connections were also
+experimented with but yielded poor results.
+
+6 experimental results
+
+6.1 datasets
+
+we chose two commonly used benchmark datasets for our experiments: the stanford sentiment
+treebank (sst) (socher et al., 2013) and the imdb sentiment dataset (maas et al., 2011). this
+allowed us to compare the performance of our models to existing work and review the    exibility of
+our proposed model extensions across fairly disparate types of classi   cation datasets. sst contains
+relatively well curated, short sequence sentences, in contrast to imdb   s comparatively colloquial
+and lengthy sequences (some up to 2, 000 tokens). to further differentiate the classi   cation tasks we
+chose to experiment with    ne-grained,    ve-class sentiment on sst, while imdb only offered binary
+labels. for imdb, we randomly split the training set of 25, 000 examples into training and validation
+sets containing 22, 500 and 2, 500 examples respectively, as done in maas et al. (2011).
+
+6.2 methodology
+
+our objective is to show a series of compounding extensions to the standard lstm baseline that
+enhance accuracy. to ensure scienti   c reliability, the addition of each feature is the only change
+from the previous model (see figures 4 and 5). the baseline model is a 2-layer stacked lstm with
+hidden size 170 for sst and 120 for imdb, as used in tai et al. (2015). all models in this paper used
+publicly available 300 dimensional word vectors, pre-trained using glove on 840 million tokens of
+common crawl data (pennington et al., 2014), and both the word vectors and the subsequent weight
+matrices were trained using adam with a learning rate of 10   4.
+the    rst set of basic feature additions were adding a forget bias and using dropout. adding a bias of
+1.0 to the forget gate (i.e. adding 1.0 to the inside of the sigmoid function in equation 3) improves
+results across nlp tasks, especially for learning long-range dependencies (zaremba, 2015). dropout
+(srivastava et al., 2014) is a highly effective regularizer for deep models. for sst and imdb we used
+grid search to select dropout probabilities of 0.5 and 0.7 respectively, applied to the input of each
+layer, including the projection/softmax layer. while forget bias appears to hurt performance in figure
+
+5
+
+under review as a conference paper at iclr 2017
+
+5, the combination of dropout and forget bias yielded better results in all cases than dropout without
+forget bias. our last two basic optimizations were increasing the hidden sizes and then adding shared-
+weight bidirectionality to the id56. the hidden sizes for sst and imdb were increased to 800 and
+360 respectively; we found signi   cantly diminishing returns to performance from increases beyond
+this. we chose shared-weight bidirectionality to ensure the model size did not increase any further.
+speci   cally, the forward and backward weights are shared, and the input to the projection/softmax
+layer is a concatenation of the forward and backward passes       nal hidden states.
+all of our subsequent proposed model extensions are described at length in their own sections. for
+both datasets, we used 60 monte carlo samples, and the embed average pooling mlp had one
+hidden layer and both a hidden dimension and an output dimension of 300 as the output dimension
+of the embed average pooling mlp. note that although the mlp weights increased the size of their
+respective models, this increase is negligible (equivalent to increasing the hidden size for sst from
+800 to 804 or the hidden size of imdb from 360 to 369), and we found that such a size increase had
+no discernible effect on accuracy when done without the embed average pooling.
+
+6.3 results
+
+since each of our proposed modi   cations operate independently, they are well suited to use in
+combination as well as in isolation. in figures 4 and 5 we compound these features on top of the
+more traditional enhancements. due to the expensiveness of bidirectional models, figure 4 also
+shows these compounding features on sst with and without bidirectionality. the validation accuracy
+distributions show that each augmentation usually provides some small but noticeable improvement
+on the previous model, as measured by consistent improvements in mean and median accuracy.
+
+(a) compounding feature models on 5-class sst.
+
+(b) compounding feature models (minus bidirectional)
+for 5-class sst.
+
+figure 4: these box-plots show the performance of compounding model features on    ne-grain sst
+validation accuracy. the red points, red lines, blue boxes, whiskers and plus-shaped points indicate
+the mean, median, quartiles, range, and outliers, respectively.
+
+we originally suspected that mc would provide marginal yet consistent improvements across datasets,
+while embed average pooling would especially excel for long sequences like in imdb, where id165
+based models and deep unordered compositions have bene   ted from their ability to retain information
+from disparate parts of the text. the former hypothesis was largely con   rmed. however, while
+embed average pooling was generally performance-enhancing, the performance boost it yielded for
+imdb was not signi   cantly larger than the one it yielded for sst, though that may have been because
+the other enhancements already encompassed most of the advantages provided by deep unordered
+compositions.
+the only evident exceptions to the positive trend are the variations of residual connections. which of
+res-v1 (vertical only) and res-v2 (vertical and residual) outperformed the other depended on the
+dataset and whether the network was bidirectional. the res-v2 architecture dominated in experiments
+4b and 5 while the res-v1 (only vertical residuals) architecture is most performant in figure 4a. this
+
+6
+
+baseline: 2-lstm + forget bias + dropout + hidden size + bidirectional + monte carlo + embed averaging + vertical residual + lateral residualfeatures0.450.460.470.480.490.500.510.520.535-class val accuracysst: full compounding model featuresbaseline: 2-lstm + forget bias + dropout + hidden size + monte carlo + embed averaging + vertical residual + lateral residualfeatures0.450.460.470.480.490.500.510.520.535-class val accuracysst: compounding model featuresunder review as a conference paper at iclr 2017
+
+figure 5: these box-plots show the performance of compounding model features on binary imdb
+validation accuracy.
+
+figure 6: comparing the effects of layer depth between vanilla id56s, res-v1 and res-v2 models
+on    ne-grained sentiment classi   cation (sst). as we increase the layers, we decrease the hidden size
+to maintain equivalent model sizes. the points indicate average validation accuracy, while the shaded
+regions indicate 90% con   dence intervals.
+
+suggests for short sequences, bidirectionality and lateral residuals con   ict. further analysis of the
+effect of residual connections and model depth can be found in figure 6. in that    gure, the number of
+parameters, and hence model size, are kept uniform by modifying the hidden size as the layer depth
+changed. the hidden sizes used for 1, 2, 4, 6, and 8 layer models were 250, 170, 120, 100, and 85
+respectively, maintaining     550, 000 total parameters for all models. as the graph demonstrates,
+
+7
+
+baseline: 2-lstm + forget bias + dropout + hidden size + bidirectional + monte carlo + embed averaging + vertical residual + lateral residualfeatures0.8700.8750.8800.8850.8900.8950.9000.9050.910binary val accuracyimdb: compounding model features# params (m) train time / epoch (sec) test acc (%)
+
+under review as a conference paper at iclr 2017
+
+model
+rntn (socher et al., 2013)
+id98-mc (kim, 2014)
+did56 (irsoy and cardie, 2014)
+ct-lstm (tai et al., 2015)
+dmn (kumar et al., 2016)
+nti-slstm-lstm (munkhdalai and
+yu, 2016)
+baseline 2-lstm
+large 2-lstm
+bi-2-lstm
+bi-2-lstm+mc+pooling+resv
+2-lstm+mc+pooling+resv+resl
+
+model
+id166-bi (wang and manning, 2012)
+dan-rand (iyyer et al., 2015)
+dan (iyyer et al., 2015)
+nbid166-bi (wang and manning, 2012)
+nbid166-tri, id56, sentence-vec en-
+semble (mesnil et al., 2014)
+baseline 2-lstm
+large 2-lstm
+bi-2-lstm
+bi-2-lstm+mc+pooling+resv+resl
+
+   
+   
+   
+0.317
+   
+   
+
+   
+   
+   
+   
+   
+
+   
+   
+   
+   
+   
+   
+
+   
+   
+   
+   
+   
+
+0.553
+8.650
+8.650
+8.740
+8.740
+
+    2, 100
+    3, 150
+    6, 100
+    8, 050
+    4, 800
+
+0.318
+2.00
+2.00
+2.08
+
+    1, 800
+    2, 500
+    5, 100
+    5, 500
+
+table 1: test performance on the stanford sentiment treebank (sst) sentiment classi   cation task.
+
+# params (m) train time / epoch (sec) test acc (%)
+
+45.7
+47.4
+49.8
+51.0
+52.1
+53.1
+
+46.4
+48.7
+50.9
+52.2
+51.6
+
+89.2
+88.8
+89.4
+91.2
+92.6
+
+85.3
+87.6
+88.9
+90.1
+
+table 2: test performance on the imdb sentiment classi   cation task.
+
+normal lstms (   vanilla   ) perform drastically worse as they become deeper and narrower, while
+res-v1 and res-v2 both see their performance stay much steadier or even brie   y rise. while depth
+wound up being far from a panacea for the datasets we experimented on, the ability of an lstm with
+residual connections to maintain its performance as it gets deeper holds promise for other domains
+where the extra expressive power provided by depth might prove more crucial.
+selecting the best results for each model, we see results competitive with state-of-the-art performance
+for both imdb1 and sst, even though many state-of-the-art models use either parse-tree information
+(tai et al., 2015), multiple passes through the data (kumar et al., 2016) or tremendous train and
+test-time computational and memory expenses (le and mikolov, 2014). to our knowledge, our
+models constitute the best performance of purely sequential, single-pass, and computationally feasible
+models, precisely the desired features of a solid out-of-the-box baseline. furthermore, for sst, the
+compounding enhancement model without bidirectionality, the    nal model shown in figure 4b, greatly
+exceeded the performance of the large bidirectional model (51.6% vs 50.9%), with signi   cantly less
+training time (table 1). this suggests our enhancements could provide a similarly reasonable and
+ef   cient alternative to shared-weight bidirectionality for other such datasets.
+
+7 conclusion
+
+we explore several easy to implement enhancements to the basic lstm network that positively
+impact performance. these include both fairly well established extensions (biasing the forget gate,
+dropout, increasing the model size, bidirectionality) and several more novel ones (monte carlo
+
+1for imdb, we benchmark only against results obtained from training exclusively on the labeled training set.
+thus, we omit results from unsupervised models that leveraged the additional 50, 000 unlabeled examples, such
+as miyato et al. (2016).
+
+8
+
+under review as a conference paper at iclr 2017
+
+model averaging, embed average pooling, residual connections). we    nd that these enhancements
+improve the performance of the lstm in classi   cation tasks, both in conjunction or isolation, with
+an accuracy close to state of the art despite being more lightweight and using less information than
+the current state of the art models. our results suggest that these extensions should be incorporated
+into lstm baselines.
+
+references
+rich caruana, nikos karampatziakis, and ainur yessenalina. an empirical evaluation of supervised
+learning in high dimensions. in proceedings of the 25th international conference on machine
+learning, pages 96   103. acm, 2008.
+
+yarin gal. a theoretically grounded application of dropout in recurrent neural networks. arxiv
+
+preprint arxiv:1512.05287, 2015.
+
+klaus greff, rupesh kumar srivastava, jan koutn    k, bas r steunebrink, and j  urgen schmidhuber.
+
+lstm: a search space odyssey. arxiv preprint arxiv:1503.04069, 2015.
+
+kaiming he, xiangyu zhang, shaoqing ren, and jian sun. deep residual learning for image
+recognition. corr, abs/1512.03385, 2015. url http://arxiv.org/abs/1512.03385.
+
+gao huang, yu sun, zhuang liu, daniel sedra, and kilian weinberger. deep networks with
+
+stochastic depth. arxiv preprint arxiv:1603.09382, 2016.
+
+ozan irsoy and claire cardie. modeling compositionality with multiplicative recurrent neural
+
+networks. arxiv preprint arxiv:1412.6577, 2014.
+
+mohit iyyer, varun manjunatha, jordan boyd-graber, and hal daum  e iii. deep unordered composi-
+tion rivals syntactic methods for text classi   cation. in association for computational linguistics,
+2015.
+
+andrej karpathy, justin johnson, and fei-fei li. visualizing and understanding recurrent networks.
+
+corr, abs/1506.02078, 2015.
+
+yoon kim. convolutional neural networks for sentence classi   cation. arxiv preprint arxiv:1408.5882,
+
+2014.
+
+ankit kumar, ozan irsoy, peter ondruska, mohit iyyer, james bradbury, ishaan gulrajani, victor
+zhong, romain paulus, and richard socher. ask me anything: dynamic memory networks for
+natural language processing. in icml, 2016.
+
+quoc v le and tomas mikolov. distributed representations of sentences and documents. in icml,
+
+volume 14, pages 1188   1196, 2014.
+
+qianli liao and tomaso a. poggio. bridging the gaps between residual learning, recurrent neural
+networks and visual cortex. corr, abs/1604.03640, 2016. url http://arxiv.org/abs/
+1604.03640.
+
+andrew l. maas, raymond e. daly, peter t. pham, dan huang, andrew y. ng, and christopher
+potts. learning word vectors for id31. in proceedings of the 49th annual meeting of
+the association for computational linguistics: human language technologies, pages 142   150,
+portland, oregon, usa, june 2011. association for computational linguistics. url http:
+//www.aclweb.org/anthology/p11-1015.
+
+gr  egoire mesnil, tomas mikolov, marc   aurelio ranzato, and yoshua bengio. ensemble of gen-
+erative and discriminative techniques for id31 of movie reviews. arxiv preprint
+arxiv:1412.5335, 2014.
+
+takeru miyato, andrew m dai, and ian goodfellow. virtual adversarial training for semi-supervised
+
+text classi   cation. arxiv preprint arxiv:1605.07725, 2016.
+
+tsendsuren munkhdalai and hong yu. neural tree indexers for text understanding. corr,
+
+abs/1607.04492, 2016. url http://arxiv.org/abs/1607.04492.
+
+9
+
+under review as a conference paper at iclr 2017
+
+jeffrey pennington, richard socher, and christopher d manning. glove: global vectors for word
+
+representation. in emnlp, volume 14, pages 1532   43, 2014.
+
+ali sharif razavian, hossein azizpour, josephine sullivan, and stefan carlsson. id98 features
+off-the-shelf: an astounding baseline for recognition. in the ieee conference on computer
+vision and pattern recognition (cvpr) workshops, june 2014.
+
+karen simonyan and andrew zisserman. very deep convolutional networks for large-scale image
+
+recognition. corr, abs/1409.1556, 2014. url http://arxiv.org/abs/1409.1556.
+
+richard socher, alex perelygin, jean y wu, jason chuang, christopher d manning, andrew y ng,
+and christopher potts. recursive deep models for semantic compositionality over a sentiment
+treebank. in proceedings of the conference on empirical methods in natural language processing
+(emnlp), volume 1631, page 1642. citeseer, 2013.
+
+nitish srivastava, geoffrey e hinton, alex krizhevsky, ilya sutskever, and ruslan salakhutdinov.
+dropout: a simple way to prevent neural networks from over   tting. journal of machine learning
+research, 15(1):1929   1958, 2014.
+
+christian szegedy, wei liu, yangqing jia, pierre sermanet, scott reed, dragomir anguelov, du-
+mitru erhan, vincent vanhoucke, and andrew rabinovich. going deeper with convolutions. in
+proceedings of the ieee conference on id161 and pattern recognition, pages 1   9,
+2015.
+
+christian szegedy, sergey ioffe, and vincent vanhoucke. inception-v4, inception-resnet and the
+impact of residual connections on learning. corr, abs/1602.07261, 2016. url http://arxiv.
+org/abs/1602.07261.
+
+kai sheng tai, richard socher, and christopher d manning. improved semantic representations
+from tree-structured id137. arxiv preprint arxiv:1503.00075, 2015.
+
+andreas veit, michael j. wilber, and serge j. belongie. residual networks are exponential ensembles
+of relatively shallow networks. corr, abs/1605.06431, 2016. url http://arxiv.org/
+abs/1605.06431.
+
+sida wang and christopher d manning. baselines and bigrams: simple, good sentiment and topic
+classi   cation. in proceedings of the 50th annual meeting of the association for computational
+linguistics: short papers-volume 2, pages 90   94. association for computational linguistics,
+2012.
+
+caiming xiong, stephen merity, and richard socher. dynamic memory networks for visual and
+
+textual id53. in icml, 2016.
+
+wojciech zaremba. an empirical exploration of recurrent network architectures. 2015.
+
+10
+
+

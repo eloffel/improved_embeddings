@@ -1,0 +1,311 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]gab41
+     * [9]machine learning
+     * [10]data science
+     * [11]deep learning
+     * [12]lab41 website
+     __________________________________________________________________
+
+some tips for debugging deep learning
+
+   [13]go to the profile of patrick callier
+   [14]patrick callier (button) blockedunblock (button) followfollowing
+   jan 9, 2016
+
+   deep learning is tricky in several respects. not only can the math and
+   theory quickly lead to hairballs of gradient formulas and update
+   equations, but deep learning models are also complex and often finicky
+   pieces of software. recently, we   ve seen promising projects like
+   [15]tdb for tensorflow, which promises online visualization of neural
+   networks and control flow interruption during training and id136,
+   helping the developer diagnose the behavior of a neural network that
+   isn   t working.
+
+   in our adventures with [16]theano, [17]keras and [18]neon, however, my
+   colleagues and i often had problems verifying that we had represented
+   the data correctly, figuring out if some bug or undesirable behavior
+   was our fault or [19]someone else   s, and even getting our scripts to
+   run at all. in my work on [20]sunny-side-up, lab41   s exploration of
+   deep learning for id31, i often muttered some variant of
+   the phrase    this bleeping convnet       at most such times, i didn   t even
+   technically have a [21]convolutional neural network, but instead a sad,
+   broken piece of software trying valiantly to function as one. in this
+   post i offer a few tips, tricks, and outright hacks for transforming
+   your code into happy,    working    (no guarantees!) convolutional neural
+   networks and other deep learning models. these tips are, in rough
+   order:
+    1. start small
+    2. use funny numbers
+    3. debug with debuggers
+
+start small
+
+   the state-of-the-art deep learning architectures are only getting
+   [22]bigger and [23]deeper. as a programmer trying to implement these
+   architectures, this is not a problem, provided you know exactly what
+   you are doing. if your knowledge is less than perfect, then things will
+   go wrong         whether it   s trying to replicate someone else   s results or
+   forging ahead beyond the limits of what has already been done. in
+   particular, i have found two measures particularly help when you are
+   just starting a new deep learning project: validate your data model
+   with fake data, and proceed incrementally when building up
+   architectures.
+
+fake your data, fake your results
+
+   my first piece of advice, which lands mostly in the    do as i say   
+   category, is to start with the simplest possible architecture and
+   decide on your representation of the data. implement a small
+   fully-connected feed-forward network (even just a id28)
+   for some version of your problem. create a simulated data stream with
+   the same shape and dimensionality of the data you plan on pushing
+   through the net. try data where the relationship between the input and
+   the output is deterministic and easy to learn, and another where there
+   is no relationship between input and output, and compare the
+   performance of your algorithm:
+# easily separable
+a1=np.random.normal(0.25,0.1,50)
+b1=np.random.normal(0.75,0.1,50)
+# not separable
+a2=np.random.normal(0.5,0.3,50)
+b2=np.random.normal(0.5,0.3,50)
+
+   these samples are plotted below. which of these relationships would you
+   expect to be easier to learn?
+   [1*vaqy7osifw2uyuhryzvbrq.png]
+
+   call it a unit test of sorts. fake data will set some sanity checks on
+   the behavior of the algorithm you end up implementing. and you will
+   need your sanity.
+
+one thing at a time
+
+   for sunny-side-up, we implemented a [24]nine-layer convolutional neural
+   network from a paper by [25]xiang zhang and collaborators at nyu. the
+   [26]reference implementation is in torch. my colleagues and i initially
+   set out to replicate this architecture in [27]theano, [28]keras and
+   [29]neon, and our efforts dragged on for days, even weeks.
+
+   in my own case, i eventually realized it was because i was updating the
+   code for data ingest and for the classifier at the same time. theano is
+   one thing, but when it comes down to it, neon and keras have fairly
+   straightforward model specification idioms, so in theory it should be
+   hard to screw them up too badly. but i had unwittingly introduced
+   subtle changes in the way the data was represented when it arrived at
+   the first model layer. for better or for worse, many architectures get
+   very confused when you feed in a matrix whose dimensions don   t match
+   what that layer was expecting, leading to fun error messages like this:
+typeerror:(bad input argument to theano function with name build/bdist.linux-x86
+_64/egg/keras/models.py:406 at index 0(0-based), wrong number of dimensions: exp
+ected 2, got 4 with shape (32,1,128,128).)
+valueerror:dimension mismatch in args to gemm (32,16384)x(14400,128)-(32,128)
+
+   so if your data model might be broken, fall back to your unit test and
+   fix it first there. then build back up to the network you   re
+   implementing. in any event, what was that about array sizes   ?
+
+diagnose array dimension mismatch with funny numbers
+
+   sometimes the neural network framework you are using doesn   t adequately
+   document the expected shape of input to a layer. or, it could be that
+   maybe you didn   t read the documentation, or implemented the layer
+   inconsistently. however it happens, it can be surprisingly hard to get
+   the number of dimensions right going from one network layer to the
+   next. even in fairly simple architectures, it is not difficult to
+   arrive at a point where you have f w     h filters convolving over the
+   third and fourth dimensions of a k     l     m     n array. my trick here is
+   to selectively edit the shape of the data, the batch size, or the input
+   dimensions of particular layers in a way that makes them easier to
+   identify if an error message comes up. note that this very hacky
+   technique (a very primitive cousin of debug-by-print) should go
+   hand-in-hand with more rigorous dimensional analysis of the data and
+   the model, and taking advantage of facilities such as neon   s for
+   [30]naming individual layers, which could circumvent the entire
+   problem.
+
+   for instance, when you end up switching the dimension for the
+   [31]mini-batch size and the dimension for number of channels (like i
+   did yesterday), your code will blow up, maybe with an error message if
+   you   re lucky. the message will often (helpfully!) tell you which
+   dimension just didn   t match up to expectations, but in my case it
+   reported only the dimension size it encountered rather than the name i
+   had been using using for it, or even which layer in particular was
+   amiss. just today i got the following very informative stack trace from
+   theano:
+gpucorrmm images andkernel must have the same stack size
+apply node that caused the error:gpucorrmm{valid,(1,1)}(gpucontiguous.0,gpuconti
+guous.0)
+toposort index:76
+inputs types:[cudandarraytype(float32,4d),
+cudandarraytype(float32,4d)]
+inputs shapes:[(256,1,64,64),(20,32,5,5)]
+inputs strides:[(4096,0,64,1),(800,25,5,1)]
+inputs values:[notshown,notshown]
+outputs clients:[[gpuelemwise{add}[(0,0)](gpucorrmm{valid,(1,1)}.0,gpudimshuffle
+{x,0,x,x}.0)]]
+
+   i haven   t had any luck making use of the tantalizing toposort index one
+   often sees in such messages, and while the inputs shapes line contains
+   a lot of valuable information, it can be difficult to cross-reference
+   it with the graph of your actual network. to be fair, at least theano
+   is nice enough to suggest ways to elicit more readable and verbose
+   output, but don   t hold your breath for an easy fix. confusingly, some
+   frameworks also restrict the products of certain quantities, and these
+   will often appear in errors as literal constants, e.g. 45, rather than
+   k     m. everyone loves assertionerror: 114688 > 2**16, right?
+
+   in general, the most thorough approach to fixing bad error messages
+   would be to go into the code for your chosen framework, write helpful
+   error messages, and push your improvements back to the maintainers. if
+   you improve the software, everyone will be happier, wealthier and
+   longer-lived. such magnanimity can, however, be hard to muster in the
+   midst of debugging this bleeping convnet. barring that, try
+   manipulating dimensions of interest: mini-batch size, width, number of
+   channels, etc. to be prime (or just funny) numbers. if you see error:
+   expected foo==26, you   re much more likely to see quickly that the
+   problem involves your two dimensions measuring 2 and 13. i did this to
+   debug my data model all the time, so that i knew if a problem arose
+   involving the quantity 333(1077) = 358641, it somehow involved my
+   mini-batch size (333 records per mini-batch) or my data length (1077
+   characters). if this seems hacky, well, i don   t have much to say about
+   that.
+
+   in most real-life neural network architectures, you don   t necessarily
+   have the freedom to arbitrarily set the dimensionality of particular
+   layers. for instance, one layer may accept as input the result of a
+   convolution-and-pooling operation, which puts certain restrictions on
+   possible dimension sizes. but in my experience, the interface between
+   the data and the first layer is both the most problematic and the
+   easiest to fiddle with. for higher layers, meanwhile, you can often get
+   into a ballpark that at least helps point the way toward the problem.
+
+pdb might actually work
+
+   as your neural network software slowly stops being a haphazard mess of
+   stack dump-inducing spaghetti code and increasingly exasperated
+   comments (# trying this againnn   ) and flowers into a    working,   
+   possibly very quirky neural network training and testing system, tools
+   like tdb, [32]tensorboard, neon   s [33]nvis, or your own bespoke logging
+   and visualization systems will become increasingly useful in doing
+   actual deep learning debugging: checking gradients, tweaking learning
+   rates, and addressing other phenomena in the    this output is not what i
+   wanted or expected    category         the fun stuff. but the squishy middle
+   stage between broken and working can be frustrating, painful, and long.
+
+   my parting comment is that one of the most useful tools for debugging
+   my neural networks in this stage was, strangely enough, the
+   debugger         specifically ipython   s [34]ipdb, which provides ipythonified
+   hooks to pdb. for certain kinds of errors, breaking on exception (as
+   simple as issuing pdb in interactive ipython or a notebook) dumps you
+   right into a place where you can print out array dimensions and start
+   trying to fiddle and tinker. there are often several layers of logic
+   hiding you from whatever is actually training your network, however, so
+   pdb may not always be the right choice.
+
+   of course, the right choice is always to know what you   re doing and
+   never to make any mistakes. this may involve sketching your network
+   architecture out on paper, doing a masters in machine learning, or
+   getting someone else do either one of those for you and going to the
+   beach instead. if you are a fallible human being, though, or you   ve
+   blown through your vacation budget already, i hope these nuggets of
+   intermittently sound advice help you iterate faster and (eventually)
+   get your bleeping convnet to work.
+     __________________________________________________________________
+
+   originally published at [35]www.lab41.org on january 10, 2016.
+
+     * [36]machine learning
+     * [37]artificial intelligence
+     * [38]python
+
+   (button)
+   (button)
+   (button) 37 claps
+   (button) (button) (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [39]go to the profile of patrick callier
+
+[40]patrick callier
+
+   data scientist. [41]https://github.com/pcallier
+
+     (button) follow
+   [42]gab41
+
+[43]gab41
+
+   gab41 is lab41's blog exploring data science, machine learning, and
+   artificial intelligence. geek out with us!
+
+     * (button)
+       (button) 37
+     * (button)
+     *
+     *
+
+   [44]gab41
+   never miss a story from gab41, when you sign up for medium. [45]learn
+   more
+   never miss a story from gab41
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://gab41.lab41.org/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/3f69e56ea134
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://gab41.lab41.org/some-tips-for-debugging-deep-learning-3f69e56ea134&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://gab41.lab41.org/some-tips-for-debugging-deep-learning-3f69e56ea134&source=--------------------------nav_reg&operation=register
+   8. https://gab41.lab41.org/?source=logo-lo_emkw3wv8dm2c---b9e75b66ab60
+   9. https://gab41.lab41.org/tagged/machine-learning
+  10. https://gab41.lab41.org/tagged/data-science
+  11. https://gab41.lab41.org/tagged/deep-learning
+  12. http://www.lab41.org/
+  13. https://gab41.lab41.org/@patrc?source=post_header_lockup
+  14. https://gab41.lab41.org/@patrc
+  15. https://github.com/ericjang/tdb
+  16. https://github.com/theano/theano
+  17. https://github.com/fchollet/keras
+  18. https://github.com/nervanasystems/neon
+  19. https://github.com/fchollet/keras/issues
+  20. https://github.com/lab41/sunny-side-up
+  21. http://cs231n.github.io/convolutional-networks/
+  22. http://arxiv.org/abs/1512.03385
+  23. http://arxiv.org/abs/1409.4842
+  24. http://arxiv.org/abs/1509.01626v2
+  25. http://xzh.me/
+  26. https://github.com/zhangxiangxiao/crepe
+  27. https://github.com/theano/theano
+  28. https://github.com/fchollet/keras
+  29. https://github.com/nervanasystems/neon
+  30. http://neon.nervanasys.com/docs/latest/generated/neon.layers.layer.layer.html#neon.layers.layer.layer.__init__
+  31. https://class.coursera.org/ml-003/lecture/106
+  32. https://www.tensorflow.org/versions/master/how_tos/summaries_and_tensorboard/index.html
+  33. http://neon.nervanasys.com/docs/latest/tools.html#nvis
+  34. https://pypi.python.org/pypi/ipdb
+  35. https://www.lab41.org/some-tips-for-debugging-in-deep-learning-2/
+  36. https://gab41.lab41.org/tagged/machine-learning?source=post
+  37. https://gab41.lab41.org/tagged/artificial-intelligence?source=post
+  38. https://gab41.lab41.org/tagged/python?source=post
+  39. https://gab41.lab41.org/@patrc?source=footer_card
+  40. https://gab41.lab41.org/@patrc
+  41. https://github.com/pcallier
+  42. https://gab41.lab41.org/?source=footer_card
+  43. https://gab41.lab41.org/?source=footer_card
+  44. https://gab41.lab41.org/
+  45. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  47. https://medium.com/p/3f69e56ea134/share/twitter
+  48. https://medium.com/p/3f69e56ea134/share/facebook
+  49. https://medium.com/p/3f69e56ea134/share/twitter
+  50. https://medium.com/p/3f69e56ea134/share/facebook

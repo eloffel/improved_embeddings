@@ -1,0 +1,785 @@
+    #[1]nvidia developer blog    feed [2]nvidia developer blog    comments
+   feed [3]nvidia developer blog    id56s with pytorch
+   comments feed [4]alternate [5]alternate
+
+   [6]nvidia accelerated computing [7]developer
+     * ____________________
+       [ ] search nvidia developer
+     * [8]join
+     * [9]login
+
+   ____________________
+   [ ] search nvidia developer
+
+[10]nvidia developer blog
+
+main menu
+
+   [11]skip to primary content
+   [12]skip to secondary content
+   [13]developer news
+   [14]subscribe
+   [15]follow us
+   [16]nvidiaaidev
+   [17]nvidiahpcdev
+   [18]nvidiagamedev
+   [19]nvidiaembedded
+   [20]nvidiadrive
+   [21]nvidiadesign
+
+   (button) toggle navigation
+
+   topics
+     * [22]accelerated computing
+     * [23]artificial intelligence
+     * [24]autonomous vehicles
+     * [25]design & visualization
+     * [26]features
+     * [27]game development
+     * [28]robotics
+     * [29]smart cities
+     * [30]virtual reality
+
+   [31]accelerated computing
+   [32]artificial intelligence
+   [33]autonomous vehicles
+   [34]design & visualization
+   [35]features
+   [36]game development
+   [37]robotics
+   [38]smart cities
+   [39]virtual reality
+
+   [40]artificial intelligence
+
+
+id56s with pytorch
+
+   by [41]james bradbury | [42]april 9, 2017
+   tags: [43]deep learning, [44]lstm, [45]machine learning and ai,
+   [46]natural language processing, [47]python, [48]pytorch, [49]torch
+
+   from siri to google translate, deep [50]neural networks have enabled
+   breakthroughs in machine understanding of natural language. most of
+   these models treat language as a flat sequence of words or characters,
+   and use a kind of model called a [51]recurrent neural network (id56) to
+   process this sequence. but many linguists think that language is best
+   understood as a hierarchical tree of phrases, so a significant amount
+   of research has gone into [52]deep learning models known as recursive
+   neural networks that take this structure into account. while these
+   models are notoriously hard to implement and inefficient to run, a
+   brand new deep learning framework called [53]pytorch makes these and
+   other complex natural language processing models a lot easier.
+
+   while id56s are a good demonstration of pytorch   s
+   flexibility, it is also a fully-featured framework for all kinds of
+   deep learning with particularly strong support for id161. the
+   work of developers at facebook ai research and several other labs, the
+   framework combines the efficient and flexible gpu-accelerated backend
+   libraries from torch7 with an intuitive python frontend that focuses on
+   rapid prototyping, readable code, and support for the widest possible
+   variety of deep learning models.
+
+spinning up
+
+   this post walks through the pytorch [54]implementation of a recursive
+   neural network with a recurrent tracker and treelstm nodes, also known
+   as spinn   an example of a deep learning model from natural language
+   processing that is difficult to build in many popular frameworks. the
+   implementation i describe is also partially batched, so it   s able to
+   take advantage of gpu acceleration to run significantly faster than
+   versions that don   t use batching.
+
+   this model, which stands for stack-augmented parser-interpreter neural
+   network, was introduced in [55]bowman et al. (2016) as a way of
+   tackling the task of natural language id136 using stanford   s
+   [56]snli dataset.
+
+   the task is to classify pairs of sentences into three categories:
+   assuming that sentence one is an accurate caption for an unseen image,
+   then is sentence two (a) definitely, (b) possibly, or (c) definitely
+   not also an accurate caption? (these classes are called entailment,
+   neutral, and contradiction, respectively). for example, suppose
+   sentence one is    two dogs are running through a field.    then a sentence
+   that would make the pair an entailment might be    there are animals
+   outdoors,    one that would make the pair neutral might be    some puppies
+   are running to catch a stick,    and one that would make it a
+   contradiction could be    the pets are sitting on a couch.   
+
+   in particular, the goal of the research that led to spinn was to do
+   this by encoding each sentence into a fixed-length vector
+   representation before determining their relationship (there are other
+   ways, such as attentional models that compare individual parts of each
+   sentence with each other using a kind of soft focus).
+
+   the dataset comes with machine-generated syntactic parse trees, which
+   group the words in each sentence into phrases and clauses that all have
+   independent meaning and are each composed of two words or sub-phrases.
+   many linguists believe that humans understand language by combining
+   meanings in a hierarchical way as described by trees like these, so it
+   might be worth trying to build a neural network that works the same
+   way. here   s an example of a sentence from the dataset, with its parse
+   tree represented by nested parentheses:
+    ( ( the church ) ( ( has ( cracks ( in ( the ceiling ) ) ) ) . ) )
+
+   one way to encode this sentence using a neural network that takes the
+   parse tree into account would be to build a neural network layer reduce
+   that combines pairs of words (represented by id27s like
+   [57]glove) and/or phrases, then apply this layer recursively, taking
+   the result of the last reduce operation as the encoding of the
+   sentence:
+x = reduce(   the   ,    ceiling   )
+y = reduce(   in   , x)
+... etc.
+
+   but what if i want the network to work in an even more humanlike way,
+   reading from left to right and maintaining sentence context while still
+   combining phrases using the parse tree? or, what if i want to train a
+   network to construct its own parse tree as it reads the sentence, based
+   on the words it sees? here   s the same parse tree written a slightly
+   different way:
+    the church ) has cracks in the ceiling ) ) ) ) . ) )
+
+   or a third way, again equivalent:
+words:  the church   has cracks in the ceiling         .
+parses: s   s      r s   s      s  s   s       r r r r s r r
+
+   all i did was remove open parentheses, then tag words with    s    for
+      shift    and replace close parentheses with    r    for    reduce.    but now
+   the information can be read from left to right as a set of instructions
+   for manipulating a stack and a stack-like buffer, with exactly the same
+   results as the recursive method described above:
+    1. place the words into the buffer.
+    2. pop    the    from the front of the buffer and push it onto stack,
+       followed by    church   .
+    3. pop top two stack values, apply reduce, then push the result back
+       to the stack.
+    4. pop    has    from buffer and push to stack, then    cracks   , then    in   ,
+       then    the   , then    ceiling   .
+    5. repeat four times: pop top two stack values, apply reduce, then
+       push the result.
+    6. pop    .    from buffer and push onto stack.
+    7. repeat two times: pop top two stack values, apply reduce, then push
+       the result.
+    8. pop the remaining stack value and return it as the sentence
+       encoding.
+
+   i also want to maintain sentence context to take into account
+   information about the parts of the sentence the system has already read
+   when performing reduce operations on later parts of the sentence. so
+   i   ll replace the two-argument reduce function with a three-argument
+   function that takes a left child phrase, a right child phrase, and the
+   current sentence context state. this state is created by a second
+   neural network layer, a recurrent unit called the tracker. the tracker
+   produces a new state at every step of the stack manipulation (i.e.,
+   after reading each word or close parenthesis) given the current
+   sentence context state, the top entry b in the buffer, and the top two
+   entries s1, s2 in the stack:
+context[t+1] = tracker(context[t], b, s1, s2)
+
+   you could easily imagine writing code to do these things in your
+   favorite programming language. for each sentence to be processed it
+   would load the next word from the buffer, run the tracker, check
+   whether to push onto the stack or perform a reduce, do that operation,
+   then repeat until the sentence is complete. applied to a single
+   sentence, this process constitutes a large and complex deep neural
+   network with two trainable layers applied over and over in ways
+   determined by the stack manipulation. but if you   re familiar with
+   traditional deep learning frameworks like tensorflow or theano, it   s
+   difficult to implement a dynamic procedure like this. it   s worth
+   stepping back and spending a little while exploring why that   s the
+   case, and what pytorch does differently.
+
+id207
+
+   figure 1: graph structure representation of a function. figure 1: graph
+   structure representation of a function.
+
+   deep neural networks are, in essence, just complicated functions with a
+   large number of parameters. the goal of deep learning is to optimize
+   these parameters by computing their partial derivatives (gradients)
+   with respect to a loss metric. if the function is represented as a
+   graph structure of computations (figure 1), then traversing this
+   [58]graph backwards enables computing these gradients without any
+   redundant work. every modern framework for deep learning is based on
+   this concept of [59]id26, and as a result every framework
+   needs a way to represent computation graphs.
+
+   in many popular frameworks, including tensorflow, theano, and keras, as
+   well as torch7   s nngraph library, the computation graph is a static
+   object that is built ahead of time. the graph is defined using code
+   that looks like mathematical expressions, but whose variables are
+   actually placeholders that don   t yet hold any numerical values. this
+   graph of placeholder variables is compiled once into a function that
+   can then be run repeatedly on batches of training data to produce
+   outputs and gradients.
+
+   this kind of static computation graph approach works well for[60]
+   convolutional networks, whose structure is typically fixed. but in many
+   other applications, it would be useful if the graph structure of neural
+   networks could vary depending on the data. in natural language
+   processing, researchers usually want to unroll recurrent neural
+   networks over as many timesteps as there are words in the input. the
+   stack manipulation in the spinn model described above relies heavily on
+   control flow like for and if statements to define the graph structure
+   of computation for a particular sentence. in even more complex cases,
+   you might want to build models whose structure depends on the output of
+   subnetworks within the model itself.
+
+   some (though not all) of these ideas can be shoehorned into
+   static-graph systems, but almost always at the cost of reduced
+   transparency and confusing code. the framework has to add special nodes
+   to its computation graphs that represent programming primitives like
+   loops and conditionals, while users have to learn and use these nodes
+   rather than the for and if statements in the language they   re writing
+   their code in. this is because any control flow statements the
+   programmer uses will run only once, when the graph is built, hard
+   coding a single computation path.
+
+   for example, running a recurrent neural network unit (id56_unit) over
+   the vectors in words (starting with initial state h0) requires
+   tf.while_loop, a special control flow node, in tensorflow. an
+   additional special node is needed to obtain the length of words at run
+   time, since it   s only a placeholder at the time the code is run.
+# tensorflow
+# (this code runs once, during model initialization)
+#    words    is not a real list (it   s a placeholder variable) so
+# i can   t use    len   
+cond = lambda i, h: i < tf.shape(words)[0]
+cell = lambda i, h: id56_unit(words[i], h)
+i = 0
+_, h = tf.while_loop(cond, cell, (i, h0))
+
+   a fundamentally different approach, pioneered in decades of academic
+   work including harvard   s [61]kayak and [62]autograd, as well as the
+   research-centric frameworks [63]chainer and [64]dynet, is based on
+   dynamic computation graphs. in such a framework, also known as
+   define-by-run, the computation graph is built and rebuilt at runtime,
+   with the same code that performs the computations for the forward pass
+   also creating the data structure needed for id26. this
+   approach produces more straightforward code, because control flow can
+   be written using standard for and if. it also makes debugging easier,
+   because a run-time breakpoint or stack trace takes you to the code you
+   actually wrote and not a compiled function in an execution engine. the
+   same variable-length recurrent neural network can be implemented with a
+   simple python for loop in a dynamic framework.
+# pytorch (also works in chainer)
+# (this code runs on every forward pass of the model)
+#    words    is a python list with actual values in it
+h = h0
+for word in words:
+    h = id56_unit(word, h)
+
+   pytorch is the first define-by-run deep learning framework that matches
+   the capabilities and performance of static graph frameworks like
+   tensorflow, making it a good fit for everything from standard
+   convolutional networks to the wildest id23 ideas. so
+   let   s jump in and start looking at the spinn implementation.
+
+code review
+
+   before i start building the network, i need to set up a data loader.
+   it   s common in deep learning for models to operate on batches of data
+   examples, to speed up training through parallelism and to have a
+   smoother gradient at each step. i   d like to be able to do that here
+   (i   ll explain later how the stack-manipulation process described above
+   can be batched). the following python code  loads some data using a
+   system built into the pytorch [65]text library that automatically
+   produces batches by joining together examples of similar length. after
+   running this code, train_iter, dev_iter, and test_iter contain
+   iterators that cycle through batches in the train, validation, and test
+   splits of snli.
+from torchtext import data, datasets
+text = datasets.snli.parsedtextfield(lower=true)
+transitions = datasets.snli.shiftreducefield()
+labels = data.field(sequential=false)
+train, dev, test = datasets.snli.splits(
+    text, transitions, labels, wv_type='glove.42b')
+text.build_vocab(train, dev, test)
+train_iter, dev_iter, test_iter = data.bucketiterator.splits(
+    (train, dev, test), batch_size=64)
+
+   you can find the rest of the code for setting up things like the
+   training loop and accuracy metrics in [66]train.py. let   s move on to
+   the model. as described above, a spinn encoder contains a parameterized
+   reduce layer and an optional recurrent tracker to keep track of
+   sentence context by updating a hidden state every time the network
+   reads a word or applies reduce; the following code says that creating a
+   spinn just means creating these two submodules (we   ll see their code
+   soon) and putting them in a container to be used later.
+import torch
+from torch import nn
+# subclass the module class from pytorch   s neural network package
+class spinn(nn.module):
+    def __init__(self, config):
+        super(spinn, self).__init__()
+        self.config = config
+        self.reduce = reduce(config.d_hidden, config.d_tracker)
+        if config.d_tracker is not none:
+            self.tracker = tracker(config.d_hidden, config.d_tracker)
+
+   spinn.__init__ is called once, when the model is created; it allocates
+   and initializes parameters but doesn   t perform any neural network
+   operations or build any kind of computation graph. the code that runs
+   on each new batch of data is defined in the spinn.forward method, the
+   standard pytorch name for the user-implemented method that defines a
+   model   s forward pass. it   s effectively just an implementation of the
+   stack-manipulation algorithm described above, in ordinary python,
+   operating on a batch of buffers and stacks   one of each for every
+   example. i iterate over the set of    shift    and    reduce    operations
+   contained in transitions, running the tracker if it exists and going
+   through each example in the batch to apply the    shift    operation if
+   requested or add it to a list of examples that need the    reduce   
+   operation. then i run the reduce layer on all the examples in that list
+   and push the results back to their respective stacks.
+def forward(self, buffers, transitions):
+        # the input comes in as a single tensor of id27s;
+        # i need it to be a list of stacks, one for each example in
+        # the batch, that we can pop from independently. the words in
+        # each example have already been reversed, so that they can
+        # be read from left to right by popping from the end of each
+        # list; they have also been prefixed with a null value.
+        buffers = [list(torch.split(b.squeeze(1), 1, 0))
+                   for b in torch.split(buffers, 1, 1)]
+        # we also need two null values at the bottom of each stack,
+        # so we can copy from the nulls in the input; these nulls
+        # are all needed so that the tracker can run even if the
+        # buffer or stack is empty
+        stacks = [[buf[0], buf[0]] for buf in buffers]
+        if hasattr(self, 'tracker'):
+            self.tracker.reset_state()
+        for trans_batch in transitions:
+            if hasattr(self, 'tracker'):
+                # i described the tracker earlier as taking 4
+                # arguments (context_t, b, s1, s2), but here i
+                # provide the stack contents as a single argument
+                # while storing the context inside the tracker
+                # object itself.
+                tracker_states, _ = self.tracker(buffers, stacks)
+            else:
+                tracker_states = itertools.repeat(none)
+            lefts, rights, trackings = [], [], []
+            batch = zip(trans_batch, buffers, stacks, tracker_states)
+            for transition, buf, stack, tracking in batch:
+                if transition == shift:
+                    stack.append(buf.pop())
+                elif transition == reduce:
+                    rights.append(stack.pop())
+                    lefts.append(stack.pop())
+                    trackings.append(tracking)
+            if rights:
+                reduced = iter(self.reduce(lefts, rights, trackings))
+                for transition, stack in zip(trans_batch, stacks):
+                    if transition == reduce:
+                        stack.append(next(reduced))
+        return [stack.pop() for stack in stacks]
+
+   a call to self.tracker or self.reduce runs the forward method of the
+   tracker or reduce submodule, respectively, which takes a list of
+   examples on which to apply the operation. it makes sense to operate
+   independently on the various examples here in the main forward method,
+   keeping separate buffers and stacks for each of the examples in the
+   batch, since all of the math-heavy, gpu-accelerated operations that
+   benefit from batched execution take place in tracker and reduce. in
+   order to write those functions more cleanly, i   ll use some helpers
+   (which i   ll define later) which turn these lists of examples into
+   batched tensors and vice versa.
+
+   i   d like the reduce module to automatically batch its arguments to
+   accelerate computation, then unbatch them so they can be independently
+   pushed and popped later. the actual composition function used to
+   combine the representations of each pair of left and right sub-phrases
+   into the representation of the parent phrase is a treelstm, a variation
+   of the common recurrent neural network unit called an [67]lstm. this
+   composition function requires that the state of each of the children
+   actually consist of two tensors, a hidden state h and a memory cell
+   state c, while the function is defined using two linear layers
+   (nn.linear) operating on the children   s hidden states and a nonlinear
+   combination function tree_lstm that combines the result of the linear
+   layers with the children   s memory cell states. in the spinn, this is
+   extended by adding a third linear layer that operates on the tracker   s
+   hidden state.
+   figure 2: a treelstm composition function augmented with a third input
+   (x, in this case the tracker state). in the pytorch implementation
+   shown below, the five groups of three linear transformations
+   (represented by triplets of blue, black, and red arrows) have been
+   combined into three nn.linear modules, while the tree_lstm function
+   performs all computations located inside the box. figure from chen et
+   al. (2016). figure 2: a treelstm composition function augmented with a
+   third input (x, in this case the tracker state). in the pytorch
+   implementation shown below, the five groups of three linear
+   transformations (represented by triplets of blue, black, and red
+   arrows) have been combined into three nn.linear modules, while the
+   tree_lstm function performs all computations located inside the box.
+   figure from chen et al. (2016).
+def tree_lstm(c1, c2, lstm_in):
+    # takes the memory cell states (c1, c2) of the two children, as
+    # well as the sum of linear transformations of the children   s
+    # hidden states (lstm_in)
+    # that sum of transformed hidden states is broken up into a
+    # candidate output a and four gates (i, f1, f2, and o).
+    a, i, f1, f2, o = lstm_in.chunk(5, 1)
+    c = a.tanh() * i.sigmoid() + f1.sigmoid() * c1 + f2.sigmoid() * c2
+    h = o.sigmoid() * c.tanh()
+    return h, c
+
+class reduce(nn.module):
+    def __init__(self, size, tracker_size=none):
+        super(reduce, self).__init__()
+        self.left = nn.linear(size, 5 * size)
+        self.right = nn.linear(size, 5 * size, bias=false)
+        if tracker_size is not none:
+            self.track = nn.linear(tracker_size, 5 * size, bias=false)
+
+    def forward(self, left_in, right_in, tracking=none):
+        left, right = batch(left_in), batch(right_in)
+        tracking = batch(tracking)
+        lstm_in = self.left(left[0])
+        lstm_in += self.right(right[0])
+        if hasattr(self, 'track'):
+            lstm_in += self.track(tracking[0])
+        return unbatch(tree_lstm(left[1], right[1], lstm_in))
+
+   since both the reduce layer and the similarly implemented tracker work
+   using lstms, the batch and unbatch helper functions operate on pairs of
+   hidden and memory states (h, c).
+def batch(states):
+    if states is none:
+        return none
+    states = tuple(states)
+    if states[0] is none:
+        return none
+    # states is a list of b tensors of dimension (1, 2h)
+    # this returns two tensors of dimension (b, h)
+    return torch.cat(states, 0).chunk(2, 1)
+
+def unbatch(state):
+    if state is none:
+        return itertools.repeat(none)
+    # state is a pair of tensors of dimension (b, h)
+    # this returns a list of b tensors of dimension (1, 2h)
+    return torch.split(torch.cat(state, 1), 1, 0)
+
+   and that   s all there is to it. (the rest of the necessary code,
+   including the tracker, is in [68]spinn.py, while the classifier layers
+   that compute an snli category from two sentence encodings and compare
+   this result with a target giving a final loss variable are in
+   [69]model.py). the forward code for spinn and its submodules produces
+   an extraordinarily complex computation graph (figure 3) culminating in
+   loss, whose details are completely different for every batch in the
+   dataset, but which can be automatically backpropagated each time with
+   very little overhead simply by calling loss.backward(), a function
+   built into pytorch that performs id26 from any point in a
+   graph.
+
+   the models and hyperparameters in the full code can match the
+   performance reported in the original spinn [70]paper, but are several
+   times faster to train on a gpu because the implementation takes full
+   advantage of batch processing and the efficiency of pytorch. while the
+   original implementation [71]takes 21 minutes to compile the computation
+   graph (meaning that the debugging cycle during implementation is at
+   least that long), then about five days to train, the version described
+   here has no compilation step and takes about 13 hours to train on a
+   tesla k40 gpu, or about 9 hours on a quadro gp100.
+   figure 3: a small section of the computation graph for a spinn with
+   batch size two, running a chainer version of the code presented above.
+   figure 3: a small section of the computation graph for a spinn with
+   batch size two, running a chainer version of the code presented in this
+   post.
+
+calling all reinforcements
+
+   the version of the model described above without a tracker is actually
+   fairly well suited to tensorflow   s new [72]tf.fold domain-specific
+   language for special cases of dynamic graphs, but the version with a
+   tracker would be much more difficult to implement. this is because
+   adding a tracker means switching from the recursive approach to the
+   stack-based method. this (as in the code above) is most
+   straightforwardly implemented using conditional branches that depend on
+   the values of the input. but fold lacks a built-in conditional
+   branching operation, so the graph structure in a model built with it
+   can depend only on the structure of the input and not its values. in
+   addition, it would be effectively impossible to build a version of the
+   spinn whose tracker decides how to parse the input sentence as it reads
+   it since the graph structures in fold   while they depend on the
+   structure of an input example   must be completely fixed once an input
+   example is loaded.
+
+   one such model was [73]explored by researchers at deepmind and google
+   brain, who applied id23 to train a spinn   s tracker to
+   parse input sentences without using any external parsing data.
+   essentially, such a model starts with random guessing and learns by
+   rewarding itself when its parses happen to produce good accuracy on the
+   overall classification task. the researchers wrote that they    use batch
+   size 1 since the computation graph needs to be reconstructed for every
+   example at every iteration depending on the samples from the policy
+   network [tracker]      but pytorch would enable them to use batched
+   training even on a network like this one with complex, stochastically
+   varying structure.
+
+   pytorch is also the first framework to have id23 (rl)
+   built into the library in the form of [74]stochastic computation
+   graphs, making policy gradient rl as easy to use as id26. to
+   add it to the model described above, you would simply need to rewrite
+   the first few lines of the main spinn for loop as follows, allowing the
+   tracker to define the id203 of making each kind of parser
+   transition.
+!# nn.functional contains neural network operations without parameters
+from torch.nn import functional as f
+transitions = []
+for i in range(len(buffers[0]) * 2 - 3):  # we know how many steps
+    # obtain raw scores for each kind of parser transition
+    tracker_states, transition_scores = self.tracker(buffers, stacks)
+    # use a softmax function to normalize scores into probabilities,
+    # then sample from the distribution these probabilities define
+    transition_batch = f.softmax(transition_scores).multinomial()
+    transitions.append(transition_batch
+
+   then, once the batch has run all the way through and the model knows
+   how accurately it predicted its categories, i can send reward signals
+   back through these stochastic computation graph nodes in addition to
+   backpropagating through the rest of the graph in the traditional way:
+# losses should contain a loss per example, while mean and std
+# represent averages across many batches
+rewards = (-losses - mean) / std
+for transition in transitions:
+    transition.reinforce(rewards)
+# connect the stochastic nodes to the final loss variable
+# so that id26 can find them, multiplying by zero
+# because this trick shouldn   t change the loss value
+loss = losses.mean() + 0 * sum(transitions).sum()
+# perform id26 through deterministic nodes and
+# policy gradient rl for stochastic nodes
+loss.backward()
+
+   the google researchers reported results from spinn plus rl that were a
+   little bit better than what the original spinn obtained on snli   despite
+   the rl version using no precomputed parse tree information. the field
+   of deep id23 for natural language processing is brand
+   new, and research problems in the area are wide open; by building rl
+   into the framework, pytorch dramatically lowers the barrier to entry.
+
+learn more at gtc
+
+   come to the gpu technology conference, may 8-11 in san jose,
+   california, to learn more about deep learning and pytorch. gtc is the
+   largest and most important event of the year for ai and gpu developers.
+   use code cmdlipf to receive 20% off registration!
+
+   join me at gtc and hear more about my work in my talk with stephen
+   merity, [75]quasi-recurrent neural networks     a hightly optimized id56
+   architecture for the gpu (s7265). you   ll also enjoy soumith chintala   s
+   talk, [76]pytorch, a framework for new-generation ai research.
+
+get started with pytorch today
+
+   follow the instructions at [77]pytorch.org to install on your chosen
+   platform (windows support is [78]coming soon). pytorch supports python
+   2 and 3 and computation on either cpus or nvidia gpus using cuda 7.5 or
+   8.0 and cudnn 5.1 or 6.0. the linux binaries for conda and pip even
+   include cuda itself, so you don   t need to set it up on your own.
+
+   the [79]official tutorials include a [80]60-minute introduction and a
+   walkthrough of [81]deep id24, a modern id23
+   model. there   s also a wonderfully comprehensive [82]tutorial from
+   stanford   s justin johnson, while the [83]official examples
+   include   among other things   a deep convolutional generative adversarial
+   network (dcgan) and models for id163 and [84]neural machine
+   translation. richie ng from national university of singapore keeps an
+   [85]up-to-date list of other pytorch implementations, examples, and
+   tutorials. the pytorch developers and user community answer questions
+   at all hours on the [86]discussion forum, though you should probably
+   check the [87]api documentation first.
+
+   even though pytorch has only been available for a short time, [88]three
+   [89]research [90]papers have already used it several academic and
+   industry labs have adopted it. back when dynamic computation graphs
+   were more obscure, my colleagues and i at [91]salesforce research used
+   to consider chainer our secret sauce; now, we   re happy that pytorch is
+   bringing this level of power and flexibility into the mainstream, with
+   the support of major companies. happy hacking!
+   [92]6 comments
+   about the authors
+   james bradbury
+   about james bradbury
+   james bradbury is a research scientist at salesforce research, where he
+   works on cutting-edge deep learning models for natural language
+   processing. james joined salesforce with the april 2016 acquisition of
+   deep learning startup metamind inc., and he is an active contributor to
+   the chainer and pytorch deep learning software frameworks. james holds
+   a degree in linguistics from stanford university.
+   [93]view all posts by james bradbury
+   related posts
+   [94]deep learning in a nutshell: sequence learning
+   by [95]tim dettmers | [96]march 7, 2016
+   [97]cuda ai cube
+   [98]end-to-end deep learning for self-driving cars
+   by [99]mariusz bojarski, [100]ben firner, [101]beat flepp, [102]larry
+   jackel, [103]urs muller, [104]karol zieba and [105]davide del testa |
+   [106]august 17, 2016
+   [107]5driver-closeup-hands-1200  675
+   [108]understanding natural language with deep neural networks using
+   torch
+   by [109]soumith chintala | [110]march 3, 2015
+   [111]torch_lstm_thumb
+   [112]nvidia apex: tools for easy mixed-precision training in pytorch
+   by [113]carl case and [114]michael carilli | [115]december 3, 2018
+   [116]tensor_cube_white-1280
+   comments
+
+   copyright    2019 nvidia corporation
+   [117]legal information [118]privacy policy
+
+   [119]close
+
+parallel forall
+
+     * [120]features
+
+   search for: ____________________ search
+
+accelerated computing
+
+     * [121]accelerated computing
+     * [122]downloads
+     * [123]training
+     * [124]ecosystem
+     * [125]forums
+     * [126]register now
+     * [127]login
+
+references
+
+   visible links
+   1. https://devblogs.nvidia.com/feed/
+   2. https://devblogs.nvidia.com/comments/feed/
+   3. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/feed/
+   4. https://devblogs.nvidia.com/wp-json/oembed/1.0/embed?url=https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+   5. https://devblogs.nvidia.com/wp-json/oembed/1.0/embed?url=https://devblogs.nvidia.com/recursive-neural-networks-pytorch/&format=xml
+   6. https://developer.nvidia.com/
+   7. https://developer.nvidia.com/
+   8. https://developer.nvidia.com/accelerated-computing-developer
+   9. https://developer.nvidia.com/user
+  10. https://devblogs.nvidia.com/
+  11. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/#content
+  12. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/#secondary
+  13. https://news.developer.nvidia.com/
+  14. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  15. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  16. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  17. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  18. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  19. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  20. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  21. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  22. https://devblogs.nvidia.com/category/accelerated-computing/
+  23. https://devblogs.nvidia.com/category/artificial-intelligence/
+  24. https://devblogs.nvidia.com/category/autonomous-vehicles/
+  25. https://devblogs.nvidia.com/category/design-visualization/
+  26. https://devblogs.nvidia.com/category/features/
+  27. https://devblogs.nvidia.com/category/game-development/
+  28. https://devblogs.nvidia.com/category/robotics/
+  29. https://devblogs.nvidia.com/category/smart-cities/
+  30. https://devblogs.nvidia.com/category/virtual-reality/
+  31. https://devblogs.nvidia.com/category/accelerated-computing/
+  32. https://devblogs.nvidia.com/category/artificial-intelligence/
+  33. https://devblogs.nvidia.com/category/autonomous-vehicles/
+  34. https://devblogs.nvidia.com/category/design-visualization/
+  35. https://devblogs.nvidia.com/category/features/
+  36. https://devblogs.nvidia.com/category/game-development/
+  37. https://devblogs.nvidia.com/category/robotics/
+  38. https://devblogs.nvidia.com/category/smart-cities/
+  39. https://devblogs.nvidia.com/category/virtual-reality/
+  40. https://devblogs.nvidia.com/category/artificial-intelligence/
+  41. https://devblogs.nvidia.com/author/jbradbury/
+  42. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+  43. https://devblogs.nvidia.com/tag/deep-learning/
+  44. https://devblogs.nvidia.com/tag/lstm/
+  45. https://devblogs.nvidia.com/tag/machine-learning-and-ai/
+  46. https://devblogs.nvidia.com/tag/natural-language-processing/
+  47. https://devblogs.nvidia.com/tag/python/
+  48. https://devblogs.nvidia.com/tag/pytorch/
+  49. https://devblogs.nvidia.com/tag/torch/
+  50. https://developer.nvidia.com/discover/artificialneuralnetwork
+  51. https://developer.nvidia.com/discover/recurrentneuralnetwork
+  52. https://developer.nvidia.com/deep-learning
+  53. http://pytorch.org/
+  54. https://github.com/jekbradbury/examples/tree/spinn/snli
+  55. https://arxiv.org/abs/1603.06021
+  56. http://nlp.stanford.edu/projects/snli/
+  57. http://nlp.stanford.edu/projects/glove/
+  58. https://developer.nvidia.com/discover/graphanalytics
+  59. https://devblogs.nvidia.com/parallelforall/deep-learning-nutshell-history-training/#id26
+  60. https://developer.nvidia.com/discover/convolutionalneuralnetwork
+  61. https://github.com/hips/kayak
+  62. https://github.com/hips/autograd
+  63. http://chainer.org/
+  64. https://github.com/clab/dynet
+  65. https://github.com/pytorch/text
+  66. https://github.com/jekbradbury/examples/blob/spinn/snli/train.py
+  67. https://developer.nvidia.com/discover/lstm
+  68. https://github.com/jekbradbury/examples/blob/spinn/snli/spinn.py
+  69. https://github.com/jekbradbury/examples/blob/spinn/snli/model.py
+  70. https://arxiv.org/abs/1603.06021
+  71. https://github.com/stanfordnlp/spinn/blob/master/checkpoints/spinn_pi.log
+  72. https://github.com/tensorflow/fold
+  73. https://arxiv.org/abs/1611.09100
+  74. https://arxiv.org/abs/1506.05254
+  75. https://gputechconf2017.smarteventscloud.com/connect/search.ww#loadsearch-searchphrase=bradbury&searchtype=session&tc=0&sortby=daytime&p=
+  76. https://gputechconf2017.smarteventscloud.com/connect/sessiondetail.ww?session_id=114208
+  77. http://pytorch.org/
+  78. https://github.com/pytorch/pytorch/issues/494
+  79. http://pytorch.org/tutorials
+  80. http://pytorch.org/tutorials/beginner/deep_learning_60min_blitz.html
+  81. http://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  82. https://github.com/jcjohnson/pytorch-examples
+  83. https://github.com/pytorch/examples
+  84. https://github.com/openid4/openid4-py
+  85. https://github.com/ritchieng/the-incredible-pytorch
+  86. https://discuss.pytorch.org/
+  87. http://pytorch.org/docs/
+  88. https://github.com/martinarjovsky/wassersteingan
+  89. https://github.com/locuslab/optnet
+  90. https://github.com/szagoruyko/attention-transfer
+  91. https://einstein.ai/research/
+  92. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/#comments
+  93. https://devblogs.nvidia.com/author/jbradbury/
+  94. https://devblogs.nvidia.com/deep-learning-nutshell-sequence-learning/
+  95. https://devblogs.nvidia.com/author/tdettmers/
+  96. https://devblogs.nvidia.com/deep-learning-nutshell-sequence-learning/
+  97. https://devblogs.nvidia.com/deep-learning-nutshell-sequence-learning/
+  98. https://devblogs.nvidia.com/deep-learning-self-driving-cars/
+  99. https://devblogs.nvidia.com/author/mbojarski/
+ 100. https://devblogs.nvidia.com/author/bfirner/
+ 101. https://devblogs.nvidia.com/author/bflepp/
+ 102. https://devblogs.nvidia.com/author/ljackel/
+ 103. https://devblogs.nvidia.com/author/umuller/
+ 104. https://devblogs.nvidia.com/author/kzieba/
+ 105. https://devblogs.nvidia.com/author/ddeltesta/
+ 106. https://devblogs.nvidia.com/deep-learning-self-driving-cars/
+ 107. https://devblogs.nvidia.com/deep-learning-self-driving-cars/
+ 108. https://devblogs.nvidia.com/understanding-natural-language-deep-neural-networks-using-torch/
+ 109. https://devblogs.nvidia.com/author/schintala/
+ 110. https://devblogs.nvidia.com/understanding-natural-language-deep-neural-networks-using-torch/
+ 111. https://devblogs.nvidia.com/understanding-natural-language-deep-neural-networks-using-torch/
+ 112. https://devblogs.nvidia.com/apex-pytorch-easy-mixed-precision-training/
+ 113. https://devblogs.nvidia.com/author/carlc/
+ 114. https://devblogs.nvidia.com/author/mcarilli/
+ 115. https://devblogs.nvidia.com/apex-pytorch-easy-mixed-precision-training/
+ 116. https://devblogs.nvidia.com/apex-pytorch-easy-mixed-precision-training/
+ 117. http://www.nvidia.com/object/legal_info.html
+ 118. http://www.nvidia.com/object/privacy_policy.html
+ 119. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/#sidr-left
+ 120. https://devblogs.nvidia.com/category/features/
+ 121. https://developer.nvidia.com/accelerated-computing
+ 122. https://developer.nvidia.com/accelerated-computing-toolkit
+ 123. https://developer.nvidia.com/accelerated-computing-training
+ 124. https://developer.nvidia.com/tools-ecosystem
+ 125. https://devtalk.nvidia.com/
+ 126. https://developer.nvidia.com/accelerated-computing-developer
+ 127. https://developer.nvidia.com/user
+
+   hidden links:
+ 129. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+ 130. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/
+ 131. https://devblogs.nvidia.com/recursive-neural-networks-pytorch/

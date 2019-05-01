@@ -1,0 +1,702 @@
+   #[1]sebastian ruder
+
+   [2]sebastian ruder
+     * [3]about
+     * [4]tags
+     * [5]papers
+     * [6]talks
+     * [7]news
+     * [8]faq
+     * [9]nlp news
+     * [10]nlp progress
+     * [11]contact
+
+   3 december 2017 / [12]optimization
+
+optimization for deep learning highlights in 2017
+
+   optimization for deep learning highlights in 2017
+
+   this post discusses the most exciting highlights and most promising
+   directions in optimization for deep learning.
+
+   table of contents:
+     * [13]improving adam
+     * [14]decoupling weight decay
+     * [15]fixing the exponential moving average
+     * [16]tuning the learning rate
+     * [17]warm restarts
+     * [18]sgd with restarts
+     * [19]snapshot ensembles
+     * [20]adam with restarts
+     * [21]learning to optimize
+     * [22]understanding generalization
+
+   deep learning ultimately is about finding a minimum that generalizes
+   well -- with bonus points for finding one fast and reliably. our
+   workhorse, stochastic id119 (sgd), is a 60-year old
+   algorithm (robbins and monro, 1951) ^[23][1], that is as essential to
+   the current generation of deep learning algorithms as back-propagation.
+
+   different optimization algorithms have been proposed in recent years,
+   which use different equations to update a model's parameters. adam
+   (kingma and ba, 2015) ^[24][2] was introduced in 2015 and is arguably
+   today still the most commonly used one of these algorithms. this
+   indicates that from the machine learning practitioner's perspective,
+   best practices for optimization for deep learning have largely remained
+   the same.
+
+   new ideas, however, have been developed over the course of this year,
+   which may shape the way we will optimize our models in the future. in
+   this blog post, i will touch on the most exciting highlights and most
+   promising directions in optimization for deep learning in my opinion.
+   note that this blog post assumes a familiarity with sgd and with
+   adaptive learning rate methods such as adam. to get up to speed, refer
+   to [25]this blog post for an overview of existing id119
+   optimization algorithms.
+
+improving adam
+
+   despite the apparent supremacy of adaptive learning rate methods such
+   as adam, state-of-the-art results for many tasks in id161 and
+   nlp such as object recognition (huang et al., 2017) ^[26][3] or machine
+   translation (wu et al., 2016) ^[27][4] have still been achieved by
+   plain old sgd with momentum. recent theory (wilson et al., 2017)
+   ^[28][5] provides some justification for this, suggesting that adaptive
+   learning rate methods converge to different (and less optimal) minima
+   than sgd with momentum. it is empirically shown that the minima found
+   by adaptive learning rate methods perform generally worse compared to
+   those found by sgd with momentum on object recognition, character-level
+   id38, and constituency parsing. this seems
+   counter-intuitive given that adam comes with nice convergence
+   guarantees and that its adaptive learning rate should give it an edge
+   over the regular sgd. however, adam and other adaptive learning rate
+   methods are not without their own flaws.
+
+decoupling weight decay
+
+   one factor that partially accounts for adam's poor generalization
+   ability compared with sgd with momentum on some datasets is weight
+   decay. weight decay is most commonly used in image classification
+   problems and decays the weights \(\theta_t\) after every parameter
+   update by multiplying them by a decay rate \(w_t\) that is slightly
+   less than \(1\):
+
+   \(\theta_{t+1} = w_t : \theta_t \)
+
+   this prevents the weights from growing too large. as such, weight decay
+   can also be understood as an \(\ell_2\) id173 term that
+   depends on the weight decay rate \(w_t\) added to the loss:
+
+   \(\mathcal{l}_\text{reg} = \dfrac{w_t}{2} |\theta_t |^2_2 \)
+
+   weight decay is commonly implemented in many neural network libraries
+   either as the above id173 term or directly to modify the
+   gradient. as the gradient is modified in both the momentum and adam
+   update equations (via multiplication with other decay terms), weight
+   decay no longer equals \(\ell_2\) id173. loshchilov and hutter
+   (2017) ^[29][6] thus propose to decouple weight decay from the gradient
+   update by adding it after the parameter update as in the original
+   definition.
+   the sgd with momentum and weight decay (sgdw) update then looks like
+   the following:
+
+   \(
+   \begin{align}
+   \begin{split}
+   v_t &= \gamma v_{t-1} + \eta g_t \\
+   \theta_{t+1} &= \theta_t - v_t - \eta w_t \theta_t
+   \end{split}
+   \end{align}
+   \)
+
+   where \(\eta\) is the learning rate and the third term in the second
+   equation is the decoupled weight decay. similarly, for adam with weight
+   decay (adamw) we obtain:
+
+   \(
+   \begin{align}
+   \begin{split}
+   m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
+   v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2\\
+   \hat{m}_t &= \dfrac{m_t}{1 - \beta^t_1} \\
+   \hat{v}_t &= \dfrac{v_t}{1 - \beta^t_2} \\
+   \theta_{t+1} &= \theta_{t} - \dfrac{\eta}{\sqrt{\hat{v}_t} + \epsilon}
+   \hat{m}_t - \eta w_t \theta_t
+   \end{split}
+   \end{align}
+   \)
+
+   where \(m_t\) and \(\hat{m}_t\) and \(v_t\) and \(\hat{v}_t\) are the
+   biased and bias-corrected estimates of the first and second moments
+   respectively and \(\beta_1\) and \(\beta_2\) are their decay rates,
+   with the same weight decay term added to it. the authors show that this
+   substantially improves adam   s generalization performance and allows it
+   to compete with sgd with momentum on image classification datasets.
+
+   in addition, it decouples the choice of the learning rate from the
+   choice of the weight decay, which enables better hyperparameter
+   optimization as the hyperparameters no longer depend on each other. it
+   also separates the implementation of the optimizer from the
+   implementation of the weight decay, which contributes to cleaner and
+   more reusable code (see e.g. the [30]fast.ai adamw/sgdw
+   implementation).
+
+fixing the exponential moving average
+
+   several recent papers (dozat and manning, 2017; laine and aila, 2017)
+   ^[31][7],^[32][8] empirically find that a lower \(\beta_2\) value,
+   which controls the contribution of the exponential moving average of
+   past squared gradients in adam, e.g. \(0.99\) or \(0.9\) vs. the
+   default \(0.999\) worked better in their respective applications,
+   indicating that there might be an issue with the exponential moving
+   average.
+
+   an [33]iclr 2018 submission formalizes this issue and pinpoints the
+   exponential moving average of past squared gradients as another reason
+   for the poor generalization behaviour of adaptive learning rate
+   methods. updating the parameters via an exponential moving average of
+   past squared gradients is at the heart of adaptive learning rate
+   methods such as adadelta, rmsprop, and adam. the contribution of the
+   exponential average is well-motivated: it should prevent the learning
+   rates to become infinitesimally small as training progresses, the key
+   flaw of the adagrad algorithm. however, this short-term memory of the
+   gradients becomes an obstacle in other scenarios.
+
+   in settings where adam converges to a suboptimal solution, it has been
+   observed that some minibatches provide large and informative gradients,
+   but as these minibatches only occur rarely, exponential averaging
+   diminishes their influence, which leads to poor convergence. the
+   authors provide an example for a simple id76 problem
+   where the same behaviour can be observed for adam.
+
+   to fix this behaviour, the authors propose a new algorithm, amsgrad
+   that uses the maximum of past squared gradients rather than the
+   exponential average to update the parameters. the full amsgrad update
+   without bias-corrected estimates can be seen below:
+
+   \(
+   \begin{align}
+   \begin{split}
+   m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
+   v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2\\
+   \hat{v}_t &= \text{max}(\hat{v}_{t-1}, v_t) \\
+   \theta_{t+1} &= \theta_{t} - \dfrac{\eta}{\sqrt{\hat{v}_t} + \epsilon}
+   m_t
+   \end{split}
+   \end{align}
+   \)
+
+   the authors observe improved performance compared to adam on small
+   datasets and on cifar-10.
+
+tuning the learning rate
+
+   in many cases, it is not our models that require improvement and
+   tuning, but our hyperparameters. recent examples for language modelling
+   demonstrate that tuning lstm parameters (melis et al., 2017) ^[34][9]
+   and id173 parameters (merity et al., 2017) ^[35][10] can yield
+   state-of-the-art results compared to more complex models.
+
+   an important hyperparameter for optimization in deep learning is the
+   learning rate \(\eta\). in fact, sgd has been shown to require a
+   learning rate annealing schedule to converge to a good minimum in the
+   first place. it is often thought that adaptive learning rate methods
+   such as adam are more robust to different learning rates, as they
+   update the learning rate themselves. even for these methods, however,
+   there can be a large difference between a good and the optimal learning
+   rate (psst... it's [36]\(3e-4\)).
+
+   zhang et al. (2017) ^[37][11] show that sgd with a tuned learning rate
+   annealing schedule and momentum parameter is not only competitive with
+   adam, but also converges faster. on the other hand, while we might
+   think that the adaptivity of adam's learning rates might mimic learning
+   rate annealing, an explicit annealing schedule can still be beneficial:
+   if we add sgd-style learning rate annealing to adam, it converges
+   faster and outperforms sgd on machine translation (denkowski and
+   neubig, 2017) ^[38][12].
+
+   in fact, learning rate annealing schedule engineering seems to be the
+   new feature engineering as we can often find highly-tuned learning rate
+   annealing schedules that improve the final convergence behaviour of our
+   model. an interesting example of this is vaswani et al. (2017)
+   ^[39][13]. while it is usual to see a model's hyperparameters being
+   subjected to large-scale hyperparameter optimization, it is interesting
+   to see a learning rate annealing schedule as the focus of the same
+   attention to detail: the authors use adam with \(\beta_1=0.9\), a
+   non-default \(\beta_2=0.98\), \(\epsilon = 10^{-9}\), and arguably one
+   of the most elaborate annealing schedules for the learning rate
+   \(\eta\):
+
+   \(\eta = d_\text{model}^{-0.5} \cdot \min(step\text{_}num^{-0.5},
+   step\text{_}num \cdot warmup\text{_}steps^{-1.5}) \)
+
+   where \(d_\text{model}\) is the number of parameters of the model and
+   \(warmup\text{_}steps = 4000\).
+
+   another recent paper by smith et al. (2017) ^[40][14] demonstrates an
+   interesting connection between the learning rate and the batch size,
+   two hyperparameters that are typically thought to be independent of
+   each other: they show that decaying the learning rate is equivalent to
+   increasing the batch size, while the latter allows for increased
+   parallelism. conversely, we can reduce the number of model updates and
+   thus speed up training by increasing the learning rate and scaling the
+   batch size. this has ramifications for large-scale deep learning, which
+   can now repurpose existing training schedules with no hyperparameter
+   tuning.
+
+warm restarts
+
+sgd with restarts
+
+   another effective recent development is sgdr (loshchilov and hutter,
+   2017) ^[41][15], an sgd alternative that uses warm restarts instead of
+   learning rate annealing. in each restart, the learning rate is
+   initialized to some value and is scheduled to decrease. importantly,
+   the restart is warm as the optimization does not start from scratch but
+   from the parameters to which the model converged during the last step.
+   the key factor is that the learning rate is decreased with an
+   aggressive cosine annealing schedule, which rapidly lowers the learning
+   rate and looks like the following:
+
+   \(\eta_t = \eta_{min}^i + \dfrac{1}{2}(\eta_{max}^i - \eta_{min}^i)(1 +
+   \text{cos}(\dfrac{t_{cur}}{t_i}\pi)) \)
+
+   where \(\eta_{min}^i\) and \(\eta_{max}^i\) are ranges for the learning
+   rate during the \(i\)-th run, \(t_{cur}\) indicates how many epochs
+   passed since the last restart, and \(t_i\) specifies the epoch of the
+   next restart. the warm restart schedules for \(t_i=50\), \(t_i=100\),
+   and \(t_i=200\) compared with regular learning rate annealing are shown
+   in figure 1.
+   learning rate schedules with warm restarts figure 1: learning rate
+   schedules with warm restarts (loshchilov and hutter, 2017)
+
+   the high initial learning rate after a restart is used to essentially
+   catapult the parameters out of the minimum to which they previously
+   converged and to a different area of the loss surface. the aggressive
+   annealing then enables the model to rapidly converge to a new and
+   better solution. the authors empirically find that sgd with warm
+   restarts requires 2 to 4 times fewer epochs than learning rate
+   annealing and achieves comparable or better performance.
+
+   learning rate annealing with warm restarts is also known as cyclical
+   learning rates and has been originally proposed by smith (2017)
+   ^[42][16]. two more articles by students of [43]fast.ai (which has
+   recently started to teach this method) that discuss warm restarts and
+   cyclical learning rates can be found [44]here and [45]here.
+
+snapshot ensembles
+
+   snapshot ensembles (huang et al., 2017) ^[46][17] are a clever, recent
+   technique that uses warm restarts to assemble an ensemble essentially
+   for free when training a single model. the method trains a single model
+   until convergence with the cosine annealing schedule that we have seen
+   above. it then saves the model parameters, performs a warm restart, and
+   then repeats these steps \(m\) times. in the end, all saved model
+   snapshots are ensembled. the common sgd optimization behaviour on an
+   error surface compared to the behaviour of snapshot ensembling can be
+   seen in figure 2.
+   learning rate schedules with warm restarts figure 2: sgd vs. snapshot
+   ensemble (huang et al., 2017)
+
+   the success of ensembling in general relies on the diversity of the
+   individual models in the ensemble. snapshot ensembling thus relies on
+   the cosine annealing schedule's ability to enable the model to converge
+   to a different local optimum after every restart. the authors
+   demonstrate that this holds in practice, achieving state-of-the-art
+   results on cifar-10, cifar-100, and svhn.
+
+adam with restarts
+
+   warm restarts did not work originally with adam due to its
+   dysfunctional weight decay, which we have seen before. after fixing
+   weight decay, loshchilov and hutter (2017) similarly extend adam to
+   work with warm restarts. they set \(\eta_{min}^i=0\) and
+   \(\eta_{max}^i=1\), which yields:
+
+   \(\eta_t = 0.5 + 0.5 : \text{cos}(\dfrac{t_{cur}}{t_i}\pi))\)
+
+   they recommend to start with an initially small \(t_i\) (between \(1%\)
+   and \(10%\) of the total number of epochs) and multiply it by a factor
+   of \(t_{mult}\) (e.g. \(t_{mult}=2\)) at every restart.
+
+learning to optimize
+
+   one of the most interesting papers of last year (and [47]reddit's "best
+   paper name of 2016" winner) was a paper by andrychowicz et al. (2016)
+   ^[48][18] where they train an lstm optimizer to provide the updates to
+   the main model during training. unfortunately, learning a separate lstm
+   optimizer or even using a pre-trained lstm optimizer for optimization
+   greatly increases the complexity of model training.
+
+   another very influential learning-to-learn paper from this year uses an
+   lstm to generate model architectures in a domain-specific language
+   (zoph and quoc, 2017) ^[49][19]. while the search process requires vast
+   amounts of resources, the discovered architectures can be used as-is to
+   replace their existing counterparts. this search process has proved
+   effective and found architectures that achieve state-of-the-art results
+   on id38 and results competitive with the state-of-the-art
+   on cifar-10.
+
+   the same search principle can be applied to any other domain where key
+   processes have been previously defined by hand. one such domain are
+   optimization algorithms for deep learning. as we have seen before,
+   optimization algorithms are more similar than they seem: all of them
+   use a combination of an exponential moving average of past gradients
+   (as in momentum) and of an exponential moving average of past squared
+   gradients (as in adadelta, rmsprop, and adam) (ruder, 2016) ^[50][20].
+
+   bello et al. (2017) ^[51][21] define a domain-specific language that
+   consists of primitives useful for optimization such as these
+   exponential moving averages. they then sample an update rule from the
+   space of possible update rules, use this update rule to train a model,
+   and update the id56 controller based on the performance of the trained
+   model on the test set. the full procedure can be seen in figure 3.
+   neural optimizer search figure 3: neural optimizer search (bello et
+   al., 2017)
+
+   in particular, they discover two update equations, powersign and
+   addsign. the update equation for powersign is the following:
+
+   \( \theta_{t+1} = \theta_{t} - \alpha^{f(t)*
+   \text{sign}(g_t)*\text{sign}(m_t)}*g_t \)
+
+   where \(\alpha\) is a hyperparameter that is often set to \(e\) or
+   \(2\), \(f(t)\) is either \(1\) or a decay function that performs
+   linear, cyclical or decay with restarts based on time step \(t\), and
+   \(m_t\) is the moving average of past gradients. the common
+   configuration uses \(\alpha=e\) and no decay. we can observe that the
+   update scales the gradient by \(\alpha^{f(t)}\) or \(1/\alpha^{f(t)}\)
+   depending on whether the direction of the gradient and its moving
+   average agree. this indicates that this momentum-like agreement between
+   past gradients and the current one is a key piece of information for
+   optimizing deep learning models.
+
+   addsign in turn is defined as follows:
+
+   \( \theta_{t+1} = \theta_{t} - \alpha + f(t) * \text{sign}(g_t) *
+   \text{sign}(m_t)) * g_t\)
+
+   with \(\alpha\) often set to \(1\) or \(2\). similar to the above, this
+   time the update scales \(\alpha + f(t)\) or \(\alpha - f(t)\) again
+   depending on the agreement of the direction of the gradients. the
+   authors show that powersign and addsign outperform adam, rmsprop, and
+   sgd with momentum on cifar-10 and transfer well to other tasks such as
+   id163 classification and machine translation.
+
+understanding generalization
+
+   optimization is closely tied to generalization as the minimum to which
+   a model converges defines how well the model generalizes. advances in
+   optimization are thus closely correlated with theoretical advances in
+   understanding the generalization behaviour of such minima and more
+   generally of gaining a deeper understanding of generalization in deep
+   learning.
+
+   however, our understanding of the generalization behaviour of deep
+   neural networks is still very shallow. recent work showed that the
+   number of possible local minima grows exponentially with the number of
+   parameters (kawaguchi, 2016) ^[52][22]. given the huge number of
+   parameters of current deep learning architectures, it still seems
+   almost magical that such models converge to solutions that generalize
+   well, in particular given that they can completely memorize random
+   inputs (zhang et al., 2017) ^[53][23].
+
+   keskar et al. (2017) ^[54][24] identify the sharpness of a minimum as a
+   source for poor generalization: in particular, they show that sharp
+   minima found by batch id119 have high generalization error.
+   this makes intuitive sense, as we generally would like our functions to
+   be smooth and a sharp minima indicates a high irregularity in the
+   corresponding error surface. however, more recent work suggests that
+   sharpness may not be such a good indicator after all by showing that
+   local minima that generalize well can be made arbitrarily sharp (dinh
+   et al., 2017) ^[55][25]. a [56]quora answer by eric jang also discusses
+   these articles.
+
+   an [57]iclr 2018 submission demonstrates through a series of ablation
+   analyses that a model's reliance on single directions in activation
+   space, i.e. the activation of single units or feature maps is a good
+   predictor of its generalization performance. they show that this holds
+   across models trained on different datasets and for different degrees
+   of label corruption. they find that dropout does not help to resolve
+   this, while batch id172 discourages single direction reliance.
+
+   while these findings indicate that there is still much we do not know
+   in terms of optimization for deep learning, it is important to remember
+   that convergence guarantees and a large body of work exists for convex
+   optimization and that existing ideas and insights can also be applied
+   to non-id76 to some extent. the large-scale optimization
+   tutorial at nips 2016 provides an excellent overview of more
+   theoretical work in this area (see the [58]slides part 1, [59]part 2,
+   and the [60]video).
+
+conclusion
+
+   i hope that i was able to provide an impression of some of the
+   compelling developments in optimization for deep learning over the past
+   year. i've undoubtedly failed to mention many other approaches that are
+   equally important and noteworthy. please let me know in the comments
+   below what i missed, where i made a mistake or misrepresented a method,
+   or which aspect of optimization for deep learning you find particularly
+   exciting or underexplored.
+
+hacker news
+
+   you can find the discussion of this post on hn [61]here.
+     __________________________________________________________________
+
+    1. robbins, h., & monro, s. (1951). a stochastic approximation method.
+       the annals of mathematical statistics, 400-407. [62]      
+    2. kingma, d. p., & ba, j. l. (2015). adam: a method for stochastic
+       optimization. international conference on learning representations.
+       [63]      
+    3. huang, g., liu, z., weinberger, k. q., & van der maaten, l. (2017).
+       densely connected convolutional networks. in proceedings of cvpr
+       2017. [64]      
+    4. wu, y., schuster, m., chen, z., le, q. v, norouzi, m., macherey,
+       w.,     dean, j. (2016). google   s id4 system:
+       bridging the gap between human and machine translation. arxiv
+       preprint arxiv:1609.08144. [65]      
+    5. wilson, a. c., roelofs, r., stern, m., srebro, n., & recht, b.
+       (2017). the marginal value of adaptive gradient methods in machine
+       learning. arxiv preprint arxiv:1705.08292. retrieved from
+       [66]http://arxiv.org/abs/1705.08292 [67]      
+    6. loshchilov, i., & hutter, f. (2017). fixing weight decay
+       id173 in adam. arxiv preprint arxi1711.05101. retrieved
+       from [68]http://arxiv.org/abs/1711.05101 [69]      
+    7. dozat, t., & manning, c. d. (2017). deep biaffine attention for
+       neural id33. in iclr 2017. retrieved from
+       [70]http://arxiv.org/abs/1611.01734 [71]      
+    8. laine, s., & aila, t. (2017). temporal ensembling for
+       semi-supervised learning. in proceedings of iclr 2017. [72]      
+    9. melis, g., dyer, c., & blunsom, p. (2017). on the state of the art
+       of evaluation in neural language models. in arxiv preprint
+       arxiv:1707.05589. [73]      
+   10. merity, s., shirish keskar, n., & socher, r. (2017). regularizing
+       and optimizing lstm language models. arxiv preprint
+       arxiv:1708.02182. retrieved from
+       [74]https://arxiv.org/pdf/1708.02182.pdf [75]      
+   11. zhang, j., mitliagkas, i., & r  , c. (2017). yellowfin and the art
+       of momentum tuning. in arxiv preprint arxiv:1706.03471. [76]      
+   12. denkowski, m., & neubig, g. (2017). stronger baselines for
+       trustable results in id4. in workshop on
+       id4 (wid4). retrieved from
+       [77]https://arxiv.org/abs/1706.09733 [78]      
+   13. vaswani, a., shazeer, n., parmar, n., uszkoreit, j., jones, l.,
+       gomez, a. n.,     polosukhin, i. (2017). attention is all you need.
+       in advances in neural information processing systems. [79]      
+   14. smith, s. l., kindermans, p.-j., & le, q. v. (2017). don   t decay
+       the learning rate, increase the batch size. in arxiv preprint
+       arxiv:1711.00489. retrieved from
+       [80]http://arxiv.org/abs/1711.00489 [81]      
+   15. loshchilov, i., & hutter, f. (2017). sgdr: stochastic gradient
+       descent with warm restarts. in proceedings of iclr 2017.
+       [82]https://doi.org/10.1002/fut [83]      
+   16. smith, leslie n. "cyclical learning rates for training neural
+       networks." in applications of id161 (wacv), 2017 ieee
+       winter conference on, pp. 464-472. ieee, 2017. [84]      
+   17. huang, g., li, y., pleiss, g., liu, z., hopcroft, j. e., &
+       weinberger, k. q. (2017). snapshot ensembles: train 1, get m for
+       free. in proceedings of iclr 2017. [85]      
+   18. andrychowicz, m., denil, m., gomez, s., hoffman, m. w., pfau, d.,
+       schaul, t., & de freitas, n. (2016). learning to learn by gradient
+       descent by id119. in advances in neural information
+       processing systems. retrieved from
+       [86]http://arxiv.org/abs/1606.04474 [87]      
+   19. zoph, b., & le, q. v. (2017). neural architecture search with
+       id23. in iclr 2017. [88]      
+   20. ruder, s. (2016). an overview of id119 optimization
+       algorithms. arxiv preprint arxiv:1609.04747. [89]      
+   21. bello, i., zoph, b., vasudevan, v., & le, q. v. (2017). neural
+       optimizer search with id23. in proceedings of the
+       34th international conference on machine learning. [90]      
+   22. kawaguchi, k. (2016). deep learning without poor local minima. in
+       advances in neural information processing systems 29 (nips 2016).
+       retrieved from [91]http://arxiv.org/abs/1605.07110 [92]      
+   23. zhang, c., bengio, s., hardt, m., recht, b., & vinyals, o. (2017).
+       understanding deep learning requires rethinking generalization. in
+       proceedings of iclr 2017. [93]      
+   24. keskar, n. s., mudigere, d., nocedal, j., smelyanskiy, m., & tang,
+       p. t. p. (2017). on large-batch training for deep learning:
+       generalization gap and sharp minima. in proceedings of iclr 2017.
+       retrieved from [94]http://arxiv.org/abs/1609.04836 [95]      
+   25. dinh, l., pascanu, r., bengio, s., & bengio, y. (2017). sharp
+       minima can generalize for deep nets. in proceedings of the 34th
+       international conference on machine learning. [96]      
+
+   sebastian ruder
+
+[97]sebastian ruder
+
+   read [98]more posts by this author.
+   [99]read more
+
+       sebastian ruder    
+
+[100]optimization
+
+     * [101]an overview of id119 optimization algorithms
+
+   [102]1 post    
+
+   [103]requests for research
+
+   id21
+
+requests for research
+
+   it can be hard to find compelling topics to work on and know what
+   questions to ask when you are just starting as a researcher. this post
+   aims to provide inspiration and ideas for research directions to junior
+   researchers and those trying to get into research.
+
+     * sebastian ruder
+       [104]sebastian ruder
+
+   [105]id27s in 2017: trends and future directions
+
+   id27s
+
+id27s in 2017: trends and future directions
+
+   id27s are an integral part of current nlp models, but
+   approaches that supersede the original id97 have not been proposed.
+   this post focuses on the deficiencies of id27s and how recent
+   approaches have tried to resolve them.
+
+     * sebastian ruder
+       [106]sebastian ruder
+
+   [107]sebastian ruder
+      
+   optimization for deep learning highlights in 2017
+   share this
+   please enable javascript to view the [108]comments powered by disqus.
+
+   [109]sebastian ruder    2019
+
+   [110]latest posts [111]twitter [112]ghost
+
+references
+
+   visible links
+   1. http://ruder.io/rss/
+   2. http://ruder.io/
+   3. http://ruder.io/about/
+   4. http://ruder.io/tags/
+   5. http://ruder.io/publications/
+   6. http://ruder.io/talks/
+   7. http://ruder.io/news/
+   8. http://ruder.io/faq/
+   9. http://ruder.io/nlp-news/
+  10. https://nlpprogress.com/
+  11. http://ruder.io/contact/
+  12. http://ruder.io/tag/optimization/index.html
+  13. http://ruder.io/deep-learning-optimization-2017/index.html#improvingadam
+  14. http://ruder.io/deep-learning-optimization-2017/index.html#decouplingweightdecay
+  15. http://ruder.io/deep-learning-optimization-2017/index.html#fixingtheexponentialmovingaverage
+  16. http://ruder.io/deep-learning-optimization-2017/index.html#tuningthelearningrate
+  17. http://ruder.io/deep-learning-optimization-2017/index.html#warmrestarts
+  18. http://ruder.io/deep-learning-optimization-2017/index.html#sgdwithrestarts
+  19. http://ruder.io/deep-learning-optimization-2017/index.html#snapshotensembles
+  20. http://ruder.io/deep-learning-optimization-2017/index.html#adamwithrestarts
+  21. http://ruder.io/deep-learning-optimization-2017/index.html#learningtooptimize
+  22. http://ruder.io/deep-learning-optimization-2017/index.html#understandinggeneralization
+  23. http://ruder.io/deep-learning-optimization-2017/index.html#fn1
+  24. http://ruder.io/deep-learning-optimization-2017/index.html#fn2
+  25. http://ruder.io/optimizing-gradient-descent/index.html
+  26. http://ruder.io/deep-learning-optimization-2017/index.html#fn3
+  27. http://ruder.io/deep-learning-optimization-2017/index.html#fn4
+  28. http://ruder.io/deep-learning-optimization-2017/index.html#fn5
+  29. http://ruder.io/deep-learning-optimization-2017/index.html#fn6
+  30. https://github.com/fastai/fastai/pull/46/files
+  31. http://ruder.io/deep-learning-optimization-2017/index.html#fn7
+  32. http://ruder.io/deep-learning-optimization-2017/index.html#fn8
+  33. https://openreview.net/forum?id=ryqu7f-rz
+  34. http://ruder.io/deep-learning-optimization-2017/index.html#fn9
+  35. http://ruder.io/deep-learning-optimization-2017/index.html#fn10
+  36. https://twitter.com/karpathy/status/801621764144971776
+  37. http://ruder.io/deep-learning-optimization-2017/index.html#fn11
+  38. http://ruder.io/deep-learning-optimization-2017/index.html#fn12
+  39. http://ruder.io/deep-learning-optimization-2017/index.html#fn13
+  40. http://ruder.io/deep-learning-optimization-2017/index.html#fn14
+  41. http://ruder.io/deep-learning-optimization-2017/index.html#fn15
+  42. http://ruder.io/deep-learning-optimization-2017/index.html#fn16
+  43. http://www.fast.ai/
+  44. https://medium.com/@bushaev/improving-the-way-we-work-with-learning-rate-5e99554f163b
+  45. http://teleported.in/posts/cyclic-learning-rate/
+  46. http://ruder.io/deep-learning-optimization-2017/index.html#fn17
+  47. https://www.reddit.com/r/machinelearning/comments/5n53k7/d_results_from_the_best_paper_awards/
+  48. http://ruder.io/deep-learning-optimization-2017/index.html#fn18
+  49. http://ruder.io/deep-learning-optimization-2017/index.html#fn19
+  50. http://ruder.io/deep-learning-optimization-2017/index.html#fn20
+  51. http://ruder.io/deep-learning-optimization-2017/index.html#fn21
+  52. http://ruder.io/deep-learning-optimization-2017/index.html#fn22
+  53. http://ruder.io/deep-learning-optimization-2017/index.html#fn23
+  54. http://ruder.io/deep-learning-optimization-2017/index.html#fn24
+  55. http://ruder.io/deep-learning-optimization-2017/index.html#fn25
+  56. https://www.quora.com/why-is-the-paper-   understanding-deep-learning-requires-rethinking-generalization   -important/answer/eric-jang?srid=dwc3
+  57. https://openreview.net/forum?id=r1iuqjxcz
+  58. https://www.di.ens.fr/~fbach/fbach_tutorial_vr_nips_2016.pdf
+  59. http://suvrit.de/talks/vr_nips16_sra.pdf
+  60. https://channel9.msdn.com/events/neural-information-processing-systems-conference/neural-information-processing-systems-conference-nips-2016/large-scale-optimization-beyond-stochastic-gradient-descent-and-convexity
+  61. https://news.ycombinator.com/item?id=15839564
+  62. http://ruder.io/deep-learning-optimization-2017/index.html#fnref1
+  63. http://ruder.io/deep-learning-optimization-2017/index.html#fnref2
+  64. http://ruder.io/deep-learning-optimization-2017/index.html#fnref3
+  65. http://ruder.io/deep-learning-optimization-2017/index.html#fnref4
+  66. http://arxiv.org/abs/1705.08292
+  67. http://ruder.io/deep-learning-optimization-2017/index.html#fnref5
+  68. http://arxiv.org/abs/1711.05101
+  69. http://ruder.io/deep-learning-optimization-2017/index.html#fnref6
+  70. http://arxiv.org/abs/1611.01734
+  71. http://ruder.io/deep-learning-optimization-2017/index.html#fnref7
+  72. http://ruder.io/deep-learning-optimization-2017/index.html#fnref8
+  73. http://ruder.io/deep-learning-optimization-2017/index.html#fnref9
+  74. https://arxiv.org/pdf/1708.02182.pdf
+  75. http://ruder.io/deep-learning-optimization-2017/index.html#fnref10
+  76. http://ruder.io/deep-learning-optimization-2017/index.html#fnref11
+  77. https://arxiv.org/abs/1706.09733
+  78. http://ruder.io/deep-learning-optimization-2017/index.html#fnref12
+  79. http://ruder.io/deep-learning-optimization-2017/index.html#fnref13
+  80. http://arxiv.org/abs/1711.00489
+  81. http://ruder.io/deep-learning-optimization-2017/index.html#fnref14
+  82. https://doi.org/10.1002/fut
+  83. http://ruder.io/deep-learning-optimization-2017/index.html#fnref15
+  84. http://ruder.io/deep-learning-optimization-2017/index.html#fnref16
+  85. http://ruder.io/deep-learning-optimization-2017/index.html#fnref17
+  86. http://arxiv.org/abs/1606.04474
+  87. http://ruder.io/deep-learning-optimization-2017/index.html#fnref18
+  88. http://ruder.io/deep-learning-optimization-2017/index.html#fnref19
+  89. http://ruder.io/deep-learning-optimization-2017/index.html#fnref20
+  90. http://ruder.io/deep-learning-optimization-2017/index.html#fnref21
+  91. http://arxiv.org/abs/1605.07110
+  92. http://ruder.io/deep-learning-optimization-2017/index.html#fnref22
+  93. http://ruder.io/deep-learning-optimization-2017/index.html#fnref23
+  94. http://arxiv.org/abs/1609.04836
+  95. http://ruder.io/deep-learning-optimization-2017/index.html#fnref24
+  96. http://ruder.io/deep-learning-optimization-2017/index.html#fnref25
+  97. http://ruder.io/author/sebastian/index.html
+  98. http://ruder.io/author/sebastian/index.html
+  99. http://ruder.io/author/sebastian/index.html
+ 100. http://ruder.io/tag/optimization/index.html
+ 101. http://ruder.io/optimizing-gradient-descent/index.html
+ 102. http://ruder.io/tag/optimization/index.html
+ 103. http://ruder.io/index.html
+ 104. http://ruder.io/author/sebastian/index.html
+ 105. http://ruder.io/index.html
+ 106. http://ruder.io/author/sebastian/index.html
+ 107. http://ruder.io/
+ 108. https://disqus.com/?ref_noscript
+ 109. http://ruder.io/
+ 110. http://ruder.io/
+ 111. https://twitter.com/seb_ruder
+ 112. https://ghost.org/
+
+   hidden links:
+ 114. https://twitter.com/seb_ruder
+ 115. http://ruder.io/rss/index.rss
+ 116. http://ruder.io/index.html
+ 117. http://ruder.io/index.html
+ 118. https://twitter.com/share?text=optimization%20for%20deep%20learning%20highlights%20in%202017&url=http://ruder.io/deep-learning-optimization-2017/
+ 119. https://www.facebook.com/sharer/sharer.php?u=http://ruder.io/deep-learning-optimization-2017/

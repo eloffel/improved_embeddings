@@ -1,0 +1,750 @@
+6
+1
+0
+2
+
+ 
+
+y
+a
+m
+4
+2
+
+ 
+
+ 
+ 
+]
+l
+m
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+7
+2
+4
+7
+0
+
+.
+
+5
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+hierarchical memory networks
+
+sarath chandar    1, sungjin ahn1, hugo larochelle2,4, pascal vincent1,4,
+
+gerald tesauro3, yoshua bengio1,4
+
+1 universit   de montr  al, canada.
+
+2 twitter cortex, usa.
+
+3 ibm watson research center, usa.
+
+4 cifar, canada.
+
+abstract
+
+memory networks are neural networks with an explicit memory component that can
+be both read and written to by the network. the memory is often addressed in a soft
+way using a softmax function, making end-to-end training with id26
+possible. however, this is not computationally scalable for applications which
+require the network to read from extremely large memories. on the other hand, it
+is well known that hard attention mechanisms based on id23 are
+challenging to train successfully. in this paper, we explore a form of hierarchical
+memory network, which can be considered as a hybrid between hard and soft
+attention memory networks. the memory is organized in a hierarchical structure
+such that reading from it is done with less computation than soft attention over a
+   at memory, while also being easier to train than hard attention over a    at memory.
+speci   cally, we propose to incorporate maximum inner product search (mips) in
+the training and id136 procedures for our hierarchical memory network. we
+explore the use of various state-of-the art approximate mips techniques and report
+results on simplequestions, a challenging large scale factoid id53
+task.
+
+1
+
+introduction
+
+until recently, traditional machine learning approaches for challenging tasks such as image captioning,
+id164, or machine translation have consisted in complex pipelines of algorithms, each being
+separately tuned for better performance. with the recent success of neural networks and deep learning
+research, it has now become possible to train a single model end-to-end, using id26.
+such end-to-end systems often outperform traditional approaches, since the entire model is directly
+optimized with respect to the    nal task at hand. however, simple encode-decode style neural networks
+often underperform on knowledge-based reasoning tasks like question-answering or id71.
+indeed, in such cases it is nearly impossible for regular neural networks to store all the necessary
+knowledge in their parameters.
+neural networks with memory [1, 2] can deal with knowledge bases by having an external memory
+component which can be used to explicitly store knowledge. the memory is accessed by reader
+and writer functions, which are both made differentiable so that the entire architecture (neural
+network, reader, writer and memory components) can be trained end-to-end using id26.
+memory-based architectures can also be considered as generalizations of id56s and lstms, where
+the memory is analogous to recurrent hidden states. however they are much richer in structure and
+can handle very long-term dependencies because once a vector (i.e., a memory) is stored, it is copied
+
+   corresponding author: apsarathchandar@gmail.com
+
+from time step to time step and can thus stay there for a very long time (and gradients correspondingly
+   ow back time unhampered).
+there exists several variants of neural networks with a memory component: memory networks [2],
+id63s (ntm) [1], dynamic memory networks (dmn) [3]. they all share    ve
+major components: memory, input module, reader, writer, and output module.
+memory: the memory is an array of cells, each capable of storing a vector. the memory is often
+initialized with external data (e.g. a database of facts), by    lling in its cells with a pre-trained vector
+representations of that data.
+input module: the input module is to compute a representation of the input that can be used by
+other modules.
+writer: the writer takes the input representation and updates the memory based on it. the writer
+can be as simple as    lling the slots in the memory with input vectors in a sequential way (as often
+done in memory networks). if the memory is bounded, instead of sequential writing, the writer has to
+decide where to write and when to rewrite cells (as often done in ntms).
+reader: given an input and the current state of the memory, the reader retrieves content from the
+memory, which will then be used by an output module. this often requires comparing the input   s
+representation or a function of the recurrent state with memory cells using some scoring function
+such as a dot product.
+output module: given the content retrieved by the reader, the output module generates a prediction,
+which often takes the form of a conditional distribution over multiple labels for the output.
+for the rest of the paper, we will use the name memory network to describe any model which has any
+form of these    ve components. we would like to highlight that all the components except the memory
+are learnable. depending on the application, any of these components can also be    xed. in this paper,
+we will focus on the situation where a network does not write and only reads from the memory.
+in this paper, we focus on the application of memory networks to large-scale tasks. speci   cally,
+we focus on large scale factoid id53. for this problem, given a large set of facts
+and a natural language question, the goal of the system is to answer the question by retrieving the
+supporting fact for that question, from which the answer can be derived. application of memory
+networks to this task has been studied in [4]. however, [4] depended on keyword based heuristics to
+   lter the facts to a smaller set which is manageable for training. however heuristics are invariably
+dataset dependent and we are interested in a more general solution which can be used when the facts
+are of any structure. one can design soft attention retrieval mechanisms, where a convex combination
+of all the cells is retrieved or design hard attention retrieval mechanisms where one or few cells from
+the memory are retrieved. soft attention is achieved by using softmax over the memory which makes
+the reader differentiable and hence learning can be done using id119. hard attention is
+achieved by using methods like reinforce [5], which provides a noisy gradient estimate when
+discrete stochastic decisions are made by a model.
+both soft attention and hard attention have limitations. as the size of the memory grows, soft attention
+using softmax weighting is not scalable. it is computationally very expensive, since its complexity is
+linear in the size of the memory. also, at initialization, gradients are dispersed so much that it can
+reduce the effectiveness of id119. these problems can be alleviated by a hard attention
+mechanism, for which the training method of choice is reinforce. however, reinforce can be
+brittle due to its high variance and existing variance reduction techniques are complex. thus, it is
+rarely used in memory networks (even in cases of a small memory).
+in this paper, we propose a new memory selection mechanism based on maximum inner product
+search (mips) which is both scalable and easy to train. this can be considered as a hybrid of soft
+and hard attention mechanisms. the key idea is to structure the memory in a hierarchical way such
+that it is easy to perform mips, hence the name hierarchical memory network (hmn). hmns are
+scalable at both training and id136 time. the main contributions of the paper are as follows:
+
+    we explore hierarchical memory networks, where the memory is organized in a hierarchical
+
+fashion, which allows the reader to ef   ciently access only a subset of the memory.
+
+    while there are several ways to decide which subset to access, we propose to pose memory
+
+access as a maximum inner product search (mips) problem.
+
+2
+
+    we empirically show that exact mips-based algorithms not only enjoy similar convergence
+
+as soft id12, but can even improve the performance of the memory network.
+
+    since exact mips is as computationally expensive as a full soft attention model, we propose
+to train the memory networks using approximate mips techniques for scalable memory
+access.
+
+    we empirically show that unlike exact mips, approximate mips algorithms provide a
+
+speedup and scalability of training, though at the cost of some performance.
+
+2 hierarchical memory networks
+
+in this section, we describe the proposed hierarchical memory network (hmn). in this paper, hmns
+only differ from regular memory networks in two of its components: the memory and the reader.
+memory: instead of a    at array of cells for the memory structure, hmns leverages a hierarchical
+memory structure. memory cells are organized into groups and the groups can further be organized
+into higher level groups. the choice for the memory structure is tightly coupled with the choice
+of reader, which is essential for fast memory access. we consider three classes of approaches for
+the memory   s structure: hashing-based approaches, tree-based approaches, and id91-based
+approaches. this is explained in detail in the next section.
+reader: the reader in the hmn is different from the readers in    at memory networks. flat memory-
+based readers use either soft attention over the entire memory or hard attention that retrieves a single
+cell. while these mechanisms might work with small memories, with hmns we are more interested
+in achieving scalability towards very large memories. so instead, hmn readers use soft attention
+only over a selected subset of the memory. selecting memory subsets is guided by a maximum inner
+product search algorithm, which can exploit the hierarchical structure of the organized memory to
+retrieve the most relevant facts in sub-linear time. the mips-based reader is explained in more detail
+in the next section.
+in hmns, the reader is thus trained to create mips queries such that it can retrieve a suf   cient set of
+facts. while most of the standard applications of mips [6   8] so far have focused on settings where
+both query vector and database (memory) vectors are precomputed and    xed, memory readers in
+hmns are learning to do mips by updating the input representation such that the result of mips
+retrieval contains the correct fact(s).
+
+3 memory reader with k-mips attention
+
+i   x q(cid:62)xi
+
+in this section, we describe how the hmn memory reader uses maximum inner product search
+(mips) during learning and id136.
+we begin with a formal de   nition of k-mips. given a set of points x = {x1, . . . , xn} and a query
+vector q, our goal is to    nd
+
+argmax(k)
+
+(1)
+where the argmax(k) returns the indices of the top-k maximum values. in the case of hmns, x
+corresponds to the memory and q corresponds to the vector computed by the input module.
+a simple but inef   cient solution for k-mips involves a linear search over the cells in memory by
+performing the dot product of q with all the memory cells. while this will return the exact result
+for k-mips, it is too costly to perform when we deal with a large-scale memory. however, in
+many practical applications, it is often suf   cient to have an approximate result for k-mips, trading
+speed-up at the cost of the accuracy. there exist several approximate k-mips solutions in the
+literature [8, 9, 7, 10].
+all the approximate k-mips solutions add a form of hierarchical structure to the memory and visit
+only a subset of the memory cells to    nd the maximum inner product for a given query. hashing-based
+approaches [8   10] hash cells into multiple bins, and given a query they search for k-mips cell
+vectors only in bins that are close to the bin associated with the query. tree-based approaches [6, 7]
+create search trees with cells in the leaves of the tree. given a query, a path in the tree is followed and
+mips is performed only for the leaf for the chosen path. id91-based approaches [11] cluster
+
+3
+
+cells into multiple clusters (or a hierarchy of clusters) and given a query, they perform mips on the
+centroids of the top few clusters. we refer the readers to [11] for an extensive comparison of various
+state-of-the-art approaches for approximate k-mips.
+our proposal is to exploit this rich approximate k-mips literature to achieve scalable training and
+id136 in hmns. instead of    ltering the memory with heuristics, we propose to organize the
+memory based on approximate k-mips algorithms and then train the reader to learn to perform
+mips. speci   cally, consider the following softmax over the memory which the reader has to perform
+for every reading step to retrieve a set of relevant candidates:
+
+(2)
+where h(q)     rd is the representation of the query, m     rn  d is the memory with n being the
+total number of cells in the memory. we propose to replace this softmax with softmax(k) which is
+de   ned as follows:
+
+rout = softmax(h(q)m t )
+
+c = argmax(k) h(q)m t
+
+rout = softmax(k)(h(q)m t ) = softmax(h(q)m [c]t )
+
+(3)
+(4)
+where c is the indices of top-k mip candidate cells and m [c] is a sub-matrix of m where the rows
+are indexed by c.
+one advantage of using the softmax(k) is that it naturally focuses on cells that would normally
+receive the strongest gradients during learning. that is, in a full softmax, the gradients are otherwise
+more dispersed across cells, given the large number of cells and despite many contributing a small
+gradient. as our experiments will show, this results in slower training.
+one problematic situation when learning with the softmax(k) is when we are at the initial stages of
+training and the k-mips reader is not including the correct fact candidate. to avoid this issue, we
+always include the correct candidate to the top-k candidates retrieved by the k-mips algorithm,
+effectively performing a fully supervised form of learning.
+during training, the reader is updated by id26 from the output module, through the subset
+of memory cells. additionally, the log-likelihood of the correct fact computed using k-softmax is
+also maximized. this second supervision helps the reader learn to modify the query such that the
+maximum inner product of the query with respect to the memory will yield the correct supporting
+fact in the top k candidate set.
+until now, we described the exact k-mips-based learning framework, which still requires a linear
+look-up over all memory cells and would be prohibitive for large-scale memories. in such scenarios,
+we can replace the exact k-mips in the training procedure with the approximate k-mips. this is
+achieved by deploying a suitable memory hierarchical structure. the same approximate k-mips-
+based reader can be used during id136 stage as well. of course, approximate k-mips algorithms
+might not return the exact mips candidates and will likely to hurt performance, but at the bene   t of
+achieving scalability.
+while the memory representation is    xed in this paper, updating the memory along with the query
+representation should improve the likelihood of choosing the correct fact. however, updating the
+memory will reduce the precision of the approximate k-mips algorithms, since all of them assume
+that the vectors in the memory are static. designing ef   cient dynamic k-mips should improve the
+performance of hmns even further, a challenge that we hope to address in future work.
+
+3.1 reader with id91-based approximate k-mips
+
+id91-based approximate k-mips was proposed in [11] and it has been shown to outperform
+various other state-of-the-art data dependent and data independent approximate k-mips approaches
+for id136 tasks. as we will show in the experiments section, id91-based mips also performs
+better when used to training hmns. hence, we focus our presentation on the id91-based
+approach and propose changes that were found to be helpful for learning hmns.
+following most of the other approximate k-mips algorithms, [11] converts mips to maximum
+cosine similarity search (mcss) problem:
+
+argmax(k)
+i   x
+
+qt xi
+
+||q|| ||xi|| = argmax(k)
+i   x
+
+qt xi
+||xi||
+
+(5)
+
+4
+
+when all the data vectors xi have the same norm, then mcss is equivalent to mips. however, it is
+often restrictive to have this additional constraint. instead, [11] appends additional dimensions to
+both query and data vectors to convert mips to mcss. in hmn terminology, this would correspond
+to adding a few more dimensions to the memory cells and input representations.
+the algorithm introduces two hyper-parameters, u < 1 and m     n   . the    rst step is to scale all the
+vectors in the memory by the same factor, such that maxi ||xi||2 = u. we then apply two mappings,
+p and q, on the memory cells and on the input vector, respectively. these two mappings simply
+concatenate m new components to the vectors and make the norms of the data points all roughly the
+same [9]. the mappings are de   ned as follows:
+p (x) = [x, 1/2     ||x||2
+q(x) = [x, 0, 0, . . . , 0]
+
+2, . . . , 1/2     ||x||2m
+2 ]
+
+2, 1/2     ||x||4
+
+(6)
+(7)
+
+we thus have the following approximation of mips by mcss for any query vector q:
+
+argmax(k)
+
+i
+
+q(cid:62)xi (cid:39) argmax(k)
+
+i
+
+q(q)(cid:62)p (xi)
+
+||q(q)||2    ||p (xi)||2
+
+(8)
+
+once we convert mips to mcss, we can use spherical id116 [12] or its hierarchical version to
+approximate and speedup the cosine similarity search. once the memory is clustered, then every read
+operation requires only k dot-products, where k is the number of cluster centroids.
+since this is an approximation, it is error-prone. as we are using this approximation for the learning
+process, this introduces some bias in gradients, which can affect the overall performance of hmn. to
+alleviate this bias, we propose three simple strategies.
+
+    instead of using only the top-k candidates for a single read query, we also add top-k
+candidates retrieved for every other read query in the mini-batch. this serves two purposes.
+first, we can do ef   cient id127s by leveraging gpus since all the k-softmax
+in a minibatch are over the same set of elements. second, this also helps to decrease the bias
+introduced by the approximation error.
+    for every read access, instead of only using the top few clusters which has a maximum
+product with the read query, we also sample some clusters from the rest, based on a
+id203 distribution log-proportional to the dot product with the cluster centroids. this
+also decreases the bias.
+
+    we can also sample random blocks of memory and add it to top-k candidates.
+
+we empirically investigate the effect of these variations in section 5.5.
+
+4 related work
+
+memory networks have been introduced in [2] and have been so far applied to comprehension-based
+id53 [13, 14], large scale id53 [4] and dialogue systems [15]. while
+[2] considered supervised memory networks in which the correct supporting fact is given during
+the training stage, [14] introduced semi-supervised memory networks that can learn the supporting
+fact by itself. [3, 16] introduced dynamic memory networks (dmns) which can be considered as
+a memory network with two types of memory: a regular large memory and an episodic memory.
+another related class of model is the id63 [1], which is uses softmax-based soft
+attention. later [17] extended ntm to hard attention using id23. [15, 4] alleviate
+the problem of the scalability of soft attention by having an initial keyword based    ltering stage,
+which reduces the number of facts being considered. our work generalizes this    ltering by using
+mips for    ltering. this is desirable because mips can be applied for any modality of data or even
+when there is no overlap between the words in a question and the words in facts.
+the softmax arises in various situations and most relevant to this work are scaling methods for large
+vocabulary neural id38. in neural id38, the    nal layer is a softmax
+distribution over the next word and there exist several approaches to achieve scalability. [18] proposes
+a hierarchical softmax based on prior id91 of the words into a binary, or more generally n-ary
+tree, that serves as a    xed structure for the learning process of the model. the complexity of training
+
+5
+
+is reduced from o(n) to o(log n). due to its id91 and tree structure, it resembles the id91-
+based mips techniques we explore in this paper. however, the approaches differ at a fundamental
+level. hierarchical softmax de   nes the id203 of a leaf node as the product of all the probabilities
+computed by all the intermediate softmaxes on the way to that leaf node. by contrast, an approximate
+mips search imposes no such constraining structure on the probabilistic model, and is better thought
+as ef   ciently searching for top winners of what amounts to be a large ordinary    at softmax. other
+methods such as noice constrastive estimation [19] and negative sampling [20] avoid an expensive
+id172 constant by sampling negative samples from some marginal distribution. by contrast,
+our approach approximates the softmax by explicitly including in its negative samples candidates
+that likely would have a large softmax value. [21] introduces an importance sampling approach that
+considers all the words in a mini-batch as the candidate set. this in general might also not include
+the mips candidates with highest softmax values.
+[22] is the only work that we know of, proposing to use mips during learning. it proposes hashing-
+based mips to sort the hidden layer activations and reduce the computation in every layer. however,
+a small scale application was considered and data-independent methods like hashing will likely suffer
+as dimensionality increases.
+
+5 experiments
+
+in this section, we report experiments on factoid id53 using hierarchical memory
+networks. speci   cally, we use the simplequestions dataset [4]. the aim of these experiments is
+not to achieve state-of-the-art results on this dataset. rather, we aim to propose and analyze various
+approaches to make memory networks more scalable and explore the achieved tradeoffs between
+speed and accuracy.
+
+5.1 dataset
+
+we use simplequestions [4] which is a large scale factoid id53 dataset. simpleques-
+tions consists of 108,442 natural language questions, each paired with a corresponding fact from
+freebase. each fact is a triple (subject,relation,object) and the answer to the question is always the ob-
+ject. the dataset is divided into training (75910), validation (10845), and test (21687) sets. unlike [4]
+who additionally considered fb2m (10m facts) or fb5m (12m facts) with keyword-based heuristics
+for    ltering most of the facts for each question, we only use simplequestions, with no keyword-based
+heuristics. this allows us to do a direct comparison with the full softmax approach in a reasonable
+amount of time. moreover, we would like to highlight that for this dataset, keyword-based    ltering is
+a very ef   cient heuristic since all questions have an appropriate source entity with a matching word.
+nevertheless, our goal is to design a general purpose architecture without such strong assumptions on
+the nature of the data.
+
+5.2 model
+let vq be the vocabulary of all words in the natural language questions. let wq be a |vq|     m matrix
+where each row is some m dimensional embedding for a word in the question vocabulary. this matrix
+is initialized with random values and learned during training. given any question, we represent it with
+a bag-of-words representation by summing the vector representation of each word in the question.
+let q = {wi}p
+
+i=1,
+
+p(cid:88)
+
+i=1
+
+h(q) =
+
+wq[wi]
+
+then, to    nd the relevant fact from the memory m, we call the k-mips-based reader module with
+h(q) as the query. this uses equation 3 and 4 to compute the output of the reader rout. the reader is
+trained by minimizing the negative log likelihood (nll) of the correct fact.
+
+j   =
+
+   log(rout[fi])
+
+n(cid:88)
+
+i=1
+
+6
+
+where fi is the index of the correct fact in wm. we are    xing the memory embeddings to the transe
+[23] embeddings and learning only the question embeddings.
+this model is simpler than the one reported in [4] so that it is esay to analyze the effect of various
+memory reading strategies.
+
+5.3 training details
+
+we trained the model with the adam optimizer [24], with a    xed learning rate of 0.001. we used
+mini-batches of size 128. we used 200 dimensional embeddings for the transe entities, yielding
+600 dimensional embeddings for facts by concatenating the embeddings of the subject, relation and
+object. we also experimented with summing the entities in the triple instead of concatenating, but we
+found that it was dif   cult for the model to differentiate facts this way. the only learnable parameters
+by the hmn model are the question id27s. the entity distribution in simplequestions is
+extremely sparse and hence, following [4], we also add arti   cial questions for all the facts for which
+we do not have natural language questions. unlike [4], we do not add any other additional tasks like
+paraphrase detection to the model, mainly to study the effect of the reader. we stopped training for
+all the models when the validation accuracy consistently decreased for 3 epochs.
+
+5.4 exact k-mips improves accuracy
+
+in this section, we compare the performance of the full soft attention reader and exact k-mips
+attention readers. our goal is to verify that k-mips attention is in fact a valid and useful attention
+mechanism and see how it fares when compared to full soft attention. for k-mips attention, we tried
+k     10, 50, 100, 1000. we would like to emphasize that, at training time, along with k candidates
+for a particular question, we also add the k-candidates for each question in the mini-batch. so
+the exact size of the softmax layer would be higer than k during training. in table 1, we report
+the test performance of memory networks using the soft attention reader and k-mips attention
+reader. we also report the average softmax size during training. from the table, it is clear that the
+k-mips attention readers improve the performance of the network compared to soft attention reader.
+in fact, smaller the value of k is, better the performance. this result suggests that it is better to
+use a k-mips layer instead of softmax layer whenever possible. it is interesting to see that the
+convergence of the model is not slowed down due to this change in softmax computation (as shown
+in figure 1).
+
+test acc. avg. softmax size
+
+model
+
+full-softmax
+
+10-mips
+50-mips
+100-mips
+1000-mips
+id91
+pca-tree
+wta-hash
+
+59.5
+62.2
+61.2
+60.6
+59.6
+51.5
+32.4
+40.2
+
+108442
+1290
+6180
+11928
+70941
+20006
+21108
+20008
+
+table 1: accuracy in sq test-set and average size
+of memory used. 10-softmax has high performance
+while using only smaller amount of memory.
+
+figure 1: validation curve for various models.
+convergence is not slowed down by k-softmax.
+
+this experiment con   rms the usefulness of k-mips attention. however, exact k-mips has the
+same complexity as a full softmax. hence, to scale up the training, we need more ef   cient forms of
+k-mips attention, which is the focus of next experiment.
+
+5.5 approximate k-mips based learning
+
+as mentioned previously, designing faster algorithms for k-mips is an active area of research.
+[11] compared several state-of-the-art data-dependent and data-independent methods for faster
+approximate k-mips and it was found that id91-based mips performs signi   cantly better than
+other approaches. however the focus of the comparison was on performance during the id136
+
+7
+
+0510152025epochs30405060708090val errorsoftmax10-softmax50-softmax100-softmax1000-softmaxstage. in hmns, k-mips must be used at both training stage and id136 stages. to verify if the
+same trend can been seen during learning stage as well, we compared three different approaches:
+id91: this was explained in detail in section 3.
+wta-hash: winner takes all hashing [25] is a hashing-based k-mips algorithm which also
+converts mips to mcss by augmenting additional dimensions to the vectors. this method used n
+hash functions and each hash function does p different random permutations of the vector. then the
+pre   x constituted by the    rst k elements of each permuted vector is used to construct the hash for the
+vector.
+pca-tree: pca-tree [7] is the state-of-the-art tree-based method, which converts mips to nns by
+vector augmentation. it uses the principal components of the data to construct a balanced binary tree
+with data residing in the leaves.
+for a fair comparison, we varied the hyper-parameters of each algorithm in such a way that the
+average speedup is approximately the same. table 1 shows the performance of all three methods,
+compared to a full softmax. from the table, it is clear that the id91-based method performs
+signi   cantly better than the other two methods. however, performances are lower when compared to
+the performance of the full softmax.
+as a next experiment, we analyze various the strategies proposed in section 3.1 to reduce the
+approximation bias of id91-based k-mips:
+top-k: this strategy picks the vectors in the top k clusters as candidates.
+sample-k: this strategy samples k clusters, without replacement, based on a id203 distribution
+based on the dot product of the query with the cluster centroids. when combined with the top-k
+strategy, we ignore clusters selected by the top-k strategy for sampling.
+rand-block: this strategy divides the memory into several blocks and uniformly samples a random
+block as candidate.
+we experimented with 1000 clusters and 2000 clusters. while comparing various training strategies,
+we made sure that the effective speedup is approximately the same. memory access to facts per query
+for all the models is approximately 20,000, hence yielding a 5x speedup.
+
+top-k sample-k rand-block
+yes
+no
+yes
+yes
+yes
+
+no
+yes
+yes
+no
+yes
+
+no
+no
+no
+yes
+yes
+
+1000 clusters
+
+test acc.
+
+50.2
+52.5
+52.8
+51.8
+52.5
+
+epochs
+
+16
+68
+31
+32
+38
+
+2000 clusters
+
+test acc.
+
+51.5
+52.8
+53.1
+52.3
+52.7
+
+epochs
+
+22
+63
+26
+26
+19
+
+table 2: accuracy in sq test set and number of epochs for convergence.
+
+results are given in table 2. we observe that the best approach is to combine the top-k and sample-k
+strategies, with rand-block not being bene   cial. interestingly, the worst performances correspond to
+cases where the sample-k strategy is ignored.
+
+6 conclusion
+
+in this paper, we proposed a hierarchical memory network that exploits k-mips for its attention-
+based reader. unlike soft attention readers, k-mips attention reader is easily scalable to larger
+memories. this is achieved by organizing the memory in a hierarchical way. experiments on
+the simplequestions dataset demonstrate that exact k-mips attention is better than soft attention.
+however, existing state-of-the-art approximate k-mips techniques provide a speedup at the cost of
+some accuracy. future research will investigate designing ef   cient dynamic k-mips algorithms,
+where the memory can be dynamically updated during training. this should reduce the approximation
+bias and hence improve the overall performance.
+
+8
+
+references
+[1] alex graves, greg wayne, and ivo danihelka. id63s. arxiv preprint arxiv:1410.5401,
+
+2014.
+
+[2] jason weston, sumit chopra, and antoine bordes. memory networks. in proceedings of the international
+
+conference on representation learning (iclr 2015), 2015. in press.
+
+[3] ankit kumar et al. ask me anything: dynamic memory networks for natural language processing. corr,
+
+abs/1506.07285, 2015.
+
+[4] antoine bordes, nicolas usunier, sumit chopra, and jason weston. large-scale simple id53
+
+with memory networks. arxiv preprint arxiv:1506.02075, 2015.
+
+[5] ronald j. williams. simple statistical gradient-following algorithms for connectionist reinforcement
+
+learning. machine learning, 8:229   256, 1992.
+
+[6] parikshit ram and alexander g. gray. maximum inner-product search using cone trees. kdd    12, pages
+
+931   939, 2012.
+
+[7] yoram bachrach et al. speeding up the xbox recommender system using a euclidean transformation for
+
+inner-product spaces. recsys    14, pages 257   264, 2014.
+
+[8] anshumali shrivastava and ping li. asymmetric lsh (alsh) for sublinear time maximum inner product
+
+search (mips). in advances in neural information processing systems 27, pages 2321   2329, 2014.
+
+[9] anshumali shrivastava and ping li. improved asymmetric locality sensitive hashing (alsh) for maximum
+inner product search (mips). in proceedings of conference on uncertainty in arti   cial intelligence (uai),
+2015.
+
+[10] behnam neyshabur and nathan srebro. on symmetric and asymmetric lshs for inner product search. in
+
+proceedings of the 31st international conference on machine learning, 2015.
+
+[11] alex auvolat, sarath chandar, pascal vincent, hugo larochelle, and yoshua bengio. id91 is ef   cient
+
+for approximate maximum inner product search. arxiv preprint arxiv:1507.05910, 2015.
+
+[12] shi zhong. ef   cient online spherical id116 id91. in neural networks, 2005. ijid98   05. proceed-
+
+ings. 2005 ieee international joint conference on, volume 5, pages 3180   3185. ieee, 2005.
+
+[13] jason weston, antoine bordes, sumit chopra, and tomas mikolov. towards ai-complete question
+
+answering: a set of prerequisite toy tasks. arxiv preprint arxiv:1502.05698, 2015.
+
+[14] sainbayar sukhbaatar, arthur szlam, jason weston, and rob fergus. end-to-end memory networks. arxiv
+
+preprint arxiv:1503.08895, 2015.
+
+[15] jesse dodge, andreea gane, xiang zhang, antoine bordes, sumit chopra, alexander miller, arthur
+szlam, and jason weston. evaluating prerequisite qualities for learning end-to-end id71. corr,
+abs/1511.06931, 2015.
+
+[16] caiming xiong, stephen merity, and richard socher. dynamic memory networks for visual and textual
+
+id53. corr, abs/1603.01417, 2016.
+
+[17] wojciech zaremba and ilya sutskever. id23 id63s. corr,
+
+abs/1505.00521, 2015.
+
+[18] frederic morin and yoshua bengio. hierarchical probabilistic neural network language model. in robert g.
+
+cowell and zoubin ghahramani, editors, proceedings of aistats, pages 246   252, 2005.
+
+[19] andriy mnih and karol gregor. neural variational id136 and learning in belief networks. arxiv
+
+preprint arxiv:1402.0030, 2014.
+
+[20] tomas mikolov, kai chen, greg corrado, and jeffrey dean. ef   cient estimation of word representations
+
+in vector space. in international conference on learning representations, workshop track, 2013.
+
+[21] s  bastien jean, kyunghyun cho, roland memisevic, and yoshua bengio. on using very large target
+
+vocabulary for id4. in proceedings of acl,2015, pages 1   10, 2015.
+
+[22] ryan spring and anshumali shrivastava. scalable and sustainable deep learning via randomized hashing.
+
+corr, abs/1602.08194, 2016.
+
+9
+
+[23] antoine bordes, nicolas usunier, alberto garcia-duran, jason weston, and oksana yakhnenko. translat-
+
+ing embeddings for modeling multi-relational data. in advances in nips, pages 2787   2795. 2013.
+
+[24] diederik p. kingma and jimmy ba. adam: a method for stochastic optimization. corr, abs/1412.6980,
+
+2014.
+
+[25] sudheendra vijayanarasimhan, jon shlens, rajat monga, and jay yagnik. deep networks with large output
+
+spaces. arxiv preprint arxiv:1412.7479, 2014.
+
+10
+
+

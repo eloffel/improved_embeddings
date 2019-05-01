@@ -1,0 +1,377 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]the artificial impostor
+     * [9]deep learning
+     * [10]python
+     * [11]r
+     * [12]reading lists
+     * [13]data analysis
+     __________________________________________________________________
+
+[tensorflow] implementing temporal convolutional networks
+
+understanding tensorflow part 3
+
+   [14]go to the profile of ceshine lee
+   [15]ceshine lee (button) blockedunblock (button) followfollowing
+   apr 1, 2018
+   [1*myfanidknc02ltdiflrgpa.jpeg]
+   [16]source
+
+   the term    temporal convolutional networks    (tcns) is a vague term that
+   could represent a wide range of network architectures. in this post it
+   is pointed specifically to one family of architectures proposed in the
+   paper [17]an empirical evaluation of generic convolutional and
+   recurrent networks for sequence modeling:
+
+     our aim is to distill the best practices in convolutional network
+     design into a simple architecture.
+
+   the authors [18]released the source code in pytorch, which is
+   well-written and easy to incorporate into your own projects. you can
+   skip all the tensorflow parts below and use their implementation
+   instead if you just want to use tcns with pytorch.
+
+   in this post, we   ll learn how to write models with customized building
+   blocks by implementing tcns using tf.layers apis.
+
+   20180528 update (gihub repo with links to all posts and notebooks):
+   [19]ceshine/tensorflow-crash-course
+   tensorflow-crash-course - for those who already have some basic idea
+   about deep learning, and preferably are familiar   github.com
+
+   previous parts of this series:
+   [20][notes] understanding tensorflow         part 1
+   core concepts and common confusions (from a beginner   s point of
+   view)medium.com
+   [21][notes] understanding tensorflow         part 2
+   building id56 models to solve sequential mnistmedium.com
+
+an overview of tcns
+
+   [1*1ck-uewhgazlm-4itceqdq.png]
+   [22](figure taken from the paper)
+
+     the distinguishing characteristics of tcns are: 1) the convolutions
+     in the architecture are causal, meaning that there is no information
+        leakage    from future to past; 2) the architecture can take a
+     sequence of any length and map it to an output sequence of the same
+     length, just as with an id56.
+
+dilated causal convolution
+
+   the most important component of tcns is dilated causal convolution.
+      causal    simply means a filter at time step t can only see inputs that
+   are no later than t. dilated convolution is [23]well explained in this
+   blog post. the point of using dilated convolution is to achieve larger
+   receptive field with fewer parameters and fewer layers. (i also
+   mentioned dilated causal convolution in [24]the writeup of the
+   instacart competition).
+
+residual blocks
+
+   a residual block stacks two dilated causal convolution layers together,
+   and the results from the final convolution are added back to the inputs
+   to obtain the outputs of the block. if the width(number of channels) of
+   the inputs and the width(number of filters) of the second dilated
+   causal convolution layers differs, we   ll have to apply an 1d
+   convolution to the inputs before the adding the convolution outputs to
+   match the widths.
+
+putting it together
+
+   what tcns do is simply stacking a number of residual blocks together to
+   get the receptive field that we desire. if the receptive field is
+   larger or equal to the maximum length of any sequences, the results of
+   a tcn will be semantically equivalent to the results of a id56.
+
+calculating receptive field
+
+   it   s important to know how to calculate the receptive field because
+   you   ll need it to determine how many layers of residual blocks you need
+   in the model.
+
+   here we denote the number of previous time steps(history) the ith a
+   dilated causal convolution layer can see as f(i).
+
+   for layer 0 (an imagined convolution as the initial case), f(0) = 1, as
+   a causal convolution can always see its current time steps it   s at.
+
+   for layer 1, f(1) = f(0) + [kernel_size(n)-1] * dilation(n). it can see
+   what the previous layer can see plus the position of the last kernel
+   minus the position of the first. we can verify this using figure
+   1         f(1) = 1 + (3   1) * 1 = 3.
+
+   for layer 2, f(2) = f(1) + [kernel_size(n)-1] * dilation(n).
+   verify         f(2) = 3 + (3   1) * 1 = 5. this matches figure 1c.
+
+   you should be able to see the pattern now. generally, f(n) = f(n-1) +
+   [kernel_size(n)-1] * dilation(n), where n means we   re at the nth
+   dilated causal convolution layer since the input layer. since every
+   residual block has two identical dilated causal convolutions (same
+   kernel sizes and dilations), we could simplifies the formula to f   (n) =
+   f   (n-1) + 2 * [kernel_size(n)-1] * dilation(n), but n now means we are
+   at the nth residual block.
+
+   if the kernel size is fixed, and the dilation of each residual block
+   increases exponentially by 2, i.e. dilation(n) = 2^(n-1), we can expand
+   the formula as f   (n) = 1 + 2 * (kernel_size-1) * (1 + 2 + 2   +     +
+   2^(n-1)) = 1 + 2*(kernel_size-1)*(2^n-1). verify using figure
+   1c         1+2*(3   1)*(2  -1)=5. you could verify the result with more residual
+   blocks yourself.
+
+   so there it is, with a fixed kernel size and exponentially increasing
+   dilations, tcn with n residual blocks will have a receptive field of
+   1 + 2*(kernel_size-1)*(2^n-1) at the final block. it most likely won   t
+   match your maximum sequence length exactly, so you   ll have to decide to
+   add one more block to make it larger than the maximum length, or
+   sacrifice some of the older history.
+
+tensorflow implementation with tf.layers
+
+   as before, the notebook with the source code use in the post is
+   uploaded to google colab:
+
+     [25]link to the notebook
+
+tf.layers
+
+   we   re going to use the tf.layers module to provide high-level
+   abstraction for the implemented tcns. the base layer class
+   [26]tf.layers.layer is the foundation of all other layers in the
+   module. the official documentation recommends descendants to this class
+   implements the following three methods:
+    1. __init__() : save configuration in member variables.
+    2. build() : called once from __call__, when we know the shapes of
+       inputs and dtype. should have the calls to add_variable(), and then
+       call the super's build().
+    3. call() :called in __call__ after making sure build() has been
+       called once. should actually perform the logic of applying the
+       layer to the input tensors (which should be passed in as the first
+       argument).
+
+   (the descriptions above were directly copied from the documentation)
+
+   when in doubt, try to read [27]the source code of a built-in layer and
+   imitate what it does in those methods.
+
+dilated causal convolution
+
+   it   s quite simple to implement this since tf.layers.conv1d already
+   supports dilation through the dilation_rate parameter. what we need to
+   do is to pad the start of the sequence with (kernel_size-1) * dilation
+   zeros ourselves, and pass padding='valid'(basically means no padding)
+   to the parent tf.layers.conv1d. the padding will make the first output
+   element only able to see the first input element (and the padding
+   zeros).
+
+   iframe: [28]/media/a892131500a5725b003dc55998773594?postid=7f6633fcc7c7
+
+   because of the restriction from other layers, causalconv1d only support
+   channels_last data format, i.e. input shape is always (batch_size,
+   length, channels). it use tf.pad to pad the input tensor. most of the
+   lines are just capturing the initialization parameters of
+   tf.layers.conv1d.
+
+residual blocks
+
+   [1*z8cw_vs7e8rvhqgaoabbaw.png]
+
+   besides dilated causal convolution, we still need weight id172,
+   dropout, and the optional 1x1 conv to complete the residual block.
+
+   i did not find an easy way to implement weight id172 in
+   tensorflow, so i replaced it with tf.contrib.layers.layernorm([29]layer
+   id172). they won   t be the same, but should have similar effects
+   in stabilizing training. the layer id172 implementation
+   basically assumes the channels are located at the last dimension of the
+   input tensor, so the whole stack needs to use channels_last data
+   format.
+x = tf.contrib.layers.layer_norm(x) # using the shortcut
+
+   in the dropout section, we randomly drop out some of the channels
+   across all time steps (a.k.a [30]spatial dropout). tf.layers.dropout
+   layer has a parameter noise_shape that does exactly that. by setting
+   the noise_shape to (batch_size, 1, channels), we select some channels
+   for each example and set the dropout mask. then the mask is
+   [31]broadcast to all time steps. (check the notebook for a simple
+   example.)
+
+   in the following implementation noise_shape is set to (1, 1, channels)
+   to allow dynamic batch sizes. this will slow down convergence. if you
+   want dynamic batch sizes with different masks for each example, you   ll
+   have to override the _get_noise_shape() method to generate noise_shape
+   dynamically.
+self.dropout1 = tf.layers.dropout(
+    self.dropout,
+    [tf.constant(1), tf.constant(1), tf.constant(self.n_outputs)])
+
+   finally, the 1x1 convolution can easily be achieved with a
+   tf.layers.dense layer (it creates a projection at the last dimension):
+if input_shape[channel_dim] != self.n_outputs:
+
+    self.down_sample = tf.layers.dense(
+        self.n_outputs, activation=none)
+
+   iframe: [32]/media/9c0ece79fa09edd5534fa6d5c6678695?postid=7f6633fcc7c7
+
+   the naming of the class follows the pytorch implementation. two dropout
+   layers was created instead of one (same applies to layer id172)
+   simply to make tensorboard create a cleaner graph visualization:
+   [1*r3juv8gf0umvvjxy-k-s8a.png]
+
+tcns
+
+   all that is left to do is to stack residual blocks together and create
+   dilations exponentially:
+
+   iframe: [33]/media/c90290feb36585c9f9c4430c7495bfdd?postid=7f6633fcc7c7
+
+   note we can name each block manually with the name parameter, which
+   will be shown in the tensorboard:
+   [1*jf9-74dzqaz1vmvp99p-aw.png]
+
+todo: write unit tests
+
+   i haven   t figured out how to properly write unit tests against
+   tensorflow layers, but it should be a hard requirement if you want to
+   use this implementation on real-world datasets.
+
+solve sequential mnist with tcn
+
+   some differences comparing to the previous id56 models:
+    1. adamoptimizer: higher momentum usually works better with
+       convolution neural networks than with id56s.
+    2. no gradient clipping: convolution neural networks does not has the
+       problem of exploding gradients.
+    3. is_training placeholder: we need to disable dropout while
+       predicting to have better predictions (otherwise you   ll have to do
+       [34]mc dropout). an example session run (in training):
+       sess.run(train_op, feed_dict={x: batch_x, y: batch_y, is_training:
+       true})
+
+   we set kernel size to be 8 and number of stacked blocks to be 6, so the
+   receptive field will be 1 + 2 * (8   1) * (2   -1) = 883, a bit larger than
+   the maximum sequence length 784.
+   [1*ssr0cxtp8hvdp4au1k0kww.png]
+   using tcns to solve (permuted) sequential mnist
+
+   you can see in [35]the notebook that a tcn with ~ 36k parameters
+   converged faster and had better test accuracy than id56 from [36]the
+   previous notebook.
+   [1*qmbdxcqde6mmn-eskzhuba.png]
+   comparing tcn with three id56 variants. (taken from the tcn paper)
+
+coming up: the dataset api
+
+   we   ve been using the test set in the training process to pick the final
+   model, which is a very bad practice. it makes the results from the two
+   notebooks so far somewhat unreliable. in the next and probably the
+   final part of this series, we   ll learn how to import the fashion-mnist
+   dataset and create a proper validation set to evaluate our models.
+   [37][tensorflow] fashion-mnist with dataset api
+   understanding tensorflow part 4medium.com
+
+     * [38]machine learning
+     * [39]python
+     * [40]tensorflow
+     * [41]deep learning
+     * [42]data science
+
+   (button)
+   (button)
+   (button) 542 claps
+   (button) (button) (button) 13 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [43]go to the profile of ceshine lee
+
+[44]ceshine lee
+
+   humanist. data geek.
+
+     (button) follow
+   [45]the artificial impostor
+
+[46]the artificial impostor
+
+   pretending to write about data science, deep learning, and some others
+   (a.k.a. the whole ai package).
+
+     * (button)
+       (button) 542
+     * (button)
+     *
+     *
+
+   [47]the artificial impostor
+   never miss a story from the artificial impostor, when you sign up for
+   medium. [48]learn more
+   never miss a story from the artificial impostor
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/7f6633fcc7c7
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7&source=--------------------------nav_reg&operation=register
+   8. https://medium.com/the-artificial-impostor?source=logo-lo_s1chv0gyrijp---99edadf89480
+   9. https://medium.com/the-artificial-impostor/tagged/deep-learning
+  10. https://medium.com/the-artificial-impostor/tagged/python
+  11. https://medium.com/the-artificial-impostor/tagged/r-language
+  12. https://medium.com/the-artificial-impostor/tagged/readings
+  13. https://medium.com/the-artificial-impostor/tagged/data-analysis
+  14. https://medium.com/@ceshine?source=post_header_lockup
+  15. https://medium.com/@ceshine
+  16. https://www.pexels.com/photo/chronograph-control-counter-dial-260637/
+  17. http://arxiv.org/abs/1803.01271
+  18. https://github.com/locuslab/tcn
+  19. https://github.com/ceshine/tensorflow-crash-course
+  20. https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-1-5f0ebb253ad4
+  21. https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-2-f7e5ece849f5
+  22. https://arxiv.org/abs/1803.01271
+  23. http://www.id136.vc/dilated-convolutions-and-kronecker-factorisation/
+  24. https://medium.com/the-artificial-impostor/kaggle-instacart-competition-b7177c3324dd
+  25. https://colab.research.google.com/drive/1la33lw7fqv1ricpfzylq9h0sh1vsd4le
+  26. https://www.tensorflow.org/versions/r1.6/api_docs/python/tf/layers/layer
+  27. https://github.com/tensorflow/tensorflow/blob/r1.6/tensorflow/python/layers/convolutional.py#l34
+  28. https://medium.com/media/a892131500a5725b003dc55998773594?postid=7f6633fcc7c7
+  29. https://arxiv.org/abs/1607.06450
+  30. https://arxiv.org/pdf/1411.4280.pdf
+  31. https://www.tensorflow.org/performance/xla/broadcasting
+  32. https://medium.com/media/9c0ece79fa09edd5534fa6d5c6678695?postid=7f6633fcc7c7
+  33. https://medium.com/media/c90290feb36585c9f9c4430c7495bfdd?postid=7f6633fcc7c7
+  34. https://becominghuman.ai/learning-note-dropout-in-recurrent-networks-part-1-57a9c19a2307
+  35. https://colab.research.google.com/drive/1la33lw7fqv1ricpfzylq9h0sh1vsd4le
+  36. https://colab.research.google.com/drive/18fqi18psdh30wuj1upd6zvgk2awxo_bj
+  37. https://medium.com/the-artificial-impostor/tensorflow-fashion-mnist-with-dataset-api-cce1e3cc8cd4
+  38. https://medium.com/tag/machine-learning?source=post
+  39. https://medium.com/tag/python?source=post
+  40. https://medium.com/tag/tensorflow?source=post
+  41. https://medium.com/tag/deep-learning?source=post
+  42. https://medium.com/tag/data-science?source=post
+  43. https://medium.com/@ceshine?source=footer_card
+  44. https://medium.com/@ceshine
+  45. https://medium.com/the-artificial-impostor?source=footer_card
+  46. https://medium.com/the-artificial-impostor?source=footer_card
+  47. https://medium.com/the-artificial-impostor
+  48. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  50. https://github.com/ceshine/tensorflow-crash-course
+  51. https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-1-5f0ebb253ad4
+  52. https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-2-f7e5ece849f5
+  53. https://medium.com/the-artificial-impostor/tensorflow-fashion-mnist-with-dataset-api-cce1e3cc8cd4
+  54. https://medium.com/p/7f6633fcc7c7/share/twitter
+  55. https://medium.com/p/7f6633fcc7c7/share/facebook
+  56. https://medium.com/p/7f6633fcc7c7/share/twitter
+  57. https://medium.com/p/7f6633fcc7c7/share/facebook

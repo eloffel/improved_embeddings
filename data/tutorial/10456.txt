@@ -1,0 +1,1381 @@
+6
+1
+0
+2
+
+ 
+
+g
+u
+a
+4
+
+ 
+
+ 
+ 
+]
+
+g
+l
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+4
+3
+8
+4
+0
+
+.
+
+1
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2016
+
+neural programmer: inducing latent
+
+programs with id119
+
+arvind neelakantan   
+university of massachusetts amherst
+arvind@cs.umass.edu
+
+quoc v. le
+google brain
+qvl@google.com
+
+ilya sutskever
+google brain
+ilyasu@google.com
+
+abstract
+
+deep neural networks have achieved impressive supervised classi   cation perfor-
+mance in many tasks including image recognition, id103, and se-
+quence to sequence learning. however, this success has not been translated to ap-
+plications like id53 that may involve complex arithmetic and logic
+reasoning. a major limitation of these models is in their inability to learn even
+simple arithmetic and logic operations. for example, it has been shown that neural
+networks fail to learn to add two binary numbers reliably. in this work, we pro-
+pose neural programmer, a neural network augmented with a small set of basic
+arithmetic and logic operations that can be trained end-to-end using backpropaga-
+tion. neural programmer can call these augmented operations over several steps,
+thereby inducing compositional programs that are more complex than the built-in
+operations. the model learns from a weak supervision signal which is the result of
+execution of the correct program, hence it does not require expensive annotation
+of the correct program itself. the decisions of what operations to call, and what
+data segments to apply to are inferred by neural programmer. such decisions,
+during training, are done in a differentiable fashion so that the entire network can
+be trained jointly by id119. we    nd that training the model is dif   -
+cult, but it can be greatly improved by adding random noise to the gradient. on
+a fairly complex synthetic table-comprehension dataset, traditional recurrent net-
+works and attentional models perform poorly while neural programmer typically
+obtains nearly perfect accuracy.
+
+1
+
+introduction
+
+the past few years have seen the tremendous success of deep neural networks (dnns) in a variety of
+supervised classi   cation tasks starting with image recognition (krizhevsky et al., 2012) and speech
+recognition (hinton et al., 2012) where the dnns act on a    xed-length input and output. more
+recently, this success has been translated into applications that involve a variable-length sequence
+as input and/or output such as machine translation (sutskever et al., 2014; bahdanau et al., 2014;
+luong et al., 2014), image captioning (vinyals et al., 2015; xu et al., 2015), conversational model-
+ing (shang et al., 2015; vinyals & le, 2015), end-to-end q&a (sukhbaatar et al., 2015; peng et al.,
+2015; hermann et al., 2015), and end-to-end id103 (graves & jaitly, 2014; hannun
+et al., 2014; chan et al., 2015; bahdanau et al., 2015).
+while these results strongly indicate that dnn models are capable of learning the fuzzy underlying
+patterns in the data, they have not had similar impact in applications that involve crisp reasoning.
+a major limitation of these models is in their inability to learn even simple arithmetic and logic
+operations. for example, joulin & mikolov (2015) show that recurrent neural networks (id56s) fail
+at the task of adding two binary numbers even when the result has less than 10 bits. this makes
+existing dnn models unsuitable for downstream applications that require complex reasoning, e.g.,
+natural language id53. for example, to answer the question    how many states border
+texas?    (see zettlemoyer & collins (2005)), the algorithm has to perform an act of counting in a
+table which is something that a neural network is not yet good at.
+
+   work done during an internship at google.
+
+1
+
+published as a conference paper at iclr 2016
+
+a fairly common method for solving these problems is program induction where the goal is to    nd
+a program (in sql or some high-level languages) that can correctly solve the task. an application
+of these models is in id29 where the task is to build a natural language interface to a
+structured database (zelle & mooney, 1996). this problem is often formulated as mapping a natural
+language question to an executable query.
+a drawback of existing methods in id29 is that they are dif   cult to train and require
+a great deal of human supervision. as the space over programs is non-smooth, it is dif   cult to
+apply simple id119; most often, id119 is augmented with a complex search
+procedure, such as sampling (liang et al., 2010). to further simplify training, the algorithmic de-
+signers have to manually add more supervision signals to the models in the form of annotation of the
+complete program for every question (zettlemoyer & collins, 2005) or a domain-speci   c grammar
+(liang et al., 2011). for example, designing grammars that contain rules to associate lexical items to
+the correct operations, e.g., the word    largest    to the operation    argmax   , or to produce syntactically
+valid programs, e.g., disallow the program >= dog. the role of hand-crafted grammars is crucial in
+id29 yet also limits its general applicability to many different domains. in a recent work
+by wang et al. (2015) to build semantic parsers for 7 domains, the authors hand engineer a separate
+grammar for each domain.
+the goal of this work is to develop a model that does not require substantial human supervision
+and is broadly applicable across different domains, data sources and natural languages. we propose
+neural programmer (figure 1), a neural network augmented with a small set of basic arithmetic
+and logic operations that can be trained end-to-end using id26. in our formulation, the
+neural network can run several steps using a recurrent neural network. at each step, it can select a
+segment in the data source and a particular operation to apply to that segment. the neural network
+propagates these outputs forward at every step to form the    nal, more complicated output. using
+the target output, we can adjust the network to select the right data segments and operations, thereby
+inducing the correct program. key to our approach is that the selection process (for the data source
+and operations) is done in a differentiable fashion (i.e., soft selection or attention), so that the whole
+neural network can be trained jointly by id119. at test time, we replace soft selection
+with hard selection.
+
+figure 1: the architecture of neural programmer, a neural network augmented with arithmetic and
+logic operations. the controller selects the operation and the data segment. the memory stores the
+output of the operations applied to the data segments and the previous actions taken by the controller.
+the controller runs for several steps thereby inducing compositional programs that are more complex
+than the built-in operations. the dotted line indicates that the controller uses information in the
+memory to make decisions in the next time step.
+
+by combining neural network with mathematical operations, we can utilize both the fuzzy pattern
+matching capabilities of deep networks and the crisp algorithmic power of traditional programmable
+computers. this approach of using an augmented logic and arithmetic component is reminiscent of
+the idea of using an alu (arithmetic and logic unit) in a conventional computer (von neumann,
+1945). it is loosely related to the symbolic numerical processing abilities exhibited in the intrapari-
+etal sulcus (ips) area of the brain (piazza et al., 2004; cantlon et al., 2006; kucian et al., 2006; fias
+et al., 2007; dastjerdi et al., 2013). our work is also inspired by the success of the soft attention
+mechanism (bahdanau et al., 2014) and its application in learning a neural network to control an
+additional memory component (graves et al., 2014; sukhbaatar et al., 2015).
+
+2
+
+controllersoftselectionarithmetic and logic operationsmemorydataoutputapplyinputt = 1, 2,    , ttimestep tpublished as a conference paper at iclr 2016
+
+neural programmer has two attractive properties. first, it learns from a weak supervision signal
+which is the result of execution of the correct program. it does not require the expensive annotation
+of the correct program for the training examples. the human supervision effort is in the form of
+question, data source and answer triples. second, neural programmer does not require additional
+rules to guide the program search, making it a general framework. with neural programmer, the
+algorithmic designer only de   nes a list of basic operations which requires lesser human effort than
+in previous program induction techniques.
+we experiment with a synthetic table-comprehension dataset, consisting of questions with a wide
+range of dif   culty levels. examples of natural language translated queries include    print elements in
+column h whose    eld in column c is greater than 50 and    eld in column e is less than 20?    or    what
+is the difference between sum of elements in column a and number of rows in the table?   . we    nd
+that lstm recurrent networks (hochreiter & schmidhuber, 1997) and lstm models with attention
+(bahdanau et al., 2014) do not work well. neural programmer, however, can completely solve this
+task or achieve greater than 99% accuracy on most cases by inducing the required latent program.
+we    nd that training the model is dif   cult, but it can be greatly improved by injecting random
+gaussian noise to the gradient (welling & teh, 2011; neelakantan et al., 2016) which enhances the
+generalization ability of the neural programmer.
+
+2 neural programmer
+
+even though our model is quite general, in this paper, we apply neural programmer to the task of
+id53 on tables, a task that has not been previously attempted by neural networks.
+in our implementation for this task, neural programmer is run for a total of t time steps chosen
+in advance to induce compositional programs of up to t operations. the model consists of four
+modules:
+
+    a question recurrent neural network (id56) to process the input question,
+    a selector to assign two id203 distributions at every step, one over the set of operations
+    a list of operations that the model can apply and,
+    a history id56 to remember the previous operations and data segments selected by the
+
+and the other over the data segments,
+
+model till the current time step.
+
+these four modules are also shown in figure 2. the history id56 combined with the selector module
+functions as the controller in this case. information about each component is discussed in the next
+sections.
+
+figure 2: an implementation of neural programmer for the task of id53 on tables.
+the output of the model at time step t is obtained by applying the operations on the data segments
+weighted by their probabilities. the    nal output of the model is the output at time step t . the dotted
+line indicates the input to the history id56 at step t+1.
+
+apart from the list of operations, all the other modules are learned using id119 on a
+training set consisting of triples, where each triple has a question, a data source and an answer. we
+
+3
+
+id56 stepht-1input at step t cthistory id56data source; []input atstep t+1timestep tfinaloutput=outputtt = 1, 2,    , t      hcolqquestion id56outputt =op on data weighted by softmaxsoftmaxsoftmaxhopop selectorcol selectorhtoperations     applypublished as a conference paper at iclr 2016
+
+assume that the data source is in the form of a table, table     rm  c, containing m rows and c
+columns (m and c can vary amongst examples). the data segments in our experiments are the
+columns, where each column also has a column name.
+
+2.1 question module
+
+the question module converts the question tokens to a distributed representation. in the basic version
+of our model, we use a simple id56 (werbos, 1990) parameterized by w question and the last hidden
+state of the id56 is used as the question representation (figure 3).
+
+figure 3: the question module to process the input question. q = zq denotes the question represen-
+tation used by neural programmer.
+consider an input question containing q words {w1, w2, . . . , wq}, the question module performs
+the following computations:
+
+zi = tanh(w question [zi   1; v (wi)]),   i = 1, 2, . . . , q
+
+where v (wi)     rd represents the embedded representation of the word wi, [a; b]     r2d represents
+the concatenation of two vectors a, b     rd, w question     rd  2d is the recurrent matrix of the
+question id56, tanh is the element-wise non-linearity function and zq     rd is the representation
+of the question. we set z0 to [0]d. we pre-process the question by removing numbers from it and
+storing the numbers in a separate list. along with the numbers we store the word that appeared to the
+left of it in the question which is useful to compute the pivot values for the comparison operations
+described in section 2.3.
+for tasks that involve longer questions, we use a bidirectional id56 since we    nd that a simple
+unidirectional id56 has trouble remembering the beginning of the question. when the bidirectional
+id56 is used, the question representation is obtained by concatenating the last hidden states of the
+two-ends of the bidirectional id56s. the question representation is denoted by q.
+
+2.2 selector
+
+the selector produces two id203 distributions at every time step t (t = 1, 2, . . . , t ): one
+probablity distribution over the set of operations and another id203 distribution over the set
+of columns. the inputs to the selector are the question representation (q     rd) from the question
+module and the output of the history id56 (described in section 2.4) at time step t (ht     rd) which
+stores information about the operations and columns selected by the model up to the previous step.
+each operation is represented using a d-dimensional vector. let the number of operations be o and
+let u     ro  d be the matrix storing the representations of the operations.
+operation selection is performed by:
+
+  op
+t = softmax (u tanh(w op[q; ht]))
+
+t     [0, 1]o over the set of operations (figure 4).
+
+where w op     rd  2d is the parameter matrix of the operation selector that produces the id203
+distribution   op
+the selector also produces a id203 distribution over the columns at every time step. we obtain
+vector representations for the column names using the parameters in the question module (section
+2.1) by id27 or an id56 phrase embedding. let p     rc  d be the matrix storing the
+representations of the column names.
+data selection is performed by:
+
+4
+
+question id56last id56 hidden statew1v(w1) z1w2v(w2) z2 = tanh(wquestion [z1; v(w2)])wqv(wq) q=zq      published as a conference paper at iclr 2016
+
+figure 4: operation selection at time step t where the selector assigns a id203 distribution over
+the set of operations.
+
+  col
+t = softmax (p tanh(w col[q; ht]))
+
+where w col     rd  2d is the parameter matrix of the column selector that produces the id203
+distribution   col
+
+t     [0, 1]c over the set of columns (figure 5).
+
+figure 5: data selection at time step t where the selector assigns a id203 distribution over the
+set of columns.
+
+2.3 operations
+
+neural programmer currently supports two types of outputs: a) a scalar output, and b) a list of items
+selected from the table (i.e., table lookup).1 the    rst type of output is for questions of type    sum
+of elements in column c    while the second type of output is for questions of type    print elements
+in column a that are greater than 50.    to facilitate this, the model maintains two kinds of out-
+put variables at every step t, scalar answert     r and lookup answert     [0, 1]m  c. the output
+lookup answert (i , j ) stores the id203 that the element (i, j) in the table is part of the out-
+put. the    nal output of the model is scalar answert or lookup answert depending on whichever
+of the two is updated after t time steps. apart from the two output variables, the model main-
+tains an additional variable row selectt     [0, 1]m that is updated at every time step. the variables
+row selectt [i ](   i = 1, 2, . . . , m) maintain the id203 of selecting row i and allows the model
+to dynamically select a subset of rows within a column. the output is initialized to zero while the
+row select variable is initialized to [1]m .
+key to neural programmer is the built-in operations, which have access to the outputs of the
+model at every time step before the current time step t,
+the operations have access to
+(scalar answer i, lookup answer i),   i = 1, 2, . . . , t     1. this enables the model to build powerful
+compositional programs.
+it is important to design the operations such that they can work with probabilistic row and column
+selection so that the model is differentiable. table 1 shows the list of operations built into the model
+along with their de   nitions. the reset operation can be selected any number of times which when
+required allows the model to induce programs whose complexity is less than t steps.
+
+i.e.,
+
+1it is trivial to extend the model to support general text responses by adding a decoder id56 to generate text
+
+sentences.
+
+5
+
+id56 stepht ht-1input at step t cthistory id56qquestion id56hop =tanh(wop [q; ht])op selectorop: 1op: 2 op: voperations      softmax            timestep tt = 1, 2,    , tid56 stepht ht-1input at step t cthistory id56qquestion id56timestep tt = 1, 2,    , tcol:1col:c         .data sourcesoftmax      col selector       hcol = tanh(wcol [q; ht])published as a conference paper at iclr 2016
+
+m(cid:80)
+m(cid:80)
+
+i=1
+
+type
+
+operation
+
+de   nition
+
+aggregate
+
+sum
+
+sumt [j] =
+
+row selectt   1 [i]     table[i][j],   j = 1, 2, . . . , c
+
+i=1
+
+row selectt   1 [i]
+
+arithmetic
+comparison
+
+count
+difference
+greater
+lesser
+and
+or
+assign
+reset
+
+countt =
+di   t = scalar output t   3     scalar output t   1
+gt[i][j] = table[i][j] > pivotg ,   (i, j), i = 1, . . . , m, j = 1, . . . , c
+lt[i][j] = table[i][j ] < pivotl ,   (i, j), i = 1, . . . , m, j = 1, . . . , c
+and t[i] = min(row selectt   1 [i], row selectt   2 [i]),   i = 1, 2, . . . , m
+or t[i] = max(row selectt   1 [i], row selectt   2 [i]),   i = 1, 2, . . . , m
+assignt[i][j] = row selectt   1 [i],   (i, j)i = 1, 2, . . . , m, j = 1, 2, . . . , c
+resett [i] = 1,   i = 1, 2, . . . , m
+
+logic
+assign lookup
+reset
+table 1: list of operations along with their de   nitions at time step t, table     rm  c is the data
+source in the form of a table and row selectt     [0, 1]m functions as a row selector.
+
+while the de   nitions of the operations are fairly straightforward, comparison operations greater
+and lesser require a pivot value as input (refer table 1), which appears in the question. let
+qn1, qn2, . . . , qnn be the numbers that appear in the question.
+for every comparison operation (greater and lesser), we compute its pivot value by adding up all the
+numbers in the question each of them weighted with the probabilities assigned to it computed using
+the hidden vector at position to the left of the number,2 and the operation   s embedding vector. more
+precisely:
+
+  op = softmax (zu (op))
+
+pivotop =
+
+  op(i)qni
+
+n(cid:88)
+
+i=1
+
+where u (op)     rd is the vector representation of operation op (op     {greater, lesser}) and z    
+rn  d is the matrix storing the hidden vectors of the question id56 at positions to the left of the
+occurrence of the numbers.
+by overloading the de   nition of   op
+t (j) denote the id203 assigned
+by the selector to operation x (x     {sum, count, difference, greater, lesser, and, or, assign, reset})
+and column j (   j = 1, 2, . . . , c) at time step t respectively.
+figure 6 show how the output and row selector variables are computed. the output and row selector
+variables at a step is obtained by additively combining the output of the individual operations on the
+different data segments weighted with their corresponding probabilities assigned by the model.
+
+t (x) and   col
+
+t and   col
+
+, let   op
+
+t
+
+figure 6: the output and row selector variables are obtained by applying the operations on the data
+segments and additively combining their outputs weighted using the probabilities assigned by the
+selector.
+
+2this choice is made to re   ect the common case in english where the pivot number is usually mentioned
+
+after the operation but it is trivial to extend to use hidden vectors both in the left and the right of the number.
+
+6
+
+data sourcetimestep tt = 1, 2,    , toperations     applyselectorsoftmaxsoftmaxrow_selectt-1row_selectt-2scalar_answert-1scalar_answert-2scalar_answert-3row_selecttscalar_answertlookup_answertpublished as a conference paper at iclr 2016
+
+more formally, the output variables are given by:
+
+scalar answert =   op
+
+t (count)countt +   op
+
+t (difference)di   t +
+
+c(cid:88)
+
+t (j)  op
+  col
+
+t (sum)sumt [j ],
+
+t (assign)assignt [i][j],   (i, j)i = 1, 2, . . . , m, j = 1, 2, . . . , c
+
+j=1
+
+t (j)  op
+lookup answert [i][j] =   col
+the row selector variable is given by:
+row selectt [i ] =   op
+
+t (and)andt [i] +   op
+
+c(cid:88)
+
+t (or)ort [i] +   op
+
+t (reset)resett [i]+
+
+t (j)(  op
+  col
+
+t (greater)gt[i][j] +   op
+
+t (lesser)lt[i][j]),   i = 1, . . . , m
+
+j=1
+
+it is important to note that other operations like equal to, max, min, not etc. can be built into this
+model easily.
+
+2.3.1 handling text entries
+
+so far, our disscusion has been only concerned with tables that have numeric entries. in this section
+we describe how neural programmer handles text entries in the input table. we assume a column
+can contain either numeric or text entries. an example query is    what is the sum of elements in
+column b whose    eld in column c is word:1 and    eld in column a is word:7?   . in other words, the
+query is looking for text entries in the column that match speci   ed words in the questions. to answer
+these queries, we add a text match operation that updates the row selector variable appropriately. in
+our implementation, the parameters for vector representations of the column   s text entries are shared
+with the question module.
+the text match operation uses a two-stage soft attention mechanism, back and forth from the text
+entries to question module. in the following, we explain its implementation in detail.
+let t c1, t c2, . . . , t ck be the set of columns that each have m text entries and a     m    k    d
+store the vector representations of the text entries. in the    rst stage, the question representation
+coarsely selects the appropriate text entries through the sigmoid operation. concretely, coarse se-
+lection, b, is given by the sigmoid of dot product between vector representations for text entries, a,
+and question representation, q:
+
+(cid:32) d(cid:88)
+
+(cid:33)
+
+b[m][k] = sigmoid
+
+a[m][k][p]    q[p]
+
+   (m, k) m = 1, . . . , m, k = 1, . . . , k
+
+p=1
+
+to obtain question-speci   c column representations, d, we use b as weighting factors to compute
+the weighted average of the vector representations of the text entries in that column:
+
+m(cid:88)
+
+m=1
+
+1
+m
+
+d[k][p] =
+
+(b[m][k]    a[m][k][p])    (k, p) k = 1, . . . , k, p = 1, . . . , d
+
+to allow different words in the question to be matched to the corresponding columns (e.g., match
+word:1 in column c and match word:7 in column a for question    what is the sum of elements in
+column b whose    eld in column c is word:1 and    eld in column a is word:7?   ), we add the column
+name representations (described in section 2.2), p , to d to obtain column representations e. this
+make the representation also sensitive to the column name.
+in the second stage, we use e to compute an attention over the hidden states of the question id56
+to get attention vector g for each column of the input table. more concretely, we compute the dot
+product between e and the hidden states of the question id56 to obtain scalar values. we then
+
+7
+
+published as a conference paper at iclr 2016
+
+pass them through softmax to obtain weighting factors for each hidden state. g is the weighted
+combination of the hidden states of the question id56.
+finally, text match selection is done by:
+
+text match[m][k] = sigmoid
+
+a[m][k][p]    g[k][p]
+
+   (m, k) m = 1, . . . , m, k = 1, . . . , k
+
+(cid:33)
+
+without loss of generality, let the    rst k (k     [0, 1, . . . , c]) columns out of c columns of the table
+contain text entries while the remaining contain numeric entries. the row selector variable now is
+given by:
+
+row selectt [i ] =   op
+
+t (and)andt [i] +   op
+
+t (or)ort [i] +   op
+
+t (reset)resett [i]+
+
+t (j)(  op
+  col
+
+t (greater)gt[i][j] +   op
+
+t (lesser)lt[i][j])+
+
+(cid:32) d(cid:88)
+
+p=1
+
+c(cid:88)
+k(cid:88)
+
+j=k+1
+
+t (j)(  op
+  col
+
+t (text match)text match t[i][j],   i = 1, . . . , m
+
+j=1
+
+the two-stage mechanism is required since in our experiments we    nd that simply averaging the
+vector representations fails to make the representation of the column speci   c enough to the question.
+unless otherwise stated, our experiments are with input tables whose entries are only numeric and
+in that case the model does not contain the text match operation.
+
+2.4 history id56
+
+the history id56 keeps track of the previous operations and columns selected by the selector module
+so that the model can induce compositional programs. this information is encoded in the hidden
+vector of the history id56 at time step t, ht     rd. this helps the selector module to induce the
+id203 distributions over the operations and columns by taking into account the previous actions
+selected by the model. figure 7 shows details of this component.
+
+figure 7: the history id56 which helps in remembering the previous operations and data segments
+selected by the model. the dotted line indicates the input to the history id56 at step t+1.
+
+the input to the history id56 at time step t, ct     r2d is obtained by concatenating the weighted
+representations of operations and column names with their corresponding id203 distribution
+produced by the selector at step t     1. more precisely:
+
+ct = [(  op
+
+t   1)t u ; (  col
+
+t   1)t p ]
+
+the hidden state of the history id56 at step t is computed as:
+
+ht = tanh(w history [ct; ht   1]),   i = 1, 2, . . . , q
+
+where w history     rd  3d is the recurrent matrix of the history id56, and ht     rd is the current
+representation of the history. the history vector at time t = 1, h1 is set to [0]d.
+
+8
+
+id56 stepht-1input at step t cthistory id56data source; []input atstep t+1timestep tt = 1, 2,    , t      hcolqquestion id56softmaxsoftmaxhophtoperationsweighted sum of col vectors weighted sum of op vectors published as a conference paper at iclr 2016
+
+2.5 training objective
+
+the parameters of the model include the parameters of the question id56, w question, parameters
+of the history id56, w history, id27s v (.), operation embeddings u, operation selector
+and column selector matrices, w op and w col respectively. during training, depending on whether
+the answer is a scalar or a lookup from the table we have two different id168s.
+when the answer is a scalar, we use huber loss (huber, 1964) given by:
+
+lscalar(scalar answert , y) =
+
+(cid:26) 1
+2 a2, if a       
+  a     1
+
+2   2, otherwise
+
+where a = |scalar answer t     y| is the absolute difference between the predicted and true answer,
+and    is the huber constant treated as a model hyper-parameter. in our experiments, we    nd that
+using square loss makes training unstable while using the absolute loss makes the optimization
+dif   cult near the non-differentiable point.
+when the answer is a list of items selected from the table, we convert the answer to y     {0, 1}m  c,
+where y[i, j] indicates whether the element (i, j) is part of the output. in this case we use log-loss
+over the set of elements in the table given by:
+
+llookup(lookup answer t , y) =     1
+m c
+
+m(cid:88)
+
+(cid:18)
+c(cid:88)
+
+i=1
+
+j=1
+
+y[i, j] log(lookup answer t [i, j])+
+
+(cid:19)
+(1     y[i, j]) log(1     lookup answer t [i, j])
+
+the training objective of the model is given by:
+
+(cid:18)
+
+n(cid:88)
+
+k=1
+
+l =
+
+1
+n
+
+[nk == t rue]l(k)
+
+scalar + [nk == f alse]  l(k)
+
+lookup
+
+(cid:19)
+
+scalar and l(k)
+
+where n is the number of training examples, l(k)
+lookup are the scalar and lookup loss on
+kth example, nk is a boolean random variable which is set to true when the kth example   s answer
+is a scalar and set to false when the answer is a lookup, and    is a hyper-parameter of the model
+that allows to weight the two id168s appropriately.
+at id136 time, we replace the three softmax layers in the model with the conventional
+maximum (hardmax) operation and the    nal output of the model is either scalar answert or
+lookup answert , depending on whichever among them is updated after t time steps. algorithm 1
+gives a high-level view of neural programmer during id136.
+
+3 experiments
+
+neural programmer is faced with many challenges, speci   cally: 1) can the model learn the param-
+eters of the different modules with delayed supervision after t steps? 2) can it exhibit composi-
+tionality by generalizing to unseen questions? and 3) can the question module handle the variability
+and ambiguity of natural language? in our experiments, we mainly focus on answering the    rst two
+questions using synthetic data. our reason for using synthetic data is that it is easier to understand a
+new model with a synthetic dataset. we can generate the data in a large quantity, whereas the biggest
+real-word id29 datasets we know of contains only about 14k training examples (pasu-
+pat & liang, 2015) which is very small by neural network standards. in one of our experiments,
+we introduce simple word-level variability to simulate one aspect of the dif   culties in dealing with
+natural language input.
+
+3.1 data
+
+we generate question, table and answer triples using a synthetic grammar. tables 4 and 5 (see ap-
+pendix) shows examples of question templates from the synthetic grammar for single and multiple
+
+9
+
+published as a conference paper at iclr 2016
+
+algorithm 1 high-level view of neural programmer during its id136 stage for an input example.
+1: input: table     rm  c and question
+2: initialize: scalar answer 0 = 0, lookup answer 0 = 0m  c, row select 0 = 1m , history vector
+3: preprocessing: remove numbers from question and store them in a list along with the words
+
+at time t = 0, h0 = 0d and input to history id56 at time t = 0, c0 = 02d
+that appear to the left of it. the tokens in the input question are {w1, w2, . . . , wq}.
+
+4: question module: run question id56 on the preprocessed question to get question represen-
+
+tation q and list of hidden states z1, z2, . . . , zq
+
+5: pivot numbers: pivotg and pivotl are computed using hidden states from question id56 and
+
+operation representations u
+
+6: for t = 1, 2, . . . , t do
+7:
+8:
+9:
+10:
+
+compute history vector ht by passing input ct to the history id56
+operation selection using q, ht and operation representations u
+data selection on table using q, ht and column representations v
+update scalar answert, lookup answert and row select t using the selected operation and
+
+compute input to the history id56 at time t + 1, ct+1
+
+11:
+12: end for
+13: output: scalar answer t or lookup answer t depending on whichever of the two is updated
+
+column
+
+at step t
+
+columns respectively. the elements in the table are uniformly randomly sampled from [-100, 100]
+and [-200, 200] during training and test time respectively. the number of rows is sampled randomly
+from [30, 100] in training while during prediction the number of rows is 120. each question in the
+test set is unique, i.e., it is generated from a distinct template. we use the following settings:
+single column: we    rst perform experiments with a single column that enables 23 different ques-
+tion templates which can be answered using 4 time steps.
+many columns: we increase the dif   culty by experimenting with multiple columns (max columns
+= 3, 5 or 10). during training, the number of columns is randomly sampled from (1, max columns)
+and at test time every question had the maximum number of columns used during training.
+variability: to simulate one aspect of the dif   culties in dealing with natural language input, we
+consider multiple ways to refer to the same operation (tables 6 and 7).
+text match: now we consider cases where some columns in the input table contain text entries.
+we use a small vocabulary of 10 words and    ll the column by uniformly randomly sampling from
+them. in our    rst experiment with text entries, the table always contains two columns, one with text
+and other with numeric entries (table 8). in the next experiment, each example can have up to 3
+columns containing numeric entries and up to 2 columns containing text entries during training. at
+test time, all the examples contain 3 columns with numeric entries and 2 columns with text entries.
+
+3.2 models
+
+in the following, we benchmark the performance of neural programmer on various versions of the
+table-comprehension dataset. we slowly increase the dif   culty of the task by changing the table
+properties (more columns, mixed numeric and text entries) and question properties (word variabil-
+ity). after that we discuss a comparison between neural programmer, lstm, and lstm with
+attention.
+
+3.2.1 neural programmer
+
+we use 4 time steps in our experiments (t = 4). neural programmer is trained with mini-batch
+stochastic id119 with adam optimizer (kingma & ba, 2014). the parameters are ini-
+tialized uniformly randomly within the range [-0.1, 0.1]. in all experiments, we set the mini-batch
+size to 50, dimensionality d to 256, the initial learning rate and the momentum hyper-parameters
+of adam to their default values (kingma & ba, 2014). we found that it is extremely useful to add
+random gaussian noise to our gradients at every training step. this acts as a regularizer to the model
+
+10
+
+published as a conference paper at iclr 2016
+
+and allows it to actively explore more programs. we use a schedule inspired from welling & teh
+(2011), where at every step we sample a gaussian of 0 mean and variance= curr step   0.55.
+to prevent exploding gradients, we perform gradient clipping by scaling the gradient when the norm
+exceeds a threshold (graves, 2013). the threshold value is picked from [1, 5, 50]. we tune the  
+hyper-parameter in adam from [1e-6, 1e-8], the huber constant    from [10, 25, 50] and    (weight
+between two losses) from [25, 50, 75, 100] using grid search. while performing experiments with
+multiple random restarts we    nd that the performance of the model is stable with respect to   and
+gradient clipping threshold but we have to tune    and    for the different random seeds.
+
+type
+single column
+3 columns
+5 columns
+10 columns
+word variability on 1 column
+word variability on 5 columns
+text match on 2 columns
+text match on 5 columns
+
+no. of test question templates accuracy % seen test
+23
+307
+1231
+7900
+1368
+24000
+1125
+14600
+
+100.0
+99.02
+99.11
+99.13
+96.49
+88.99
+99.11
+98.03
+
+100
+100
+98.62
+62.44
+100
+31.31
+97.42
+31.02
+
+table 2: summary of the performance of neural programmer on various versions of the synthetic
+table-comprehension task. the prediction of the model is considered correct if it is equal to the
+correct answer up to the    rst decimal place. the last column indicates the percentage of question
+templates in the test set that are observed during training. the unseen question templates generate
+questions containing sequences of words that the model has never seen before. the model can
+generalize to unseen question templates which is evident in the 10-columns, word variability on
+5-columns and text match on 5 columns experiments. this indicates that neural programmer is
+a powerful compositional model since solving unseen question templates requires performing a
+sequence of actions that it has never done during training.
+
+the training set consists of 50, 000 triples in all our experiments. table 2 shows the performance
+of neural programmer on synthetic data experiments. in single column experiments, the model
+answers all questions correctly which we manually verify by inspecting the programs induced by
+the model. in many columns experiments with 5 columns, we use a bidirectional id56 and for 10
+columns we additionally perform attention (bahdanau et al., 2014) on the question at every time step
+using the history vector. the model is able to generalize to unseen question templates which are a
+considerable fraction in our ten columns experiment. this can also be seen in the word variability
+experiment with 5 columns and text match experiment with 5 columns where more than two-thirds
+of the test set contains question templates that are unseen during training. this indicates that neural
+programmer is a powerful compositional model since solving unseen question templates requires
+inducing programs that do not appear during training. almost all the errors made by the model were
+on questions that require the difference operation to be used. table 3 shows examples of how the
+model selects the operation and column at every time step for three test questions.
+
+figure 8 shows an example of the effect of adding random noise to the gradients in our experiment
+with 5 columns.
+
+3.2.2 comparison to lstm and lstm with attention
+
+we apply a three-layer sequence-to-sequence lstm recurrent network model (hochreiter &
+schmidhuber, 1997; sutskever et al., 2014) and lstm model with attention (bahdanau et al., 2014).
+we explore multiple attention heads (1, 5, 10) and try two cases, placing the input table before and
+after the question. we consider a simpler version of the single column dataset with only questions
+that have scalar answers. the number of elements in the column is uniformly randomly sampled
+
+11
+
+published as a conference paper at iclr 2016
+
+question
+
+greater 50.32 c and lesser 20.21 e sum h
+what is the sum of numbers in column h
+
+whose    eld in column c is greater than 50.32
+and    eld in column e is lesser than 20.21.
+lesser -80.97 d or greater 12.57 b print f
+
+print elements in column f
+
+whose    eld in column d is lesser than -80.97
+or    eld in column b is greater than 12.57.
+
+sum a diff count
+
+what is the difference
+
+between sum of elements in
+column a and number of rows
+
+t
+
+1
+2
+3
+4
+1
+2
+3
+4
+1
+2
+3
+4
+
+selected
+
+op
+
+selected
+column
+
+pivotg
+
+pivotl
+
+greater
+lesser
+and
+sum
+lesser
+greater
+
+or
+
+assign
+sum
+reset
+count
+diff
+
+c
+e
+-
+h
+d
+b
+-
+f
+a
+-
+-
+-
+
+50.32
+
+20.21
+
+12.57
+
+-80.97
+
+-1
+
+-1
+
+row
+select
+
+g1
+l2
+
+and3
+[0]m
+l1
+g2
+or3
+[0]m
+[0]m
+[1]m
+[0]m
+[0]m
+
+table 3: example outputs from the model for t = 4 time steps on three questions in the test set.
+we show the synthetically generated question along with its natural language translation. for each
+question, the model takes 4 steps and at each step selects an operation and a column. the pivot
+numbers for the comparison operations are computed before performing the 4 steps. we show the
+selected columns in cases during which the selected operation acts on a particular column.
+
+figure 8: the effect of adding random noise to the gradients versus not adding it in our experiment
+with 5 columns when all hyper-parameters are the same. the models trained with noise generalizes
+almost always better.
+
+from [4, 7] while the elements are sampled from [   10, 10]. the best accuracy using these models is
+close to 80% in spite of relatively easier questions and supplying fresh training examples at every
+step. when the scale of the input numbers is changed to [   50, 50] at test time, the accuracy drops to
+30%.
+neural programmer solves this task and achieves 100% accuracy using 50, 000 training examples.
+since hardmax operation is used at test time, the answers (or the program induced) from neural
+programmer is invariant to the scale of numbers and the length of the input.
+
+4 related work
+
+program induction has been studied in the context of id29 (zelle & mooney, 1996;
+zettlemoyer & collins, 2005; liang et al., 2011) in natural language processing. pasupat & liang
+(2015) develop a semantic parser with a hand engineered grammar for id53 on tables
+with natural language questions. methods such as piantadosi et al. (2008); eisenstein et al. (2009);
+clarke et al. (2010) learn a compositional semantic model without hand engineered compositional
+grammar, but still requiring a hand labeled lexical mapping of words to the operations. poon (2013)
+develop an unsupervised method for id29, which requires many pre-processing steps
+
+12
+
+050100150200250300no. of epochs100015002000250030003500train losstrain loss: noise vs. no noiseno noisenoise050100150200250300no. of epochs020406080100test accuracytest accuracy: noise vs. no noiseno noisenoisepublished as a conference paper at iclr 2016
+
+including id33 and mapping from words to operations. liang et al. (2010) propose
+an hierarchical bayesian approach to learn simple programs.
+there has been some early work in using neural networks for learning id18 (das
+et al., 1992a;b; zeng et al., 1994) and id19 (steijvers, 1996; gers & schmid-
+huber, 2001) for small problems. neelakantan et al. (2015); lin et al. (2015) learn simple horn
+clauses in a large knowledge base using id56s. neural networks have also been used for q&a on
+datasets that do not require complicated arithmetic and logic reasoning (bordes et al., 2014; iyyer
+et al., 2014; sukhbaatar et al., 2015; peng et al., 2015; hermann et al., 2015). while there has been
+lot of work in augmenting neural networks with additional memory (das et al., 1992a; schmidhu-
+ber, 1993; hochreiter & schmidhuber, 1997; graves et al., 2014; weston et al., 2015; kumar et al.,
+2015; joulin & mikolov, 2015), we are not aware of any other work that augments a neural network
+with a set of operations to enhance complex reasoning capabilities.
+after our work was submitted to arxiv, neural programmer-interpreters (reed & freitas, 2016), a
+method that learns to induce programs with supervision of the entire program was proposed. this
+was followed by neural enquirer (yin et al., 2015), which similar to our work tackles the problem of
+synthetic table qa. however, their method achieves perfect accuracy only when given supervision
+of the entire program. later, dynamic neural module network (andreas et al., 2016) was proposed
+for id53 which uses syntactic supervision in the form of dependency trees.
+
+5 conclusions
+
+we develop neural programmer, a neural network model augmented with a small set of arithmetic
+and logic operations to perform complex arithmetic and logic reasoning. the model can be trained in
+an end-to-end fashion using id26 to induce programs requiring much lesser sophisticated
+human supervision than prior work. it is a general model for program induction broadly applicable
+across different domains, data sources and languages. our experiments indicate that the model is
+capable of learning with delayed supervision and exhibits powerful compositionality.
+
+acknowledgements we sincerely thank greg corrado, andrew dai, jeff dean, shixiang gu,
+andrew mccallum, and luke vilnis for their suggestions and the google brain team for the support.
+
+references
+andreas, jacob, rohrbach, marcus, darrell, trevor, and klein, dan. learning to compose neural
+
+networks for id53. arxiv, 2016.
+
+bahdanau, dzmitry, cho, kyunghyun, and bengio, yoshua. id4 by jointly
+
+learning to align and translate. iclr, 2014.
+
+bahdanau, dzmitry, chorowski,
+
+end-to-end attention-based large vocabulary id103.
+
+jan, serdyuk, dmitriy, brakel, philemon, and bengio,
+arxiv preprint
+
+yoshua.
+arxiv:1508.04395, 2015.
+
+bordes, antoine, chopra, sumit, and weston, jason. id53 with subgraph embed-
+
+dings. in emnlp, 2014.
+
+cantlon, jessica f., brannon, elizabeth m., carter, elizabeth j., and pelphrey, kevin a. functional
+
+imaging of numerical processing in adults and 4-y-old children. plos biology, 2006.
+
+chan, william, jaitly, navdeep, le, quoc v., and vinyals, oriol. listen, attend and spell. arxiv
+
+preprint arxiv:1508.01211, 2015.
+
+clarke, james, goldwasser, dan, chang, ming-wei, and roth, dan. driving id29 from
+
+the world   s response. in conll, 2010.
+
+das, sreerupa, giles, c. lee, and zheng sun, guo. learning context-free grammars: capabilities
+and limitations of a recurrent neural network with an external stack memory. in cogsci, 1992a.
+das, sreerupa, giles, c. lee, and zheng sun, guo. using prior knowledge in an nnpda to learn
+
+context-free languages. in nips, 1992b.
+
+13
+
+published as a conference paper at iclr 2016
+
+dastjerdi, mohammad, ozker, muge, foster, brett l, rangarajan, vinitha, and parvizi, josef. nu-
+merical processing in the human parietal cortex during experimental and natural conditions. na-
+ture communications, 4, 2013.
+
+eisenstein, jacob, clarke, james, goldwasser, dan, and roth, dan. reading to learn: constructing
+
+features from semantic abstracts. in emnlp, 2009.
+
+fias, wim, lammertyn, jan, caessens, bernie, and orban, guy a. processing of abstract ordinal
+knowledge in the horizontal segment of the intraparietal sulcus. the journal of neuroscience,
+2007.
+
+gers, felix a. and schmidhuber, j  urgen. lstm recurrent networks learn simple context free and
+
+context sensitive languages. ieee transactions on neural networks, 2001.
+
+graves, alex.
+
+generating sequences with recurrent neural networks.
+
+arxiv:1308.0850, 2013.
+
+arxiv preprint
+
+graves, alex and jaitly, navdeep. towards end-to-end id103 with recurrent neural
+
+networks. in icml, 2014.
+
+graves, alex, wayne, greg, and danihelka, ivo. id63s.
+
+arxiv:1410.5401, 2014.
+
+arxiv preprint
+
+hannun, awni y., case, carl, casper, jared, catanzaro, bryan c., diamos, greg, elsen, erich,
+prenger, ryan, satheesh, sanjeev, sengupta, shubho, coates, adam, and ng, andrew y. deep
+speech: scaling up end-to-end id103. arxiv preprint arxiv:1412.5567, 2014.
+
+hermann, karl moritz, kocisk  y, tom  as, grefenstette, edward, espeholt, lasse, kay, will, suley-
+
+man, mustafa, and blunsom, phil. teaching machines to read and comprehend. nips, 2015.
+
+hinton, geoffrey, deng, li, yu, dong, dahl, george, rahman mohamed, abdel, jaitly, navdeep,
+senior, andrew, vanhoucke, vincent, nguyen, patrick, sainath, tara, and kingsbury, brian. deep
+neural networks for acoustic modeling in id103. signal processing magazine, 2012.
+
+hochreiter, sepp and schmidhuber, j  urgen. long short-term memory. neural computation, 1997.
+
+huber, peter. robust estimation of a location parameter. in the annals of mathematical statistics,
+
+1964.
+
+iyyer, mohit, boyd-graber, jordan l., claudino, leonardo max batista, socher, richard, and iii,
+hal daum  e. a neural network for factoid id53 over paragraphs. in emnlp, 2014.
+
+joulin, armand and mikolov, tomas. inferring algorithmic patterns with stack-augmented recurrent
+
+nets. nips, 2015.
+
+kingma, diederik p. and ba, jimmy. adam: a method for stochastic optimization. iclr, 2014.
+
+krizhevsky, alex, sutskever, ilya, and hinton, geoffrey e. id163 classi   cation with deep con-
+
+volutional neural networks. in nips, 2012.
+
+kucian, karin, loenneker, thomas, dietrich, thomas, dosch, mengia, martin, ernst, and
+von aster, michael. impaired neural networks for approximate calculation in dyscalculic chil-
+dren: a functional mri study. behavioral and brain functions, 2006.
+
+kumar, ankit, irsoy, ozan, su, jonathan, bradbury, james, english, robert, pierce, brian, on-
+druska, peter, gulrajani, ishaan, and socher, richard. ask me anything: dynamic memory net-
+works for natural language processing. arxiv, 2015.
+
+liang, percy, jordan, michael i., and klein, dan. learning programs: a hierarchical bayesian
+
+approach. in icml, 2010.
+
+liang, percy, jordan, michael i., and klein, dan. learning dependency-based compositional se-
+
+mantics. in acl, 2011.
+
+14
+
+published as a conference paper at iclr 2016
+
+lin, yankai, liu, zhiyuan, luan, huan-bo, sun, maosong, rao, siwei, and liu, song. modeling
+
+relation paths for representation learning of knowledge bases. in emnlp, 2015.
+
+luong, thang, sutskever, ilya, le, quoc v., vinyals, oriol, and zaremba, wojciech. addressing
+
+the rare word problem in id4. acl, 2014.
+
+neelakantan, arvind, roth, benjamin, and mccallum, andrew. compositional vector space models
+
+for knowledge base completion. in acl, 2015.
+
+neelakantan, arvind, vilnis, luke, le, quoc v., sutskever, ilya, kaiser, lukasz, kurach, karol,
+iclr
+
+and martens, james. adding gradient noise improves learning for very deep networks.
+workshop, 2016.
+
+pasupat, panupong and liang, percy. compositional id29 on semi-structured tables. in
+
+acl, 2015.
+
+peng, baolin, lu, zhengdong, li, hang, and wong, kam-fai. towards neural network-based rea-
+
+soning. arxiv preprint arxiv:1508.05508, 2015.
+
+piantadosi, steven t., goodman, n.d., ellis, b.a., and tenenbaum, j.b. a bayesian model of the
+
+acquisition of id152. in cogsci, 2008.
+
+piazza, manuela, izard, veronique, pinel, philippe, le bihan, denis, and dehaene, stanislas. tuning
+
+curves for approximate numerosity in the human intraparietal sulcus. neuron, 2004.
+
+poon, hoifung. grounded unsupervised id29. in acl, 2013.
+
+reed, scott and freitas, nando de. neural programmer-interpreters. iclr, 2016.
+
+schmidhuber, j. a self-referentialweight matrix. in icann, 1993.
+
+shang, lifeng, lu, zhengdogn, and li, hang. neural responding machine for short-text conversa-
+
+tion. arxiv preprint arxiv:1503.02364, 2015.
+
+steijvers, mark. a recurrent network that performs a context-sensitive prediction task. in cogsci,
+
+1996.
+
+sukhbaatar, sainbayar, szlam, arthur, weston, jason, and fergus, rob. end-to-end memory net-
+
+works. arxiv preprint arxiv:1503.08895, 2015.
+
+sutskever, ilya, vinyals, oriol, and le, quoc v. sequence to sequence learning with neural net-
+
+works. in nips, 2014.
+
+vinyals, oriol and le, quoc v. a neural conversational model. icml dl workshop, 2015.
+
+vinyals, oriol, toshev, alexander, bengio, samy, and erhan, dumitru. show and tell: a neural
+
+image caption generator. in cvpr, 2015.
+
+von neumann, john. first draft of a report on the edvac. technical report, 1945.
+
+wang, yushi, berant, jonathan, and liang, percy. building a semantic parser overnight. in acl,
+
+2015.
+
+welling, max and teh, yee whye. bayesian learning via stochastic gradient langevin dynamics. in
+
+icml, 2011.
+
+werbos, p. id26 through time: what does it do and how to do it. in proceedings of
+
+ieee, 1990.
+
+weston, jason, chopra, sumit, and bordes, antoine. memory networks. 2015.
+
+xu, kelvin, ba, jimmy, kiros, ryan, cho, kyunghyun, courville, aaron c., salakhutdinov, ruslan,
+zemel, richard s., and bengio, yoshua. show, attend and tell: neural image id134
+with visual attention. in icml, 2015.
+
+15
+
+published as a conference paper at iclr 2016
+
+yin, pengcheng, lu, zhengdong, li, hang, and kao, ben. neural enquirer: learning to query tables
+
+with natural language. arxiv, 2015.
+
+zelle, john m. and mooney, raymond j. learning to parse database queries using inductive logic
+
+programming. in aaai/iaai, 1996.
+
+zeng, z., goodman, r., and smyth, p. discrete recurrent neural networks for grammatical id136.
+
+ieee transactions on neural networks, 1994.
+
+zettlemoyer, luke s. and collins, michael. learning to map sentences to logical form: structured
+
+classi   cation with probabilistic categorial grammars. in uai, 2005.
+
+16
+
+published as a conference paper at iclr 2016
+
+appendix
+
+sum
+count
+print
+greater [number] sum
+lesser [number] sum
+greater [number] count
+lesser [number] count
+greater [number] print
+lesser [number] print
+greater [number1] and lesser [number2] sum
+lesser [number1] and greater [number2] sum
+greater [number1] or lesser [number2] sum
+lesser [number1] or greater [number2] sum
+greater [number1] and lesser [number2] count
+lesser [number1] and greater [number2] count
+greater [number1] or lesser [number2] count
+lesser [number1] or greater [number2] count
+greater [number1] and lesser [number2] print
+lesser [number1] and greater [number2] print
+greater [number1] or lesser [number2] print
+lesser [number1] or greater [number2] print
+sum diff count
+count diff sum
+
+table 4: 23 question templates for single column experiment. we have four categories of questions:
+1) simple aggregation (sum, count) 2) comparison (greater, lesser) 3) logic (and, or) and, 4) arith-
+metic (diff). we    rst sample the categories uniformly randomly and each program within a category
+is equally likely. in the word variability experiment with 5 columns we sampled from the set of
+all programs uniformly randomly since greater than 90% of the test questions were unseen during
+training using the other procedure.
+
+greater [number1] a and lesser [number2] a sum a
+greater [number1] b and lesser [number2] b sum b
+greater [number1] a and lesser [number2] a sum b
+greater [number1] a and lesser [number2] b sum a
+greater [number1] b and lesser [number2] a sum a
+greater [number1] a and lesser [number2] b sum b
+greater [number1] b and lesser [number2] b sum a
+greater [number1] b and lesser [number2] b sum a
+
+table 5: 8 question templates of type    greater [number1] and lesser [number2] sum    when there are
+2 columns.
+
+sum
+count
+greater
+lesser
+assign
+difference
+
+sum, total, total of, sum of
+count, count of, how many
+greater, greater than, bigger, bigger than, larger, larger than
+lesser, lesser than, smaller, smaller than, under
+print, display, show
+difference, difference between
+
+table 6: word variability, multiple ways to refer to the same operation.
+
+17
+
+published as a conference paper at iclr 2016
+
+greater [number] sum
+greater [number] total
+greater [number] total of
+greater [number] sum of
+greater than [number] sum
+greater than [number] total
+greater than [number] total of
+greater than [number] sum of
+bigger [number] sum
+bigger [number] total
+bigger [number] total of
+bigger [number] sum of
+bigger than [number] sum
+bigger than [number] total
+bigger than [number] total of
+bigger than [number] sum of
+larger [number] sum
+larger [number] total
+larger [number] total of
+larger [number] sum of
+larger than [number] sum
+larger than [number] total
+larger than [number] total of
+larger than [number] sum of
+
+table 7: 24 questions templates for questions of type    greater [number] sum    in the single column
+word variability experiment.
+
+word:0 a sum b
+word:1 a sum b
+word:2 a sum b
+word:3 a sum b
+word:4 a sum b
+word:5 a sum b
+word:6 a sum b
+word:7 a sum b
+word:8 a sum b
+word:9 a sum b
+
+table 8: 10 questions templates for questions of type    [word] a sum b    in the two columns text
+match experiment.
+
+18
+
+

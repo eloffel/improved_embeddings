@@ -1,0 +1,399 @@
+   #[1]rss feed for the berkeley artificial intelligence research blog
+
+   [2][bair_logo.png]
+
+   [3]subscribe [4]about [5]archive [6]bair
+
+minibatch metropolis-hastings
+
+   [7]daniel seita    aug 2, 2017
+
+   over the last few years we have experienced an enormous data deluge,
+   which has played a key role in the surge of interest in ai. a partial
+   list of some large datasets:
+     * [8]id163, with over 14 million images for classification and
+       id164.
+     * [9]movielens, with 20 million user ratings of movies for
+       id185.
+     * [10]udacity   s car dataset (at least 223gb) for training
+       self-driving cars.
+     * [11]yahoo   s 13.5 tb dataset of user-news interaction for studying
+       human behavior.
+
+   [12]stochastic id119 (sgd) has been the engine fueling the
+   development of large-scale models for these datasets. sgd is remarkably
+   well-suited to large datasets: it estimates the gradient of the loss
+   function on a full dataset using only a fixed-sized minibatch, and
+   updates a model many times with each pass over the dataset.
+
+   but sgd has limitations. when we construct a model, we use a loss
+   function $l_\theta(x)$ with dataset $x$ and model parameters $\theta$
+   and attempt to minimize the loss by id119 on $\theta$. this
+   shortcut approach makes optimization easy, but is vulnerable to a
+   variety of problems including over-fitting, excessively sensitive
+   coefficient values, and possibly slow convergence. a more robust
+   approach is to treat the id136 problem for $\theta$ as a full-blown
+   posterior id136, deriving a joint distribution $p(x,\theta)$ from
+   the id168, and computing the posterior $p(\theta|x)$. this is
+   the bayesian modeling approach, and specifically the bayesian neural
+   network approach when applied to deep models. this recent [13]tutorial
+   by zoubin ghahramani discusses some of the advantages of this approach.
+
+   the model posterior $p(\theta|x)$ for most problems is intractable (no
+   closed form). there are two methods in machine learning to work around
+   intractable posteriors: [14]id58ian methods and [15]markov
+   chain monte carlo (mcmc). in variational methods, the posterior is
+   approximated with a simpler distribution (e.g. a normal distribution)
+   and its distance to the true posterior is minimized. in mcmc methods,
+   the posterior is approximated as a sequence of correlated samples
+   (points or particle densities). id58 methods have been
+   widely used but often introduce significant error     see [16]this recent
+   comparison with id150, also [17]figure 3 from the variational
+   autoencoder (vae) paper. variational methods are also more
+   computationally expensive than direct parameter sgd (it   s a small
+   constant factor, but a small constant times 1-10 days can be quite
+   important).
+
+   mcmc methods have no such bias. you can think of mcmc particles as
+   rather like quantum-mechanical particles: you only observe individual
+   instances, but they follow an arbitrarily-complex joint distribution.
+   by taking multiple samples you can infer useful statistics, apply
+   regularizing terms, etc. but mcmc methods have one over-riding problem
+   with respect to large datasets: other than the important class of
+   conjugate models which admit id150, there has been no
+   efficient way to do the metropolis-hastings tests required by general
+   mcmc methods on minibatches of data (we will define/review mh tests in
+   a moment). in response, researchers had to design models to make
+   id136 tractable, e.g. [18]restricted id82s (rbms) use
+   a layered, undirected design to make id150 possible. in a
+   recent breakthrough, [19]vaes use variational methods to support more
+   general posterior distributions in probabilistic auto-encoders. but
+   with vaes, like other variational models, one has to live with the fact
+   that the model is a best-fit approximation, with (usually) no
+   quantification of how close the approximation is. although they
+   typically offer better accuracy, mcmc methods have been sidelined
+   recently in auto-encoder applications, lacking an efficient scalable mh
+   test.
+
+   a bridge between sgd and bayesian modeling has been forged recently by
+   papers on [20]stochastic gradient langevin dynamics (sgld) and
+   [21]stochastic gradient hamiltonian monte carlo (sghmc). these methods
+   involve minor variations to typical sgd updates which generate samples
+   from a id203 distribution which is approximately the bayesian
+   model posterior $p(\theta|x)$. these approaches turn sgd into an mcmc
+   method, and as such require metropolis-hastings (mh) tests for accurate
+   results, the topic of this blog post.
+
+   because of these developments, interest has warmed recently in scalable
+   mcmc and in particular in doing the mh tests required by general mcmc
+   models on large datasets. normally an mh test requires a scan of the
+   full dataset and is applied each time one wants a data sample. clearly
+   for large datasets, it   s intractable to do this. two papers from icml
+   2014, [22]korattikara et al. and [23]bardenet et al., attempt to reduce
+   the cost of mh tests. they both use concentration bounds, and both
+   achieve constant-factor improvements relative to a full dataset scan.
+   [24]other recent work improves performance but makes even stronger
+   assumptions about the model which limits applicability, especially for
+   deep networks. none of these approaches come close to matching the
+   performance of sgd, i.e. generating a posterior sample from small
+   constant-size batches of data.
+
+   in this post we describe a new approach to mh testing which moves the
+   cost of mh testing from $o(n)$ to $o(1)$ relative to dataset size. it
+   avoids the need for global statistics and does not use tail bounds
+   (which lead to long-tailed distributions for the amount of data
+   required for a test). instead we use a novel correction distribution to
+   directly    morph    the distribution of a noisy minibatch estimator into a
+   smooth mh test distribution. our method is a true    black-box    method
+   which provides estimates on the accuracy of each mh test using only
+   data from a small expected size minibatch. it can even be applied to
+   unbounded data streams. it can be    piggy-backed    on existing sgd
+   implementations to provide full posterior samples (via sgld or sghmc)
+   for almost the same cost as sgd samples. thus full bayesian neural
+   network modeling is now possible for about the same cost as sgd
+   optimization. our approach is also a potential substitute for
+   variational methods and vaes, providing unbiased posterior samples at
+   lower cost.
+
+   to explain the approach, we review the role of mh tests in mcmc models.
+
+id115 review
+
+markov chains
+
+   mcmc methods are designed to sample from a target distribution which is
+   difficult to compute. to generate samples, they utilize markov chains,
+   which consist of nodes representing states of the system and
+   id203 distributions for transitioning from one state to another.
+
+   a key concept is the markovian assumption, which states that the
+   id203 of being in a state at time $t+1$ can be inferred entirely
+   based on the current state at time $t$. mathematically, letting
+   $\theta_t$ represent the current state of the markov chain at time $t$,
+   we have $p(\theta_{t+1} | \theta_t, \ldots, \theta_0) = p(\theta_{t+1}
+   | \theta_t)$. by using these id203 distributions, we can generate
+   a chain of samples $(\theta_i)_{i=1}^t$ for some large $t$.
+
+   since the id203 of being in state $\theta_{t+1}$ directly depends
+   on $\theta_t$, the samples are correlated. rather surprisingly, it can
+   be shown that, under mild assumptions, in the limit of many samples the
+   distribution of the chain   s samples approximates the target
+   distribution.
+
+   a full review of mcmc methods is beyond the scope of this post, but a
+   good reference is the [25]handbook of id115 (2011).
+   standard machine learning textbooks such as [26]koller & friedman
+   (2009) and [27]murphy (2012) also cover mcmc methods.
+
+metropolis-hastings
+
+   one of the most general and powerful mcmc methods is
+   [28]metropolis-hastings. this uses a test to filter samples. to define
+   it properly, let $p(\theta)$ be the target distribution we want to
+   approximate. in general, it   s intractable to sample directly from it.
+   metropolis-hastings uses a simpler proposal distribution $q(\theta    |
+   \theta)$ to generate samples. here, $\theta$ represents our current
+   sample in the chain, and $\theta   $ represents the proposed sample. for
+   simple cases, it   s common to use a gaussian proposal centered at
+   $\theta$.
+
+   if we were to just use a gaussian to generate samples in our chain,
+   there   s no way we could approximate our target $p$, since the samples
+   would form a random walk. the mh test cleverly resolves this by
+   filtering samples with the following test. draw a uniform random
+   variable $u \in [0,1]$ and determine whether the following is true:
+
+   if true, we accept $\theta   $. otherwise, we reject and reuse the old
+   sample $\theta$. notice that
+     * it doesn   t require knowledge of a normalizing constant (independent
+       of $\theta$ and $\theta   $), because that cancels out in the
+       $p(\theta   )/p(\theta)$ ratio. this is great, because normalizing
+       constants are arguably the biggest reason why distributions become
+       intractable.
+     * the higher the value of $p(\theta   )$, the more likely we are to
+       accept.
+
+   to get more intuition on how the test works, we   ve created the
+   following figure from [29]this jupyter notebook, showing the
+   progression of samples to approximate a target posterior. this example
+   is derived from [30]welling & teh (2011).
+
+   jupyter_notebook
+   a quick example of the mh test in action on a mixture of gaussians
+   example. the parameter is $\theta \in \mathbb{r}^2$ with the x and y
+   axes representing $\theta_1$ and $\theta_2$, respectively. the target
+   posterior has contours shown in the fourth plot; the id203 mass
+   is concentrated in the diagonal between points $(0,1)$ and $(1,-1)$.
+   (this posterior depends on sampled gaussians.) the plots show the
+   progression of the mh test after 50, 500, and 5000 samples in our mcmc
+   chain. after 5000 samples, it's clear that our samples are concentrated
+   in the regions with higher posterior id203.
+
+reducing metropolis-hastings data usage
+
+   what happens when we consider the bayesian posterior id136 case
+   with large datasets? (perhaps we   re interested in the same example in
+   the figure above, except that the posterior is based on more data
+   points.) then our goal is to sample to approximate the distribution
+   $p(\theta | x_1, \ldots, x_n)$ for large $n$. by bayes    rule, this is
+   $\frac{p_0(\theta)p(x_1, \ldots, x_n | \theta) }{p(x_1,\ldots,x_n)}$
+   where $p_0$ is the prior. we additionally assume that the $x_i$ are
+   conditionally independent given $\theta$. the mh test therefore
+   becomes:
+
+   or, after taking logarithms and rearranging (while ignoring the minimum
+   operator, which technically isn   t needed here), we get
+
+   the problem now is apparent: it   s expensive to compute all the $p(x_i |
+   \theta   )$ terms, and this has to be done every time we sample since it
+   depends on $\theta   $.
+
+   the naive way to deal with this is to apply the same test, but with a
+   minibatch of $b$ elements:
+
+   unfortunately, this won   t sample from the correct target distribution;
+   see section 6.1 in [31]bardenet et al. (2017) for details.
+
+   a better strategy is to start with the same batch of $b$ points, but
+   then gauge the confidence of the batch test relative to using the full
+   data. if, after seeing $b$ points, we already know that our proposed
+   sample $\theta   $ is significantly worse than our current sample
+   $\theta$, then we should reject right away. if $\theta   $ is
+   significantly better, we should accept. if it   s ambiguous, then we
+   increase the size of our test batch, perhaps to $2b$ elements, and then
+   measure the test   s confidence. lather, rinse, repeat. as mentioned
+   earlier, [32]korattikara et al. (2014) and [33]bardenet et al. (2014)
+   developed algorithms following this framework.
+
+   a weakness of the above approach is that it   s doing repeated testing
+   and one must reduce the allowable test error each time one increments
+   the test batch size. unfortunately, there is also a significant
+   id203 that the approaches above will grow the test batch all the
+   way to the full dataset, and they offer at most constant factor
+   speedups over testing the full dataset.
+
+minibatch metropolis-hastings: our contribution
+
+change the acceptance function
+
+   to set up our test, we first define the log transition id203
+   ratio $\delta$:
+
+   this log ratio factors into a sum of per-sample terms, so when we
+   approximate its value by computing on a minibatch we get an unbiased
+   estimator of its full-data value plus some noise (which is
+   asymptotically normal by the central limit theorem).
+
+   the first step for applying our mh test is to use a different
+   acceptance function. expressed in terms of $\delta$, the classical mh
+   accepts a transition with id203 given by the blue curve.
+
+   different_tests
+   functions $f$ and $g$ can serve as acceptance tests for
+   metropolis-hastings. given current sample $\theta$ and proposed sample
+   $\theta'$, the vertical axis represents the id203 of accepting
+   $\theta'$.
+
+   instead of using the classical test, we   ll use the sigmoid function. it
+   might not be apparent why this is allowed, but there   s some elegant
+   theory that explains why using this alternative function as the
+   acceptance test for mh still results in the correct semantics of mcmc.
+   that is, under the same mild assumptions, the distribution of samples
+   $(\theta_i)_{i=1}^t$ approaches the target distribution.
+
+   equivalent_test
+   the density of the standard logistic random variable, denoted $x_{\rm
+   log}$ along with the equivalent mh test expression ($x_{\rm log}+\delta
+   > 0$) with the sigmoid acceptance function.
+
+   our acceptance test is now the sigmoid function. note that the sigmoid
+   function is the cumulative distribution function of a (standard)
+   [34]logistic random variable; the figure above plots the density. one
+   can show that the mh test under the sigmoid acceptance function reduces
+   to determining whether $x_{\rm \log} + \delta > 0$ for a sampled
+   $x_{\rm log}$ value.
+
+new mh test
+
+   this is nice, but we don   t want to compute $\delta$ because it depends
+   on all $p(x_i | \theta   )$ terms. when we estimate $\delta$ using a
+   minibatch, we introduce an additive error which is approximately
+   normal, $x_{\rm normal}$. the key observation in our work is that the
+   distribution of the minibatch estimate of $\delta$ (approximately
+   gaussian) is already very close to the desired test distribution
+   $x_{\rm log}$, as shown below.
+
+   gaussian_logistic_cdf
+   a plot of the logistic cdf in red (as we had earlier) along with a
+   normal cdf curve, colored in lime, which corresponds to a standard
+   deviation of 1.7.
+
+   rather than resorting to tail bounds as in prior work, we directly
+   bridge these two distributions using an additive correction variable
+   $x_{\rm correction}$:
+
+   test_visual
+   a diagram of our minibatch mh test. on the right we have the full data
+   test that we want, but we can't use it since $\delta$ is intractable.
+   instead, we have $\delta + x_{\rm normal}$ (from the left side) and
+   must add a correction $x_{\rm correction}$.
+
+   we want to make the lhs and rhs distributions equal, so we add in a
+   correction $x_{\rm correction}$ which is a symmetric random variable
+   centered at zero. adding independent random variables gives a random
+   variable whose distribution is the convolution of the summands   
+   distributions. so finding the correction distribution involves
+      deconvolution    of a logistic and normal distribution. it   s not always
+   possible to do this, and several conditions must be met (e.g. the tails
+   of the normal distribution must be weaker than the logistic) but
+   luckily for us they are. [35]in our paper to appear at uai 2017 we show
+   that the correction distribution can be approximated to essentially
+   single-precision floating-point precision by tabulation.
+
+   in our paper, we also prove theoretical results bounding the error of
+   our test, and present experimental results showing that our method
+   results in accurate posterior estimation for a gaussian mixture model,
+   and that it is also highly sample-efficient in id28 for
+   classification of mnist digits.
+
+   paper_results
+   histograms showing the batch sizes used for metropolis-hastings for the
+   three algorithms benchmarked in our paper. the posterior is similar to
+   the earlier example from the jupyter notebook, except generated with
+   one million data points. left is our result, the other two are from
+   [36]korattikara et al. (2014), and [37]bardenet et al. (2014),
+   respectively. our algorithm uses an average of just 172 data points
+   each iteration. note the log-log scale of the histograms.
+
+   we hope our test is useful to other researchers who are looking to use
+   mcmc methods in large datasets. we   ve also [38]implemented an
+   open-source version of the test as part of the [39]bidmach machine
+   learning library developed at uc berkeley.
+     __________________________________________________________________
+
+   i thank co-authors xinlei pan, haoyu chen, and especially, john    the
+   edge    canny for their help on this project.
+     * [40]an efficient minibatch acceptance test for metropolis-hastings.
+       daniel seita, xinlei pan, haoyu chen, john canny.
+       uncertainty in artificial intelligence, 2017.
+
+   subscribe to our [41]rss feed.
+   spread the word:
+
+comments
+
+   please enable javascript to view the [42]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://bair.berkeley.edu/blog/feed.xml
+   2. https://bair.berkeley.edu/blog/
+   3. https://bair.berkeley.edu/blog/subscribe/
+   4. https://bair.berkeley.edu/blog/about/
+   5. https://bair.berkeley.edu/blog/archive/
+   6. http://bair.berkeley.edu/
+   7. https://people.eecs.berkeley.edu/~seita/
+   8. http://www.image-net.org/
+   9. https://grouplens.org/datasets/movielens/
+  10. https://github.com/udacity/self-driving-car
+  11. https://techcrunch.com/2016/01/14/yahoo-releases-its-biggest-ever-machine-learning-dataset-to-the-research-community/
+  12. https://en.wikipedia.org/wiki/stochastic_gradient_descent
+  13. http://bayesiandeeplearning.org/slides/nips16bayesdeep.pdf
+  14. https://en.wikipedia.org/wiki/variational_bayesian_methods
+  15. https://en.wikipedia.org/wiki/markov_chain_monte_carlo
+  16. https://arxiv.org/abs/1603.02644
+  17. https://arxiv.org/abs/1312.6114
+  18. https://en.wikipedia.org/wiki/restricted_boltzmann_machine
+  19. https://arxiv.org/abs/1312.6114
+  20. https://www.ics.uci.edu/~welling/publications/papers/stoclangevin_v6.pdf
+  21. https://arxiv.org/abs/1402.4102
+  22. https://arxiv.org/abs/1304.5299
+  23. http://proceedings.mlr.press/v32/bardenet14.html
+  24. http://www.jmlr.org/papers/v18/15-205.html
+  25. http://www.mcmchandbook.net/
+  26. https://mitpress.mit.edu/books/probabilistic-graphical-models
+  27. https://mitpress.mit.edu/books/machine-learning-0
+  28. https://en.wikipedia.org/wiki/metropolis   hastings_algorithm
+  29. https://github.com/danieltakeshi/mcmc_and_dynamics/blob/master/standard_mcmc/quick_mh_test_example.ipynb
+  30. https://www.ics.uci.edu/~welling/publications/papers/stoclangevin_v6.pdf
+  31. http://www.jmlr.org/papers/v18/15-205.html
+  32. https://arxiv.org/abs/1304.5299
+  33. http://proceedings.mlr.press/v32/bardenet14.html
+  34. https://en.wikipedia.org/wiki/logistic_distribution
+  35. https://arxiv.org/abs/1610.06848
+  36. https://arxiv.org/abs/1304.5299
+  37. http://proceedings.mlr.press/v32/bardenet14.html
+  38. https://github.com/biddata/bidmach/blob/master/src/main/scala/bidmach/updaters/mhtest.scala
+  39. https://github.com/biddata/bidmach
+  40. https://arxiv.org/abs/1610.06848
+  41. https://bair.berkeley.edu/blog/feed.xml
+  42. http://disqus.com/?ref_noscript
+
+   hidden links:
+  44. https://facebook.com/sharer.php?u=http://bair.berkeley.edu/blog/2017/08/02/minibatch-metropolis-hastings/
+  45. https://twitter.com/intent/tweet?text=minibatch%20metropolis-hastings&url=http://bair.berkeley.edu/blog/2017/08/02/minibatch-metropolis-hastings/
+  46. https://plus.google.com/share?url=http://bair.berkeley.edu/blog/2017/08/02/minibatch-metropolis-hastings/
+  47. http://www.linkedin.com/sharearticle?url=http://bair.berkeley.edu/blog/2017/08/02/minibatch-metropolis-hastings/&title=minibatch%20metropolis-hastings
+  48. http://reddit.com/submit?url=http://bair.berkeley.edu/blog/2017/08/02/minibatch-metropolis-hastings/&title=minibatch%20metropolis-hastings
+  49. https://news.ycombinator.com/submitlink?u=http://bair.berkeley.edu/blog/2017/08/02/minibatch-metropolis-hastings/&t=minibatch%20metropolis-hastings

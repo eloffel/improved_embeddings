@@ -1,0 +1,1201 @@
+    #[1]r2rt full atom feed [2]r2rt categories atom feed
+
+   (button) toggle navigation [3]r2rt
+
+recurrent neural networks in tensorflow ii
+
+   mon 25 july 2016
+
+   this is the second in a series of posts about recurrent neural networks
+   in tensorflow. the first post lives [4]here. in this post, we will
+   build upon our vanilla id56 by learning how to use tensorflow   s scan and
+   dynamic_id56 models, upgrading the id56 cell and stacking multiple id56s,
+   and adding dropout and layer id172. we will then use our
+   upgraded id56 to generate some text, character by character.
+
+   note 3/14/2017: this tutorial is quite a bit deprecated by changes to
+   the tf api. leaving it up since it may still be useful, and most
+   changes to the api are cosmetic (biggest change is that many of the id56
+   cells and functions are in the tf.contrib.id56 module). there was also a
+   change to the ptb_iterator. a (slightly modified) copy of the old
+   version which should work until i update this tutorial is uploaded
+   [5]here.
+
+recap of our model
+
+   in the last post, we built a very simple, no frills id56 that was
+   quickly able to learn to solve the toy task we created for it.
+
+   here is the formal statement of our model from last time:
+
+   \(s_t = \text{tanh}(w(x_t \ @ \ s_{t-1}) + b_s)\)
+
+   \(p_t = \text{softmax}(us_t + b_p)\)
+
+   where \(@\) represents vector concatenation, \(x_t \in r^n\) is an
+   input vector, \(w \in r^{d \times (n + d)}, \ b_s \in r^d, \ u \in r^{n
+   \times d}\), \(b_p \in r^n\), \(n\) is the size of the input and output
+   vectors, and d is the size of the hidden state vector. at time step 0,
+   \(s_{-1}\) (the initial state) is initialized as a vector of zeros.
+
+task and data
+
+   this time around we will be building a character-level language model
+   to generate character sequences, a la andrej karpathy   s [6]char-id56
+   (and see, e.g., a tensorflow implementation by sherjil ozair [7]here).
+
+   why do something that   s already been done? well, this is a much harder
+   task than the toy model from last time. this model needs to handle long
+   sequences and learn long time dependencies. that makes a great task for
+   learning about adding features to our id56, and seeing how our changes
+   affect the results as we go.
+
+   to start, let   s create our data generator. we   ll use the
+   tiny-shakespeare corpus as our data, though we could use any plain text
+   file. we   ll choose to use all of the characters in the text file as our
+   vocabulary, treating lowercase and capital letters are separate
+   characters. in practice, there may be some advantage to forcing the
+   network to use similar representations for capital and lowercase
+   letters by using the same one-hot representations for each, plus a
+   binary flag to indicate whether or not the letter is a capital.
+   additionally, it is likely a good idea to restrict the vocabulary
+   (i.e., the set of characters) used, by replacing uncommon characters
+   with an unk token (like a square:    ).
+"""
+imports
+"""
+import numpy as np
+import tensorflow as tf
+%matplotlib inline
+import matplotlib.pyplot as plt
+import time
+import os
+import urllib.request
+from tensorflow.models.id56.ptb import reader
+
+"""
+load and process data, utility functions
+"""
+
+file_url = 'https://raw.githubusercontent.com/jcjohnson/torch-id56/master/data/ti
+ny-shakespeare.txt'
+file_name = 'tinyshakespeare.txt'
+if not os.path.exists(file_name):
+    urllib.request.urlretrieve(file_url, file_name)
+
+with open(file_name,'r') as f:
+    raw_data = f.read()
+    print("data length:", len(raw_data))
+
+vocab = set(raw_data)
+vocab_size = len(vocab)
+idx_to_vocab = dict(enumerate(vocab))
+vocab_to_idx = dict(zip(idx_to_vocab.values(), idx_to_vocab.keys()))
+
+data = [vocab_to_idx[c] for c in raw_data]
+del raw_data
+
+def gen_epochs(n, num_steps, batch_size):
+    for i in range(n):
+        yield reader.ptb_iterator(data, batch_size, num_steps)
+
+def reset_graph():
+    if 'sess' in globals() and sess:
+        sess.close()
+    tf.reset_default_graph()
+
+def train_network(g, num_epochs, num_steps = 200, batch_size = 32, verbose = tru
+e, save=false):
+    tf.set_random_seed(2345)
+    with tf.session() as sess:
+        sess.run(tf.initialize_all_variables())
+        training_losses = []
+        for idx, epoch in enumerate(gen_epochs(num_epochs, num_steps, batch_size
+)):
+            training_loss = 0
+            steps = 0
+            training_state = none
+            for x, y in epoch:
+                steps += 1
+
+                feed_dict={g['x']: x, g['y']: y}
+                if training_state is not none:
+                    feed_dict[g['init_state']] = training_state
+                training_loss_, training_state, _ = sess.run([g['total_loss'],
+                                                      g['final_state'],
+                                                      g['train_step']],
+                                                             feed_dict)
+                training_loss += training_loss_
+            if verbose:
+                print("average training loss for epoch", idx, ":", training_loss
+/steps)
+            training_losses.append(training_loss/steps)
+
+        if isinstance(save, str):
+            g['saver'].save(sess, save)
+
+    return training_losses
+
+data length: 1115394
+
+using tf.scan and dynamic_id56 to speed things up
+
+   recall from [8]last post that we represented each duplicate tensor of
+   our id56 (e.g., the id56 inputs, id56 outputs, the predictions and the
+   loss) as a list of tensors:
+   diagram of basic id56 - labeled diagram of basic id56 - labeled
+
+   this worked quite well for our toy task, because our longest dependency
+   was 7 steps back and we never really needed to backpropagate errors
+   more than 10 steps. even with a word-level id56, using lists will
+   probably be sufficient. see, e.g., my post on [9]styles of truncated
+   id26, where i build a 40-step graph with no problems. but
+   for a character-level model, 40 characters isn   t a whole lot. we might
+   want to capture much longer dependencies. so let   s see what happens
+   when we build a graph that is 200 time steps wide:
+def build_basic_id56_graph_with_list(
+    state_size = 100,
+    num_classes = vocab_size,
+    batch_size = 32,
+    num_steps = 200,
+    learning_rate = 1e-4):
+
+    reset_graph()
+
+    x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholde
+r')
+    y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placehold
+er')
+
+    x_one_hot = tf.one_hot(x, num_classes)
+    id56_inputs = [tf.squeeze(i,squeeze_dims=[1]) for i in tf.split(1, num_steps,
+ x_one_hot)]
+
+    cell = tf.nn.id56_cell.basicid56cell(state_size)
+    init_state = cell.zero_state(batch_size, tf.float32)
+    id56_outputs, final_state = tf.nn.id56(cell, id56_inputs, initial_state=init_st
+ate)
+
+    with tf.variable_scope('softmax'):
+        w = tf.get_variable('w', [state_size, num_classes])
+        b = tf.get_variable('b', [num_classes], initializer=tf.constant_initiali
+zer(0.0))
+    logits = [tf.matmul(id56_output, w) + b for id56_output in id56_outputs]
+
+    y_as_list = [tf.squeeze(i, squeeze_dims=[1]) for i in tf.split(1, num_steps,
+ y)]
+
+    loss_weights = [tf.ones([batch_size]) for i in range(num_steps)]
+    losses = tf.nn.id195.sequence_loss_by_example(logits, y_as_list, loss_weig
+hts)
+    total_loss = tf.reduce_mean(losses)
+    train_step = tf.train.adamoptimizer(learning_rate).minimize(total_loss)
+
+    return dict(
+        x = x,
+        y = y,
+        init_state = init_state,
+        final_state = final_state,
+        total_loss = total_loss,
+        train_step = train_step
+    )
+
+t = time.time()
+build_basic_id56_graph_with_list()
+print("it took", time.time() - t, "seconds to build the graph.")
+
+it took 5.626644849777222 seconds to build the graph.
+
+   it took over 5 seconds to build the graph of the most basic id56 model!
+   this could bad    what happens when we move up to a 3-layer lstm?
+
+   below, we switch out the id56 cell for a multi-layer lstm cell. we   ll go
+   over the details of how to do this in the next section.
+def build_multilayer_lstm_graph_with_list(
+    state_size = 100,
+    num_classes = vocab_size,
+    batch_size = 32,
+    num_steps = 200,
+    num_layers = 3,
+    learning_rate = 1e-4):
+
+    reset_graph()
+
+    x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholde
+r')
+    y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placehold
+er')
+
+    embeddings = tf.get_variable('embedding_matrix', [num_classes, state_size])
+    id56_inputs = [tf.squeeze(i) for i in tf.split(1,
+                                num_steps, tf.nn.embedding_lookup(embeddings, x)
+)]
+
+    cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+    cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=true)
+    init_state = cell.zero_state(batch_size, tf.float32)
+    id56_outputs, final_state = tf.nn.id56(cell, id56_inputs, initial_state=init_st
+ate)
+
+    with tf.variable_scope('softmax'):
+        w = tf.get_variable('w', [state_size, num_classes])
+        b = tf.get_variable('b', [num_classes], initializer=tf.constant_initiali
+zer(0.0))
+    logits = [tf.matmul(id56_output, w) + b for id56_output in id56_outputs]
+
+    y_as_list = [tf.squeeze(i, squeeze_dims=[1]) for i in tf.split(1, num_steps,
+ y)]
+
+    loss_weights = [tf.ones([batch_size]) for i in range(num_steps)]
+    losses = tf.nn.id195.sequence_loss_by_example(logits, y_as_list, loss_weig
+hts)
+    total_loss = tf.reduce_mean(losses)
+    train_step = tf.train.adamoptimizer(learning_rate).minimize(total_loss)
+
+    return dict(
+        x = x,
+        y = y,
+        init_state = init_state,
+        final_state = final_state,
+        total_loss = total_loss,
+        train_step = train_step
+    )
+
+t = time.time()
+build_multilayer_lstm_graph_with_list()
+print("it took", time.time() - t, "seconds to build the graph.")
+
+it took 25.640846967697144 seconds to build the graph.
+
+   yikes, almost 30 seconds.
+
+   now this isn   t that big of an issue for training, because we only need
+   to build the graph once. it could be a big issue, however, if we need
+   to build the graph multiple times at test time.
+
+   to get around this long compile time, tensorflow allows us to create
+   the graph at runtime. here is a quick demonstration of the difference,
+   using tensorflow   s dynamic_id56 function:
+def build_multilayer_lstm_graph_with_dynamic_id56(
+    state_size = 100,
+    num_classes = vocab_size,
+    batch_size = 32,
+    num_steps = 200,
+    num_layers = 3,
+    learning_rate = 1e-4):
+
+    reset_graph()
+
+    x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholde
+r')
+    y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placehold
+er')
+
+    embeddings = tf.get_variable('embedding_matrix', [num_classes, state_size])
+
+    # note that our inputs are no longer a list, but a tensor of dims batch_size
+ x num_steps x state_size
+    id56_inputs = tf.nn.embedding_lookup(embeddings, x)
+
+    cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+    cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=true)
+    init_state = cell.zero_state(batch_size, tf.float32)
+    id56_outputs, final_state = tf.nn.dynamic_id56(cell, id56_inputs, initial_state
+=init_state)
+
+    with tf.variable_scope('softmax'):
+        w = tf.get_variable('w', [state_size, num_classes])
+        b = tf.get_variable('b', [num_classes], initializer=tf.constant_initiali
+zer(0.0))
+
+    #reshape id56_outputs and y so we can get the logits in a single matmul
+    id56_outputs = tf.reshape(id56_outputs, [-1, state_size])
+    y_reshaped = tf.reshape(y, [-1])
+
+    logits = tf.matmul(id56_outputs, w) + b
+
+    total_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_id178_with_logits(l
+ogits, y_reshaped))
+    train_step = tf.train.adamoptimizer(learning_rate).minimize(total_loss)
+
+    return dict(
+        x = x,
+        y = y,
+        init_state = init_state,
+        final_state = final_state,
+        total_loss = total_loss,
+        train_step = train_step
+    )
+
+t = time.time()
+build_multilayer_lstm_graph_with_dynamic_id56()
+print("it took", time.time() - t, "seconds to build the graph.")
+
+it took 0.5314393043518066 seconds to build the graph.
+
+   much better. one would think that pushing the graph construction to
+   execution time would cause execution of the graph to go slower, but in
+   this case, using dynamic_id56 actually speeds things up:
+g = build_multilayer_lstm_graph_with_list()
+t = time.time()
+train_network(g, 3)
+print("it took", time.time() - t, "seconds to train for 3 epochs.")
+
+average training loss for epoch 0 : 3.53323210245
+average training loss for epoch 1 : 3.31435756163
+average training loss for epoch 2 : 3.21755325109
+it took 117.78161263465881 seconds to train for 3 epochs.
+
+g = build_multilayer_lstm_graph_with_dynamic_id56()
+t = time.time()
+train_network(g, 3)
+print("it took", time.time() - t, "seconds to train for 3 epochs.")
+
+average training loss for epoch 0 : 3.55792756053
+average training loss for epoch 1 : 3.3225021006
+average training loss for epoch 2 : 3.28286816745
+it took 96.69413661956787 seconds to train for 3 epochs.
+
+   it   s not a breeze to work through and understand the dynamic_id56 code
+   (which lives [10]here), but we can obtain a similar result ourselves by
+   using tf.scan (dynamic_id56 does not use scan). scan runs just a tad
+   slower than tensorflow   s optimized code, but is easier to understand
+   and write yourself.
+
+   scan is a higher-order function that you might be familiar with if
+   you   ve done any programming in ocaml, haskell or the like. in general,
+   it takes a function (\(f: (x_t, y_{t-1}) \mapsto y_t\)), a sequence
+   (\([x_0, x_1 \dots x_n]\)) and an initial value (\(y_{-1}\)) and
+   returns a sequence (\([y_0, y_1 \dots y_n]\)) according to the rule:
+   \(y_t = f(x_t, y_{t-1})\). in tensorflow, scan treats the first
+   dimension of a tensor as the sequence. thus, if fed a tensor of shape
+   [n, m, o] as the sequence, scan would unpack it into a sequence of
+   n-tensors, each with shape [m, o]. you can learn more about
+   tensorflow   s scan [11]here.
+
+   below, i use scan with an lstm so as to compare to the dynamic_id56
+   using tensorflow above. because lstms store their state in a 2-tuple,
+   and we   re using a 3-layer network, the scan function produces, as
+   final_states below, a 3-tuple (one for each layer) of 2-tuples (one for
+   each lstm state), each of shape [num_steps, batch_size, state_size]. we
+   need only the last state, which is why we unpack, slice and repack
+   final_states to get final_state below.
+
+   another thing to note is that scan produces id56_outputs with shape
+   [num_steps, batch_size, state_size], whereas the dynamic_id56 produces
+   id56_outputs with shape [batch_size, num_steps, state_size] (the first
+   two dimensions are switched). dynamic_id56 has the flexibility to switch
+   this behavior, using the    time_major    argument. tf.scan does not have
+   this flexibility, which is why we transpose id56_inputs and y in the
+   code below.
+def build_multilayer_lstm_graph_with_scan(
+    state_size = 100,
+    num_classes = vocab_size,
+    batch_size = 32,
+    num_steps = 200,
+    num_layers = 3,
+    learning_rate = 1e-4):
+
+    reset_graph()
+
+    x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholde
+r')
+    y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placehold
+er')
+
+    embeddings = tf.get_variable('embedding_matrix', [num_classes, state_size])
+
+    id56_inputs = tf.nn.embedding_lookup(embeddings, x)
+
+    cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+    cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=true)
+    init_state = cell.zero_state(batch_size, tf.float32)
+    id56_outputs, final_states = \
+        tf.scan(lambda a, x: cell(x, a[1]),
+                tf.transpose(id56_inputs, [1,0,2]),
+                initializer=(tf.zeros([batch_size, state_size]), init_state))
+
+    # there may be a better way to do this:
+    final_state = tuple([tf.nn.id56_cell.lstmstatetuple(
+                  tf.squeeze(tf.slice(c, [num_steps-1,0,0], [1, batch_size, stat
+e_size])),
+                  tf.squeeze(tf.slice(h, [num_steps-1,0,0], [1, batch_size, stat
+e_size])))
+                       for c, h in final_states])
+
+    with tf.variable_scope('softmax'):
+        w = tf.get_variable('w', [state_size, num_classes])
+        b = tf.get_variable('b', [num_classes], initializer=tf.constant_initiali
+zer(0.0))
+
+    id56_outputs = tf.reshape(id56_outputs, [-1, state_size])
+    y_reshaped = tf.reshape(tf.transpose(y,[1,0]), [-1])
+
+    logits = tf.matmul(id56_outputs, w) + b
+
+    total_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_id178_with_logits(l
+ogits, y_reshaped))
+    train_step = tf.train.adamoptimizer(learning_rate).minimize(total_loss)
+
+    return dict(
+        x = x,
+        y = y,
+        init_state = init_state,
+        final_state = final_state,
+        total_loss = total_loss,
+        train_step = train_step
+    )
+
+t = time.time()
+g = build_multilayer_lstm_graph_with_scan()
+print("it took", time.time() - t, "seconds to build the graph.")
+t = time.time()
+train_network(g, 3)
+print("it took", time.time() - t, "seconds to train for 3 epochs.")
+
+it took 0.6475389003753662 seconds to build the graph.
+average training loss for epoch 0 : 3.55362293501
+average training loss for epoch 1 : 3.32045680079
+average training loss for epoch 2 : 3.27433713688
+it took 101.60246014595032 seconds to train for 3 epochs.
+
+   using scan was only marginally slower than using dynamic_id56, and gives
+   us the flexibility and understanding to tweak the code if we ever need
+   to (e.g., if for some reason we wanted to create a skip connection from
+   the state at timestep t-2 to timestep t, it would be easy to do with
+   scan).
+
+upgrading the id56 cell
+
+   above, we seaid113ssly swapped out the basicid56cell we were using for a
+   multi-layered lstm cell. this was possible because the id56 cells
+   conform to a general structure: every id56 cell is a function of the
+   current input, \(x_t\), and the prior state, \(s_{t-1}\), that outputs
+   a current state, \(s_{t}\), and a current output, \(y_t\). thus, in the
+   same way that we can swap out id180 in a feedforward net
+   (e.g., change the tanh activation to a sigmoid or a relu activation),
+   we can swap out the entire recurrence function (cell) in an id56.
+
+   note that while for basic id56 cells, the current output equals the
+   current state (\(y_t = s_t\)), this does not have to be the case. we   ll
+   see how lstms and multi-layered id56s diverge from this below.
+
+   two popular choices for id56 cells are the gru cell and the lstm cell.
+   by using gates, gru and lstm cells avoid the vanishing gradient problem
+   and allow the network to learn longer-term dependencies. their
+   internals are quite complicated, and i would refer you to my post
+   [12]written memories: understanding, deriving and extending the lstm
+   for a good starting point to learn about them.
+
+   all we have to do to upgrade our vanilla id56 cell is to replace this
+   line:
+cell = tf.nn.id56_cell.basicid56cell(state_size)
+
+   with this for lstm:
+cell = tf.nn.id56_cell.lstmcell(state_size)
+
+   or this for gru:
+cell = tf.nn.id56_cell.grucell(state_size)
+
+   the lstm keeps two sets of internal state vectors, \(c\) (for memory
+   cell or constant error carousel) and \(h\) (for hidden state). by
+   default, they are concatenated into a single vector, but as of this
+   writing, using the default arguments to lstmcell will produce a warning
+   message:
+warning:tensorflow:<tensorflow.python.ops.id56_cell.lstmcell object at 0x7faade17
+08d0>: using a concatenated state is slower and will soon be deprecated.  use st
+ate_is_tuple=true.
+
+   this error tells us that it   s faster to represent the lstm state as a
+   tuple of \(c\) and \(h\), rather than as a concatenation of \(c\) and
+   \(h\). you can tack on the argument state_is_tuple=true to have it do
+   that.
+
+   by using a tuple for the state, we can also easily replace the base
+   cell with a    multiid56cell    for multiple layers. to see why this works,
+   consider that while a single cell:
+   diagram of basic id56 cell diagram of basic id56 cell
+
+   looks different from a two cells stacked on top of each other:
+   diagram of multi id56 cell 1 diagram of multi id56 cell 1
+
+   we can wrap the two cells into a single two-layer cell to make them
+   look and behave as a single cell:
+   diagram of multi id56 cell 2 diagram of multi id56 cell 2
+
+   to make this switch, we call tf.nn.id56_cell.multiid56cell, which takes a
+   list of id56cells as its inputs and wraps them into a single cell:
+cell = tf.nn.id56_cell.multiid56cell([tf.nn.id56_cell.basicid56cell(state_size)] * n
+um_layers)
+
+   note that if you are wrapping an lstmcell that uses
+   state_is_tuple=true, you should pass this same argument to the
+   multiid56cell as well.
+
+writing a custom id56 cell
+
+   it   s almost too easy to use the standard gru or lstm cells, so let   s
+   define our own id56 cell. here   s a random idea that may or may not work:
+   starting with a gru cell, instead of taking a single transformation of
+   its input, we enable it to take a weighted average of multiple
+   transformations of its input. that is, using the notation from [13]cho
+   et al. (2014), instead of using \(wx\) in our candidate state, \(\tilde
+   h^{(t)} = \text{tanh}(wx + u(r \odot h^{(t-1)})\), we use a weighted
+   average of \(w_1 x, \ w_2 x \dots w_n x\) for some n. in other words,
+   we will replace \(wx\) with \(\sigma\lambda_iw_ix\) for some weights
+   \(\lambda_i\) that sum to 1. the vector of weights, \(\lambda\), will
+   be calculated as \(\lambda = \text{softmax}(w_{avg}x^{(t)} +
+   u_{avg}h^{(t-1)} + b)\). the idea is that we might benefit from treat
+   the input differently in different scenarios (e.g., we may want to
+   treat verbs differently than nouns).
+
+   to write the custom cell, we need to extend tf.nn.id56_cell.id56cell.
+   specifically, we need to fill in 3 abstract methods and write an
+   __init__ method (take a look at the tensorflow code [14]here). first,
+   let   s start with a gru cell, adapted from tensorflow   s implementation:
+class grucell(tf.nn.id56_cell.id56cell):
+    """gated recurrent unit cell (cf. http://arxiv.org/abs/1406.1078)."""
+
+    def __init__(self, num_units):
+        self._num_units = num_units
+
+    @property
+    def state_size(self):
+        return self._num_units
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def __call__(self, inputs, state, scope=none):
+        with tf.variable_scope(scope or type(self).__name__):  # "grucell"
+            with tf.variable_scope("gates"):  # reset gate and update gate.
+                # we start with bias of 1.0 to not reset and not update.
+                ru = tf.nn.id56_cell._linear([inputs, state],
+                                        2 * self._num_units, true, 1.0)
+                ru = tf.nn.sigmoid(ru)
+                r, u = tf.split(1, 2, ru)
+            with tf.variable_scope("candidate"):
+                c = tf.nn.tanh(tf.nn.id56_cell._linear([inputs, r * state],
+                                             self._num_units, true))
+            new_h = u * state + (1 - u) * c
+        return new_h, new_h
+
+   we modify the __init__ method to take a parameter \(n\) at
+   initialization, which will determine the number of transformation
+   matrices \(w_i\) it will create:
+def __init__(self, num_units, num_weights):
+    self._num_units = num_units
+    self._num_weights = num_weights
+
+   then, we modify the candidate variable scope of the __call__ method to
+   do a weighted average as shown below (note that all of the \(w_i\)
+   matrices are created as a single variable and then split into multiple
+   tensors):
+class customcell(tf.nn.id56_cell.id56cell):
+    """gated recurrent unit cell (cf. http://arxiv.org/abs/1406.1078)."""
+
+    def __init__(self, num_units, num_weights):
+        self._num_units = num_units
+        self._num_weights = num_weights
+
+    @property
+    def state_size(self):
+        return self._num_units
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def __call__(self, inputs, state, scope=none):
+        with tf.variable_scope(scope or type(self).__name__):  # "grucell"
+            with tf.variable_scope("gates"):  # reset gate and update gate.
+                # we start with bias of 1.0 to not reset and not update.
+                ru = tf.nn.id56_cell._linear([inputs, state],
+                                        2 * self._num_units, true, 1.0)
+                ru = tf.nn.sigmoid(ru)
+                r, u = tf.split(1, 2, ru)
+            with tf.variable_scope("candidate"):
+                lambdas = tf.nn.id56_cell._linear([inputs, state], self._num_weig
+hts, true)
+                lambdas = tf.split(1, self._num_weights, tf.nn.softmax(lambdas))
+
+                ws = tf.get_variable("ws",
+                        shape = [self._num_weights, inputs.get_shape()[1], self.
+_num_units])
+                ws = [tf.squeeze(i) for i in tf.split(0, self._num_weights, ws)]
+
+                candidate_inputs = []
+
+                for idx, w in enumerate(ws):
+                    candidate_inputs.append(tf.matmul(inputs, w) * lambdas[idx])
+
+                wx = tf.add_n(candidate_inputs)
+
+                c = tf.nn.tanh(wx + tf.nn.id56_cell._linear([r * state],
+                                            self._num_units, true, scope="second
+"))
+            new_h = u * state + (1 - u) * c
+        return new_h, new_h
+
+   let   s see how the custom cell stacks up to a regular gru cell (using
+   num_steps = 30, since this performs much better than num_steps = 200
+   after 5 epochs     can you see why that might happen?):
+def build_multilayer_graph_with_custom_cell(
+    cell_type = none,
+    num_weights_for_custom_cell = 5,
+    state_size = 100,
+    num_classes = vocab_size,
+    batch_size = 32,
+    num_steps = 200,
+    num_layers = 3,
+    learning_rate = 1e-4):
+
+    reset_graph()
+
+    x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholde
+r')
+    y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placehold
+er')
+
+    embeddings = tf.get_variable('embedding_matrix', [num_classes, state_size])
+
+    id56_inputs = tf.nn.embedding_lookup(embeddings, x)
+
+    if cell_type == 'custom':
+        cell = customcell(state_size, num_weights_for_custom_cell)
+    elif cell_type == 'gru':
+        cell = tf.nn.id56_cell.grucell(state_size)
+    elif cell_type == 'lstm':
+        cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+    else:
+        cell = tf.nn.id56_cell.basicid56cell(state_size)
+
+    if cell_type == 'lstm':
+        cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=t
+rue)
+    else:
+        cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers)
+
+    init_state = cell.zero_state(batch_size, tf.float32)
+    id56_outputs, final_state = tf.nn.dynamic_id56(cell, id56_inputs, initial_state
+=init_state)
+
+    with tf.variable_scope('softmax'):
+        w = tf.get_variable('w', [state_size, num_classes])
+        b = tf.get_variable('b', [num_classes], initializer=tf.constant_initiali
+zer(0.0))
+
+    #reshape id56_outputs and y
+    id56_outputs = tf.reshape(id56_outputs, [-1, state_size])
+    y_reshaped = tf.reshape(y, [-1])
+
+    logits = tf.matmul(id56_outputs, w) + b
+
+    total_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_id178_with_logits(l
+ogits, y_reshaped))
+    train_step = tf.train.adamoptimizer(learning_rate).minimize(total_loss)
+
+    return dict(
+        x = x,
+        y = y,
+        init_state = init_state,
+        final_state = final_state,
+        total_loss = total_loss,
+        train_step = train_step
+    )
+
+g = build_multilayer_graph_with_custom_cell(cell_type='gru', num_steps=30)
+t = time.time()
+train_network(g, 5, num_steps=30)
+print("it took", time.time() - t, "seconds to train for 5 epochs.")
+
+average training loss for epoch 0 : 2.92919953048
+average training loss for epoch 1 : 2.35888109404
+average training loss for epoch 2 : 2.21945820894
+average training loss for epoch 3 : 2.12258511006
+average training loss for epoch 4 : 2.05038544733
+it took 284.6971204280853 seconds to train for 5 epochs.
+
+g = build_multilayer_graph_with_custom_cell(cell_type='custom', num_steps=30)
+t = time.time()
+train_network(g, 5, num_steps=30)
+print("it took", time.time() - t, "seconds to train for 5 epochs.")
+
+average training loss for epoch 0 : 3.04418995892
+average training loss for epoch 1 : 2.5172702761
+average training loss for epoch 2 : 2.37068433601
+average training loss for epoch 3 : 2.27533404217
+average training loss for epoch 4 : 2.20167231745
+it took 537.6112766265869 seconds to train for 5 epochs.
+
+   so much for that idea. our custom cell took almost twice as long to
+   train and seems to perform worse than a standard gru cell.
+
+adding dropout
+
+   adding features like dropout to the network is easy: we figure out
+   where they belong and drop them in.
+
+   dropout belongs in between layers, not on the state or in intra-cell
+   connections. see [15]zaremba et al. (2015), recurrent neural network
+   id173 (   the main idea is to apply the dropout operator only to
+   the non-recurrent connections.   )
+
+   thus, to apply dropout, we need to wrap the input and/or output of each
+   cell. in our id56 implementation using list, we might do something like
+   this:
+id56_inputs = [tf.nn.dropout(id56_input, keep_prob) for id56_input in id56_inputs]
+id56_outputs = [tf.nn.dropout(id56_output, keep_prob) for nn_output in id56_outputs
+]
+
+   in our dynamic_id56 or scan implementations, we might apply dropout
+   directly to the id56_inputs or id56_outputs:
+id56_inputs = tf.nn.dropout(id56_inputd, keep_prob)
+id56_outputs = tf.nn.dropout(id56_outputd, keep_prob)
+
+   but what happens when we use multiid56cell? how can we have dropout in
+   between layers like in zaremba et al. (2015)? the answer is to wrap our
+   base id56 cell with dropout, thereby including it as part of the base
+   cell, similar to how we wrapped our three id56 cells into a single
+   multiid56cell above. tensorflow allows us to do this without writing a
+   new id56cell by using tf.nn.id56_cell.dropoutwrapper:
+cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+cell = tf.nn.id56_cell.dropoutwrapper(cell, input_keep_prob=input_dropout, output
+_keep_prob=output_dropout)
+cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=true)
+
+   note that if we wrap a base cell with dropout and then use it to build
+   a multiid56cell, both input dropout and output dropout will be applied
+   between layers (so if both are, say, 0.9, the dropout in between layers
+   will be 0.9 * 0.9 = 0.81). if we want equal dropout on all inputs and
+   outputs of a multi-layered id56, we can use only output or input dropout
+   on the base cell, and then wrap the entire multiid56cell with the input
+   or output dropout like so:
+cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+cell = tf.nn.id56_cell.dropoutwrapper(cell, input_keep_prob=global_dropout)
+cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=true)
+cell = tf.nn.id56_cell.dropoutwrapper(cell, output_keep_prob=global_dropout)
+
+layer id172
+
+   layer id172 is a feature that was published just a few days ago
+   by [16]lei ba et al. (2016), which we can use to improve our id56. it
+   was inspired by batch id172, which you can read about and learn
+   how to implement in my post [17]here. batch id172 (for
+   feed-forward and convolutional neural networks) and layer id172
+   (for recurrent neural networks) generally improve training time and
+   achieve better overall performance. in this section, we   ll apply what
+   we   ve learned in this post to implement layer id172 in
+   tensorflow.
+
+   layer id172 is applied as follows: the initial layer
+   id172 function is applied individually to each training example
+   so as to normalize the output vector of a linear transformation to have
+   a mean of 0 and a variance of 1. in math: \(ln_{initial}: v \mapsto
+   \frac{v - \mu_v}{\sqrt{\sigma_v^2 + \epsilon}}\) for some vector \(v\)
+   and some small value of \(\epsilon\) for numerical stability. for some
+   the same reasons we add scale and shift parameters to the initial batch
+   id172 transform (see my [18]batch id172 post for
+   details), we add scale, \(\alpha\), and shift, \(\beta\), parameters
+   here as well, so that the final layer id172 function is:
+
+   \[ln: v \mapsto \alpha \odot \frac{v - \mu_v}{\sqrt{\sigma_v^2 +
+   \epsilon}} + \beta\]
+
+   note that \(\odot\) is point-wise multiplication.
+
+   to add layer id172 to our network, we first write a function
+   that will layer id172 a 2d tensor along its second dimension:
+def ln(tensor, scope = none, epsilon = 1e-5):
+    """ layer normalizes a 2d tensor along its second axis """
+    assert(len(tensor.get_shape()) == 2)
+    m, v = tf.nn.moments(tensor, [1], keep_dims=true)
+    if not isinstance(scope, str):
+        scope = ''
+    with tf.variable_scope(scope + 'layer_norm'):
+        scale = tf.get_variable('scale',
+                                shape=[tensor.get_shape()[1]],
+                                initializer=tf.constant_initializer(1))
+        shift = tf.get_variable('shift',
+                                shape=[tensor.get_shape()[1]],
+                                initializer=tf.constant_initializer(0))
+    ln_initial = (tensor - m) / tf.sqrt(v + epsilon)
+
+    return ln_initial * scale + shift
+
+   let   s apply it our layer id172 function as it was applied by
+   lei ba et al. (2016) to lstms (in their experiments    teaching machines
+   to read and comprehend    and    handwriting sequence generation   ). lei ba
+   et al. apply layer id172 to the output of each gate inside the
+   lstm cell, which means that we get to take a second shot at writing a
+   new type of id56 cell. we   ll start with tensorflow   s official code,
+   located [19]here, and modify it accordingly:
+class layernormalizedlstmcell(tf.nn.id56_cell.id56cell):
+    """
+    adapted from tf's basiclstmcell to use layer id172.
+    note that state_is_tuple is always true.
+    """
+
+    def __init__(self, num_units, forget_bias=1.0, activation=tf.nn.tanh):
+        self._num_units = num_units
+        self._forget_bias = forget_bias
+        self._activation = activation
+
+    @property
+    def state_size(self):
+        return tf.nn.id56_cell.lstmstatetuple(self._num_units, self._num_units)
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def __call__(self, inputs, state, scope=none):
+        """long short-term memory cell (lstm)."""
+        with tf.variable_scope(scope or type(self).__name__):
+            c, h = state
+
+            # change bias argument to false since ln will add bias via shift
+            concat = tf.nn.id56_cell._linear([inputs, h], 4 * self._num_units, fa
+lse)
+
+            i, j, f, o = tf.split(1, 4, concat)
+
+            # add layer id172 to each gate
+            i = ln(i, scope = 'i/')
+            j = ln(j, scope = 'j/')
+            f = ln(f, scope = 'f/')
+            o = ln(o, scope = 'o/')
+
+            new_c = (c * tf.nn.sigmoid(f + self._forget_bias) + tf.nn.sigmoid(i)
+ *
+                   self._activation(j))
+
+            # add layer_id172 in calculation of new hidden state
+            new_h = self._activation(ln(new_c, scope = 'new_h/')) * tf.nn.sigmoi
+d(o)
+            new_state = tf.nn.id56_cell.lstmstatetuple(new_c, new_h)
+
+            return new_h, new_state
+
+   and that   s it! let   s try this out.
+
+final model
+
+   at this point, we   ve covered all of the graph modifications we planned
+   to cover, so here is our final model, which allows for dropout and
+   layer normalized lstm cells:
+def build_graph(
+    cell_type = none,
+    num_weights_for_custom_cell = 5,
+    state_size = 100,
+    num_classes = vocab_size,
+    batch_size = 32,
+    num_steps = 200,
+    num_layers = 3,
+    build_with_dropout=false,
+    learning_rate = 1e-4):
+
+    reset_graph()
+
+    x = tf.placeholder(tf.int32, [batch_size, num_steps], name='input_placeholde
+r')
+    y = tf.placeholder(tf.int32, [batch_size, num_steps], name='labels_placehold
+er')
+
+    dropout = tf.constant(1.0)
+
+    embeddings = tf.get_variable('embedding_matrix', [num_classes, state_size])
+
+    id56_inputs = tf.nn.embedding_lookup(embeddings, x)
+
+    if cell_type == 'custom':
+        cell = customcell(state_size, num_weights_for_custom_cell)
+    elif cell_type == 'gru':
+        cell = tf.nn.id56_cell.grucell(state_size)
+    elif cell_type == 'lstm':
+        cell = tf.nn.id56_cell.lstmcell(state_size, state_is_tuple=true)
+    elif cell_type == 'ln_lstm':
+        cell = layernormalizedlstmcell(state_size)
+    else:
+        cell = tf.nn.id56_cell.basicid56cell(state_size)
+
+    if build_with_dropout:
+        cell = tf.nn.id56_cell.dropoutwrapper(cell, input_keep_prob=dropout)
+
+    if cell_type == 'lstm' or cell_type == 'ln_lstm':
+        cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers, state_is_tuple=t
+rue)
+    else:
+        cell = tf.nn.id56_cell.multiid56cell([cell] * num_layers)
+
+    if build_with_dropout:
+        cell = tf.nn.id56_cell.dropoutwrapper(cell, output_keep_prob=dropout)
+
+    init_state = cell.zero_state(batch_size, tf.float32)
+    id56_outputs, final_state = tf.nn.dynamic_id56(cell, id56_inputs, initial_state
+=init_state)
+
+    with tf.variable_scope('softmax'):
+        w = tf.get_variable('w', [state_size, num_classes])
+        b = tf.get_variable('b', [num_classes], initializer=tf.constant_initiali
+zer(0.0))
+
+    #reshape id56_outputs and y
+    id56_outputs = tf.reshape(id56_outputs, [-1, state_size])
+    y_reshaped = tf.reshape(y, [-1])
+
+    logits = tf.matmul(id56_outputs, w) + b
+
+    predictions = tf.nn.softmax(logits)
+
+    total_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_id178_with_logits(l
+ogits, y_reshaped))
+    train_step = tf.train.adamoptimizer(learning_rate).minimize(total_loss)
+
+    return dict(
+        x = x,
+        y = y,
+        init_state = init_state,
+        final_state = final_state,
+        total_loss = total_loss,
+        train_step = train_step,
+        preds = predictions,
+        saver = tf.train.saver()
+    )
+
+   let   s compare the gru, lstm and ln_lstm after training each for 20
+   epochs using 80 step sequences.
+g = build_graph(cell_type='gru', num_steps=80)
+t = time.time()
+losses = train_network(g, 20, num_steps=80, save="saves/gru_20_epochs")
+print("it took", time.time() - t, "seconds to train for 20 epochs.")
+print("the average loss on the final epoch was:", losses[-1])
+
+it took 1051.6652357578278 seconds to train for 20 epochs.
+the average loss on the final epoch was: 1.75318197903
+
+g = build_graph(cell_type='lstm', num_steps=80)
+t = time.time()
+losses = train_network(g, 20, num_steps=80, save="saves/lstm_20_epochs")
+print("it took", time.time() - t, "seconds to train for 20 epochs.")
+print("the average loss on the final epoch was:", losses[-1])
+
+it took 614.4890048503876 seconds to train for 20 epochs.
+the average loss on the final epoch was: 2.02813237837
+
+g = build_graph(cell_type='ln_lstm', num_steps=80)
+t = time.time()
+losses = train_network(g, 20, num_steps=80, save="saves/ln_lstm_20_epochs")
+print("it took", time.time() - t, "seconds to train for 20 epochs.")
+print("the average loss on the final epoch was:", losses[-1])
+
+it took 3867.550405740738 seconds to train for 20 epochs.
+the average loss on the final epoch was: 1.71850851623
+
+   it looks like the layer normalized lstm just managed to edge out the
+   gru in the last few epochs, though the increase in training time hardly
+   seems worth it (perhaps my implementation could be improved?). it would
+   be interesting to see how they would perform on a validation or test
+   set and also to try out a layer normalized gru. for now, let   s use the
+   gru to generate some text.
+
+generating text
+
+   to generate text, were going to rebuild the graph so as to accept a
+   single character at a time and restore our saved model. we   ll give the
+   network a single character prompt, grab its predicted id203
+   distribution for the next character, use that distribution to pick the
+   next character, and repeat. when picking the next character, our
+   generate_characters function can be set to use the whole id203
+   distribution (default), or be forced to pick one of the top n most
+   likely characters in the distribution. the latter option should obtain
+   more english-like results.
+def generate_characters(g, checkpoint, num_chars, prompt='a', pick_top_chars=non
+e):
+    """ accepts a current character, initial state"""
+
+    with tf.session() as sess:
+        sess.run(tf.initialize_all_variables())
+        g['saver'].restore(sess, checkpoint)
+
+        state = none
+        current_char = vocab_to_idx[prompt]
+        chars = [current_char]
+
+        for i in range(num_chars):
+            if state is not none:
+                feed_dict={g['x']: [[current_char]], g['init_state']: state}
+            else:
+                feed_dict={g['x']: [[current_char]]}
+
+            preds, state = sess.run([g['preds'],g['final_state']], feed_dict)
+
+            if pick_top_chars is not none:
+                p = np.squeeze(preds)
+                p[np.argsort(p)[:-pick_top_chars]] = 0
+                p = p / np.sum(p)
+                current_char = np.random.choice(vocab_size, 1, p=p)[0]
+            else:
+                current_char = np.random.choice(vocab_size, 1, p=np.squeeze(pred
+s))[0]
+
+            chars.append(current_char)
+
+    chars = map(lambda x: idx_to_vocab[x], chars)
+    print("".join(chars))
+    return("".join(chars))
+
+g = build_graph(cell_type='ln_lstm', num_steps=1, batch_size=1)
+generate_characters(g, "saves/ln_lstm_20_epochs", 750, prompt='a', pick_top_char
+s=5)
+
+atooos
+
+ uieaouyouzzzzzzuzaaayayf n fsflflrurctuateot t ta's  a  wtutss esgnano:
+whith then, a do makes and them and to sees,
+i wark on this ance may string take thou honon
+to sorriccorn of the bairer, whither, all
+i'd see if yiust the would a peid.
+
+laryngle:
+to would she troust they fould.
+
+penmes:
+thou she so the havin to my shald woust of
+as tale we they all my forder have
+as to say heant thy wansing thag and
+whis it thee shath his breact, i be and might, she
+tirs you desarvishensed and see thee: shall,
+what he hath with that is all time,
+and sen the have would be sectiens, way thee,
+they are there to man shall with me to the mon,
+and mere fear would be the balte, as time an at
+and the say oun touth, thy way womers thee.
+
+   you can see that this network has learned something. it   s definitely
+   not random, though there is a bit of a warm up at the beginning (the
+   state starts at 0). i was expecting something a bit better, however,
+   given [20]karpathy   s shakespeare results. his model used more data, a
+   state_size of 512, and was trained quite a bit longer than this one.
+   let   s see if we can match that. i couldn   t find a suitable premade
+   dataset, so i had to make one myself: i concatenated the scripts from
+   the star wars movies, the star trek movies, tarantino and the matrix.
+   the final file size is 3.3mb, which is a bit smaller than the full
+   works of william shakespeare. let   s load these up and try this again,
+   with a larger state size:
+"""
+load new data
+"""
+
+file_url = 'https://gist.githubusercontent.com/spitis/59bfafe6966bfe60cc206ffbb7
+60269f/'+\
+'raw/030a08754aada17cef14eed6fac7797cda830fe8/variousscripts.txt'
+file_name = 'variousscripts.txt'
+if not os.path.exists(file_name):
+    urllib.request.urlretrieve(file_url, file_name)
+
+with open(file_name,'r') as f:
+    raw_data = f.read()
+    print("data length:", len(raw_data))
+
+vocab = set(raw_data)
+vocab_size = len(vocab)
+idx_to_vocab = dict(enumerate(vocab))
+vocab_to_idx = dict(zip(idx_to_vocab.values(), idx_to_vocab.keys()))
+
+data = [vocab_to_idx[c] for c in raw_data]
+del raw_data
+
+data length: 3299132
+
+g = build_graph(cell_type='gru',
+                num_steps=80,
+                state_size = 512,
+                batch_size = 50,
+                num_classes=vocab_size,
+                learning_rate=5e-4)
+t = time.time()
+losses = train_network(g, 30, num_steps=80, batch_size = 50, save="saves/gru_30_
+epochs_variousscripts")
+print("it took", time.time() - t, "seconds to train for 30 epochs.")
+print("the average loss on the final epoch was:", losses[-1])
+
+it took 4877.8002140522 seconds to train for 30 epochs.
+the average loss on the final epoch was: 0.726858645461
+
+g = build_graph(cell_type='gru', num_steps=1, batch_size=1, num_classes=vocab_si
+ze, state_size = 512)
+generate_characters(g, "saves/gru_30_epochs_variousscripts", 750, prompt='d', pi
+ck_top_chars=5)
+
+dent'sueenck
+
+bartholomew of the tie fighters are stunned. there is a crowd and armored
+switcheroos.
+
+picard
+(continuing)
+couns two dim is tired. in order to the sentence...
+
+the sub    bottle appears on the screen into a small shuttle shift of the
+ceiling. the damba fett splash fires and matches them into the top, transmit to
+stable high above upon their statels,
+falling from an alien shaft.
+
+anakin and obi-wan stand next to obi-wan down the control plate of smoke at the
+tie fighter. they stare at the centre of the station loose into a comlink cover
+-- comes up to the general, the general huntan and finnfurmbard from the picador
+ to a beautiful podracisly.
+
+engineer
+naboo from an army seventy medical
+security team area re-weilergular.
+
+ext.
+
+   not sure these are that much better than before, but it   s sort of
+   readable?
+
+conclusion
+
+   in this post, we used a character sequence generation task to learn how
+   to use tensorflow   s scan and dynamic_id56 functions, how to use advanced
+   id56 cells and stack multiple id56s, and how to add features to our id56
+   like dropout and layer id172. in the next post, we will use a
+   machine translation task to look at handling variable length sequences
+   and building id56 encoders and decoders.
+
+   (button)
+
+   implementations
+
+   please enable javascript to view the [21]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://r2rt.com/feeds/all.atom.xml
+   2. https://r2rt.com/feeds/implementations.atom.xml
+   3. https://r2rt.com/
+   4. https://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
+   5. https://gist.github.com/spitis/2dd1720850154b25d2cec58d4b75c4a0
+   6. https://github.com/karpathy/char-id56
+   7. https://github.com/sherjilozair/char-id56-tensorflow
+   8. https://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
+   9. http://r2rt.com/styles-of-truncated-id26.html
+  10. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56_cell.py
+  11. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/g3doc/api_docs/python/functional_ops.md#tfscanfn-elems-initializernone-parallel_iterations10-back_proptrue-swap_memoryfalse-namenone-scan
+  12. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html
+  13. http://arxiv.org/pdf/1406.1078v3.pdf
+  14. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56_cell.py
+  15. https://arxiv.org/pdf/1409.2329.pdf
+  16. https://arxiv.org/abs/1607.06450
+  17. http://r2rt.com/implementing-batch-id172-in-tensorflow.html
+  18. http://r2rt.com/implementing-batch-id172-in-tensorflow.html
+  19. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56_cell.py
+  20. http://karpathy.github.io/2015/05/21/id56-effectiveness/#shakespeare
+  21. https://disqus.com/?ref_noscript
+
+   hidden links:
+  23. https://r2rt.com/category/implementations.html

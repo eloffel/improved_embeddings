@@ -1,0 +1,469 @@
+csc321 lecture 10: automatic di   erentiation
+
+roger grosse
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+1 / 23
+
+overview
+
+implementing backprop by hand is like programming in assembly
+language.
+
+you   ll probably never do it, but it   s important for having a mental
+model of how everything works.
+
+lecture 6 covered the math of backprop, which you are using to code
+it up for a particular network for assignment 1
+this lecture: how to build an automatic di   erentiation (autodi   )
+library, so that you never have to write derivatives by hand
+
+we   ll cover a simpli   ed version of autograd, a lightweight autodi    tool.
+pytorch   s autodi    feature is based on very similar principles.
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+2 / 23
+
+confusing terminology
+
+automatic di   erentiation (autodi   ) refers to a general way of taking
+a program which computes a value, and automatically constructing a
+procedure for computing derivatives of that value.
+
+in this lecture, we focus on reverse mode autodi   . there is also a
+forward mode, which is for computing directional derivatives.
+
+id26 is the special case of autodi    applied to neural nets
+
+but in machine learning, we often use backprop synonymously with
+autodi   
+
+autograd is the name of a particular autodi    package.
+
+but lots of people, including the pytorch developers, got confused and
+started using    autograd    to mean    autodi      
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+3 / 23
+
+what autodi    is not
+
+autodi    is not    nite di   erences.
+
+finite di   erences are expensive, since you need to do a forward pass for
+each derivative.
+it also induces huge numerical error.
+normally, we only use it for testing.
+
+autodi    is both e   cient (linear in the cost of computing the value)
+and numerically stable.
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+4 / 23
+
+what autodi    is not
+
+autodi    is not symbolic di   erentiation (e.g. mathematica).
+symbolic di   erentiation can result in complex and redundant
+expressions.
+mathematica   s derivatives for one layer of soft relu (univariate case):
+
+derivatives for two layers of soft relu:
+
+there might not be a convenient formula for the derivatives.
+
+the goal of autodi    is not a formula, but a procedure for computing
+derivatives.
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+5 / 23
+
+what autodi    is
+
+recall how we computed the derivatives of logistic least squares regression.
+an autodi    system should transform the left-hand side into the right-hand
+side.
+
+computing the loss:
+
+z = wx + b
+
+y =   (z)
+l =
+
+(y     t)2
+
+1
+2
+
+computing the derivatives:
+
+l = 1
+y = y     t
+(cid:48)
+(z)
+z = y   
+
+w = z x
+
+b = z
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+6 / 23
+
+what autodi    is
+
+an autodi    system will convert the program into a sequence of primitive
+operations which have speci   ed routines for computing derivatives.
+
+in this representation, backprop can be done in a completely mechanical way.
+
+sequence of primitive operations:
+
+original program:
+
+z = wx + b
+1
+
+y =
+
+1 + exp(   z)
+(y     t)2
+1
+2
+
+l =
+
+t1 = wx
+z = t1 + b
+t3 =    z
+t4 = exp(t3)
+t5 = 1 + t4
+y = 1/t5
+t6 = y     t
+t7 = t 2
+6
+l = t7/2
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+7 / 23
+
+what autodi    is
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+8 / 23
+
+autograd
+
+the rest of this lecture covers how autograd is implemented.
+source code for the original autograd package:
+
+https://github.com/hips/autograd
+
+autodidact, a pedagogical implementation of autograd     you are
+encouraged to read the code.
+
+https://github.com/mattjj/autodidact
+thanks to matt johnson for providing this!
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+9 / 23
+
+building the computation graph
+
+most autodi    systems, including autograd, explicitly construct the
+computation graph.
+
+some frameworks like tensorflow provide mini-languages for building
+computation graphs directly. disadvantage: need to learn a totally new api.
+autograd instead builds them by tracing the forward pass computation,
+allowing for an interface nearly indistinguishable from numpy.
+
+the node class (de   ned in tracer.py) represents a node of the
+computation graph. it has attributes:
+
+value, the actual value computed on a particular set of inputs
+fun, the primitive operation de   ning the node
+args and kwargs, the arguments the op was called with
+parents, the parent nodes
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+10 / 23
+
+building the computation graph
+
+autograd   s fake numpy module provides primitive ops which look and
+feel like numpy functions, but secretly build the computation graph.
+
+they wrap around numpy functions:
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+11 / 23
+
+building the computation graph
+
+example:
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+12 / 23
+
+vector-jacobian products
+
+previously, i suggested deriving backprop equations in terms of sums
+and indices, and then vectorizing them. but we   d like to implement
+our primitive operations in vectorized form.
+the jacobian is the matrix of partial derivatives:
+
+                y1
+
+   x1
+
+...
+
+   ym
+   x1
+
+            
+
+      
+. . .
+      
+
+   y1
+   xn
+
+...
+
+   ym
+   xn
+
+j =
+
+   y
+   x
+
+=
+
+the backprop equation (single child node) can be written as a
+vector-jacobian product (vjp):
+
+(cid:88)
+
+i
+
+xj =
+
+yi
+
+   yi
+   xj
+
+x = y(cid:62)j
+
+that gives a row vector. we can treat it as a column vector by taking
+
+x = j(cid:62)y
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+13 / 23
+
+vector-jacobian products
+
+examples
+
+matrix-vector product
+
+z = wx
+
+j = w x = w
+
+(cid:62)
+
+z
+
+elementwise operations
+
+y = exp(z)
+
+j =
+
+         exp(z1)
+
+0
+
+         
+
+0
+
+. . .
+
+exp(zd )
+
+z = exp(z)     y
+
+note: we never explicitly construct the jacobian. it   s usually simpler
+and more e   cient to compute the vjp directly.
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+14 / 23
+
+vector-jacobian products
+
+for each primitive operation, we must specify vjps for each of its
+arguments. consider y = exp(x).
+this is a function which takes in the output gradient (i.e. y ), the
+answer (y ), and the arguments (x), and returns the input gradient (x)
+defvjp (de   ned in core.py) is a convenience routine for registering
+vjps. it just adds them to a dict.
+examples from numpy/numpy vjps.py
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+15 / 23
+
+backward pass
+
+recall that the backprop computations are more modular if we view
+them as message passing.
+
+this procedure can be implemented directly using the data structures
+we   ve introduced.
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+16 / 23
+
+backward pass
+
+the backwards pass is de   ned in core.py.
+the argument g is the error signal for the end node; for us this is always l = 1.
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+17 / 23
+
+backward pass
+
+grad (in differential operators.py) is just a wrapper around make vjp (in
+core.py) which builds the computation graph and feeds it to backward pass.
+grad itself is viewed as a vjp, if we treat l as the 1    1 matrix with entry 1.
+
+   l
+   w
+
+   l
+   w
+
+l
+
+=
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+18 / 23
+
+recap
+
+we saw three main parts to the code:
+
+tracing the forward pass to build the computation graph
+vector-jacobian products for primitive ops
+the backwards pass
+
+building the computation graph requires fancy numpy gymnastics,
+but other two items are basically what i showed you.
+you   re encouraged to read the full code (< 200 lines!) at:
+
+https://github.com/mattjj/autodidact/tree/master/autograd
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+19 / 23
+
+di   erentiating through a fluid simulation
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+20 / 23
+
+di   erentiating through a fluid simulation
+
+https://github.com/hips/autograd#end-to-end-examples
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+21 / 23
+
+gradient-based hyperparameter optimization
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+22 / 23
+
+gradient-based hyperparameter optimization
+
+roger grosse
+
+csc321 lecture 10: automatic di   erentiation
+
+23 / 23
+
+

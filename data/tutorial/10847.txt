@@ -1,0 +1,1503 @@
+7
+1
+0
+2
+
+ 
+
+y
+a
+m
+0
+1
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+9
+6
+9
+3
+0
+
+.
+
+2
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2017
+
+tracking the world state with
+recurrent entity networks
+
+mikael henaff1,2, jason weston1, arthur szlam1, antoine bordes1 and yann lecun1,2
+
+1facebook ai research
+2courant institute, new york university
+{mbh305}@nyu.edu, {jase,aszlam,abordes,yann}@fb.com
+
+abstract
+
+we introduce a new model, the recurrent entity network (entnet). it is equipped
+with a dynamic long-term memory which allows it to maintain and update a rep-
+resentation of the state of the world as it receives new data. for language un-
+derstanding tasks, it can reason on-the-   y as it reads text, not just when it is
+required to answer a question or respond as is the case for a memory network
+(sukhbaatar et al., 2015). like a id63 or differentiable neural
+computer (graves et al., 2014; 2016) it maintains a    xed size memory and can
+learn to perform location and content-based read and write operations. however,
+unlike those models it has a simple parallel architecture in which several memory
+locations can be updated simultaneously. the entnet sets a new state-of-the-art
+on the babi tasks, and is the    rst method to solve all the tasks in the 10k training
+examples setting. we also demonstrate that it can solve a reasoning task which
+requires a large number of supporting facts, which other methods are not able to
+solve, and can generalize past its training horizon. it can also be practically used
+on large scale datasets such as children   s book test, where it obtains competitive
+performance, reading the story in a single pass.
+
+1
+
+introduction
+
+the essence of intelligence is the ability to predict. an intelligent agent must be able to predict
+unobserved facts about their environment from limited percepts (visual, auditory, textual, or other-
+wise), combined with their knowledge of the past. in order to reason and plan, they must be able to
+predict how an observed event or action will affect the state of the world. arguably, the ability to
+maintain an estimate of the current state of the world, combined with a forward model of how the
+world evolves, is a key feature of intelligent agents.
+
+a natural way for an agent to represent the world is to maintain a set of high-level concepts or entities
+together with their properties, which are updated as new information is received. for example, if
+a percept is the textual description of an event, such as    john walks out of the kitchen   , the agent
+should learn to update its estimate of john   s location, as well as the list (and number) of people
+present in each room. if john was carrying a bag, the location of the bag and the list of objects in
+the kitchen must also be updated. when we read a story, each sentence we read or hear causes us to
+update our internal representation of the current state of the world within the story. the    ow of the
+story is captured by the evolution of this state of the world.
+
+at any given time, an agent typically receives limited information about the state of the world, and
+should therefore be able to infer new information through partial observation. in this paper, we
+investigate this problem through a simple story understanding scenario, in which the agent is given
+a sequence of textual statements and events, and then given another series of statements about the
+   nal state of the world. if the second series of statements is given in the form of questions about the
+   nal state of the world together with their correct answers, the agent should be able to learn from
+them and its performance can be measured by the accuracy of its answers.
+
+1
+
+published as a conference paper at iclr 2017
+
+even with this weak form of supervision, the system may learn basic dynamical constraints about the
+world. for example, it may learn that a person or object cannot be in two locations at the same time,
+or may learn simple update rules such as incrementing and decrementing the number of persons
+or objects in a room. it may also learn basic rules of approximate (logical) id136, such as the
+fact that objects belonging to the same category tend to have similar properties (light objects can be
+carried over from rooms to rooms for instance).
+
+we propose to handle this scenario with a new kind of memory-augmented neural network that
+uses a distributed memory and processor architecture: the recurrent entity network (entnet). the
+model consists of a    xed number of dynamic memory cells, each containing a vector key wj and
+a vector value (or content) hj . each cell is associated with its own    processor   , a simple gated
+recurrent network that may update the cell value given an input. if each cell learns to represent a
+concept or entity in the world, one can imagine a gating mechanism that, based on the key and con-
+tent of the memory cells, will only modify the cells that concern the entities mentioned in the input.
+in the current version of the model, there is no direct interaction between the memory cells, hence
+the system can be seen as multiple identical processors functioning in parallel, with distributed lo-
+cal memory. alternatively, the entnet can be seen as a bank of gated id56s (all sharing the same
+parameters), whose hidden states correspond to latent concepts and attributes, and whose parame-
+ters describe the laws of the world according to which the attributes of objects are updated. the
+sharing of these parameters re   ects an invariance of these laws across object instances, similarly to
+how the weight tying scheme in a id98 re   ects an invariance of image statistics across locations.
+their hidden state is updated only when new information relevant to their concept is received, and
+remains otherwise unchanged. the keys used in the addressing/gating mechanism also correspond
+to concepts or entities, but are modi   ed only during learning, not during id136.
+
+the entnet is able to solve all 20 babi question-answering tasks (weston et al., 2015), a popular
+benchmark of story understanding, which to our knowledge sets a new state-of-the-art. our experi-
+ments also indicate that the model indeed maintains an internal representation of the simpli   ed world
+in which the stories take place, and that the model does not limit itself to storing the aspects of the
+world required to answer a speci   c question. we also introduce a new reasoning task which, unlike
+the babi tasks, requires a model to use a large number of supporting facts to answer the question, and
+show that the entnet outperforms both lstms and memory networks (sukhbaatar et al., 2015) by
+a signi   cant margin. it is also able to generalize to sequences longer than those seen during training.
+finally, our model also obtains competitive results on the childrens book test (hill et al., 2016),
+and performs best among models that read the text in a single pass before receiving knowledge of
+the question.
+
+2 model
+
+our model is designed to process data in sequential form, and consists of three main parts: an input
+encoder, a dynamic memory and an output layer, which we now describe in detail. we developed it
+in the context of id53 on short stories where the inputs are word sequences, but the
+model could be adapted to many other contexts.
+
+2.1
+
+input encoder
+
+the encoding layer summarizes an element of the input sequence with a vector of    xed length.
+typically the input element at time t is a sequence of words, e.g. a sentence or window of words.
+one is free to choose the encoding module to be any standard sequence encoder, which is an active
+area of research. typical choices include a bag-of-words (bow) representation or the    nal state of a
+recurrent neural net (id56) run over the sequence. in this work, we use a simple encoder consisting
+of a learned multiplicative mask followed by a summation. more precisely, let the input at time t be
+a sequence of words with embeddings {e1, ..., ek}. the vector representation of this input is then:
+
+st = x
+i
+
+fi     ei
+
+(1)
+
+the same set of vectors {f1, ..., fk} are used at each time step and are learned jointly with the other
+parameters of the model. note that the model can choose to adopt a standard bow representation
+
+2
+
+published as a conference paper at iclr 2017
+
+figure 1: diagram of the recurrent entity network   s dynamic memory. update equations 1 and 2
+are represented by the module f  , where    is the set of trainable parameters. equations 3 and 4 are
+represented by the gate, since they full   ll a similar function.
+
+by setting all weights in the multiplicative mask to 1, or can choose a positional encoding model as
+used in (sukhbaatar et al., 2015).
+
+2.2 dynamic memory
+
+the dynamic memory is a gated recurrent network with a (partially) block structured weight tying
+scheme. we divide the hidden states of the network into blocks h1, ..., hm; the full hidden state is
+the concatenation of the hj . in the experiments below, m is of the order of 5 to 20, and each block
+hj is of the order of 20 to 100 units.
+
+at each time step t, the content of the hidden states {hj} (which we will call the jth memory) are
+updated using a set of key vectors {wj} and the encoded input st. in its most general form, the
+update equations of our model are given by:
+
+t wj)
+
+t hj + st
+
+gj       (st
+  hj       (u hj + v wj + w st)
+hj     hj + gj       hj
+
+hj    
+
+hj
+
+||hj||
+
+(2)
+
+(3)
+
+(4)
+
+(5)
+
+here    represents a sigmoid, gj is a gating function which determines how much the jth memory
+should be updated, and   hj is the new candidate value of the memory to be combined with the
+existing memory hj . the function    can be chosen from any number of id180, in
+our experiments we use either parametric relu non-linearities (he et al., 2015) or the identity. the
+matrices u, v, w are typically trainable parameters of the model, and are shared between all the
+blocks. they can also be    xed to certain values, such as the identity or zero, to yield a simpler
+model which we use in some of our experiments.
+
+3
+
+published as a conference paper at iclr 2017
+
+the gating function gj contains two terms: a    content    term st
+t hj which causes the gate to open
+for memory slots whose content matches the input, and a    location    term st
+t wj which causes the
+gate to open for memory slots whose key matches the input. the    nal id172 step allows
+the model to forget previous information. to see this, note that since the memories lie on the unit
+sphere, all information is contained in their phase. adding any vector to a given memory (other than
+the memory itself) will decrease the cosine distance between the original memory and the updated
+one. therefore, as new information is added, old information is forgotten.
+
+2.3 output module
+
+whenever the model is required to produce an output, it is presented with a query vector q. speci   -
+cally, the output is computed using the following equations:
+
+pj = softmax(qt hj)
+u = x
+j
+
+pjhj
+
+y = r  (q + hu)
+
+(6)
+
+the matrices h and r are additional trainable parameters of the model. the output module can
+be viewed as a one-hop memory network (sukhbaatar et al., 2015) with an additional non-linearity
+   between the internal state and the decoder matrix. if the memory slots correspond to speci   c
+words (as we will describe in the following section) which contain the answer, p can be viewed as
+a distribution over potential answers and can be used to make a prediction directly or fed into a loss
+function, removing the need for the last two steps.
+
+the entire model (all three components described above) is trained via id26 through
+time, receiving gradients from any time steps where the reader is required to produce an output,
+which are then propagated through the unrolled network.
+
+3 motivating example of operation
+
+we now describe a motivating example of how our model can perform reasoning on-the-   y as it is
+ingesting input sequences. let us suppose our model is reading a story, so the inputs are natural
+language sentences, and then it is required to answer questions about the story it has just read.
+
+our model is free to learn the key vectors wj for each memory j. one choice the model could
+make is to associate a single memory (via the key) with each entity in the story. the memory
+slot corresponding to a person could encode that person   s location, the objects they are carrying,
+or the people they are with, depending on what information is relevant for the task at hand. as
+new information is received indicating that objects are acquired or discarded, or the person changes
+location, their memory slot will change accordingly. similarly useful updates can be made for
+memories corresponding to object and location entities as well.
+
+in fact, we could encode this choice of memories directly into our model, which we consider as a
+type of prior knowledge. by tying the weights of the key vectors with the embeddings of speci   c
+words, we can encourage the model to record information about certain words occuring in the text
+which we believe to be important. for example, given a list of named entities (which could be
+produced by a standard tagger), we could make the model have a separate memory slot for each
+entity. we consider this    tied    variant in our experiments. since the list of entities is independent
+of the training data, this variant can handle entities not seen in the training set, as long as their
+embeddings can be initialized in a reasonable way (such as pre-training on a larger corpus).
+
+now, consider that the model reads the following two sentences, and the desired behavior of the
+gating function and update function at each memory as they are seen:
+
+    mary picked up the ball.
+
+    mary went to the garden.
+
+4
+
+published as a conference paper at iclr 2017
+
+as the    rst sentence st is ingested, and assuming memories encode entities, we would like the gates
+of the memories corresponding to both    mary    and    ball    to activate. this is possible due to the
+location addressing term st
+t wj which uses the key wj . we expect that a well trained model would
+learn to do this. the model would hence modify both the entry corresponding to    mary    to indicate
+that she is now carrying the ball, and also the entry corresponding to    ball   , to indicate that it is
+being carried by mary. when the second sentence is seen, we would like the model to again modify
+the    mary    entry to indicate that she is now in the garden, and also modify the    ball    entry to re   ect
+its new location as well. assuming the information for    mary    is contained in the    ball    memory
+as described before, the gate corresponding to    ball    can activate due to the content addressing
+term st
+t hj , even though the word    ball    does not occur in the second sentence. as before, the gate
+corresponding to the    mary    entry can open due to the second term.
+
+if the gating function and update function have weights such that the steps above are executed, then
+the memory will be in a state where questions such as    where is the ball?    or    where is mary?    can
+be answered from the values of relevant memories, without the need for further complex reasoning.
+
+4 related work
+
+the entnet is related to gated recurrent models such as the lstm (hochreiter & schmidhuber,
+1997) and gru (cho et al., 2014), which also use gates to    x or modify the information stored in
+the hidden state. however, these models use scalar memory cells with full interactions between
+them, whereas ours has separate memory slots which could be seen as groups of hidden units with
+tied weights in the gating and update functions. another important difference is the content-based
+matching term between the input and hidden state, which is not present in these models.
+
+our model also shares some similarities with the dnc/ntm framework of (graves et al., 2014;
+2016). there, as in our model, a block of hidden states acts as a set of read-writeable memories. on
+the other hand, the dnc has a relatively sophisticated controller network (such as an lstm) which
+reads an input and outputs a number of interface vectors (such as keys and weightings) which are
+then combined via a softmax to read from and write to the external memory matrix. in contrast, our
+model can be viewed as a set of separate recurrent models whose hidden states store the memory
+slots. these hidden states are either    xed by the gates, or modi   ed through a simple id56-style
+update. the bulk of the reasoning is thus performed by these parallel recurrent models, rather than
+through a central controller. moreover, instead of using a softmax, our model uses an independent
+gate for writing to each memory.
+
+our model is similar to a memory network and its variants (weston et al., 2014; sukhbaatar et al.,
+2015; chandar et al., 2016; miller et al., 2016) in the way it produces an output using a softmax over
+blocks of hidden states, and our encoding layer is inspired by techniques used in those works. how-
+ever, memory networks explicitly store the entire input sequence in memory, and then sequentially
+update a controller   s hidden state via a softmax gating over the memories. in contrast, our model
+keeps a    xed number of blocks of hiddens as memories and updates each block with an independent
+gated id56. the dynamic memory network of (xiong et al., 2016) also performs updates via a re-
+current model, however it links memories to input tokens and updates them sequentially rather than
+in parallel.
+
+the weight tying scheme and the parallel gated id56s recall the gated graph network of (li et al.,
+2015). if we interpret our work in that context, the    graph    is just a set of vertices with no edges;
+our gating mechanism is also somewhat different than the one they use. the commnn model of
+(sukhbaatar et al., 2016), the interaction network of (?), the neural physics engine of (?) and the
+model of (?) also use a set of parallel recurrent models with tied weights, but differ from our model
+in their use of inter-network communication and the lack of a gating mechanism.
+
+finally, there is another class of recent models that have a writeable memory arranged as (un-
+bounded) stacks, linked lists or queues (joulin & mikolov, 2015; grefenstette et al., 2015). our
+model is different from these in that we use a key-value pair array instead of a stack, and in the
+experiments in this work, the array is of    xed size.
+
+5
+
+published as a conference paper at iclr 2017
+
+t = 10
+
+model
+memn2n 0.09
+lstm
+entnet
+
+0
+0
+
+t = 20
+0.633
+0.157
+0
+
+t = 40
+0.896
+0.226
+0
+
+t
+error
+
+20
+0
+
+30
+0
+
+40
+0
+
+50
+0.01
+
+60
+0.03
+
+70
+0.05
+
+80
+0.08
+
+(a)
+
+(b)
+
+table 1: a) error of different models on the world model task. b) generalization of an entnet
+trained up to t = 20. all errors range from 0 to 1.
+
+5 experiments
+
+in this section we evaluate our model on three different datasets. training details common to all
+experiments can be found in appendix a.
+
+5.1 synthetic world model task
+
+we    rst study our model   s properties on a toy task designed to measure the ability to keep a world
+model in memory. in this task two agents are initially placed randomly on an 10  10 grid, and at each
+time step a randomly chosen agent either changes direction or moves ahead. after a certain number
+of time steps, the model is required to provide the locations of each of the agents, thus revealing
+its internal world model (details can be found in appendix b). this task is challenging because the
+model must combine up to t     2 supporting facts in order to answer the question correctly, and must
+also keep the locations of both agents in memory and update them at different times.
+
+we compared the performance of a memn2n, lstm and entnet. for the memn2n, we set the
+number of hops equal to t    2 and the embedding dimension to d = 20. the entnet had embedding
+dimension d = 20 and 5 memory slots, and the lstm had 50 hidden units which resulted in it having
+signi   cantly more parameters than the other two models. for each model, we repeated the experi-
+ment with 5 different initializations and reported the best performance. all models were trained with
+adam (kingma & ba, 2014) with initial learning rates set by grid search over {0.1, 0.01, 0.001}
+and divided by 2 every 10,000 updates. table 1a shows the results. the memn2n has the worst
+performance, which degrades quickly as the length of the sequence increases. the lstm performs
+better, but still loses accuracy as the length of the sequence increases. in contrast, the entnet is able
+to solve the task in all cases.
+
+the ability to generalize to sequences longer than those seen during training is a desirable property,
+which suggests that the network has learned the dynamics of the world it is trying to model. it also
+means the model can be trained less expensively. to study this, we trained an entnet on variable
+length sequences between 1 and 20, and evaluated it on different length sequences longer than 20.
+results are shown in table 1b. we see that the model is able to achieve good performance several
+times past its training horizon.
+
+5.2 babi tasks
+
+we next evaluate our model on the babi tasks, which are a collection of 20 synthetic question-
+answering datasets    rst introduced in (weston et al., 2015) designed to test a wide variety of rea-
+soning abilities. they have since become a benchmark for memory-augmented neural networks and
+most of the related methods described in section 4 have been tested on them. performance is mea-
+sured using two metrics: the average error across all tasks, and the number of failed tasks (more than
+5% error). we used version 1.2 of the dataset with 10k samples. 1
+
+training details we used a similar training setup as (sukhbaatar et al., 2015). all models were
+trained with adam using a learning rate of    = 0.01, which was divided by 2 every 25 epochs until
+200 epochs were reached. copying previous works (sukhbaatar et al., 2015; xiong et al., 2016),
+the capacity of the memory was limited to the most recent 70 sentences, except for task 3 which
+was limited to 130 sentences. due to the high variance in model performance for some tasks, for
+
+1code to reproduce these experiments can be found at
+
+https://github.com/facebook/memnn/tree/master/entnet-babi.
+
+6
+
+published as a conference paper at iclr 2017
+
+table 2: results on babi tasks with 10k training samples.
+
+task
+
+ntm d-ntm memn2n dnc dmn+ entnet
+
+1: 1 supporting fact
+2: 2 supporting facts
+3: 3 supporting facts
+4: 2 argument relations
+5: 3 argument relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9: simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agent   s motivation
+
+31.5
+54.5
+43.9
+0
+0.8
+17.1
+17.8
+13.8
+16.4
+16.6
+15.2
+8.9
+7.4
+24.2
+47.0
+53.6
+25.5
+2.2
+4.3
+1.5
+
+4.4
+27.5
+71.3
+0
+1.7
+1.5
+6.0
+1.7
+0.6
+19.8
+0
+6.2
+7.5
+17.5
+0
+49.6
+1.2
+0.2
+39.5
+0
+
+failed tasks (> 5% error):
+mean error:
+
+16
+20.1
+
+9
+12.8
+
+0
+0.3
+2.1
+0
+0.8
+0.1
+2.0
+0.9
+0.3
+0
+0.0
+0
+0
+0.2
+0
+51.8
+18.6
+5.3
+2.3
+0
+
+3
+4.2
+
+0
+0.4
+1.8
+0
+0.8
+0
+0.6
+0.3
+0.2
+0.2
+0
+0
+0
+0.4
+0
+55.1
+12.0
+0.8
+3.9
+0
+
+0
+0.3
+1.1
+0
+0.5
+0
+2.4
+0.0
+0.0
+0
+0.0
+0.2
+0
+0.2
+0
+45.3
+4.2
+2.1
+0.0
+0
+
+2
+3.8
+
+1
+2.8
+
+0
+0.1
+4.1
+0
+0.3
+0.2
+0
+0.5
+0.1
+0.6
+0.3
+0
+1.3
+0
+0
+0.2
+0.5
+0.3
+2.3
+0
+
+0
+0.5
+
+each task we conducted 10 runs with different initializations and picked the best model based on
+performance on the validation set, as it has been done in previous work. in all experiments, our
+model had embedding dimension size d = 100 and 20 memory slots.
+
+in table 2 we compare our model to various other state-of-the-art models in the literature: the larger
+memn2n reported in the appendix of (sukhbaatar et al., 2015), the dynamic memory network of
+(xiong et al., 2016), the dynamic id63 (gulcehre et al., 2016), the neural turing
+machine (graves et al., 2014) and the differentiable neural computer (graves et al., 2016). our
+model is able to solve all the tasks, outperforming the other models in terms of both the number of
+solved tasks and the average error.
+
+to analyze what kind of representations our model can learn, we conducted an additional experi-
+ment on task 2 using a simple bow sentence encoding and key vectors which were tied to entity
+embeddings. this was designed to make the model more interpretable, since the weight tying forces
+memory slots to encode information about speci   c entities. 2 after training, we ran the model over
+a story and computed the cosine distance between   (hhj) and each row ri of the decoder matrix
+r. this gave us a score which measures the af   nity between a given memory slot and each word
+in the vocabulary. table 3 shows the nearest neighboring words for each memory slot (which itself
+corresponds to an entity). we see that the model has indeed stored locations of all of the objects and
+characters in its memory slots which re   ect the    nal state of the story. in particular, it has the correct
+answer readily stored in the memory slot of the entity being inquired about (the milk). it also has
+correct location information about all other non-location entities stored in the appropriate memory
+slots. note that it does not store useful or correct information in the memory slots corresponding to
+
+2for most tasks including this one, tying key vectors did not signi   cantly change performance, although it
+
+hurt in a few cases (see appendix c). therefore we did not apply it in table 2
+
+7
+
+published as a conference paper at iclr 2017
+
+table 3: on the left, the network   s    nal    world model    after reading the story on the right. first and
+second nearest neighbors from each memory slot are shown, along with their cosine distance.
+
+key
+
+1-nn
+
+2-nn
+
+story
+
+hallway (0.135)
+football
+garden (0.111)
+milk
+kitchen (0.501)
+john
+garden (0.442)
+mary
+hallway (0.394)
+sandra
+daniel
+hallway (0.689)
+bedroom hallway (0.367)
+kitchen (0.483)
+kitchen
+garden (0.281)
+garden
+hallway
+hallway (0.475)
+
+dropped (0.056)
+took (0.011)
+dropped (0.027)
+took (0.034)
+kitchen (0.121)
+to (0.076)
+dropped (0.075)
+daniel (0.029)
+where (0.026)
+left (0.060)
+
+mary got the milk there
+john moved to the bedroom
+sandra went back to the kitchen
+mary travelled to the hallway
+john got the football there
+john went to the hallway
+john put down the football
+mary went to the garden
+john went to the kitchen
+sandra travelled to the hallway
+daniel went to the hallway
+mary discarded the milk
+where is the milk ?
+answer: garden
+
+locations, most likely because this task does not contain questions about locations (such as    who is
+in the kitchen?   ).
+
+5.3 children   s book test (cbt)
+
+we next evaluated our model on the children   s book test (hill et al., 2016), which is a semantic
+id38 (sentence completion) benchmark built from children   s books that are freely
+available from project gutenberg 3. models are required to read 20 consecutive sentences from a
+given story and use this context to    ll in a missing word from the 21st sentence. more speci   cally,
+each sample consists of a tuple (s, q, c, a) where s is the story consisting of 20 sentences, q is the
+21st sentence with one word replaced by a special blank token, c is a set of 10 candidate answers
+of the same type as the missing word (for example, common nouns or named entities), and a is the
+true answer (which is always contained in c).
+
+it was shown in (hill et al., 2016) that methods with limited memory such as lstms perform well
+on more frequent, syntax based words such as prepositions and verbs, being similar to human per-
+formance, but poorly relative to humans on more semantically meaningful words such as named
+entities and common nouns. therefore, most recent methods have been evaluated on the named en-
+tity and common noun subtasks, since they better test the ability of a model to make use of wider
+contextual information.
+
+training details we adopted the same window memory approach used in (hill et al., 2016), where
+each input corresponds to a window of text from {w(i   b   1/2)...wi...w(i+(b   1)/2)} centered at a can-
+didate wi     c. in our experiments we set b = 5. all models were trained using standard stochastic
+id119 (sgd) with a    xed learning rate of 0.001. we used separate input encodings for the
+update and gating functions, and applied a dropout rate of 0.5 to the id27 dimensions.
+key embeddings were tied to the embeddings of the candidate words, resulting in 10 hidden blocks,
+one per member of c. due to the weight tying, we did not need a decoder matrix and used the
+distribution over candidates to directly produce a prediction, as described in section 3.
+
+we found that a simpler version of the model worked best, with u = v = 0, w = i and    equal
+to the identity. we also removed the id172 step in this simpli   ed model, which we found
+to hurt performance. this can be explained by the fact that the maximum frequency baseline model
+in (hill et al., 2016) has performance which is signi   cantly higher than random, and including the
+id172 step hides this useful frequency-based information.
+
+results we draw a distinction between two setups: the single-pass setup, where the model must read
+the story and query in order and immediately produce an output, and the multi-pass setup, where
+the model can use the query to perform attention over the story. the    rst setup is more challenging
+
+3www.gutenberg.org
+
+8
+
+published as a conference paper at iclr 2017
+
+table 4: accuracy on cbt test set. single-pass models encode the document before seeing the
+query, multi-pass models have access to the query at read time.
+
+model
+
+named entities common nouns
+
+single pass
+
+kneser-ney language model + cache
+lstms (context + query)
+window lstm
+entnet (general)
+entnet (simple)
+
+multi pass
+
+memnn
+memnn + self-sup.
+attention sum reader (kadlec et al., 2016)
+gated-attention reader (bhuwan dhingra & salakhutdinov, 2016)
+epireader (trischler et al., 2016)
+aoa reader (cui et al., 2016)
+nse adaptive computation (munkhdalai & yu, 2016)
+
+0.439
+0.418
+0.436
+0.484
+0.616
+
+0.493
+0.666
+0.686
+0.690
+0.697
+0.720
+0.732
+
+0.577
+0.560
+0.582
+0.540
+0.588
+
+0.554
+0.630
+0.634
+0.639
+0.674
+0.694
+0.714
+
+because the model does not know beforehand which query it will be presented with, and must learn
+to retain information which is useful for a wide variety of potential queries. for this reason it can be
+viewed as a test of the model   s ability to construct a general-purpose representation of the current
+state of the story. the second setup leverages all available information, and allows the model to use
+knowledge of which question will be asked when it reads the story.
+
+in table 4, we show the performance of the general entnet, the simpli   ed entnet, as well as other
+single-pass models taken from (hill et al., 2016). the general entnet performs better than the
+lstms and id165 model on the named entities task, but lags behind on the common nouns
+task. the simpli   ed entnet outperforms all other single-pass models on both tasks, and also per-
+forms better than the memory network which does not use the self-supervision heuristic. however,
+there is still a performance gap when compared to more sophisticated machine comprehension mod-
+els, many of which perform multiple layers of attention over the story using query knowledge. the
+fact that the simpli   ed entnet is able to obtain decent performance is encouraging since it indicates
+that the model is able to build an internal representation of the story which it can then use to answer
+a relatively diverse set of queries.
+
+6 conclusion
+
+two closely related challenges in arti   cial intelligence are designing models which can maintain an
+estimate of the state of a world with complex dynamics over long timescales, and models which can
+predict the forward evolution of the state of the world from partial observation. in this paper, we
+introduced the recurrent entity network, a new model that makes a promising step towards the    rst
+goal. our model is able to accurately track the world state while reading text stories, which enables
+it to set a new state-of-the-art on the babi tasks, the competitive benchmark of story understanding,
+by being the    rst model to solve them all. we also showed that our model is able to capture simple
+dynamics over long timescales, and is able to perform competitively on a real-world dataset.
+
+although our model was able to solve all the babi tasks using 10k training samples, we found that
+performance dropped considerably when using only 1k samples (see appendix). most recent work
+on the babi tasks has focused on the 10k samples setting, and we would like to emphasize that
+solving them in the 1k samples setting remains an open problem which will require improving the
+sample ef   ciency of reasoning models, including ours.
+
+recent works have made some progress towards the second goal of forward modeling, for instance
+in capturing simple physics (lerer et al., 2016), predicting future frames in video (mathieu et al.,
+2015) or responses in dialog (weston, 2016). although we have only applied our model to tasks
+
+9
+
+published as a conference paper at iclr 2017
+
+with textual inputs in this work, the architecture is general and future work should investigate how
+to combine the entnet   s tracking abilities with such predictive models.
+
+references
+
+bhuwan dhingra, hanxiao liu, william cohen and salakhutdinov, ruslan.
+
+attention readers
+text comprehension.
+http://arxiv.org/abs/1606.01549.
+
+for
+
+corr, abs/1606.01549, 2016.
+
+gated-
+url
+
+chandar, sarath, ahn, sungjin, larochelle, hugo, vincent, pascal, tesauro, gerald, and bengio,
+
+yoshua. hierarchical memory networks. arxiv preprint arxiv:1605.07427, 2016.
+
+cho, kyunghyun, van merrienboer, bart, bahdanau, dzmitry, and bengio, yoshua.
+
+on
+the properties of id4:
+in pro-
+ceedings of ssst@emnlp 2014, eighth workshop on syntax, semantics and structure
+in statistical translation, doha, qatar, 25 october 2014, pp. 103   111, 2014.
+url
+http://aclweb.org/anthology/w/w14/w14-4012.pdf.
+
+encoder-decoder approaches.
+
+collobert, ronan, kavukcuoglu, koray, and farabet, clment. torch7: a matlab-like environment
+
+for machine learning, 2011.
+
+cui, yiming, chen, zhipeng, wei, si, wang, shijin, liu, ting, and hu, guoping. attention-
+over-attention neural networks for reading comprehension. corr, abs/1607.04423, 2016. url
+http://arxiv.org/abs/1607.04423.
+
+graves, alex, wayne, greg, and dnihelka, ivo. id63s, september 2014. url
+
+http://arxiv.org/abs/1410.5401.
+
+graves, alex, wayne, greg, reynolds, malcolm, harley, tim, danihelka, ivo, grabska-barwi  nska,
+agnieszka, colmenarejo, sergio g  omez, grefenstette, edward, ramalho, tiago, agapiou, john,
+et al. hybrid computing using a neural network with dynamic external memory. nature, 2016.
+
+grefenstette, edward, hermann, karl moritz, suleyman, mustafa, and blunsom, phil. learning to
+transduce with unbounded memory. in advances in neural information processing systems, pp.
+1828   1836, 2015.
+
+gulcehre, caglar, chandar, sarath, cho, kyunghyun, and bengio, yoshua. dynamic neural tur-
+ing machines with soft and hard addressing schemes. corr, abs/1607.00036, 2016. url
+http://arxiv.org/abs/1607.00036.
+
+he, kaiming, zhang, xiangyu, ren, shaoqing, and sun, jian. delving deep into recti   ers: surpass-
+
+ing human-level performance on id163 classi   cation. corr, abs/1502.01852, 2015.
+
+hill, felix, bordes, antoine, chopra, sumit, and weston, jason. the goldilocks principle: read-
+ing children   s books with explicit memory representations. in proceedings of the international
+conference on learning representations. 2016.
+
+hochreiter, sepp and schmidhuber, j  urgen. long short-term memory. neural comput., 9(8):
+doi: 10.1162/neco.1997.9.8.1735. url
+
+1735   1780, november 1997.
+http://dx.doi.org/10.1162/neco.1997.9.8.1735.
+
+issn 0899-7667.
+
+joulin, armand and mikolov, tomas. inferring algorithmic patterns with stack-augmented recurrent
+
+nets. arxiv preprint arxiv:1503.01007, 2015.
+
+kadlec, rudolf, schmid, martin, bajgar, ondrej, and kleindienst,
+
+text under-
+corr, abs/1603.01547, 2016. url
+
+jan.
+
+standing with the attention sum reader network.
+http://arxiv.org/abs/1603.01547.
+
+kingma, diederik p. and ba, jimmy. adam: a method for stochastic optimization. corr,
+
+abs/1412.6980, 2014. url http://arxiv.org/abs/1412.6980.
+
+10
+
+published as a conference paper at iclr 2017
+
+lerer, adam, gross, sam, and fergus, rob.
+
+intuition of block tow-
+ers by example.
+in proceedings of the 33nd international conference on machine learn-
+ing, icml 2016, new york city, ny, usa, june 19-24, 2016, pp. 430   438, 2016. url
+http://jmlr.org/proceedings/papers/v48/lerer16.html.
+
+learning physical
+
+li, yujia, tarlow, daniel, brockschmidt, marc, and zemel, richard s. gated graph sequence neural
+
+networks. corr, abs/1511.05493, 2015. url http://arxiv.org/abs/1511.05493.
+
+mathieu, micha  el, couprie, camille,
+
+and lecun, yann.
+
+prediction beyond mean square
+http://arxiv.org/abs/1511.05440.
+
+error.
+
+corr,
+
+abs/1511.05440,
+
+deep multi-scale video
+url
+
+2015.
+
+miller, alexander, fisch, adam, dodge, jesse, karimi, amir-hossein, bordes, antoine, and we-
+arxiv preprint
+
+ston, jason. key-value memory networks for directly reading documents.
+arxiv:1606.03126, 2016.
+
+munkhdalai, tsendsuren and yu, hong.
+
+ral networks
+language comprehension.
+https://arxiv.org/abs/1610.06454.
+
+for
+
+reasoning with memory augmented neu-
+url
+
+corr, abs/1610.06454, 2016.
+
+sukhbaatar,
+
+szlam,
+
+sainbayar,
+
+end-
+in cortes, c., lawrence, n. d., lee, d. d.,
+to-end memory networks.
+sugiyama, m.,
+information pro-
+2015.
+url
+cessing
+systems
+http://papers.nips.cc/paper/5846-end-to-end-memory-networks.pdf.
+
+and garnett, r.
+28,
+
+2440   2448. curran associates,
+
+in neural
+inc.,
+
+and fergus, rob.
+
+(eds.), advances
+
+arthur, weston,
+
+jason,
+
+pp.
+
+sukhbaatar,
+
+sainbayar,
+communication with
+http://arxiv.org/abs/1605.07736.
+
+szlam, arthur,
+id26.
+
+and fergus, rob.
+
+corr,
+
+abs/1605.07736,
+
+learning multiagent
+url
+
+2016.
+
+trischler, adam, ye, zheng, yuan, xingdi,
+
+guage comprehension with the epireader.
+http://arxiv.org/abs/1606.02270.
+
+and suleman, kaheer.
+corr, abs/1606.02270, 2016.
+
+natural
+
+lan-
+url
+
+weston, jason.
+
+dialog-based language learning.
+
+corr, abs/1604.06045, 2016.
+
+url
+
+http://arxiv.org/abs/1604.06045.
+
+weston, jason, chopra, sumit, and bordes, antoine. memory networks. corr, abs/1410.3916,
+
+2014. url http://arxiv.org/abs/1410.3916.
+
+weston, jason, bordes, antoine, chopra, sumit, and mikolov, tomas. towards ai-complete
+id53: a set of prerequisite toy tasks. corr, abs/1502.05698, 2015. url
+http://arxiv.org/abs/1502.05698.
+
+xiong, caiming, merity, stephen, and socher, richard. dynamic memory networks for visual and
+
+textual id53. in icml, 2016.
+
+a training details
+
+all models were implemented using torch (collobert et al., 2011). in all experiments, we initialized
+our model by drawing weights from a gaussian distribution with mean zero and standard deviation
+0.1, except for the prelu slopes and encoder weights which were initialized to 1. note that the
+prelu initialization is related to two of the heuristics used in (sukhbaatar et al., 2015), namely
+starting training with a purely linear model, and adding non-linearities to half of the hidden units.
+our initialization allows the model to choose when and how much to enter the non-linear regime.
+initializing the encoder weights to 1 corresponds to beginning with a bow encoding, which the
+model can then choose to modify. the initial values of the memory slots were initialized to the key
+values, which we found to help performance. optimization was done with sgd or adam using
+minibatches of size 32, and gradients with norm greater than 40 were clipped to 40. a null symbol
+whose embedding was constrained to be zero was used to pad all sentences or windows to a    xed
+size.
+
+11
+
+published as a conference paper at iclr 2017
+
+b details of world model experiments
+
+two agents are initially placed at random on a 10    10 grid with 100 distinct
+locations
+{(1, 1), (1, 2), ...(9, 10), (10, 10)}. at each time step an agent is chosen at random. there are two
+types of actions: the agent can face a given direction, or can move a number of steps ahead. actions
+are sampled until a legal action is found by either choosing to change direction or move with equal
+id203. if they change direction, the direction is chosen between north, south, east and west with
+equal id203. if they move, the number of steps is randomly chosen between 1 and 5. a legal
+action is one which does not place the agent off the grid. stories are given to the network in textual
+form, an example of which is below. the    rst action after each agent is placed on the grid is to face
+a given direction. therefore, the maximum number of actions made by one agent is t     2. the
+network learns id27s for all words in the vocabulary such as locations, agent identi   ers
+and actions. at question time, the model must predict the correct answer (which will always be a
+location) from all the tokens in the vocabulary.
+
+agent1 is at (2,8)
+agent1 faces-n
+agent2 is at (9,7)
+agent2 faces-n
+agent2 moves-2
+agent2 faces-e
+agent2 moves-1
+agent1 moves-1
+agent2 faces-s
+agent2 moves-5
+q1: where is agent1 ?
+q2: where is agent2 ?
+a1: (2,9)
+a2: (10,4)
+
+c additional results on babi tasks
+
+we provide some additional experiments on the babi tasks, in order to better understand the in   u-
+ence of architecture, weight tying, and amount of training data. table 5 shows results when a simple
+bow encoding is used for the inputs. here, the entnet still performs better than a memn2n which
+uses the same encoding scheme, indicating that the architecture has an important effect. tying the
+key vectors to entities did not help, and hurt performance for some tasks. table 6 shows results when
+using only 1k training samples. in this setting, the entnet performs worse than the memn2n.
+
+table 7 shows results for the entnet and the dnc when models are trained on all tasks jointly.
+we report results for the mean performance across different random seeds (20 for the dnc, 5 for
+the entnet), as well as the performance for the single best seed (measured by validation error).
+the dnc results for mean performance were taken from the appendix of graves et al. (2016). the
+dnc has better performance in terms of the best seed, but also exhibits high variation across seeds,
+indicating that many different runs are required to achieve good performance. the entnet exhibits
+less variation across runs and is able to solve more tasks consistently. note that table 2 reports dnc
+results with joint training, since results when training on each task separately were not available.
+
+12
+
+published as a conference paper at iclr 2017
+
+table 5: error rates on babi tasks with inputs are encoded using bow.    tied    refers to the case
+where key vectors are tied with entity embeddings.
+
+task
+
+memn2n entnet-tied entnet
+
+1: 1 supporting fact
+2: 2 supporting facts
+3: 3 supporting facts
+4: 2 argument relations
+5: 3 argument relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9: simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agent   s motivation
+
+failed tasks (> 5%):
+mean error:
+
+0
+0.6
+7
+32.6
+10.2
+0.2
+10.6
+2.6
+0.3
+0.5
+0
+0
+0
+0.1
+11.4
+52.9
+39.3
+40.5
+74.4
+0
+
+9
+15.6
+
+0
+3.0
+9.6
+33.8
+1.7
+0
+0.5
+0.1
+0
+0
+0.3
+0
+0.2
+6.2
+12.5
+46.5
+40.5
+44.2
+75.1
+0
+
+8
+13.7
+
+0
+1.2
+9.0
+31.8
+3.5
+0
+0.5
+0.3
+0
+0
+0
+0
+0.4
+0.1
+12.1
+0
+40.5
+45.7
+74.0
+0
+
+6
+10.9
+
+13
+
+published as a conference paper at iclr 2017
+
+table 6: results on babi tasks with 1k samples.
+
+task
+
+memn2n entnet
+
+1: 1 supporting fact
+2: 2 supporting facts
+3: 3 supporting facts
+4: 2 argument relations
+5: 3 argument relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9: simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agent   s motivation
+
+failed tasks (> 5%):
+mean error:
+
+0
+8.3
+40.3
+2.8
+13.1
+7.6
+17.3
+10.0
+13.2
+15.1
+0.9
+0.2
+0.4
+1.7
+0
+1.3
+51.0
+11.1
+82.8
+0
+
+11
+13.9
+
+0.7
+56.4
+69.7
+1.4
+4.6
+30.0
+22.3
+19.2
+31.5
+15.6
+8.0
+0.8
+9.0
+62.9
+57.8
+53.2
+46.4
+8.8
+90.4
+2.6
+
+15
+29.6
+
+14
+
+published as a conference paper at iclr 2017
+
+table 7: results on babi tasks with 10k samples and joint training on all tasks.
+
+all seeds
+
+task
+1: 1 supporting fact
+2: 2 supporting facts
+3: 3 supporting facts
+4: 2 argument relations
+5: 3 argument relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9: simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agent   s motivation
+failed tasks (> 5%):
+mean error:
+
+dnc
+9.0    12.6
+39.2    20.5
+39.6    16.4
+0.4    0.7
+1.5    1.0
+6.9    7.5
+9.8    7.0
+5.5    5.9
+7.7    8.3
+9.6    11.4
+3.3    5.7
+5.0    6.3
+3.1    3.6
+11.0    7.5
+27.2    20.1
+53.6    1.9
+32.4    8.0
+4.2    1.8
+64.6    37.4
+0.0    0.1
+11.2    5.4
+16.7    7.6
+
+entnet
+0    0.1
+15.3    15.7
+29.3    26.3
+0.1    0.1
+0.4    0.3
+0.6    0.8
+1.8    1.1
+1.5    1.2
+0    0.1
+0.1    0.2
+0.2    0.2
+0    0
+0    0.1
+7.3    4.5
+3.6    8.1
+53.3    1.2
+8.8    3.8
+1.3    0.9
+70.4    6.1
+0    0
+5    1.2
+9.7    2.6
+
+best seed
+
+dnc entnet
+0
+0.4
+1.8
+0
+0.8
+0
+0.6
+0.3
+0.2
+0.2
+0
+0
+0
+0.4
+0
+55.1
+12.0
+0.8
+3.9
+0
+2
+3.8
+
+0.1
+2.8
+10.6
+0
+0.4
+0.3
+0.8
+0.1
+0
+0
+0
+0
+0
+3.6
+0
+52.1
+11.7
+2.1
+63.0
+0
+4
+7.38
+
+15
+
+

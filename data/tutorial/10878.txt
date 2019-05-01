@@ -1,0 +1,1854 @@
+7
+1
+0
+2
+
+ 
+
+n
+a
+j
+ 
+
+3
+2
+
+ 
+ 
+]
+
+g
+l
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+8
+3
+5
+6
+0
+
+.
+
+1
+0
+7
+1
+:
+v
+i
+x
+r
+a
+
+under review as a conference paper at iclr 2017
+
+outrageously large neural networks:
+the sparsely-gated mixture-of-experts layer
+
+noam shazeer1, azalia mirhoseini      1, krzysztof maziarz   2, andy davis1, quoc le1, geoffrey
+
+hinton1 and jeff dean1
+
+1google brain, {noam,azalia,andydavis,qvl,geoffhinton,jeff}@google.com
+
+2jagiellonian university, cracow, krzysztof.maziarz@student.uj.edu.pl
+
+abstract
+
+the capacity of a neural network to absorb information is limited by its number of
+parameters. conditional computation, where parts of the network are active on a
+per-example basis, has been proposed in theory as a way of dramatically increas-
+ing model capacity without a proportional increase in computation. in practice,
+however, there are signi   cant algorithmic and performance challenges.
+in this
+work, we address these challenges and    nally realize the promise of conditional
+computation, achieving greater than 1000x improvements in model capacity with
+only minor losses in computational ef   ciency on modern gpu clusters. we in-
+troduce a sparsely-gated mixture-of-experts layer (moe), consisting of up to
+thousands of feed-forward sub-networks. a trainable gating network determines
+a sparse combination of these experts to use for each example. we apply the moe
+to the tasks of id38 and machine translation, where model capacity
+is critical for absorbing the vast quantities of knowledge available in the training
+corpora. we present model architectures in which a moe with up to 137 billion
+parameters is applied convolutionally between stacked lstm layers. on large
+id38 and machine translation benchmarks, these models achieve
+signi   cantly better results than state-of-the-art at lower computational cost.
+
+1
+
+introduction and related work
+
+1.1 conditional computation
+
+exploiting scale in both training data and model size has been central to the success of deep learn-
+ing. when datasets are suf   ciently large, increasing the capacity (number of parameters) of neural
+networks can give much better prediction accuracy. this has been shown in domains such as text
+(sutskever et al., 2014; bahdanau et al., 2014; jozefowicz et al., 2016; wu et al., 2016), images
+(krizhevsky et al., 2012; le et al., 2012), and audio (hinton et al., 2012; amodei et al., 2015). for
+typical deep learning models, where the entire model is activated for every example, this leads to
+a roughly quadratic blow-up in training costs, as both the model size and the number of training
+examples increase. unfortunately, the advances in computing power and distributed computation
+fall short of meeting such demand.
+various forms of conditional computation have been proposed as a way to increase model capacity
+without a proportional increase in computational costs (davis & arel, 2013; bengio et al., 2013;
+eigen et al., 2013; ludovic denoyer, 2014; cho & bengio, 2014; bengio et al., 2015; almahairi
+et al., 2015). in these schemes, large parts of a network are active or inactive on a per-example
+basis. the gating decisions may be binary or sparse and continuous, stochastic or deterministic.
+various forms of id23 and back-propagation are proposed for trarining the gating
+decisions.
+
+   equally major contributors
+   work done as a member of the google brain residency program (g.co/brainresidency)
+
+1
+
+under review as a conference paper at iclr 2017
+
+figure 1: a mixture of experts (moe) layer embedded within a recurrent language model. in this
+case, the sparse gating function selects two experts to perform computations. their outputs are
+modulated by the outputs of the gating network.
+
+while these ideas are promising in theory, no work to date has yet demonstrated massive improve-
+ments in model capacity, training time, or model quality. we blame this on a combination of the
+following challenges:
+
+    modern computing devices, especially gpus, are much faster at arithmetic than at branch-
+ing. most of the works above recognize this and propose turning on/off large chunks of the
+network with each gating decision.
+
+    large batch sizes are critical for performance, as they amortize the costs of parameter trans-
+fers and updates. conditional computation reduces the batch sizes for the conditionally
+active chunks of the network.
+
+    network bandwidth can be a bottleneck. a cluster of gpus may have computational power
+thousands of times greater than the aggregate inter-device network bandwidth. to be com-
+putationally ef   cient, the relative computational versus network demands of an algorithm
+must exceed this ratio. embedding layers, which can be seen as a form of conditional com-
+putation, are handicapped by this very problem. since the embeddings generally need to
+be sent across the network, the number of (example, parameter) interactions is limited by
+network bandwidth instead of computational capacity.
+
+    depending on the scheme, loss terms may be necessary to achieve the desired level of
+sparsity per-chunk and/or per example. bengio et al. (2015) use three such terms. these
+issues can affect both model quality and load-balancing.
+
+    model capacity is most critical for very large data sets. the existing literature on condi-
+tional computation deals with relatively small image recognition data sets consisting of up
+to 600,000 images. it is hard to imagine that the labels of these images provide a suf   cient
+signal to adequately train a model with millions, let alone billions of parameters.
+
+in this work, we for the    rst time address all of the above challenges and    nally realize the promise
+of conditional computation. we obtain greater than 1000x improvements in model capacity with
+only minor losses in computational ef   ciency and signi   cantly advance the state-of-the-art results
+on public id38 and translation data sets.
+
+1.2 our approach: the sparsely-gated mixture-of-experts layer
+
+our approach to conditional computation is to introduce a new type of general purpose neural net-
+work component: a sparsely-gated mixture-of-experts layer (moe). the moe consists of a num-
+ber of experts, each a simple feed-forward neural network, and a trainable gating network which
+selects a sparse combination of the experts to process each input (see figure 1). all parts of the
+network are trained jointly by back-propagation.
+
+2
+
+under review as a conference paper at iclr 2017
+
+while the introduced technique is generic, in this paper we focus on id38 and machine
+translation tasks, which are known to bene   t from very large models. in particular, we apply a moe
+convolutionally between stacked lstm layers (hochreiter & schmidhuber, 1997), as in figure 1.
+the moe is called once for each position in the text, selecting a potentially different combination
+of experts at each position. the different experts tend to become highly specialized based on syntax
+and semantics (see appendix e table 9). on both id38 and machine translation
+benchmarks, we improve on best published results at a fraction of the computational cost.
+
+1.3 related work on mixtures of experts
+
+since its introduction more than two decades ago (jacobs et al., 1991; jordan & jacobs, 1994),
+the mixture-of-experts approach has been the subject of much research. different types of expert
+architectures hae been proposed such as id166s (collobert et al., 2002), gaussian processes (tresp,
+2001; theis & bethge, 2015; deisenroth & ng, 2015), dirichlet processes (shahbaba & neal, 2009),
+and deep networks. other work has focused on different expert con   gurations such as a hierarchical
+structure (yao et al., 2009), in   nite numbers of experts (rasmussen & ghahramani, 2002), and
+adding experts sequentially (aljundi et al., 2016). garmash & monz (2016) suggest an ensemble
+model in the format of mixture of experts for machine translation. the gating network is trained on
+a pre-trained ensemble id4 model.
+the works above concern top-level mixtures of experts. the mixture of experts is the whole model.
+eigen et al. (2013) introduce the idea of using multiple moes with their own gating networks as
+parts of a deep model. it is intuitive that the latter approach is more powerful, since complex prob-
+lems may contain many sub-problems each requiring different experts. they also allude in their
+conclusion to the potential to introduce sparsity, turning moes into a vehicle for computational
+computation.
+our work builds on this use of moes as a general purpose neural network component. while eigen
+et al. (2013) uses two stacked moes allowing for two sets of gating decisions, our convolutional
+application of the moe allows for different gating decisions at each position in the text. we also
+realize sparse gating and demonstrate its use as a practical way to massively increase model capacity.
+
+2 the structure of the mixture-of-experts layer
+the mixture-of-experts (moe) layer consists of a set of n    expert networks" e1,       , en, and a
+   gating network" g whose output is a sparse n-dimensional vector. figure 1 shows an overview
+of the moe module. the experts are themselves neural networks, each with their own parameters.
+although in principle we only require that the experts accept the same sized inputs and produce the
+same-sized outputs, in our initial investigations in this paper, we restrict ourselves to the case where
+the models are feed-forward networks with identical architectures, but with separate parameters.
+let us denote by g(x) and ei(x) the output of the gating network and the output of the i-th expert
+network for a given input x. the output y of the moe module can be written as follows:
+
+y =
+
+g(x)iei(x)
+
+(1)
+
+i=1
+
+we save computation based on the sparsity of the output of g(x). wherever g(x)i = 0, we need not
+compute ei(x). in our experiments, we have up to thousands of experts, but only need to evaluate
+a handful of them for every example. if the number of experts is very large, we can reduce the
+branching factor by using a two-level hierarchical moe. in a hierarchical moe, a primary gating
+network chooses a sparse weighted combination of    experts", each of which is itself a secondary
+mixture-of-experts with its own gating network. in the following we focus on ordinary moes. we
+provide more details on hierarchical moes in appendix b.
+our implementation is related to other models of conditional computation. a moe whose experts are
+simple weight matrices is similar to the parameterized weight matrix proposed in (cho & bengio,
+2014). a moe whose experts have one hidden layer is similar to the block-wise dropout described
+in (bengio et al., 2015), where the dropped-out layer is sandwiched between fully-activated layers.
+
+3
+
+n(cid:88)
+
+under review as a conference paper at iclr 2017
+
+2.1 gating network
+
+softmax gating: a simple choice of non-sparse gating function (jordan & jacobs, 1994) is to
+multiply the input by a trainable weight matrix wg and then apply the sof tmax function.
+
+g  (x) = sof tmax(x    wg)
+
+(2)
+
+noisy top-k gating: we add two components to the softmax gating network: sparsity and noise.
+before taking the softmax function, we add tunable gaussian noise, then keep only the top k values,
+setting the rest to        (which causes the corresponding gate values to equal 0). the sparsity serves
+to save computation, as described above. while this form of sparsity creates some theoretically
+scary discontinuities in the output of gating function, we have not yet observed this to be a problem
+in practice. the noise term helps with load balancing, as will be discussed in appendix a. the
+amount of noise per component is controlled by a second trainable weight matrix wnoise.
+
+g(x) = sof tmax(keept opk(h(x), k))
+
+h(x)i = (x    wg)i + standardn ormal()    sof tplus((x    wnoise)i)
+
+keept opk(v, k)i =
+
+       otherwise.
+
+if vi is in the top k elements of v.
+
+(cid:26)vi
+
+(3)
+
+(4)
+
+(5)
+
+training the gating network we train the gating network by simple back-propagation, along
+with the rest of the model. if we choose k > 1, the gate values for the top k experts have nonzero
+derivatives with respect to the weights of the gating network. this type of occasionally-sensitive
+behavior is described in (bengio et al., 2013) with respect to noisy recti   ers. gradients also back-
+propagate through the gating network to its inputs. our method differs here from (bengio et al.,
+2015) who use boolean gates and a reinforce-style approach to train the gating network.
+
+3 addressing performance challenges
+
+3.1 the shrinking batch problem
+
+on modern cpus and gpus, large batch sizes are necessary for computational ef   ciency, so as
+to amortize the overhead of parameter loads and updates. if the gating network chooses k out of
+n experts for each example, then for a batch of b examples, each expert receives a much smaller
+n (cid:28) b examples. this causes a naive moe implementation to become
+batch of approximately kb
+very inef   cient as the number of experts increases. the solution to this shrinking batch problem is
+to make the original batch size as large as possible. however, batch size tends to be limited by the
+memory necessary to store activations between the forwards and backwards passes. we propose the
+following techniques for increasing the batch size:
+
+mixing data parallelism and model parallelism:
+in a conventional distributed training setting,
+multiple copies of the model on different devices asynchronously process distinct batches of data,
+and parameters are synchronized through a set of parameter servers. in our technique, these different
+batches run synchronously so that they can be combined for the moe layer. we distribute the
+standard layers of the model and the gating network according to conventional data-parallel schemes,
+but keep only one shared copy of each expert. each expert in the moe layer receives a combined
+batch consisting of the relevant examples from all of the data-parallel input batches. the same set
+of devices function as data-parallel replicas (for the standard layers and the gating networks) and
+as model-parallel shards (each hosting a subset of the experts). if the model is distributed over d
+devices, and each device processes a batch of size b, each expert receives a batch of approximately
+n examples. thus, we achieve a factor of d improvement in expert batch size.
+kbd
+in the case of a hierarchical moe (section b), the primary gating network employs data parallelism,
+and the secondary moes employ model parallelism. each secondary moe resides on one device.
+
+4
+
+under review as a conference paper at iclr 2017
+
+this technique allows us to increase the number of experts (and hence the number of parameters) by
+proportionally increasing the number of devices in the training cluster. the total batch size increases,
+keeping the batch size per expert constant. the memory and bandwidth requirements per device also
+remain constant, as do the step times, as does the amount of time necessary to process a number of
+training examples equal to the number of parameters in the model. it is our goal to train a trillion-
+parameter model on a trillion-word corpus. we have not scaled our systems this far as of the writing
+of this paper, but it should be possible by adding more hardware.
+
+taking advantage of convolutionality:
+in our language models, we apply the same moe to each
+time step of the previous layer. if we wait for the previous layer to    nish, we can apply the moe
+to all the time steps together as one big batch. doing so increases the size of the input batch to the
+moe layer by a factor of the number of unrolled time steps.
+
+increasing batch size for a recurrent moe: we suspect that even more powerful models may
+involve applying a moe recurrently. for example, the weight matrices of a lstm or other id56
+could be replaced by a moe. sadly, such models break the convolutional trick from the last para-
+graph, since the input to the moe at one timestep depends on the output of the moe at the previous
+timestep. gruslys et al. (2016) describe a technique for drastically reducing the number of stored
+activations in an unrolled id56, at the cost of recomputing forward activations. this would allow
+for a large increase in batch size.
+
+3.2 network bandwidth
+
+another major performance concern in distributed computing is network bandwidth. since the ex-
+perts are stationary (see above) and the number of gating parameters is small, most of the communi-
+cation involves sending the inputs and outputs of the experts across the network. to maintain com-
+putational ef   ciency, the ratio of an expert   s computation to the size of its input and output must ex-
+ceed the ratio of computational to network capacity of the computing device. for gpus, this may be
+thousands to one. in our experiments, we use experts with one hidden layer containing thousands of
+relu-activated units. since the weight matrices in the expert have sizes input_size  hidden_size
+and hidden_size   output_size, the ratio of computation to input and output is equal to the size of
+the hidden layer. conveniently, we can increase computational ef   ciency simply by using a larger
+hidden layer, or more hidden layers.
+
+4 balancing expert utilization
+
+we have observed that the gating network tends to converge to a state where it always produces
+large weights for the same few experts. this imbalance is self-reinforcing, as the favored experts
+are trained more rapidly and thus are selected even more by the gating network. eigen et al. (2013)
+describe the same phenomenon, and use a hard constraint at the beginning of training to avoid this
+local minimum. bengio et al. (2015) include a soft constraint on the batch-wise average of each
+gate.1
+we take a soft constraint approach. we de   ne the importance of an expert relative to a batch of
+training examples to be the batchwise sum of the gate values for that expert. we de   ne an additional
+loss limportance, which is added to the overall id168 for the model. this loss is equal to
+the square of the coef   cient of variation of the set of importance values, multiplied by a hand-tuned
+scaling factor wimportance. this additional loss encourages all experts to have equal importance.
+
+importance(x) =
+
+g(x)
+
+(cid:88)
+
+x   x
+
+limportance(x) = wimportance    cv (importance(x))2
+
+1bengio et al. (2015) also include two additional losses. one controls per-example sparsity, which we do
+not need since it is enforced by the    xed value of k. a third loss encourages diversity of gate values. in our
+experiments, we    nd that the gate values naturally diversify as the experts specialize (in a virtuous cycle), and
+we do not need to enforce diversity of gate values.
+
+5
+
+(6)
+
+(7)
+
+under review as a conference paper at iclr 2017
+
+while this id168 can ensure equal importance, experts may still receive very different num-
+bers of examples. for example, one expert may receive a few examples with large weights, and
+another may receive many examples with small weights. this can cause memory and performance
+problems on distributed hardware. to solve this problem, we introduce a second id168,
+lload , which ensures balanced loads. appendix a contains the de   nition of this function, along
+with experimental results.
+
+5 experiments
+
+5.1
+
+1 billion word id38 benchmark
+
+dataset: this dataset, introduced by (chelba et al., 2013) consists of shuf   ed unique sentences
+from news articles, totaling approximately 829 million words, with a vocabulary of 793,471 words.
+
+previous state-of-the-art: the best previously published results (jozefowicz et al., 2016) use
+models consisting of one or more stacked long short-term memory (lstm) layers (hochreiter
+& schmidhuber, 1997; gers et al., 2000). the number of parameters in the lstm layers of these
+models vary from 2 million to 151 million. quality increases greatly with parameter count, as do
+computational costs. results for these models form the top line of figure 2-right.
+
+moe models: our models consist of two stacked lstm layers with a moe layer between them
+(see figure 1). we vary the sizes of the layers and the number of experts. for full details on model
+architecture, training regimen, additional baselines and results, see appendix c.
+
+low computation, varied capacity: to investigate the effects of adding capacity, we trained
+a series of moe models all with roughly equal computational costs: about 8 million multiply-and-
+adds per training example per timestep in the forwards pass, excluding the softmax layer. we call
+this metric (ops/timestep). we trained models with    at moes containing 4, 32, and 256 experts, and
+models with hierarchical moes containing 256, 1024, and 4096 experts. each expert had about 1
+million parameters. for all the moe layers, 4 experts were active per input.
+the results of these models are shown in figure 2-left. the model with 4 always-active experts
+performed (unsurprisingly) similarly to the computationally-matched baseline models, while the
+largest of the models (4096 experts) achieved an impressive 24% lower perplexity on the test set.
+
+figure 2: model comparison on 1-billion-word language-modeling benchmark. on the left, we
+plot test perplexity as a function of model capacity for models with similar computational budgets
+of approximately 8-million-ops-per-timestep. on the right, we plot test perplexity as a function of
+computational budget. the top line represents the lstm models from (jozefowicz et al., 2016).
+the bottom line represents 4-billion parameter moe models with different computational budgets.
+
+varied computation, high capacity:
+in addition to the largest model from the previous section,
+we trained two more moe models with similarly high capacity (4 billion parameters), but higher
+computation budgets. these models had larger lstms, and fewer but larger and experts. details
+
+6
+
+under review as a conference paper at iclr 2017
+
+table 1: summary of high-capacity moe-augmented models with varying computational budgets,
+vs. best previously published results (jozefowicz et al., 2016). details in appendix c.
+
+best published results
+low-budget moe model
+medium-budget moe model
+high-budget moe model
+
+perplexity perplexity excluding embedding
+10 epochs 100 epochs
+and softmax layers
+
+#parameters
+
+ops/timestep
+
+training
+
+time
+
+10 epochs
+
+test
+
+30.6
+
+151 million
+4303 million
+4313 million
+4371 million
+
+59 hours, 32 k40s
+151 million
+8.9 million
+15 hours, 16 k40s
+33.8 million 17 hours, 32 k40s
+142.7 million 47 hours, 32 k40s
+
+test
+
+34.7
+34.1
+31.3
+28.0
+
+tflops
+
+/gpu
+
+1.09
+0.74
+1.22
+1.56
+
+can be found in appendix c.2. results of these three models form the bottom line of figure 2-right.
+table 1 compares the results of these models to the best previously-published result on this dataset .
+even the fastest of these models beats the best published result (when controlling for the number of
+training epochs), despite requiring only 6% of the computation.
+
+computational ef   ciency: we trained our models using tensorflow (abadi et al., 2016) on clus-
+ters containing 16-32 tesla k40 gpus. for each of our models, we determine computational ef   -
+ciency in tflops/gpu by dividing the number of    oating point operations required to process
+one training batch by the observed step time and the number of gpus in the cluster. the operation
+counts used here are higher than the ones we report in our ops/timestep numbers in that we include
+the backwards pass, we include the importance-sampling-based training of the softmax layer, and
+we count a multiply-and-add as two separate operations. for all of our moe models, the    oating
+point operations involved in the experts represent between 37% and 46% of the total.
+for our baseline models wtih no moe, observed computational ef   ciency ranged from 1.07-1.29
+tflops/gpu. for our low-computation moe models, computation ef   ciency ranged from 0.74-
+0.90 tflops/gpu, except for the 4-expert model which did not make full use of the available
+parallelism. our highest-computation moe model was more ef   cient at 1.56 tflops/gpu, likely
+due to the larger matrices. these numbers represent a signi   cant fraction of the theoretical maximum
+of 4.29 tflops/gpu claimed by nvidia. detailed results are in appendix c, table 7.
+
+5.2
+
+100 billion word google news corpus
+
+figure 3: id38 on a 100 billion word corpus. models have similar computational
+budgets (8 million ops/timestep).
+
+on the 1-billion-word corpus, adding additional capacity seems to produce diminishing returns as
+the number of parameters in the moe layer exceeds 1 billion, as can be seen in figure 2-left. we
+hypothesized that for a larger training set, even higher capacities would produce signi   cant quality
+improvements.
+we constructed a similar training set consisting of shuf   ed unique sentences from google   s internal
+news corpus, totalling roughly 100 billion words. similarly to the previous section, we tested a
+series of models with similar computational costs of about 8 million ops/timestep. in addition to a
+baseline lstm model, we trained models augmented with moe layers containing 32, 256, 1024,
+
+7
+
+under review as a conference paper at iclr 2017
+
+4096, 16384, 65536, and 131072 experts. this corresponds to up to 137 billion parameters in the
+moe layer. details on architecture, training, and results are given in appendix d.
+
+results: figure 3 shows test perplexity as a function of capacity after training on 10 billion words
+(top line) and 100 billion words (bottom line). when training over the full 100 billion words, test
+perplexity improves signi   cantly up to 65536 experts (68 billion parameters), dropping 39% lower
+than the computationally matched baseline, but degrades at 131072 experts, possibly a result of too
+much sparsity. the widening gap between the two lines demonstrates (unsurprisingly) that increased
+model capacity helps more on larger training sets.
+even at 65536 experts (99.994% layer sparsity), computational ef   ciency for the model stays at a
+respectable 0.72 tflops/gpu.
+
+5.3 machine translation (single language pair)
+
+model architecture: our model was a modi   ed version of the gid4 model described in (wu
+et al., 2016). to reduce computation, we decreased the number of lstm layers in the encoder
+and decoder from 9 and 8 to 3 and 2 respectively. we inserted moe layers in both the encoder
+(between layers 2 and 3) and the decoder (between layers 1 and 2). each moe layer contained up
+to 2048 experts each with about two million parameters, adding a total of about 8 billion parameters
+to the models. further details on model architecture, testing procedure and results can be found in
+appendix e.
+datasets: we benchmarked our method on the wmt   14 en   fr and en   de corpora, whose
+training sets have 36m sentence pairs and 5m sentence pairs, respectively. the experimental proto-
+cols were also similar to those in (wu et al., 2016): newstest2014 was used as the test set to compare
+against previous work (luong et al., 2015a; zhou et al., 2016; wu et al., 2016), while the combina-
+tion of newstest2012 and newstest2013 was used as the development set. we also tested the same
+model on a google   s production english to french data.
+
+table 2: results on wmt   14 en    fr newstest2014 (bold values represent best results).
+model
+
+test ops/timenstep
+
+training
+
+total
+
+test
+
+moe with 2048 experts
+moe with 2048 experts (longer training)
+gid4 (wu et al., 2016)
+gid4+rl (wu et al., 2016)
+pbmt (durrani et al., 2014)
+lstm (6-layer) (luong et al., 2015b)
+lstm (6-layer+posunk) (luong et al., 2015b)
+deepatt (zhou et al., 2016)
+deepatt+posunk (zhou et al., 2016)
+
+2.69
+2.63
+2.79
+2.96
+
+perplexity id7
+40.35
+40.56
+39.22
+39.92
+37.0
+31.5
+33.1
+37.7
+39.2
+
+85m
+85m
+214m
+214m
+
+#parameters
+
+time
+
+3 days/64 k40s
+8.7b
+8.7b
+6 days/64 k40s
+278m 6 days/96 k80s
+278m 6 days/96 k80s
+
+table 3: results on wmt   14 en     de newstest2014 (bold values represent best results).
+
+model
+
+moe with 2048 experts
+gid4 (wu et al., 2016)
+gid4 +rl (wu et al., 2016)
+pbmt (durrani et al., 2014)
+deepatt (zhou et al., 2016)
+
+test
+
+test
+perplexity id7
+26.03
+24.91
+24.66
+20.7
+20.6
+
+4.64
+5.25
+8.08
+
+ops/timestep
+
+85m
+214m
+214m
+
+#parameters
+
+total
+
+8.7b
+278m
+278m
+
+training
+
+time
+
+1 day/64 k40s
+1 day/96 k80s
+1 day/96 k80s
+
+table 4: results on the google production en    fr dataset (bold values represent best results).
+
+model
+
+moe with 2048 experts
+gid4 (wu et al., 2016)
+
+eval
+
+eval
+
+test
+perplexity id7 perplexity id7
+36.57
+35.56
+
+37.27
+35.80
+
+2.69
+2.87
+
+2.60
+2.78
+
+test
+
+ops/timestep
+
+85m
+214m
+
+8
+
+#parameters
+
+total
+
+8.7b
+278m
+
+training
+
+time
+
+1 day/64 k40s
+6 days/96 k80s
+
+under review as a conference paper at iclr 2017
+
+results: tables 2, 3, and 4 show the results of our largest models, compared with published
+results. our approach achieved id7 scores of 40.56 and 26.03 on the wmt   14 en   fr and
+en   de benchmarks. as our models did not use rl re   nement, these results constitute signi   cant
+gains of 1.34 and 1.12 id7 score on top of the strong baselines in (wu et al., 2016). the perplexity
+scores are also better.2 on the google production dataset, our model achieved 1.01 higher test id7
+score even after training for only one sixth of the time.
+
+5.4 multilingual machine translation
+
+dataset:
+(johnson et al., 2016) train a single gid4 (wu et al., 2016) model on a very large com-
+bined dataset of twelve language pairs. results are somewhat worse than those for 12 separately
+trained single-pair gid4 models. this is not surprising, given that the twelve models have 12
+times the capacity and twelve times the aggregate training of the one model. we repeat this ex-
+periment with a single moe-augmented model. see appendix e for details on model architecture.
+we train our model on the same dataset as (johnson et al., 2016) and process the same number of
+training examples (about 3 billion sentence pairs). our training time was shorter due to the lower
+computational budget of our model.
+
+results: results for the single-pair gid4 models, the multilingual gid4 model and the mul-
+tilingual moe model are given in table 5. the moe model achieves 19% lower perplexity on the
+dev set than the multilingual gid4 model. on id7 score, the moe model signi   cantly beats
+the multilingual gid4 model on 11 of the 12 language pairs (by as much as 5.84 points), and even
+beats the monolingual gid4 models on 8 of 12 language pairs. the poor performance on english
+    korean seems to be a result of severe overtraining, as for the rarer language pairs a small number
+of real examples were highly oversampled in the training corpus.
+
+table 5: multilingual machine translation (bold values represent best results).
+moe-multi moe-multi vs.
+gid4-multi
+
+gid4-mono gid4-multi
+
+21 days, 96 k20s 12 days, 64 k40s
+
+parameters 278m / model
+
+ops/timestep
+training time, hardware
+perplexity (dev)
+french     english test id7
+german     english test id7
+japanese     english test id7
+korean     english test id7
+portuguese     english test id7
+spanish     english test id7
+english     french test id7
+english     german test id7
+english     japanese test id7
+english     korean test id7
+english     portuguese test id7
+english     spanish test id7
+
+212m
+various
+
+36.47
+31.77
+23.41
+25.42
+44.40
+38.00
+35.37
+26.43
+23.66
+19.75
+38.40
+34.50
+
+278m
+212m
+
+4.14
+34.40
+31.17
+21.62
+22.87
+42.53
+36.04
+34.00
+23.15
+21.10
+18.41
+37.35
+34.25
+
+8.7b
+102m
+
+3.35
+37.46
+34.80
+25.91
+28.71
+46.13
+39.39
+36.59
+24.53
+22.78
+16.62
+37.90
+36.21
+
+-19%
++3.06
++3.63
++4.29
++5.84
++3.60
++3.35
++2.59
++1.38
++1.68
+-1.79
++0.55
++1.96
+
+6 conclusion
+
+this work is the    rst to demonstrate major wins from conditional computation in deep networks.
+we carefully identi   ed the design considerations and challenges of conditional computing and ad-
+dressed them with a combination of algorithmic and engineering solutions. while we focused on
+text, conditional computation may help in other domains as well, provided suf   ciently large train-
+ing sets. we look forward to seeing many novel implementations and applications of conditional
+computation in the years to come.
+
+acknowledgments
+
+we would like to thank all of the members of the google brain and google translate teams who
+helped us with this project, in particular zhifeng chen, yonghui wu, and melvin johnson. thanks
+also to our anonymous iclr reviewers for the helpful suggestions on making this paper better.
+
+2reported perplexities relative to the id121 used by both our models and gid4.
+
+9
+
+under review as a conference paper at iclr 2017
+
+references
+mart  n abadi, ashish agarwal, paul barham, eugene brevdo, zhifeng chen, craig citro, gre-
+gory s. corrado, andy davis, jeffrey dean, matthieu devin, sanjay ghemawat, ian j. good-
+fellow, andrew harp, geoffrey irving, michael isard, yangqing jia, rafal j  zefowicz, lukasz
+kaiser, manjunath kudlur, josh levenberg, dan man  , rajat monga, sherry moore, derek gor-
+don murray, chris olah, mike schuster, jonathon shlens, benoit steiner, ilya sutskever, kunal
+talwar, paul a. tucker, vincent vanhoucke, vijay vasudevan, fernanda b. vi  gas, oriol vinyals,
+pete warden, martin wattenberg, martin wicke, yuan yu, and xiaoqiang zheng. tensor   ow:
+large-scale machine learning on heterogeneous distributed systems. corr, abs/1603.04467,
+2016. url http://arxiv.org/abs/1603.04467.
+
+rahaf aljundi, punarjay chakravarty, and tinne tuytelaars. expert gate: lifelong learning with a
+network of experts. corr, abs/1611.06194, 2016. url http://arxiv.org/abs/1611.
+06194.
+
+a. almahairi, n. ballas, t. cooijmans, y. zheng, h. larochelle, and a. courville. dynamic capac-
+
+ity networks. arxiv e-prints, november 2015.
+
+dario amodei, rishita anubhai, eric battenberg, carl case, jared casper, bryan catanzaro, jing-
+dong chen, mike chrzanowski, adam coates, greg diamos, erich elsen, jesse engel, linxi
+fan, christopher fougner, tony han, awni y. hannun, billy jun, patrick legresley, libby lin,
+sharan narang, andrew y. ng, sherjil ozair, ryan prenger, jonathan raiman, sanjeev satheesh,
+david seetapun, shubho sengupta, yi wang, zhiqian wang, chong wang, bo xiao, dani yo-
+gatama, jun zhan, and zhenyao zhu. deep speech 2: end-to-end id103 in english
+and mandarin. arxiv preprint arxiv:1512.02595, 2015.
+
+dzmitry bahdanau, kyunghyun cho, and yoshua bengio. id4 by jointly
+
+learning to align and translate. arxiv preprint arxiv:1409.0473, 2014.
+
+emmanuel bengio, pierre-luc bacon, joelle pineau, and doina precup. conditional computation
+
+in neural networks for faster models. arxiv preprint arxiv:1511.06297, 2015.
+
+yoshua bengio, nicholas l  onard, and aaron courville. estimating or propagating gradients
+through stochastic neurons for conditional computation. arxiv preprint arxiv:1308.3432, 2013.
+
+ciprian chelba, tomas mikolov, mike schuster, qi ge, thorsten brants, phillipp koehn, and tony
+robinson. one billion word benchmark for measuring progress in statistical id38.
+arxiv preprint arxiv:1312.3005, 2013.
+
+k. cho and y. bengio. exponentially increasing the capacity-to-computation ratio for conditional
+
+computation in deep learning. arxiv e-prints, june 2014.
+
+ronan collobert, samy bengio, and yoshua bengio. a parallel mixture of id166s for very large
+
+scale problems. neural computing, 2002.
+
+andrew davis and itamar arel. low-rank approximations for conditional feedforward computation
+
+in deep neural networks. arxiv preprint arxiv:1312.4461, 2013.
+
+marc peter deisenroth and jun wei ng. distributed gaussian processes. in icml, 2015.
+
+john duchi, elad hazan, and yoram singer. adaptive subgradient methods for online learning and
+
+stochastic optimization, 2010.
+
+nadir durrani, barry haddow, philipp koehn, and kenneth hea   eld. edinburgh   s phrase-based
+in proceedings of the ninth workshop on statistical
+
+machine translation systems for wmt-14.
+machine translation, 2014.
+
+david eigen, marc   aurelio ranzato, and ilya sutskever. learning factored representations in a deep
+
+mixture of experts. arxiv preprint arxiv:1312.4314, 2013.
+
+ekaterina garmash and christof monz. id108 for multi-source neural machine transla-
+
+tion. in staff.science.uva.nl/c.monz, 2016.
+
+10
+
+under review as a conference paper at iclr 2017
+
+felix a. gers, j  rgen a. schmidhuber, and fred a. cummins. learning to forget: continual pre-
+
+diction with lstm. neural computation, 2000.
+
+audrunas gruslys, r  mi munos, ivo danihelka, marc lanctot, and alex graves. memory-ef   cient
+id26 through time. corr, abs/1606.03401, 2016. url http://arxiv.org/
+abs/1606.03401.
+
+kaiming he, xiangyu zhang, shaoqing ren, and jian sun. deep residual learning for image recog-
+
+nition. ieee conference on id161 and pattern recognition, 2015.
+
+geoffrey hinton, li deng, dong yu, george e. dahl, abdel-rahman mohamed, navdeep jaitly,
+andrew senior, vincent vanhoucke, patrick nguyen, tara n. sainath, et al. deep neural networks
+for acoustic modeling in id103: the shared views of four research groups. ieee
+signal processing magazine, 2012.
+
+sepp hochreiter and j  rgen schmidhuber. long short-term memory. neural computation, 1997.
+
+sergey ioffe and christian szegedy. batch id172: accelerating deep network training by
+
+reducing internal covariate shift. arxiv preprint arxiv:1502.03167, 2015.
+
+robert a. jacobs, michael i. jordan, steven j. nowlan, and geoffrey e. hinton. adaptive mixtures
+
+of local experts. neural computing, 1991.
+
+melvin johnson, mike schuster, quoc v. le, maxim krikun, yonghui wu, zhifeng chen, nikhil
+thorat, fernanda b. vi  gas, martin wattenberg, greg corrado, macduff hughes, and jeffrey
+dean. google   s multilingual id4 system: enabling zero-shot translation.
+corr, abs/1611.04558, 2016. url http://arxiv.org/abs/1611.04558.
+
+michael i. jordan and robert a. jacobs. hierarchical mixtures of experts and the em algorithm.
+
+neural computing, 1994.
+
+rafal jozefowicz, oriol vinyals, mike schuster, noam shazeer, and yonghui wu. exploring the
+
+limits of id38. arxiv preprint arxiv:1602.02410, 2016.
+
+diederik kingma and jimmy ba. adam: a method for stochastic optimization. in iclr, 2015.
+
+reinhard kneser and hermann. ney. improved backingoff for m-gram id38., 1995.
+
+alex krizhevsky, ilya sutskever, and geoffrey e. hinton. id163 classi   cation with deep convo-
+
+lutional neural networks. in nips, 2012.
+
+quoc v. le, marc   aurelio ranzato, rajat monga, matthieu devin, kai chen, greg s. corrado,
+jeffrey dean, and andrew y. ng. building high-level features using large scale unsupervised
+learning. in icml, 2012.
+
+patrick gallinari ludovic denoyer.
+
+arxiv:1410.0510, 2014.
+
+deep sequential neural network.
+
+arxiv preprint
+
+minh-thang luong, hieu pham, and christopher d. manning. effective approaches to attention-
+
+based id4. emnlp, 2015a.
+
+minh-thang luong, ilya sutskever, quoc v. le, oriol vinyals, and wojciech zaremba. addressing
+
+the rare word problem in id4. acl, 2015b.
+
+carl edward rasmussen and zoubin ghahramani. in   nite mixtures of gaussian process experts.
+
+nips, 2002.
+
+hasim sak, andrew w senior, and fran  oise beaufays. long short-term memory recurrent neural
+network architectures for large scale acoustic modeling. in interspeech, pp. 338   342, 2014.
+
+mike schuster and kaisuke nakajima. japanese and korean voice search. icassp, 2012.
+
+babak shahbaba and radford neal. nonlinear models using dirichlet process mixtures. jmlr,
+
+2009.
+
+11
+
+under review as a conference paper at iclr 2017
+
+ilya sutskever, oriol vinyals, and quoc v. le. sequence to sequence learning with neural networks.
+
+in nips, 2014.
+
+lucas theis and matthias bethge. generative image modeling using spatial lstms. in nips, 2015.
+
+volker tresp. mixtures of gaussian processes. in nips, 2001.
+
+yonghui wu, mike schuster, zhifeng chen, quoc v. le, mohammad norouzi, wolfgang macherey,
+maxim krikun, yuan cao, qin gao, klaus macherey, jeff klingner, apurva shah, melvin john-
+son, xiaobing liu,   ukasz kaiser, stephan gouws, yoshikiyo kato, taku kudo, hideto kazawa,
+keith stevens, george kurian, nishant patil, wei wang, cliff young, jason smith, jason riesa,
+alex rudnick, oriol vinyals, greg corrado, macduff hughes, and jeffrey dean. google   s neural
+machine translation system: bridging the gap between human and machine translation. arxiv
+preprint arxiv:1609.08144, 2016.
+
+bangpeng yao, dirk walther, diane beck, and li fei-fei. hierarchical mixture of classi   cation
+
+experts uncovers interactions between brain regions. in nips. 2009.
+
+wojciech zaremba, ilya sutskever, and oriol vinyals. recurrent neural network id173.
+
+arxiv preprint arxiv:1409.2329, 2014.
+
+jie zhou, ying cao, xuguang wang, peng li, and wei xu. deep recurrent models with fast-forward
+
+connections for id4. arxiv preprint arxiv:1606.04199, 2016.
+
+12
+
+under review as a conference paper at iclr 2017
+
+appendices
+
+a load-balancing loss
+
+as discussed in section 4, for load-balancing purposes, we want to de   ne an additional id168
+to encourage experts to receive roughly equal numbers of training examples. unfortunately, the
+number of examples received by an expert is a discrete quantity, so it can not be used in back-
+propagation. instead, we de   ne a smooth estimator load(x) of the number of examples assigned to
+each expert for a batch x of inputs. the smoothness allows us to back-propagate gradients through
+the estimator. this is the purpose of the noise term in the gating function. we de   ne p (x, i) as the
+id203 that g(x)i is nonzero, given a new random choice of noise on element i, but keeping
+the already-sampled choices of noise on the other elements. to compute p (x, i), we note that the
+g(x)i is nonzero if and only if h(x)i is greater than the kth-greatest element of h(x) excluding
+itself. the id203 works out to be:
+
+(cid:16)
+
+p (x, i) = p r
+
+(x    wg)i + standardn ormal()    sof tplus((x    wnoise)i)
+
+> kth_excluding(h(x), k, i)
+
+(cid:17)
+
+where kth_excluding(v, k, i) means the kth highest component of v, excluding component i. sim-
+plifying, we get:
+
+(cid:16) (x    wg)i     kth_excluding(h(x), k, i)
+
+(cid:17)
+
+sof tplus((x    wnoise)i)
+
+p (x, i) =   
+
+where    is the cdf of the standard normal distribution.
+
+(cid:88)
+
+x   x
+
+load(x)i =
+
+p (x, i)
+
+(8)
+
+(9)
+
+(10)
+
+we can now de   ne the load loss to be the square of the coef   cient of variation of the load vector,
+multiplied by a hand-tuned scaling factor wload.
+
+lload(x) = wload    cv (load(x))2
+
+(11)
+
+initial load imbalance: to avoid out-of-memory errors, we need to initialize the network in a
+state of approximately equal expert load (since the soft constraints need some time to work). to
+accomplish this, we initialize the matrices wg and wnoise to all zeros, which yields no signal and
+some noise.
+
+experiments: we trained a set of models with identical architecture (the moe-256 model de-
+scribed in appendix c), using different values of wimportance and wload. we trained each model for
+10 epochs, then measured perplexity on the test set. we also measured the coef   cients of variation
+in importance and load, as well as ratio of the load on the most overloaded expert to the average
+load. this last value is signi   cant for load balancing purposes on distributed hardware. all of these
+metrics were averaged over several training batches.
+
+table 6: experiments with different combinations of losses.
+
+wimportance wload test perplexity cv (importance(x)) cv (load(x)) max(load(x))
+mean(load(x))
+
+0.0
+0.2
+0.0
+0.1
+0.01
+1.0
+
+0.0
+0.0
+0.2
+0.1
+0.01
+1.0
+
+39.8
+35.6
+35.7
+35.6
+35.7
+35.7
+
+3.01
+0.17
+0.04
+0.05
+0.11
+0.02
+
+17.80
+1.47
+1.15
+1.14
+1.37
+1.07
+
+3.04
+0.06
+0.22
+0.06
+0.48
+0.03
+
+13
+
+under review as a conference paper at iclr 2017
+
+results: results are reported in table 6. all the combinations containing at least one the two
+losses led to very similar model quality, where having no loss was much worse. models with higher
+values of wload had lower loads on the most overloaded expert.
+
+b hierachical mixture of experts
+
+if the number of experts is very large, we can reduce the branching factor by using a two-level
+hierarchical moe. in a hierarchical moe, a primary gating network chooses a sparse weighted com-
+bination of    experts", each of which is itself a secondary mixture-of-experts with its own gating
+network.3 if the hierarchical moe consists of a groups of b experts each, we denote the primary gat-
+ing network by gprimary, the secondary gating networks by (g1, g2..ga), and the expert networks
+by (e0,0, e0,1..ea,b). the output of the moe is given by:
+
+a(cid:88)
+
+b(cid:88)
+
+i=1
+
+j=1
+
+yh =
+
+gprimary(x)i    gi(x)j    ei,j(x)
+
+our metrics of expert utilization change to the following:
+
+(cid:88)
+
+x   x
+
+importanceh (x)i,j =
+
+gprimary(x)i    gi(x)j
+
+loadh (x)i,j =
+
+loadprimary(x)i    loadi(x (i))j
+
+|x (i)|
+
+(12)
+
+(13)
+
+(14)
+
+loadprimary and loadi deonte the load functions for the primary gating network and ith sec-
+ondary gating network respectively. x (i) denotes the subset of x for which gprimary(x)i > 0.
+it would seem simpler to let loadh (x)i,j = loadi(xi)j , but this would not have a gradient with
+respect to the primary gating network, so we use the formulation above.
+
+c 1 billion word id38 benchmark - experimental details
+
+c.1
+
+8-million-operations-per-timestep models
+
+model architecture: our model consists of    ve layers: a id27 layer, a recurrent
+long short-term memory (lstm) layer (hochreiter & schmidhuber, 1997; gers et al., 2000), a
+moe layer, a second lstm layer, and a softmax layer. the dimensionality of the embedding layer,
+the number of units in each lstm layer, and the input and output dimensionality of the moe layer
+are all equal to 512. for every layer other than the softmax, we apply drouput (zaremba et al.,
+2014) to the layer output, dropping each activation with id203 dropp rob, otherwise dividing
+by (1     dropp rob). after dropout, the output of the previous layer is added to the layer output.
+this residual connection encourages gradient    ow (he et al., 2015).
+
+moe layer architecture: each expert in the moe layer is a feed forward network with one
+relu-activated hidden layer of size 1024 and an output layer of size 512. thus, each expert contains
+[512     1024] + [1024     512] = 1m parameters. the output of the moe layer is passed through a
+sigmoid function before dropout. we varied the number of experts between models, using ordinary
+moe layers with 4, 32 and 256 experts and hierarchical moe layers with 256, 1024 and 4096 experts.
+we call the resulting models moe-4, moe-32, moe-256, moe-256-h, moe-1024-h and moe-4096-
+h. for the hierarchical moe layers, the    rst level branching factor was 16, corresponding to the
+number of gpus in our cluster. we use noisy-top-k gating (see section 2.1) with k = 4 for the
+ordinary moe layers and k = 2 at each level of the hierarchical moe layers. thus, each example is
+processed by exactly 4 experts for a total of 4m ops/timestep. the two lstm layers contribute 2m
+ops/timestep each for the desired total of 8m.
+
+3 we have not found the need for deeper hierarchies.
+
+14
+
+under review as a conference paper at iclr 2017
+
+computationally-matched baselines: the moe-4 model does not employ sparsity, since all 4
+experts are always used. in addition, we trained four more computationally-matched baseline models
+with no sparsity:
+
+    moe-1-wide: the moe layer consists of a single "expert" containing one relu-activated
+
+hidden layer of size 4096.
+
+    moe-1-deep: the moe layer consists of a single "expert" containing four relu-activated
+
+hidden layers, each with size 1024.
+
+    4xlstm-512: we replace the moe layer with two additional 512-unit lstm layers.
+    lstm-2048-512: the model contains one 2048-unit lstm layer (and no moe). the out-
+put of the lstm is projected down to 512 dimensions (sak et al., 2014). the next timestep
+of the lstm receives the projected output. this is identical to one of the models published
+in (jozefowicz et al., 2016). we re-ran it to account for differences in training regimen, and
+obtained results very similar to the published ones.
+
+training: the models were trained on a cluster of 16 k40 gpus using the synchronous method
+described in section 3. each batch consisted of a set of sentences totaling roughly 300,000 words. in
+the interest of time, we limited training to 10 epochs, (27,000 steps). training took 12-16 hours for
+all models, except for moe-4, which took 18 hours (since all the expert computation was performed
+on only 4 of 16 gpus). we used the adam optimizer (kingma & ba, 2015). the base learning
+rate was increased linearly for the    rst 1000 training steps, and decreased after that so as to be
+proportional to the inverse square root of the step number. the softmax output layer was trained
+ef   ciently using importance sampling similarly to the models in (jozefowicz et al., 2016). for each
+model, we performed a hyper-parmeter search to    nd the best dropout id203, in increments of
+0.1.
+to ensure balanced expert utilization we set wimportance = 0.1 and wload = 0.1, as described in
+section 4 and appendix a.
+
+results: we evaluate our model using perplexity on the holdout dataset, used by (chelba et al.,
+2013; jozefowicz et al., 2016). we follow the standard procedure and sum over all the words in-
+cluding the end of sentence symbol. results are reported in table 7. for each model, we report
+the test perplexity, the computational budget, the parameter counts, the value of dropp rob, and the
+computational ef   ciency.
+
+table 7: model comparison on 1 billion word id38 benchmark. models marked
+with * are from (jozefowicz et al., 2016).
+
+test
+
+perplexity perplexity
+10 epochs
+
+ops/timestep #params excluding
+(millions)
+
+embed. & softmax #params p rob
+
+total drop- tflops
+per gpu
+(observed)
+
+(billions)
+
+(millions)
+
+model
+
+kneser-ney 5-gram*
+lstm-512-512*
+lstm-1024-512*
+lstm-2048-512*
+lstm-2048-512
+4xlstm-512
+moe-1-wide
+moe-1-deep
+moe-4
+moe-32
+moe-256
+moe-256-h
+moe-1024-h
+moe-4096-h
+2xlstm-8192-1024*
+moe-34m
+moe-143m
+
+45.0
+44.7
+46.0
+46.1
+45.7
+45.0
+39.7
+35.7
+36.0
+34.6
+34.1
+34.7
+31.3
+28.0
+
+test
+
+(   nal)
+67.6
+54.1
+48.2
+43.7
+
+30.6
+
+0.00001
+
+2.4
+4.7
+9.4
+9.4
+8.4
+8.4
+8.4
+8.4
+8.4
+8.6
+8.4
+8.5
+8.9
+151.0
+33.8
+142.7
+
+15
+
+2.4
+4.7
+9.4
+9.4
+8.4
+8.4
+8.4
+8.4
+37.8
+272.9
+272.9
+1079.0
+4303.4
+151.0
+4313.9
+4371.1
+
+1.8
+0.8
+0.8
+0.8
+0.8
+0.8
+0.8
+0.8
+0.8
+0.9
+1.1
+1.1
+1.9
+5.1
+1.8
+6.0
+6.0
+
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.1
+0.2
+0.2
+0.25
+0.3
+0.4
+
+0.61
+1.21
+1.07
+1.29
+1.29
+0.52
+0.87
+0.81
+0.89
+0.90
+0.74
+1.09
+1.22
+1.56
+
+under review as a conference paper at iclr 2017
+
+c.2 more expensive models
+
+we ran two additional models (moe-34m and moe-143m) to investigate the effects of adding more
+computation in the presence of a large moe layer. these models have computation budgets of 34m
+and 143m ops/timestep. similar to the models above, these models use a moe layer between two
+lstm layers. the dimensionality of the embedding layer, and the input and output dimensionality
+of the moe layer are set to 1024 instead of 512. for moe-34m, the lstm layers have 1024 units.
+for moe-143m, the lstm layers have 4096 units and an output projection of size 1024 (sak et al.,
+2014). moe-34m uses a hierarchical moe layer with 1024 experts, each with a hidden layer of size
+2048. moe-143m uses a hierarchical moe layer with 256 experts, each with a hidden layer of size
+8192. both models have 4b parameters in the moe layers. we searched for the best dropp rob for
+each model, and trained each model for 10 epochs.
+the two models achieved test perplexity of 31.3 and 28.0 respectively, showing that even in the
+presence of a large moe, more computation is still useful. results are reported at the bottom of
+table 7. the larger of the two models has a similar computational budget to the best published
+model from the literature, and training times are similar. comparing after 10 epochs, our model has
+a lower test perplexity by 18%.
+
+d 100 billion word google news corpus - experimental details
+
+model architecture: the models are similar in structure to the 8-million-operations-per-timestep
+models described in the previous section. we vary the number of experts between models, using
+an ordinary moe layer with 32 experts and hierarchical moe layers with 256, 1024, 4096, 16384,
+65536 and 131072 experts. for the hierarchical moe layers, the    rst level branching factors are 32,
+32, 64, 128, 256 and 256, respectively.
+
+training: models are trained on a cluster of 32 tesla k40 gpus, except for the last two models,
+which are trained on clusters of 64 and 128 gpus so as to have enough memory for all the param-
+eters. for all models, training batch sizes are approximately 2.5 million words. models are trained
+once-through over about 100 billion words.
+we implement several memory optimizations in order to    t up to 1 billion parameters per gpu.
+first, we do not store the activations of the hidden layers of the experts, but instead recompute them
+on the backwards pass. secondly, we modify the optimizer on the expert parameters to require less
+auxiliary storage:
+the adam optimizer (kingma & ba, 2015) keeps    rst and second moment estimates of the per-
+parameter gradients. this triples the required memory. to avoid keeping a    rst-moment estimator,
+we set   1 = 0. to reduce the size of the second moment estimator, we replace it with a factored
+approximation. for a matrix of parameters, instead of maintaining a full matrix of second-moment
+estimators, we maintain vectors of row-wise and column-wise averages of that matrix. at each step,
+the matrix of estimators is taken to be the outer product of those two vectors divided by the mean of
+either one. this technique could similarly be applied to adagrad (duchi et al., 2010).
+
+table 8: model comparison on 100 billion word google news dataset
+
+model
+
+kneser-ney 5-gram
+4xlstm-512
+moe-32
+moe-256-h
+moe-1024-h
+moe-4096-h
+moe-16384-h
+moe-65536-h
+moe-131072-h
+
+test
+
+test
+
+perplexity perplexity
+.1 epochs
+1 epoch
+
+ops/timestep #params excluding
+(millions)
+
+embed. & softmax #params
+
+total
+
+tflops
+per gpu
+(billions) (observed)
+
+67.1
+54.5
+48.5
+42.8
+40.3
+38.9
+38.2
+38.2
+39.8
+
+45.3
+47.0
+40.4
+35.3
+32.7
+30.9
+29.7
+28.9
+29.2
+
+0.00001
+
+8.4
+8.4
+8.4
+8.5
+8.6
+8.8
+9.2
+9.7
+
+(millions)
+
+8.4
+37.8
+272.9
+1079.0
+4303.4
+17201.0
+68791.0
+137577.6
+
+76.0
+0.1
+0.1
+0.4
+1.2
+4.4
+17.3
+68.9
+137.7
+
+1.23
+0.83
+1.11
+1.14
+1.07
+0.96
+0.72
+0.30
+
+results: we evaluate our model using perplexity on a holdout dataset. results are reported in
+table 8. perplexity after 100 billion training words is 39% lower for the 68-billion-parameter moe
+
+16
+
+under review as a conference paper at iclr 2017
+
+model than for the baseline model.
+it is notable that the measured computational ef   ciency of
+the largest model (0.30 tflops/gpu) is very low compared to the other models. this is likely
+a result of the fact that, for purposes of comparison to the other models, we did not increase the
+training batch size proportionally to the number of gpus. for comparison, we include results for
+a computationally matched baseline model consisting of 4 lstms, and for an unpruned 5-gram
+model with kneser-ney smoothing (kneser & ney, 1995).4
+
+e machine translation - experimental details
+
+model architecture for single language pair moe models: our model is a modi   ed version
+of the gid4 model described in (wu et al., 2016). to reduce computation, we decrease the number
+of lstm layers in the encoder and decoder from 9 and 8 to 3 and 2 respectively. we insert moe
+layers in both the encoder (between layers 2 and 3) and the decoder (between layers 1 and 2). we use
+an attention mechanism between the encoder and decoder, with the    rst decoder lstm receiving
+output from and providing input for the attention 5. all of the layers in our model have input and
+output dimensionality of 512. our lstm layers have 2048 hidden units, with a 512-dimensional
+output projection. we add residual connections around all lstm and moe layers to encourage
+gradient    ow (he et al., 2015). similar to gid4, to effectively deal with rare words, we used sub-
+word units (also known as    wordpieces") (schuster & nakajima, 2012) for inputs and outputs in our
+system.
+we use a shared source and target vocabulary of 32k wordpieces. we also used the same beam
+search technique as proposed in (wu et al., 2016).
+we train models with different numbers of experts in the moe layers. in addition to a baseline
+model with no moe layers, we train models with    at moe layers containing 32 experts, and models
+with hierarchical moe layers containing 512 and 2048 experts. the    at moe layers use k = 4 and
+the hierarchical moe models use k = 2 at each level of the gating network. thus, each input is
+processed by exactly 4 experts in each moe layer. each expert in the moe layer is a feed forward
+network with one hidden layer of size 2048 and relu activation. thus, each expert contains [512    
+2048] + [2048     512] = 2m parameters. the output of the moe layer is passed through a sigmoid
+function. we use the strictly-balanced gating function described in appendix f.
+
+model architecture for multilingual moe model: we used the same model architecture as
+for the single-language-pair models, with the following exceptions: we used noisy-top-k gating as
+described in section 2.1, not the scheme from appendix f. the moe layers in the encoder and
+decoder are non-hierarchical moes with n = 512 experts, and k = 2. each expert has a larger
+hidden layer of size 8192. this doubles the amount of computation in the moe layers, raising the
+computational budget of the entire model from 85m to 102m ops/timestep.
+
+training: we trained our networks using the adam optimizer (kingma & ba, 2015). the base
+learning rate was increased linearly for the    rst 2000 training steps, held constant for an additional
+8000 steps, and decreased after that so as to be proportional to the inverse square root of the step
+number. for the single-language-pair models, similarly to (wu et al., 2016), we applied dropout
+(zaremba et al., 2014) to the output of all embedding, lstm and moe layers, using dropp rob =
+0.4. training was done synchronously on a cluster of up to 64 gpus as described in section 3. each
+training batch consisted of a set of sentence pairs containing roughly 16000 words per gpu.
+to ensure balanced expert utilization we set wimportance = 0.01 and wload = 0.01, as described in
+section 4 and appendix a.
+
+metrics: we evaluated our models using the perplexity and the standard id7 score metric. we
+reported tokenized id7 score as computed by the multi-id7.pl script, downloaded from the public
+implementation of moses (on github), which was also used in (luong et al., 2015a).
+
+4while the original size of the corpus was 130 billion words, the neural models were trained for a maximum
+of 100 billion words. the reported kneser-ney 5-gram models were trained over 13 billion and 130 billion
+words respectively, giving them a slight advantage over the other reported results.
+
+5for performance reasons, we use a slightly different attention function from the one described in (wu et al.,
+
+2016) - see appendix g
+
+17
+
+under review as a conference paper at iclr 2017
+
+results: tables 2, 3 and 4 in section 5.3 show comparisons of our results to other published
+methods. figure 4 shows test perplexity as a function of number of words in the (training data   s)
+source sentences processed for models with different numbers of experts. as can be seen from the
+figure, as we increased the number of experts to approach 2048, the test perplexity of our model
+continued to improve.
+
+figure 4: perplexity on wmt   14 en    fr (left) and google production en    fr (right) datasets as
+a function of number of words processed. the large differences between models at the beginning
+of training are due to different batch sizes. all models incur the same computational budget (85m
+ops/timestep) except the one with no experts.
+
+we found that the experts indeed become highly specialized by syntax and/or semantics, as can be
+seen in table 9. for example, one expert is used when the inde   nite article    a" introduces the direct
+object in a verb phrase indicating importance or leadership.
+
+table 9: contexts corresponding to a few of the 2048 experts in the moe layer in the encoder portion
+of the wmt   14 en    fr translation model. for each expert i, we sort the inputs in a training batch
+in decreasing order of g(x)i, and show the words surrounding the corresponding positions in the
+input sentences.
+
+expert 381
+
+... with researchers , ...
+
+... to innovation .
+... tics researchers .
+... the generation of ...
+
+... technology innovations is ...
+... technological innovations , ...
+
+... support innovation throughout ...
+
+... role innovation will ...
+... research scienti st ...
+
+... promoting innovation where ...
+
+...
+
+expert 752
+
+... plays a core ...
+... plays a critical ...
+
+... provides a legislative ...
+
+... play a leading ...
+
+... assume a leadership ...
+
+... plays a central ...
+... taken a leading ...
+
+... established a reconciliation ...
+
+... played a vital ...
+... have a central ...
+
+...
+
+expert 2004
+
+... with rapidly growing ...
+... under static conditions ...
+
+... to swift ly ...
+
+... to dras tically ...
+... the rapid and ...
+... the fast est ...
+
+... the quick method ...
+
+... rec urrent ) ...
+
+... provides quick access ...
+
+... of volatile organic ...
+
+...
+
+f strictly balanced gating
+
+due to some peculiarities in our infrastructure which have since been    xed, at the time we ran some
+of the machine translation experiments, our models ran faster if every expert received exactly the
+same batch size. to accommodate this, we used a different gating function which we describe below.
+recall that we de   ne the softmax gating function to be:
+
+g  (x) = sof tmax(x    wg)
+
+(15)
+
+sparse gating (alternate formulation): to obtain a sparse gating vector, we multiply g  (x)
+component-wise with a sparse mask m (g  (x)) and normalize the output. the mask itself is a
+function of g  (x) and speci   es which experts are assigned to each input example:
+
+18
+
+0123456789number of source words processed1e92.02.53.03.54.04.55.05.56.0perplexity#experts=0#experts=32#experts=512#experts=20480.00.51.01.52.0number of source words processed1e102345678perplexity#experts=0#experts=32#experts=512#experts=2048under review as a conference paper at iclr 2017
+
+(cid:80)n
+
+g  (x)im (g  (x))i
+j=1 g  (x)jm (g  (x))j
+
+g(x)i =
+
+(16)
+
+top-k mask: to implement top-k gating in this formulation, we would let m (v) = t opk(v, k),
+where:
+
+t opk(v, k)i =
+
+if vi is in the top k elements of v.
+otherwise.
+
+(17)
+
+batchwise mask: to force each expert to receive the exact same number of examples, we intro-
+duce an alternative mask function, mbatchwise(x, m), which operates over batches of input vectors.
+instead of keeping the top k values per example, we keep the top m values per expert across the
+training batch, where m = k|x|
+
+n , so that each example is sent to an average of k experts.
+
+mbatchwise(x, m)j,i =
+
+if xj,i is in the top m values for to expert i
+otherwise
+
+(18)
+
+as our experiments suggest and also observed in (ioffe & szegedy, 2015), using a batchwise func-
+tion during training (such as mbatchwise) requires modi   cations to the id136 when we may not
+have a large batch of examples. our solution to this is to train a vector t of per-expert threshold
+values to approximate the effects of the batchwise mask. we use the following mask at id136
+time:
+
+(cid:26)1
+
+0
+
+(cid:26)1
+
+0
+
+mthreshold(x, t )i =
+
+if xi > ti
+otherwise
+
+(19)
+
+to learn the threshold values, we apply an additional loss at training time which is minimized when
+the batchwise mask and the threshold mask are identical.
+
+lbatchwise(x, t, m) =
+
+|x|(cid:88)
+
+n(cid:88)
+
+j=1
+
+i=1
+
+g attention function
+
+(mthreshold(x, t )i     mbatchwise(x, m)j,i)(xj,i     ti)
+
+(20)
+
+the attention mechanism described in gid4 (wu et al., 2016) involves a learned    attention func-
+tion" a(xi, yj) which takes a    source vector" xi and a    target vector" yj, and must be computed for
+every source time step i and target time step j. in gid4, the attention function is implemented as
+a feed forward neural network with a hidden layer of size n. it can be expressed as:
+
+(cid:26)1
+
+0
+
+agnm t (xi, yj) =
+
+vdtanh((xiu )d + (yjw )d)
+
+where u and w are trainable weight matrices and v is a trainable weight vector.
+for performance reasons, in our models, we used a slightly different attention function:
+
+n(cid:88)
+
+d=1
+
+n(cid:88)
+
+a(xi, yj) =
+
+vdtanh((xiu )d)tanh((yjw )d)
+
+d=1
+
+with our attention function, we can simultaneously compute the attention function on multiple
+source time steps and multiple target time steps using optimized id127s. we found
+little difference in quality between the two functions.
+
+19
+
+(21)
+
+(22)
+
+

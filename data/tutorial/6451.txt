@@ -1,0 +1,242 @@
+   #[1]andrej karpathy blog posts
+
+   [2][rssicon.svg]
+   [3]andrej karpathy blog
+
+   [4]about [5]hacker's guide to neural networks
+
+visualizing top tweeps with id167, in javascript
+
+   jul 2, 2014
+
+   [tsne_preview.jpeg]
+
+   i was recently looking into various ways of embedding unlabeled,
+   high-dimensional data in 2 dimensions for visualization. a wide variety
+   of methods have been proposed for this task. [6]this review paper from
+   2009 contains nice references to many of them (pca, kernel pca, isomap,
+   lle, autoencoders, etc.). if you have matlab available, the
+   [7]id84 toolbox has a nice implementation of many
+   of these methods. scikit learn also has a brief section on [8]manifold
+   learning along with the implementation.
+
+   among these algorithms, id167 comes across as one that has a pleasing,
+   intuitive formulation, simple gradient and nice properties. here is a
+   [9]google tech talks video of laurens van der maaten (the author)
+   explaining the method. i set out to re-implement id167 from scratch
+   since doing so is the best way of learning something that i know of,
+   and what better language to do this in than - javascript! :)
+
+   long story short, i   ve implemented id167 in js, released it as
+   [10]tsnejs on github, and created a small demo that uses the library to
+   visualize the top twitter accounts based on what they talk about. in
+   this post, i thought it might be fun to document a small 1-day project
+   like this, from beginning to end. this also gives me an opportunity to
+   describe some of my projects toolkit, which others might find useful.
+
+final demo
+
+   first, take a look at the [11]final demo. to create this demo i found
+   the top 500 most followed accounts on twitter, downloaded 200 of their
+   tweets and then measured differences in what they tweet about. these
+   differences are then fed to id167 to produce a 2-dimensional
+   visualization, where nearby people tweet similar things. fun!
+
+fetching top tweeps
+
+   we first have to identify the top 500 tweeps. i googled    top twitter
+   accounts    and found http://twitaholic.com/ , which lists them out.
+   however, the accounts are embedded in the webpage and we need to
+   extract them in structured format. for this, i love a recent yc startup
+   [12]kimono; i use it extensively to scrape structured data from
+   websites. it lets you click the elements of interest (the twitter
+   handles in this case), and extracts them out in json. easy as pie!
+
+collecting tweets
+
+   now we have a list of top 500 tweeps and we   d like to obtain their
+   tweets to get an idea about what they tweet about. my library of choice
+   for this task is [13]tweepy. their documentation is quite terrible but
+   if you browse the source code things seem relatively simple. here   s an
+   example call to get 200 tweets for a given user:
+tweets = tweepy.cursor(api.user_timeline, screen_name=user).items(200)
+
+   we iterate this over all users, extract the tweet text, and dumpt it
+   all into files, one per account. i had to be careful with two
+   annoyances in process:
+     * twitter puts severe rate limits on api calls, so this actually took
+       several hours to collect, wrapped up in try catch blocks and
+       time.sleep calls.
+     * the returned text is in unicode, which leads to trouble if you   re
+       going to try to write it to file.
+
+   one solution for the second annoyance is to use the codecs library:
+import codecs
+codecs.open(filename, 'w', 'utf-8').write(tweet_texts)
+
+   oh, and lets also grab and save the twitter profile pictures, which
+   we   ll use in the visualization. an example for one user might be:
+import urllib # yes i know this is deprecated
+userobj = api.get_user(screen_name = user)
+urllib.urlretrieve(imgname, userobj.profile_image_url) # save image to disk
+
+   i should mention that i write a lot of quick and dirty python code in
+   [14]ipython notebooks, which i very warmly recommend. if you   re writing
+   all your python in text editors, you   re seriously missing out.
+
+quantifying tweep differences
+
+   we now have 500 tweeps and their 200 most recent tweets concatenated in
+   500 files. we   d now like to find who tweets about similar things.
+   [15]scikit learn is very nice for quick nlp tasks like this. in
+   particular, we load up all the files and create a 500-long array where
+   every element are the 200 concatenated tweets. then we use the
+   [16]tfidfvectorizer class to extract all words and bigrams from the
+   text data, and to turn every user   s language into one tfidf vector.
+   this vector is a fingerprint of the language that each person uses.
+   here   s how we can simply wire this up:
+from sklearn.feature_extraction.text import countvectorizer,tfidfvectorizer
+vectorizer = tfidfvectorizer(min_df=2, stop_words = 'english',\
+strip_accents = 'unicode', lowercase=true, ngram_range=(1,2),\
+norm='l2', smooth_idf=true, sublinear_tf=false, use_idf=true)
+x = vectorizer.fit_transform(user_language_array)
+d = -(x * x.t).todense() # distance matrix: dot product between tfidf vectors
+
+   in the above, user_language_array is the 500-element array that has the
+   concatenated tweets. the tfidfvectorizer class looks through all tweets
+   and takes note of all words (unigrams) and word bigrams (i.e. series of
+   two words). it builds a dictionary out of all unigram/bigrams and
+   essentially counts up how often every person uses each one. here   s an
+   example of some tweet text converted to unigram/bigrams:
+
+   [tsne_sentprepro.jpeg]
+
+   the tfidf vectors are returned stacked up as rows inside x, which has
+   size 500 x 87,342. every one of the 87,342 dimensions corresponds to
+   some unigram or bigram. for example, the 10,000th dimension could
+   correspond to the frequency of usage of the unigram    yolo   . the vectors
+   are l2 normalized, so the dot product between these vectors is related
+   to the angle between any two vectors. this can be interpreted as the
+   similarity of language. finally, we dump the matrix and the usernames
+   into a json file, and we   re ready to load things up in javascript!
+
+the visualization parts
+
+   we now create an .html file and import [17]jquery (as always), and
+   [18]d3js, which i like to use for any kind of plotting. we load up the
+   json that stores our distances and usernames with jquery, and use d3js
+   to initialize the svg element that will hold all the users. for
+   starters, we plot the users at random position but we will soon arrange
+   them so that similar users cluster nearby with id167. inspect the code
+   on the [19]demo page to see the jquery and d3js parts (ctrl+u). in the
+   code, we see a few things i like to use:
+     * i like to use google fonts to get prettier-than-default fonts.
+       here, for example i   m importing roboto, and then using it in the
+       css.
+     * next, we see an import of syntaxhighlighter code which dynamically
+       highlights code on your page.
+     * then we see google tracking js code, which lets me track statistics
+       for the website on google analytics.
+     * i didn   t use bootstrap on this website because it   s very small and
+       simple, but normally i would because this makes your website right
+       away work nicely on mobile.
+
+id167
+
+   [tsne_eg.jpeg]
+
+   finally we get to the meat! we need to arrange the users in our d3js
+   plot so that similar users appear nearby. the id167 cost function was
+   described in this [20]2008 paper by van der maaten and hinton. similar
+   to many other methods, we set up two distance metrics in the original
+   and the embedded space and minimize their difference. in id167 in
+   particular, the original space distance is based on a gaussian
+   distribution and the embedded space is based on the heavy-tailed
+   student-t distribution. the kl-divergence formulation has the nice
+   property that it is asymmetric in how it penalizes distances between
+   the two spaces:
+     * if two points are close in the original space, there is a strong
+       attractive force between the the points in the embedding
+     * conversely, if the two points are far apart in the original space,
+       the algorithm is relatively free to place these points around.
+
+   thus, the algorithm preferentially cares about preserving the local
+   structure of the high-dimensional data. conveniently, the authors link
+   to multiple implementations of id167 on [21]their website, which allows
+   us to see some code for reference as well (if you   re like me, reading
+   code can be much easier than reading text descriptions). we   re ready to
+   write up the javascript version!
+
+   the final code can be seen in [22]tsne.js file, on github. note how
+   we   re wrapping all the js code into a function closure so that we don   t
+   pollute the global namespace. this is a very common trick in javascript
+   that is essentially used to implement classes. note also the large
+   number of utility boring code i had to include up top because
+   javascript is not exactly intended for math :) the core function where
+   all magic happens is costgrad(), which computes the cost function and
+   the gradient of the objective. the correct implementation of this
+   function is double checked with debuggrad() gradient check. once the
+   analytic gradient checks out compared to numeric gradient, we   re good
+   to go! we set up a piece of javascript to call our step() function
+   repeatedly (setinterval() call), and we plot the solution as it gets
+   computed.
+
+   phew! final result, again: [23]id167 demo.
+
+   i hope some of the references were useful. if you use tsnejs to embed
+   some of your data, let me know!
+
+bonus: id27 id167 visualization
+
+   i created another demo, this time to visualize word vector embeddings.
+   head [24]over here to see it. the id27s are trained as
+   described in this [25]acl 2012 paper.
+
+   the (unsupervised) objective function makes it so that words that are
+   interchangable (i.e. occur in very similar surrounding context) are
+   close in the embedding. this comes across in the visualization!
+   please enable javascript to view the [26]comments powered by disqus.
+   [27]comments powered by disqus
+
+     * andrej karpathy blog
+
+     * [28]karpathy
+     * [29]karpathy
+
+   musings of a computer scientist.
+
+references
+
+   visible links
+   1. http://karpathy.github.io/feed.xml
+   2. http://karpathy.github.io/feed.xml
+   3. http://karpathy.github.io/
+   4. http://karpathy.github.io/about/
+   5. http://karpathy.github.io/neuralnets/
+   6. http://homepage.tudelft.nl/19j49/matlab_toolbox_for_dimensionality_reduction_files/tr_dimensiereductie.pdf
+   7. http://homepage.tudelft.nl/19j49/matlab_toolbox_for_dimensionality_reduction.html
+   8. http://scikit-learn.org/stable/modules/manifold.html
+   9. http://www.youtube.com/watch?v=rjvl80gg3la
+  10. https://github.com/karpathy/tsnejs
+  11. http://cs.stanford.edu/people/karpathy/tsnejs/
+  12. https://www.kimonolabs.com/
+  13. https://github.com/tweepy/tweepy
+  14. http://ipython.org/notebook.html
+  15. http://scikit-learn.org/stable/
+  16. http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.tfidfvectorizer.html
+  17. http://jquery.com/
+  18. http://d3js.org/
+  19. http://cs.stanford.edu/people/karpathy/tsnejs/
+  20. http://jmlr.csail.mit.edu/papers/volume9/vandermaaten08a/vandermaaten08a.pdf
+  21. http://homepage.tudelft.nl/19j49/id167.html
+  22. https://github.com/karpathy/tsnejs
+  23. http://cs.stanford.edu/people/karpathy/tsnejs/
+  24. http://cs.stanford.edu/people/karpathy/tsnejs/wordvecs.html
+  25. http://www.socher.org/index.php/main/improvingwordrepresentationsviaglobalcontextandmultiplewordprototypes
+  26. http://disqus.com/?ref_noscript
+  27. http://disqus.com/
+  28. https://github.com/karpathy
+  29. https://twitter.com/karpathy
+
+   hidden links:
+  31. http://karpathy.github.io/2014/07/02/visualizing-top-tweeps-with-id167-in-javascript/

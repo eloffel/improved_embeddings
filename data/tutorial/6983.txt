@@ -1,0 +1,464 @@
+   [1]ideas [2]learning platform [3]conferences [4]shop
+   search ____________________ submit
+   [5]sign in
+
+on our radar
+
+   [6]ai
+   [7]data
+   [8]economy
+   [9]operations
+   [10]software architecture
+   [11]software engineering
+   [12]web programming
+   [13]see all
+
+   [14]ideas [15]learning platform [16]conferences [17]shop search
+   ____________________ submit
+
+on our radar
+
+   [18]ai
+   [19]data
+   [20]economy
+   [21]operations
+   [22]software architecture
+   [23]software engineering
+   [24]web programming
+   [25]see all
+
+   [26]ai
+
+                        id164 with tensorflow
+
+   how to create your own custom id164 model.
+
+   by [27]justin francis
+
+   october 25, 2017
+
+   framed butterfly displays framed butterfly displays (source: [28]ryan
+   somma on flickr)
+
+   [29]check out the in-person training session, "deep learning with
+   tensorflow," at the artificial intelligence conference in new york,
+   april 15-18, 2019.
+
+   attention readers: we invite you to access the corresponding python
+   code and ipython notebook for this article on [30]github.
+
+   image classification can perform some pretty amazing feats, but a large
+   drawback of many image classification applications is that the model
+   can only detect one class per image. with an id164 model,
+   not only can you classify multiple classes in one image, but you can
+   specify exactly where that object is in an image with a bounding box
+   framing the object.
+
+   the tensorflow [31]models github repository has a large variety of
+   pre-trained models for various machine learning tasks, and one
+   excellent resource is their id164 api. the id164
+   api makes it extremely easy to train your own id164 model
+   for a large variety of different applications. whether you need a
+   high-speed model to work on live stream high-frames-per-second (fps)
+   applications or high-accuracy desktop models, the api makes it easy to
+   train and export a model.
+
+   this tutorial will walk through all the steps for building a custom
+   object classification model using tensorflow   s api.
+
+gathering a data set
+
+   some very large detection data sets, such as [32]pascal and [33]coco,
+   exist already, but if you want to train a custom id164
+   class, you have to create and label your own data set.
+
+   for my data set, i decided to collect images of chess pieces from
+   internet image searches. i started using only images of white and black
+   pawns, but i   m hoping to include all the chess pieces in the future. i
+   gathered all my images from search engines, so i decided to make a list
+   of links in a text file that can be downloaded later using a script and
+   [34]scikit image. ideally, you want at least 100-300 training images;
+   for the chess pieces, unfortunately i could only find about 75 per
+   class. we   ll see how the model does at the end of this post. due to my
+   limited amount of data, i split my test files to 15%; ideally, you
+   would have 30% of all your data for testing. for convenience, i decided
+   to resize all my images to 300 x 300 pixels before saving them so i
+   could create my bounding boxes and not worry about having to resize the
+   images down the line.
+#this function will download and resize all images in the imagelinks folder and
+will split into train and test folders with their associated label.
+
+#editor's note: it is your responsibility to ensure that use of copyrighted imag
+es accessed in connection with this script complies with any license restriction
+s that may apply.
+
+copylabels = true
+trainpercent = 0.85
+
+listing = os.listdir(linkspath)
+for classes in listing:
+    os.chdir(linkspath)
+    text = open(classes, 'r')
+    links = text.readlines()
+    links = [i.strip() for i in links]
+
+    cut = int(np.floor(len(links)*trainpercent))
+
+    for i in range(cut):
+        os.chdir(trainpath)
+        if check(links[i]):
+            image = skimage.io.imread(links[i])
+            image = skimage.transform.resize(image, [300,300])
+            skimage.io.imsave(classes[:-4]+str(i)+'.jpg', image)
+            if copylabels:
+                label = classes[:-4]+str(i)+'.xml'
+                shutil.copyfile(labelspath+'/'+label,trainpath+'/'+label)
+
+    for i in range(cut,len(links)):
+        os.chdir(testpath)
+        if check(links[i]):
+            image = skimage.io.imread(links[i])
+            image = skimage.transform.resize(image, [300,300])
+            skimage.io.imsave(classes[:-4]+str(i)+'.jpg', image)
+            if copylabels:
+                label = classes[:-4]+str(i)+'.xml'
+                shutil.copyfile(labelspath+'/'+label,testpath+'/'+label)
+
+creating bounding boxes
+
+   in order to train our id164 model, for each image we will
+   need the image   s width, height, and each class with their respective
+   xmin, xmax, ymin, and ymax bounding box. simply put, our bounding box
+   is the frame that captures exactly where our class is in the image.
+   chess set figure 1. bounding box. source: pixabay, released under
+   creative commons cc0.
+
+   creating these labels can be a huge ordeal, but thankfully there are
+   programs that help create bounding boxes. [35]labelimg is an excellent
+   open source free software that makes the labeling process much easier.
+   it will save individual xml labels for each image, which we will
+   convert into a csv table for training. the labels for all the images
+   used in the pawn detector we are building are included in the
+   [36]github repository.
+
+install the id164 api
+
+   before getting started, we have to clone and install the object
+   detection api into our github repository. installing the object
+   detection api is extremely simple; you just need to clone the
+   tensorflow models directory and add some things to your python path.
+   the full installation process for docker or native python is noted in
+   the [37]github repository readme.
+pip3 install -r requirements.txt
+apt-get install -y protobuf-compiler
+git clone https://github.com/tensorflow/models.git
+cd models/research/
+protoc object_detection/protos/*.proto --python_out=.
+export pythonpath=$pythonpath:`pwd`:`pwd`/slim
+
+convert labels to the tfrecord format
+
+   when training models with tensorflow using [38]tfrecord, files help
+   optimize your data feed. we can generate a tfrecord file using code
+   adapted from this [39]raccoon detector.
+# modified from:
+# https://github.comr/datitran/raccoon_dataset/blob/master/xml_to_csv.py
+
+os.chdir(root)
+def xml_to_csv(path):
+    xml_list = []
+    for xml_file in glob.glob(path + '/*.xml'):
+        tree = et.parse(xml_file)
+        root = tree.getroot()
+        for member in root.findall('object'):
+            value = (root.find('filename').text,
+                     int(root.find('size')[0].text),
+                     int(root.find('size')[1].text),
+                     member[0].text,
+                     int(member[4][0].text),
+                     int(member[4][1].text),
+                     int(member[4][2].text),
+                     int(member[4][3].text))
+            xml_list.append(value)
+    column_name = ['filename', 'width', 'height', 'class', 'xmin', 'ymin', 'xmax
+', 'ymax']
+    xml_df = pd.dataframe(xml_list, columns=column_name)
+    return xml_df
+
+def main():
+    for i in [trainpath, testpath]:
+        image_path = i
+        folder = os.path.basename(os.path.normpath(i))
+        xml_df = xml_to_csv(image_path)
+        xml_df.to_csv('data/'+folder+'.csv', index=none)
+        print('successfully converted xml to csv.')
+
+main()
+
+choose a model
+
+   there are [40]models in the tensorflow api you can use depending on
+   your needs. if you want a high-speed model that can work on detecting
+   video feed at high fps, the [41]single shot detection (ssd) network
+   works best. some other id164 networks detect objects by
+   sliding different sized boxes across the image and running the
+   classifier many times on different sections of the image; this can be
+   very resource consuming. as its name suggests, the ssd network
+   determines all bounding box probabilities in one go; hence, it is a
+   vastly faster model. however, with single shot detection, you gain
+   speed at the cost of accuracy. i   ll use single shot detection as the
+   bounding box framework, but for the neural network architecture, i will
+   use the [42]m[43]obilenet model, which is designed to be used in mobile
+   applications. i   ve already configured the [44]config file for ssd
+   mobilenet and included it in the github repository for this post.
+   depending on your computer, you may have to lower the batch size in the
+   config file if you run out of memory.
+
+retrain the model with your data
+
+   now you could train the entire ssd mobilenet model on your own data
+   from scratch. in order to do this, though, you would need thousands of
+   training images, multiple gpus, and roughly a week of training time.
+   the much easier solution is to take a model already trained on a large
+   data set and clip off the last layer, which has the classes from the
+   trained model, and replace it with your own classes. by doing this, you
+   use all the feature detectors trained in the previous model and use
+   these features to try to detect your new classes. since we are only
+   retraining the last layer of our mobilenet model, a high-end gpu is not
+   required (but it can certainly speed things up). once our loss is
+   consistently around the value of 1 or starts rising, we can stop
+   tensorflow training by pressing ctrl+c. to train, we simply run the
+   `train.py` file in the id164 api directory.
+python3 models/research/object_detection/train.py --logtostderr --train_dir=data
+/ --pipeline_config_path=data/ssd_mobilenet_v1_pets.config
+
+   implement new model with tensorflow
+
+   before we start experimenting with our newly trained model, we have to
+   export our graph for id136. you can use the latest ckpt # from your
+   data directory.
+python3 models/research/object_detection/export_id136_graph.py \
+    --input_type image_tensor \
+    --pipeline_config_path data/ssd_mobilenet_v1_pets.config \
+    --trained_checkpoint_prefix data/model.ckpt-997 \
+    --output_directory object_detection_graph
+
+   after this, we can start having some fun using some code modified from
+   tensorflow   s id164 notebook. to validate our model   s
+   performance, we will use images that it has never seen before; for my
+   validation images, i used some pictures of my own chess set. if you are
+   building a serious detection model, i highly recommend assigning about
+   10% of your total images to be validation images. with a good number of
+   validation images, you can test multiple checkpoints to see which one
+   performs best.
+   tensorflow id164 chess set 1 figure 2. pictures of my chess
+   set. image courtesy of justin francis. chess set 2 figure 3. pictures
+   of my chess set. image courtesy of justin francis.
+
+   it was very clear to see that my very limited amount of data, about 100
+   images per class, was not enough to get a robust model. though my
+   detector was able to detect direct front shots of the pawns, it was not
+   able to detect pawns that were blurry, at a distance, at an angle, or
+   slightly covered. but, i believe this toy example showcases the api   s
+   capabilities well. it was my goal to gather all the steps to creating a
+   custom id164 model in one spot, and i highly recommend you
+   experiment with all the models. taking this tutorial a step further,
+   you could use the frozen model on a mobile device using
+   [45]tensorflow   s android camera demo. i really hope you use the tools
+   provided to create your own custom id164 model.
+
+   this post is a collaboration between o'reilly
+   and [46]tensorflow. [47]see our statement of editorial independence.
+   article image: framed butterfly displays (source: [48]ryan somma on
+   flickr).
+
+   share
+    1. [49]tweet
+    2.
+    3.
+     __________________________________________________________________
+
+   [50]justin francis
+
+[51]justin francis
+
+   justin francis is currently an undergraduate student at the university
+   of alberta in canada. justin is also on the software team for the
+   university's engineering club 'autonomous robotic vehicle project'
+   (arvp.org) helping implement and experiment with deep learning and
+   id23 algorithms.  in the past, he was the founder and
+   educator at a non-profit community cooperative bicycle shop and spent
+   two years exploring and experiencing the georgia strait on his
+   sailboat.
+   [52]more
+     __________________________________________________________________
+
+   [53]bots landscape.
+
+   [54]ai
+
+[55]infographic: the bot platform ecosystem
+
+   by [56]jon bruner
+
+   a look at the artificial intelligence and messaging platforms behind
+   the fast-growing chatbot community
+
+   video
+   [57]vertical forest, milan.
+
+   [58]ai
+
+[59]evolve ai
+
+   by [60]naveen rao
+
+   naveen rao explains how intel nervana is evolving the ai stack from
+   silicon to the cloud.
+
+   [61]welcome sign at o'reilly ai conference 2016
+
+   [62]ai
+
+[63]highlights from the o'reilly ai conference in new york 2016
+
+   by [64]mac slocum
+
+   watch highlights covering artificial intelligence, machine learning,
+   intelligence engineering, and more. from the o'reilly ai conference in
+   new york 2016.
+
+   video
+   [65]close up of uber's self driving car in pittsburgh.
+
+   [66]ai
+
+[67]how ai is propelling driverless cars, the future of surface transport
+
+   by [68]shahin farshchi
+
+   shahin farshchi examines role artificial intelligence will play in
+   driverless cars.
+
+about us
+
+     * [69]our company
+     * [70]teach/speak/write
+     * [71]careers
+     * [72]customer service
+     * [73]contact us
+
+site map
+
+     * [74]ideas
+     * [75]learning
+     * [76]topics
+     * [77]all
+
+     *
+     *
+     *
+     *
+     *
+
+      2019 o'reilly media, inc. all trademarks and registered trademarks
+   appearing on oreilly.com are the property of their respective owners.
+   [78]terms of service     [79]privacy policy     [80]editorial independence
+
+   animal
+
+   iframe: [81]https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+references
+
+   visible links
+   1. https://www.oreilly.com/ideas
+   2. https://learning.oreilly.com/
+   3. http://www.oreilly.com/conferences/
+   4. http://shop.oreilly.com/
+   5. https://www.oreilly.com/sign-in.html
+   6. https://www.oreilly.com/topics/ai
+   7. https://www.oreilly.com/topics/data
+   8. https://www.oreilly.com/topics/economy
+   9. https://www.oreilly.com/topics/operations
+  10. https://www.oreilly.com/topics/software-architecture
+  11. https://www.oreilly.com/topics/software-engineering
+  12. https://www.oreilly.com/topics/web-programming
+  13. https://www.oreilly.com/topics
+  14. https://www.oreilly.com/ideas
+  15. https://learning.oreilly.com/
+  16. http://www.oreilly.com/conferences/
+  17. http://shop.oreilly.com/
+  18. https://www.oreilly.com/topics/ai
+  19. https://www.oreilly.com/topics/data
+  20. https://www.oreilly.com/topics/economy
+  21. https://www.oreilly.com/topics/operations
+  22. https://www.oreilly.com/topics/software-architecture
+  23. https://www.oreilly.com/topics/software-engineering
+  24. https://www.oreilly.com/topics/web-programming
+  25. https://www.oreilly.com/topics
+  26. https://www.oreilly.com/topics/ai
+  27. https://www.oreilly.com/people/justin-francis
+  28. https://www.flickr.com/photos/ideonexus/4059606339
+  29. https://conferences.oreilly.com/artificial-intelligence/ai-ny/public/schedule/detail/73882
+  30. https://github.com/wagonhelm/tf_objectdetection_api
+  31. https://github.com/tensorflow/models
+  32. http://www.cs.stanford.edu/~roozbeh/pascal-context/
+  33. http://cocodataset.org/#home
+  34. http://scikit-image.org/
+  35. https://github.com/tzutalin/labelimg
+  36. https://github.com/wagonhelm/tf_objectdetection_api
+  37. https://github.com/wagonhelm/tf_objectdetection_api/blob/master/readme.md
+  38. https://www.tensorflow.org/programmers_guide/datasets
+  39. https://github.com/datitran/raccoon_dataset/blob/master/generate_tfrecord.py
+  40. https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/detection_model_zoo.md
+  41. http://www.cs.unc.edu/~wliu/papers/ssd.pdf
+  42. https://research.googleblog.com/2017/06/mobilenets-open-source-models-for.html
+  43. https://research.googleblog.com/2017/06/mobilenets-open-source-models-for.html
+  44. https://github.com/tensorflow/models/tree/master/research/object_detection/samples/configs
+  45. https://github.com/tensorflow/tensorflow/tree/master/tensorflow/examples/android#current-samples
+  46. https://www.tensorflow.org/
+  47. http://www.oreilly.com/about/editorial_independence.html
+  48. https://www.flickr.com/photos/ideonexus/4059606339
+  49. https://twitter.com/share
+  50. https://www.oreilly.com/people/justin-francis
+  51. https://www.oreilly.com/people/justin-francis
+  52. https://www.oreilly.com/people/justin-francis
+  53. https://www.oreilly.com/ideas/infographic-the-bot-platform-ecosystem
+  54. https://www.oreilly.com/topics/ai
+  55. https://www.oreilly.com/ideas/infographic-the-bot-platform-ecosystem
+  56. https://www.oreilly.com/people/b1d73-jon-bruner
+  57. https://www.oreilly.com/ideas/evolve-ai
+  58. https://www.oreilly.com/topics/ai
+  59. https://www.oreilly.com/ideas/evolve-ai
+  60. https://www.oreilly.com/people/14d38-naveen-rao
+  61. https://www.oreilly.com/ideas/keynotes-from-ai-new-york-2016
+  62. https://www.oreilly.com/topics/ai
+  63. https://www.oreilly.com/ideas/keynotes-from-ai-new-york-2016
+  64. https://www.oreilly.com/people/0d2c1-mac-slocum
+  65. https://www.oreilly.com/ideas/how-ai-is-propelling-driverless-cars-the-future-of-surface-transport
+  66. https://www.oreilly.com/topics/ai
+  67. https://www.oreilly.com/ideas/how-ai-is-propelling-driverless-cars-the-future-of-surface-transport
+  68. https://www.oreilly.com/people/c7521-shahin-farshchi
+  69. http://oreilly.com/about/
+  70. http://oreilly.com/work-with-us.html
+  71. http://oreilly.com/careers/
+  72. http://shop.oreilly.com/category/customer-service.do
+  73. http://shop.oreilly.com/category/customer-service.do
+  74. https://www.oreilly.com/ideas
+  75. https://www.oreilly.com/topics/oreilly-learning
+  76. https://www.oreilly.com/topics
+  77. https://www.oreilly.com/all
+  78. http://oreilly.com/terms/
+  79. http://oreilly.com/privacy.html
+  80. http://www.oreilly.com/about/editorial_independence.html
+  81. https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+   hidden links:
+  83. https://www.oreilly.com/
+  84. https://www.facebook.com/oreilly/
+  85. https://twitter.com/oreillymedia
+  86. https://www.youtube.com/user/oreillymedia
+  87. https://plus.google.com/+oreillymedia
+  88. https://www.linkedin.com/company/oreilly-media
+  89. https://www.oreilly.com/

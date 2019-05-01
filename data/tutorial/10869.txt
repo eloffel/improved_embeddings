@@ -1,0 +1,2297 @@
+7
+1
+0
+2
+
+ 
+
+n
+a
+j
+ 
+
+5
+1
+
+ 
+ 
+]
+l
+m
+
+.
+t
+a
+t
+s
+[
+ 
+ 
+
+1
+v
+0
+8
+9
+3
+0
+
+.
+
+1
+0
+7
+1
+:
+v
+i
+x
+r
+a
+
+dynet: the dynamic neural network toolkit
+
+graham neubig      , chris dyer   , yoav goldberg  , austin matthews   ,
+
+waleed ammar  , antonios anastasopoulos  , miguel ballesteros      , david chiang  ,
+
+daniel clothiaux   , trevor cohn      , kevin duh      , manaal faruqui    ,
+
+cynthia gan    , dan garrette    , yangfeng ji         , lingpeng kong   , adhiguna kuncoro   ,
+
+gaurav kumar      , chaitanya malaviya   , paul michel   , yusuke oda   ,
+
+matthew richardson         , naomi saphra         , swabha swayamdipta   , pengcheng yin   
+
+abstract
+
+we describe dynet, a toolkit for implementing neural network models based on dy-
+namic declaration of network structure. in the static declaration strategy that is used in
+toolkits like theano, cntk, and tensorflow, the user    rst de   nes a computation graph
+(a symbolic representation of the computation), and then examples are fed into an engine
+that executes this computation and computes its derivatives. in dynet   s dynamic dec-
+laration strategy, computation graph construction is mostly transparent, being implicitly
+constructed by executing procedural code that computes the network outputs, and the
+user is free to use di   erent network structures for each input. dynamic declaration thus
+facilitates the implementation of more complicated network architectures, and dynet is
+speci   cally designed to allow users to implement their models in a way that is idiomatic
+in their preferred programming language (c++ or python). one challenge with dynamic
+declaration is that because the symbolic computation graph is de   ned anew for every
+training example, its construction must have low overhead. to achieve this, dynet has
+an optimized c++ backend and lightweight graph representation. experiments show that
+dynet   s speeds are faster than or comparable with static declaration toolkits, and signi   -
+cantly faster than chainer, another dynamic declaration toolkit. dynet is released open-
+source under the apache 2.0 license, and available at http://github.com/clab/dynet.
+
+   
+   
+   
+  
+  
+
+  
+      
+      
+      
+    
+    
+         
+         
+         
+
+carnegie mellon university, pittsburgh, pa, usa
+nara institute of science and technology, ikoma, japan
+deepmind, london, uk
+bar ilan university, ramat gan, israel
+allen institute for arti   cial intelligence, seattle, wa, usa
+university of notre dame, notre dame, in, usa
+ibm t.j. watson research center, yorktown heights, ny, usa
+university of melbourne, melbourne, australia
+johns hopkins university, baltimore, md, usa
+google, new york, ny, usa
+google, mountain view, ca, usa
+university of washington, seattle, usa
+microsoft research, redmond, wa, usa
+university of edinburgh, edinburgh, uk
+
+1
+
+1 introduction
+
+deep neural networks are now an indispensable tool in the machine learning practitioner   s
+toolbox, powering applications from image understanding [39], id103 and syn-
+thesis [29, 65], game playing [45, 54], id38 and analysis [6, 14], and more.
+to a    rst approximation, deep learning replaces the application-speci   c feature engineering
+(coupled with well-understood models) that is characteristic of classical    shallow    learning
+paradigms with application-speci   c model engineering (usually coupled with less sophisticated
+features of the inputs). the deep learning paradigm therefore entails ongoing development
+of new model variants. while developing e   ective models requires insight and analysis, it
+also requires implementing new models and assessing their performance on real tasks. thus,
+rapid prototyping and easy maintenance of e   cient and correct model code is of paramount
+importance in deep learning.
+
+deep learning models operate in two modes: they either compute a prediction (or distri-
+bution over predictions) given an input, or, at training time when supervision is available,
+they compute the derivatives of a prediction error    loss    with respect to model parameters
+which are used to minimize subsequent errors on similar inputs using some variant of gradi-
+ent descent. since implementing a model requires both implementing the code that executes
+the model predictions as well as the code that carries out gradient computation and learn-
+ing, model development is a nontrivial engineering challenge. the di   culty of this challenge
+can be reduced by using tools that simplify implementation of neural network computations.
+these tools, including theano [7], tensorflow [1], torch [13], cntk [64], mxnet [10], and
+chainer [62] provide neural network function primitives (e.g., id202 operations, non-
+linear transformations, etc.), parameter initialization and optimization routines, and usually
+the ability to express composite computations of a task-speci   c prediction and error that are
+then di   erentiated automatically to obtain the gradients needed to drive learning algorithms.
+this last automatic di   erentiation (autodi   ) component is arguably their most important
+labor-saving feature since changes to the function that computes the loss for a training input
+will require a corresponding change in the computation of its derivative. if an engineer main-
+tains these code paths independently, it is easy for them to get out of sync. furthermore, since
+the di   erentiation of composite expressions is algorithmically straightforward [63, 31], there
+is little downside to using autodi    algorithms in place of hand-written code for computing
+derivatives.
+
+in short, these tools have made deep learning successful because they have e   ectively solved
+a crucial software engineering problem. the question remains though: since engineering is
+a key component of deep learning practice, what engineering problems are existing tools
+failing to solve? do they let programmers express themselves naturally? do they facilitate
+debugging? do they facilitate the maintenance of large-scale projects?
+
+in this paper, we suggest that the programming model that underlies several popular
+toolkits   namely a separation of declaration and execution of the network architecture (which
+we refer to as static declaration)   is necessarily associated with some serious software engi-
+neering risks, particularly when dealing with dynamically structured network architectures
+(e.g., sequences of variable lengths and tree-structured id56s). as an al-
+ternative, we propose as reviving an alternative programming model found in autodi    libraries
+that uni   es declaration and execution.
+
+as a proof of concept of our recommended programming model, we describe    dynet: the
+
+2
+
+dynamic neural network toolkit,    a toolkit based on a uni   ed declaration and execution
+programming model which we call dynamic declaration.1
+
+in a series of case-studies in a single-machine environment,2 we show that dynet obtains
+execution e   ciency that is comparable to static declaration toolkits for standard model ar-
+chitectures. for models that use dynamic architectures (e.g., where every training instance
+has a di   erent model architecture), implementation is signi   cantly simpli   ed.
+
+2 static declaration vs. dynamic declaration
+
+in this section, we describe in more concrete terms the two paradigms of static declara-
+tion (  2.1) and dynamic declaration (  2.2) .
+
+2.1 static declaration
+
+programs written in the static declaration paradigm (which is used by tensorflow, theano,
+and cntk, among others) follow a two step process:
+
+de   nition of a computational architecture: the user writes a program that de   nes the
+   shape    of the computation they wish to perform. this computation is generally rep-
+resented as a computation graph, which is a symbolic representation of a complex com-
+putation that can both be executed and di   erentiated using autodi    algorithms. for
+example, a user might de   ne computation that performs image recognition such as:
+   take a 64x64 image represented as a matrix of brightness values, perform two layers of
+convolutions, predict the class of the image out of 100 classes, and optionally calculate
+the loss with respect to the correct label.   
+
+execution of the computation: the user then repeatedly populates the 64x64 matrix
+with data and the library executes the previously declared computation graph. the
+predictions can then be used at test time, or at training time the loss can be calcu-
+lated and back-propagated through the graph to compute the gradients required for
+parameter updates.
+
+static declaration has a number of advantages, the most signi   cant of which is that after the
+computation graph is de   ned, it can be optimized in a number of ways so that the subsequent
+repeated executions of computation can be performed as quickly as possible, speeding training
+and test over large datasets. second, the static computation graph can be used to schedule
+computation across a pool of computational devices [1]. third, the static declaration paradigm
+bene   ts the toolkit designer: less e   cient algorithms for graph construction and optimization
+can be used since this one-time cost will be amortized across many training instances at run
+time. these advantages are the reason why many popular libraries take this static declaration
+approach.
+
+1available open-source under the apache license at https://github.com/clab/dynet and documented at
+
+https://dynet.readthedocs.io.
+
+2static declaration facilitates algorithmic distribution of computation across multiple devices, but our
+focus is in this paper is on the engineering challenges associated with rapid model prototyping. we discuss
+static declaration   s bene   ts with respect to scalability below, and we will return to the outlook for automatic
+distribution of dynamic computation across multiple devices in the conclusion.
+
+3
+
+unfortunately, there are a couple of reasons why this variety of static declaration can also
+be inconvenient, speci   cally in situations where we would like to use networks in which each
+piece of data requires a di   erent architecture. here are a few examples:
+
+variably sized inputs: analogously to the previous example, if we are not restricted to
+64x64 images, but have a di   erent sized input for each image, it is more di   cult to
+de   ne a single structure of identical computations. we also can think of a situation
+where we want to process a natural language sentence to perform machine translation
+[59, 4], where each sentence is of a di   erent size and we need to run a recurrent neural
+network (id56) [20, 30] over a variable number of words to process it correctly.
+
+variably structured inputs: a more complicated case is when each input has not only
+a di   erent size, but also a di   erent structure, such as the case of tree-structured net-
+works [55, 61] or graph-structured networks [41], which have been used in a variety of
+tasks. in these networks, each input data point may have a di   erent structure, which
+means that computation will be di   erent for di   erent examples, substantially compli-
+cating the use of a    xed architecture and computation order.
+
+nontrivial id136 algorithms: in some cases, it is desirable to use sophisticated in-
+ference algorithms to compute or approximate a di   erentiable quantity such as the
+marginal likelihood or bayes risk during learning [26, 15, 25, 38]. these algorithms may
+require structured intermediate values (e.g., id145 charts or graphs in
+belief propagation) and may use nontrivial    ow control.
+
+variably structured outputs: finally, the structure of the output could change, even
+based on the values calculated by earlier steps in the network. this is true for ap-
+plications such as syntactic parsing using tree-structured networks [17], or predictive
+models that use variably sized search spaces based on the certainty of the model at any
+particular decision point [9]. handling these outputs necessitates the ability to perform
+dynamic    ow control.
+
+the above-mentioned cases are di   cult for simple static declaration tools to handle. how-
+ever, by increasing the power and complexity of the computational graph formalism, it is
+possible to support them. for example, it is possible to process variable sized inputs if the
+computation graph can represent objects whose size is unspeci   ed at declaration time. to
+cope with structured data,    ow control operations such as conditional execution, iteration,
+etc., can be added to the inventory of operations supported by the computation graph. for
+example, to run an id56 over variable length sequences, theano o   ers the scan operation,
+and tensorflow o   ers the dynamic id56 operation.
+
+while it is therefore possible to deal with variable architectures with static declaration in
+
+principle, it still poses some di   culties in practice:
+
+di   culty in expressing complex    ow-control logic: when computing the value of a
+id168 requires traversal of complex data structures or the execution of nontrivial
+id136 algorithms, it is necessary, in the static declaration paradigm, to express the
+logic that governs these algorithms as part of the computation graph. however, in
+existing toolkits, iteration, recursion, and even conditional execution (standard    ow
+control primitives in any high-level language) look very di   erent in the graph than in
+
+4
+
+the imperative coding style of the host language   if they are present at all [43, 8].
+since traversal and id136 algorithms can be nontrivial to implement correctly under
+the best of circumstances [19], implementing them    indirectly    in a computation graph
+requires considerable sophistication on the developer   s part.
+
+complexity of the computation graph implementation: to support dynamic execu-
+tion, the computation graph must be able to handle more complex data types (e.g.,
+variable sized tensors and structured data), and operations like    ow control primitives
+must be available as operations. this increases the complexity of computation graph
+formalism and implementation, and reduces opportunities for optimization.
+
+di   culty in debugging: while static analysis permits some errors to be identi   ed during
+declaration, many logic errors will necessarily wait to be uncovered until execution
+(especially when many variables are left underspeci   ed at declaration time), which is
+necessarily far removed from the declaration code that gave rise to them. this separation
+of the location of the root cause and location of the observed crash makes for di   cult
+debugging.
+
+these di   culties highlight the need for an alternative paradigm for implementing neural
+networks that is simple and intuitive to program and debug, in a language widely known and
+used by programmers.
+
+2.2 dynamic declaration
+
+in contrast to the two-step process of de   nition and execution used by the static declaration
+paradigm, the dynamic declaration model that we advocate in this paper takes a single-step
+approach, in which the user de   nes the computation graph programmatically as if they were
+calculating the outputs of their network on a particular training instance. for example, in the
+case of image processing from above, this would mean that for every training example, the
+user would    load a 64x64 image into their computation graph, perform several convolutions,
+and calculate either the predictive probabilities (for test) or loss (for training).    notably,
+there are no separate steps for de   nition and execution: the necessary computation graph is
+created, on the    y, as the loss calculation is executed, and a new graph is created for each
+training instance. this requires very lightweight graph construction.
+
+this general design philosophy of implicit graph construction has been around in the form
+of autodi    libraries since at least the 1980   s [31, 27] and, in addition to dynet, is implemented
+in the neural network library chainer [62]. it is advantageous because it allows the user to:
+(1) de   ne a di   erent computation architecture for each training example or batch, allowing
+for the handling of variably sized or structured inputs using    ow-control facilities of the
+host language, and (2) interleave de   nition and execution of computation, allowing for the
+handling of cases where the structure of computation may change depending on the results
+of previous computation steps. furthermore, it reduces the complexity of the computation
+graph implementation since it does not need to contain    ow control operations or support
+dynamically sized data   these are handled by the host language (c++ or python). in   3 we
+discuss the coding paradigm in more depth, and give examples of how these cases that are
+di   cult when using static computation are handled simply within dynet.
+
+5
+
+despite the attractiveness of the dynamic declaration paradigm, there is a reason why
+many of the major neural network libraries opt for static declaration: creating and optimiz-
+ing computation graphs can be expensive, and by spreading this cost across many training
+instances, the amortized cost of even an ine   cient implementation will be negligible. the
+over-arching goal of dynet is to close this gap by minimizing the computational cost of graph
+construction, allowing for e   cient dynamic computation, and removing barriers to rapid pro-
+totyping and implementation of more sophisticated applications of neural nets that are not
+easy to implement in the static computation paradigm. in order to do so, dynet   s backend,
+which is written in c++, is optimized in a number of ways to remove overhead in computation
+graph construction, and support e   cient execution on both cpu and gpu. this optimiza-
+tion is not as tricky as might at    rst seem: because    ow control and facilities for dealing with
+variably sized inputs remain in the host language (rather than in the computation graph, as
+is required by static declaration), the computation graph needs to support fewer operation
+types, and these tend to be more completely speci   ed (e.g., tensor sizes are always known
+rather than inferred at execution time). this results in optimization opportunities and keeps
+the library code simple. the design of the backend is explained more comprehensively in   4.
+dynet is also designed to have native support for a number of more complicated use
+cases that particularly come up in natural language processing or other sequential tasks. for
+example, it is common to use recurrent neural networks [20, 30], or tree-structured neural
+networks [55, 61], both of which are supported natively by dynet (  5, c.f. some other toolkits
+such as theano, which often require a wrapper using a separate tool such as keras1). there
+is also back-end support for mini-batching (  6.2) to improve computational e   ciency, taking
+much of the mental burden o    of users who want to implement mini-batching in their mod-
+els. finally, for more complicated models that do not support mini-batching, there is also
+support for data-parallel multi-processing (  6.3), in which asynchronous parameter updates
+are performed across multiple threads, making it simple to parallelize (on a single machine)
+any variety of model at training time.
+
+3 coding paradigm
+
+3.1 coding paradigm overview
+
+from the user   s perspective, writing a program using dynet revolves around building up
+expressions that correspond to the computation that needs to be performed. this    rst starts
+with basic expressions that are either constant input values, or model parameters. then,
+compound expressions are further built from other expressions by means of operations, and
+the chain of operations implicitly de   ne a computationgraph for the desired computation.
+this computation graph represents symbolic computation, and the results of the computation
+are evaluated lazily: the computation is only performed once the user explicitly asks for it (at
+which point a    forward    computation is triggered). expressions that evaluate to scalars (i.e.
+loss values) can also be used to trigger a    backward    computation, computing the gradients
+of the computation with respect to the parameters. the parameters and gradients are saved
+in a model object, and a trainer is used to update the parameters according to the gradients
+and an update rule.
+
+1https://keras.io
+
+6
+
+we brie   y elaborate on each of these components below:
+
+parameter and lookupparameter: parameters are vectors, matrices or tensors of real
+numbers representing things like weight matrices and bias vectors. lookupparameters
+are sets of vectors of parameters that we intend to look up sparsely, such as word embed-
+dings. i.e., if we have a vocabulary v for which we would like to look up embeddings, a
+lookupparameters object de   nes a |v |    d matrix, which acts as an embedding matrix
+mapping items in 0, . . . ,|v |     1 to d-dimensional vectors. parameters and lookuppa-
+rameters are stored in a model, and persist across training examples (i.e., across di   erent
+computationgraph instances).
+
+model: a model is a collection of parameters and lookupparameters. the user obtains
+the parameters by requesting them from a model. the model then keeps track of the
+parameters (and their gradients). models can be saved to and loaded from disk, and
+are also used by the trainer object below.
+
+trainer: a trainer implements an online update rule such as simple stochastic gradient
+descent, adagrad [16], or adam [34]. the trainer holds a pointer to the model object,
+and hence the parameters within it, and also may maintain other information about the
+parameters as required by the update rule.
+
+expression: expressions are the main data types being manipulated in a dynet program.
+each expression represents a sub-computation in a computation graph. for example,
+a parameters object representing a matrix or a vector can be added to the computa-
+tiongraph resulting in an expression w or b. similarly, a lookupparameters object
+e can be queried for a speci   c embedding vector (which is added to the computa-
+tion graph) by a lookup operation, resulting in an expression e[i]. these expres-
+sions can then be combined into larger expressions, such as concatenate(e[3], e[4]) or
+softmax(tanh(w     concatenate(e[3], e[4]) + b)). here, softmax, tanh,    , +, concatenate
+are operations, discussed below.
+
+operations: these are not objects, but rather functions that operate on expressions and
+return expressions, building a computation graph in the background. dynet de   ne
+operations for many basic arithmetic primitives (addition, multiplication, dot-product,
+softmax, . . . ) as well as common id168s, id180, and so on. when
+applicable, the operations are de   ned using operator overloading, making graph con-
+struction as natural and intuitive as possible.
+
+builder classes: builder classes de   ne interfaces for creating various    standardized    net-
+work components, such as recurrent neural network, tree-structured network, and large-
+vocabulary softmax. these work on top of expressions and operations, and provide
+easy-to-use libraries. builder classes provide convenient and e   cient implementations
+of standard algorithms, but are not part of the    core    dynet library, in the sense that
+the builders are higher-level constructs that are implemented    on top of    the core dynet
+auto-di   erentiation functionality. builders are discussed more in depth in   5 below.
+
+computationgraph: expressions are part of an implicit computationgraph object that
+de   nes the computation that needs to be performed. dynet currently assumes that
+
+7
+
+only one computation graph will exist at any one time. while the computationgraph
+is central to the inner workings of dynet (  4), from the user   s perspective, the only
+responsibility is to create a new computation graph for each training example.
+
+the overall    ow of implementing and training a model in dynet can be described as
+
+follows:
+
+1. create a model.
+
+2. add the necessary parameters and lookupparameters to the model
+
+3. create a trainer object and associate it with the model.
+
+4. for each example:
+
+(a) create a new computationgraph, and populate it by building an expression
+
+representing the desired computation for this example.
+
+(b) calculate the result of that computation forward through the graph by calling the
+
+value() or npvalue() functions of the    nal expression
+
+(c) if training, calculate an expression representing the id168, and use it   s
+
+backward() function to perform back-propagation
+
+(d) use the trainer to update the parameters in the model
+
+the contrast with static declaration libraries such as theano and tensorflow can be found
+in the fact that the    create a graph    step falls within our loop over each example. this has
+the advantage of allowing the user to    exibly create a new graph structure for each instance
+and to use    ow control syntax (e.g., iteration) from their native programming language to do
+so. of course, it also adds the requirement that graph construction be fast enough that it
+does not present a burden, a challenge which we address in   4.
+
+3.2 high-level example
+
+to illustrate dynet   s coding paradigm on a high level, we demonstrate a sketch of a dynet
+programs in python figure 1. this program shows the process of performing maximum
+likelihood training for a simple classi   er that calculates a vector of scores for each class it will
+be expected to predict, then returns the id of the class with the highest score. we assume
+each training example to be an (input, output) pair, where input is tuple of two word
+indices, and output is a number indicating the correct class.
+
+in the    rst two lines we import the appropriate libraries. in line 3, we initialize the dynet
+model, which allocates space in memory to hold parameters, but does not initialize them. in
+lines 4   6, we add our parameters to the model; this process will be di   erent depending on the
+speci   c variety of model we will be using. here, we add a 20    100 weight matrix, a 20-dim
+bias vector, and a lookup-table (embedding table) mapping a vocabulary of 20, 000 items to
+50-dim vectors. in line 7, we initialize a trainer (in this case a simple stochastic gradient
+descent (sgd) trainer), which will be in charge of updating the parameters in the model. we
+then begin multiple epochs of training and testing over the data in line 8.
+
+starting at line 9, we iterate over the training data. line 10 clears the current computation
+in lines 11   13, we create a
+
+graph, starting a blank graph for the current computation.
+
+8
+
+1 import dynet as dy
+2 import numpy as np
+3 model = dy.model()
+4 w_p = model.add_parameters((20, 100))
+5 b_p = model.add_parameters(20)
+6 e
+7 trainer = dy.simplesgdtrainer(model)
+8 for epoch in range(num_epochs):
+
+= model.add_lookup_parameters((20000, 50))
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+25
+
+26
+
+27
+
+for in_words, out_label in training_data:
+
+dy.renew_cg()
+w = dy.parameter(w_p)
+b = dy.parameter(b_p)
+score_sym = dy.softmax(w*dy.concatenate([e[in_words[0]],e[in_words[1]]])+b)
+loss_sym = dy.pickneglogsoftmax(score_sym, out_label)
+loss_val = loss_sym.value()
+loss_sym.backward()
+trainer.update()
+
+correct_answers = 0
+for in_words, out_label in test_data:
+
+dy.renew_cg()
+w = dy.parameter(w_p)
+b = dy.parameter(b_p)
+score_sym = dy.softmax(w*dy.concatenate([e[in_words[0]],e[in_words[1]]])+b)
+score_val = score_sym.npvalue()
+if out_label == np.argmax(score_val):
+
+correct_answers += 1
+
+print(correct_answers/len(test_data))
+
+figure 1: an example of training and testing in the dynet python api.
+
+9
+
+graph that will calculate a score vector for the training instance (this process is also model-
+dependent). here, we    rst access the weight matrix and bias vector parameters living in
+the model (w p and b p), and add them to the graph as expressions (w and b p) for use in
+this particular training example. we then lookup the two vectors corresponding to the input
+ids, concatenate them, do a linear transform followed by a softmax, creating an expression
+corresponding to computation. then, in line 14 we create an expression corresponding to the
+loss     the negative log likelihood of the correct answer after taking a softmax over the scores.
+in line 15, we calculate the value of the computation by performing computation forward
+through the graph, and in line 16 we perform the backward pass, accumulating the gradients
+of the parameters in the    model    variable. in line 17, we update the parameters according to
+the sgd update rule, and clear the accumulated gradients from the model.
+
+next, starting on lines 18 and 19, we step through the testing data and measure accuracy.
+in lines 20   23 we again clear the computation graph and de   ne the expression calculating
+the scores of the test data in the same manner that we did during training. in line 24 we
+perform the actual calculation and retrieve the scores as a numpy array from the graph. in
+lines 25 and 26, we determine whether the correct label is the one with the highest score,
+and count it as a correct answer if so. finally in line 27, we print the test accuracy for this
+iteration.
+
+3.3 two examples of dynamic graph construction
+
+in this section, we demonstrate two examples: one of a dynamic network where the structure
+of the network changes for each training example, and another where we perform dynamic
+   ow control based on the results of computation.
+
+dynamic network shape: in figure 2 we provide an example for a tree-shaped re-
+cursive neural network, following the model of [55]. each example is a tree with unary or
+binary nodes, and leaves that come from a vocabulary v . the tree is recursively encoded
+as a vector according to the following rules: the encoding of a leaf is the embedding vector
+corresponding to the leaf   s vocabulary item. the encoding of a unary node is the same as the
+encoding of its child node, and the encoding of a binary node n with child nodes c1 and c2
+is a linear combination of the encoding of the nodes followed by a tanh activation function:
+enc(n) = tanh(w     [enc(c1); enc(c2)]) where w is a model parameter and [; ] denotes vector
+concatenation. computing the tree encoding is performed using a neural network that is dy-
+namically created based on the tree structure. this is handled by the treeid56builder class
+(lines 1   19), to be discussed shortly. once the expression representing the tree is available,
+we then use it for classi   cation by a linear transformation followed by a softmax (line 28).
+
+the treeid56builder class holds the model parameters (the transformation parameter w
+and the leaf-id27s e). these are initialized in lines 2   5. word vocab is a table
+mapping vocabulary items to numeric ids (indices in e). the encoding itself is done in the
+recursive function encode(self, tree) (lines 6   19). this function takes as input a tree data-
+structure (implementation not provided) that has the basic tree operations. it then follows
+the tree encoding logic: if the tree is a leaf, return the expression of the vector corresponding
+to the leaf   s word (tree.label).
+if the tree is a unary tree, recursively call the encoding
+function of its child. finally, if the tree is a binary tree, recursively compute the encoding of
+each child (lines 15 and 16), resulting in two expression vectors that are then combined into
+the expression of the current tree (line 18).
+
+10
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+25
+
+26
+
+27
+
+28
+
+29
+
+30
+
+31
+
+32
+
+class treeid56builder(object):
+
+def __init__(self, model, word_vocab, hdim):
+
+self.w = model.add_parameters((hdim, 2*hdim))
+self.e = model.add_lookup_parameters((len(word_vocab),hdim))
+self.w2i = word_vocab
+
+def encode(self, tree):
+
+if tree.isleaf():
+
+return self.e[self.w2i.get(tree.label,0)]
+
+elif len(tree.children) == 1: # unary node, skip
+
+expr = self.encode(tree.children[0])
+return expr
+
+else:
+
+assert(len(tree.children) == 2)
+e1 = self.encode(tree.children[0])
+e2 = self.encode(tree.children[1])
+w = dy.parameter(self.w)
+expr = dy.tanh(w*dy.concatenate([e1,e2]))
+return expr
+
+model = dy.model()
+u_p = model.add_parameters((2,50))
+tree_builder = treeid56builder(model, word_vocabulary, 50)
+trainer = dy.adamtrainer(model)
+for epoch in xrange(10):
+
+for in_tree, out_label in read_examples():
+
+dy.renew_cg()
+u = dy.parameter(u_p)
+loss = dy.pickneglogsoftmax(u*tree_builder.encode(in_tree), out_label)
+loss.forward()
+loss.backward()
+trainer.update()
+
+figure 2: an example of tree-structured id56.
+
+11
+
+the tree encoder is driven by the main program. for each training instance, we create a
+new computation graph, and then encode the tree as a vector, multiply the resulting encoding
+by u , pass through a softmax function, compute the loss, compute the gradients by calling
+backwards, and update the parameters.
+
+notably, the code for computing the tree-structured network is straightforward and short
+(19 lines of code), and extending it with a more complex composition function such as the
+tree lstm of tai et al [61] is straightforward (the corresponding class for the treelstm
+code that we use in the benchmarks is 39 lines of readable python code).
+
+dynamic flow control: there are a number of reasons why we would want to perform
+   ow control based on the results of neural network computation. for example, we may want
+to search for the best hypothesis in a model where    nding the exact best answer is ine   cient,
+a common problem in models that rely on sequences of actions, such as selections of words in
+a translation [59], shift-reduce actions to generate a parse tree [17], or selection of component
+networks to perform id53 [3].
+
+in figure 3, we show a simpli   ed example of such a situation: a binary text classi   er that
+at test time can make a decision before reading the whole document, similar to the test-time
+behavior of the model proposed by [33]. this allows the classi   er to avoid wasting processing
+time when the answer is clear, or to answer quickly in a setting when we get words in real-
+time, such as from a id103 system. the    rst 16 lines show a training algorithm
+very similar to the simpler text classi   er in figure 1, with the exception that we are now
+using the sum of the id27s for all the words (line 13), and only predicting a
+{   1, 1} binary label using the logistic sigmoid function (line 14). the dynamic    ow control
+speci   cally comes into play in the test-time id136 algorithm in lines 22   26. in line 22,
+we initialize our estimate score with the value of the bias parameter, and starting at line
+33 we loop over the input. in line 24, we update our current estimate of the score with the
+contribution of the next word by multiplying its embedding with the weight vector. in lines
+25 and 26, we check whether the absolute value of the current score is above some pre-de   ned
+threshold, and if it is, terminate the loop and output our predicted label.
+
+it should be noted that here we are only performing dynamic    ow control at test time.
+while it is also possible to perform dynamic    ow control at training time, this requires more
+sophisticated training algorithms using id23. these algorithms, require
+interleaving model evaluation and decision making on the basis of that evaluation, are well-
+suited to implementation within dynet, but they are beyond the scope of this introductory
+paper.
+
+4 behind the scenes
+
+as detailed in the previous section, one major feature that sets dynet apart from other neural
+network toolkits is its ability to e   ciently create new computation graphs for every training
+example or minibatch. to maintain computational e   ciency, dynet uses careful memory
+management to store values associated with forward and backward computation (  4.2), so
+the majority of time can be spent on the actual computation (  4.3).
+
+12
+
+1 import dynet as dy
+2 import numpy as np
+3 model = dy.model()
+4 w_p = model.add_parameters(50)
+5 b_p = model.add_parameters(1)
+6 e
+7 trainer = dy.simplesgdtrainer(model)
+8 for epoch in range(num_epochs):
+
+= model.add_lookup_parameters((20000, 50))
+
+9
+
+10
+
+11
+
+12
+
+13
+
+14
+
+15
+
+16
+
+17
+
+18
+
+19
+
+20
+
+21
+
+22
+
+23
+
+24
+
+25
+
+26
+
+27
+
+28
+
+29
+
+for in_words, out_label in training_data:
+
+dy.renew_cg()
+w = dy.parameter(w_p)
+b = dy.parameter(b_p)
+score_sym = w*sum([ e[word] for word in in_words ]) + b
+loss_sym = dy.logistic( out_label*score )
+loss_sym.backward()
+trainer.update()
+
+correct_answers = 0
+for in_words, out_label in test_data:
+
+dy.renew_cg()
+w = dy.parameter(w_p)
+b = dy.parameter(b_p)
+score_sym = b
+for word in in_words:
+
+score_sym = score_sym + w * e[word]
+if abs(score_sym.value()) > threshold:
+
+break
+
+if out_label * score_sym.value() > 0:
+
+correct_answers += 1
+
+print(correct_answers/len(test_data))
+
+figure 3: an example of dynamic    ow control.
+
+13
+
+1 b = dy.parameter(cg, b_param)
+2 w1 = dy.parameter(cg, w1_param)
+3 w2 = dy.parameter(cg, w2_param)
+4 x = dy.vectorinput(x_vec)
+5 e = e_param[i]
+6 g = dy.tanh(w1 * x + b) + dy.tanh(w2 * e + b)
+7 g_val = g.value()
+8 g.backward()
+
+(a) computation graph
+
+(b) corresponding code
+
+figure 4: an example of a computation graph for g(x, j) = tanh(w1   x+b)+tanh(w2   ej +b),
+and the corresponding code.
+
+4.1 computation graphs
+
+behind the scenes, dynet maintains a computationgraph which is a directed acyclic graph
+composed of node objects. a node instance represents a variable with a certain shape contain-
+ing parameters, constants, input data, and, most commonly, the result of applying a single
+elementary function to the node   s inputs (the shape of the node is inferred when the node
+object is created based on the shapes of the node   s inputs). each node maintains a list of in-
+coming edges stored as an ordered list of references to other nodes which represent the inputs
+to the function computed by the node (nodes representing parameters, constants, and ran-
+dom variate generators have no inputs). dynet de   nes nodes for computing a wide range of
+elementary functions, including common ones such as addition, multiplication, softmax, tanh,
+item selection, as well as many others. expression objects are thin wrappers around nodes,
+which abstract away from this behind-the-scenes detail of the computation graph structure
+and behave syntactically like a tensor value.
+
+each node has forward and backward functions speci   cally implemented by the dynet li-
+brary. forward computation takes the inputs x1, x2, . . . and calculates the function f (x1, x2, . . .)
+corresponding to the operation that the node represents. backward computation takes in-
+puts x1, x2, . . ., result f (x1, x2, . . .), the derivative of the loss l with respect to the function
+df (x1,x2,...) , and a variable index i, and it returns the derivative of variable xi with respect to
+the loss, dl
+. thus, if a user wants to implement a new operation not supported by dynet,
+xi
+they will need to implement these two functions (along with several utility functions to de   ne
+the corresponding expression wrappers, etc.).
+
+dl
+
+in figure 4, we show a computation graph for a computation consisting standard and
+lookup parameters, a constant input, parameter nodes, lookup parameter nodes, and several
+elementary functions. lines 1-6 of the above code will perform symbolic computation to create
+the computation graph, which will set up a data structure consisting of nodes and pointers
+to their inputs. line 7 sequentially steps through each node (in the order of addition to the
+graph), and for each node assigns a pointer to memory to hold the calculation results, then
+calls the    forward    function to populate this memory with the calculation result.1 line 8
+
+1this is in contrast to chainer, another dynamic toolkit, which performs the forward step while it is
+performing the computation graph construction. one advantage of the dynet design of method of performing
+symbolic computation    rst is that theoretically it would be possible to create graph optimization routines that
+run before performing actual computation. we discuss these shortly as future work in   9.
+
+14
+
+input(x)parameter(b)parameter(w1)parameter(w1)lookup(e, i)    +tanh+tanh+then sequentially starts at the designated    nal node in the graph, steps backward through
+each node and, if it has at least one input node, performs back-propagation of the derivatives
+of the loss. for nodes corresponding to parameters, gradients are also accumulated to later
+be used by the trainer in performing parameter updates.
+
+4.2 e   cient graph construction
+
+dynet   s backend is designed with this rapid computation graph construction in mind. first
+and foremost, the backend is written in c++ with a speci   c focus on ensuring that graph-
+building operations are as e   cient as possible.
+
+speci   cally, one of the major features of dynet is that it performs its own memory man-
+agement for all computation results.1 when the dynet library is initialized, it allocates three
+large blocks of memory, the one for storing results of forward calculation through the graph,
+one for storing backward calculations, and one for storing parameters and the corresponding
+gradients. when starting processing of a new graph, the pointers to the segments of memory
+responsible for forward and backward computation are reset to the top of the corresponding
+segments, and any previously used backward memory is zeroed out with a single operation.2
+when more memory is required during forward execution or in advance of running the back-
+ward algorithm, the custom allocator simply returns the current pointer, then increments it
+according to the size of the memory segment requested. thus, in this extremely simple mem-
+ory allocation setup, deallocation and allocation of memory are simple integer arithmetic.
+this is also an advantage when performing operations on the gpu, as managing memory
+requires no interaction with the gpu itself, and can be handled entirely by managing, on the
+cpu, pointers into gpu memory.
+
+interacting with the dynet library is also e   cient. when writing programs in c++,
+it is possible to interact directly on the machine code level. the python wrapper is also
+written with e   ciency in mind, attempting to keep the wrapping code as minimal as possible,
+delegating the operations directly to the c++ core when possible, writing the glue code in
+cython rather than python, and trying to minimize python objects allocation. at the same
+time, we also attempt to provide a    pythonic    and natural high-level api. we demonstrate
+empirically in   7.3 that the python speed is indeed very close to the c++ one.
+
+4.3 performing computation
+
+while computation graph construction is particularly important given dynet   s focus on dy-
+namic declaration, like any other neural network toolkit it is also paramount that the actual
+computation be e   cient.
+in order to achieve e   cient execution of arithmetic operations,
+dynet relies on the eigen [28] library, which is also used to provide the backend for ten-
+sorflow. eigen is a general-purpose matrix/tensor math library that is optimized for speed,
+
+1the data structure used to represent the computation graph is managed by the standard c++ memory
+management, care is taken to avoid performing expensive allocations in the construction of this structure as
+well.
+
+2this discrepancy is due to the fact that memory owned by a particular node is a   ected by a single operation
+in the forward step, but the backward step may have to accumulate gradients from multiple operations. for
+example, the b node in figure 4 is used in multiple operations, and thus must receive gradients passed back
+from both of these operations.
+
+15
+
+figure 5: an example of higher-level constructs implemented as dynet builders, along with
+their canonical usage.
+
+allows for    exible execution and combination of operations using c++ templates, and allows
+for simple portability between cpu and gpu.
+
+most of the operations provided by dynet are implemented in pure eigen, but in a
+few cases dynet implements its own custom operations to improve e   ciency, or to provide
+functionality not currently available in eigen itself. in addition, dynet allows for a number
+of methods to further improve e   ciency by exploiting parallelism, and also wrappers around
+common high-level functionalities to ease programming, as described in the next section.
+
+5 higher level abstractions
+as mentioned in   3, dynet implements operations that represent elementary (sub-)di   erentiable
+functions over tensors. this is similar to the operations provided in libraries such as theano
+or tensorflow.
+
+in addition to these elementary operations, it is also common to use more complicated
+structures that can be viewed as combinations of these elementary operations. common
+examples of this include recurrent neural networks (id56s), tree-structured networks, and
+more complicated methods for calculating softmax id203 distributions. in other libraries,
+these higher-level constructs are either provided natively, or through a third-party library
+such as keras. in dynet, native support for recurrent networks, tree-structured networks,
+and more complicated softmax functions is provided through builders, which we describe in
+detail below and summarize in figure 5.
+
+5.1 recurrent neural network builders
+
+the    rst, and most commonly used, variety of builder in dynet is builders to build id56s,
+id56builders. the id56builder parent class describes the overall interface, and concrete
+implementations are provided by child classes. dynet implements builders to implement
+simple elman-style recurrent networks (simpleid56builder; [20]), as well as long short-term
+memory (lstmbuilder; [30]) or gated recurrent unit (grubuilder; [11]).
+
+the id56 interface   s canonical usage is as follows:
+
+1. at the beginning of training, calling the constructor of some variety of id56builder, will
+add the parameters to the dynet model. the size and number of hidden layers in the
+id56 are speci   ed as parameters.
+
+16
+
+id56builder.add_input(xt)treeid56builder.add_input(xt,hc1,   )ht-1xthtxthc1hc2   htsoftmaxbuilder.neg_log_softmax(s,i)si-log p(y=i|s)id56buildertreeid56buildersoftmaxbuilder2. at the beginning of the sequence to be processed, start a new sequence and get the
+
+initial state of the id56.
+
+3. every time an input is received, we call add input(x), where x is the input, then get
+
+the output for further processing.
+
+this is demonstrated in code in figure 6(a).
+
+this is in contrast to the standard practice in the static declaration paradigm, which
+generally consists of creating a full string of inputs, then calling a specialized function that
+runs the id56 over all of the inputs in this sequence. an example of this in tensorflow is
+shown in figure 6(b), where at the graph de   nition stage we de   ne a recurrent neural network,
+and call a specialized function dynamic id56() that runs the id56 over a full sequence.
+
+this method of processing a full sequence at a time has advantages and disadvantages.
+a    rst advantage is that once the user is familiar with the api and know how to shape
+their input properly, they can process a full sequence with a single function call, as opposed
+to writing a for loop. a second advantage is that (as explained in more detail   6.2) some
+computations can be shared across multiple inputs, improving e   ciency. however, one major
+disadvantage is that this method requires that the full sequence must be homogeneous, and
+known before the processing begins. this makes things di   cult when, for example, we would
+want to interleave id56 processing with other processes that may di   er based on the structure
+of the input or based on the predictions of the id56.
+
+because of this, dynet also supports a sequence processing api1 as shown in figure 6(c),
+which allows a user to call functions that look up embeddings, transduce, and calculate loss
+for whole sequences in a single function call. this allows users who are experienced with the
+api to reduce the number of function calls and achieve some e   ciency gains in cases where
+this is convenient, while still allowing for usage of the more    exible (and arguably intuitive)
+canonical api.
+
+5.2 tree-structured neural network builders
+
+in addition, dynet has builders to support the creation of tree-structured neural networks, as
+shown in the middle of figure 5. these are similar to recurrent neural networks, but take not
+only a single input from the past, but compose multiple inputs into an output representation.
+as mentioned in   3.3, these models are relatively simple to implement in dynet, taking few
+dozens of python code, and resulting in speed which is comparable if not identical to that
+of a c++ dynet implementation. yet, the built-in builders provide out-of-the-box e   cient
+and debugged implementations of tree-structured networks such as id56s
+[55] or tree-structured lstms [61] for users who just want to get started working using these
+networks as tools.
+
+5.3 large-vocabulary softmax builders
+
+finally, dynet supports a softmaxbuilder interface for di   erent methods of calculating
+softmax id203 distributions with large output spaces given an input, as shown on the
+right side of figure 5. these builders include class-based or hierarchical softmax [24, 44],
+
+1with parts in the master branch, and other optimized functions residing in the sequence-ops branch as
+
+of this writing.
+
+17
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+1
+
+2
+
+3
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+1
+
+2
+
+3
+
+4
+
+5
+
+id56 = dy.lstmbuilder(layers, embed, hidden, model)
+for example in training_data:
+state = id56.initial_state()
+for x in example:
+
+# initialization
+
+# starting sequence
+
+state = state.add_input(x)
+do_further_processing(state.output())
+
+# id56 update
+# processing
+
+(a) canonical usage of id56builder in dynet.
+
+# graph definition
+cell = tf.nn.id56_cell.basiclstmcell(hidden)
+cell = tf.nn.id56_cell.multiid56cell([cell] * layers)
+outputs, _ = tf.nn.dynamic_id56(cell, x_input, sequence_length=x_len)
+x_result = do_further_processing(outputs)
+# execution
+with tf.session() as sess:
+
+for example in training_data:
+
+result = sess.run(x_result, feed_dict={x_input: x_in, x_len: len(x_in)})
+
+(b) similar code in tensorflow.
+
+id56 = dy.lstmbuilder(layers, embed, hidden, model)
+for example in training_data:
+
+outputs = id56.initial_state.transduce(example)
+for h in outputs:
+
+do_further_processing(h)
+
+# initialization
+
+# transduction
+
+# processing
+
+(c) the dynet sequence processing interface.
+
+figure 6: various id56 interfaces.
+
+18
+
+which can speed training by dividing calculation into multiple steps. at training time, these
+methods allow calling the neg log softmax() function, which rapidly calculates the loss for
+a softmax function. at test time, it is possible to either sample outputs from the distribution,
+or calculate the full id203 distribution.
+
+6 e   ciency tools
+
+dynet contains a number of features to improve computational e   ciency, including sparse
+updates, minibatching, and multi-processing across cpus.
+
+6.1 sparse updates
+as mentioned in   3, dynet supports two types of parameters, parameters and lookupparameters.
+in particular, lookup parameters are designed to perform a sparse lookup of only a few vectors
+or tensors for each training instance (e.g. only the id27s for words that exist in
+a particular sentence). because of this, when performing training, only the gradients of pa-
+rameters that existed in the training instance that we are currently handling will be non-zero,
+and the rest will be zero.
+
+in update rules such as the standard stochastic id119 update
+
+  i       i       
+
+dl(x)
+
+d  i
+
+(1)
+
+that moves parameter   i in a direction that decreases loss l(x) with step size   , if gradients
+are zero, there will be no change made to the parameters. nonetheless, in standard imple-
+mentations, it is common to loop over all the parameters and update them, regardless of
+whether their gradients are zero or not, which can be wasteful when gradients of the majority
+of parameters are zero.
+
+dynet   s sparse update functionality takes advantage of this fact by keeping track of the
+identities of all vectors that have been accessed through a lookup operation, and only updates
+the parameters that have non-zero gradients. this can greatly improve speed in cases where
+we have a large variety of parameters to be accessed by lookup operations, with two caveats.
+the    rst caveat is that while uniform speedups can be expected on cpu, on gpus (which
+specialize in rapidly performing large numbers of parallel operations), the amount of time to
+loop over all parameters can be negligible. the second caveat is that while sparse updates
+are strictly correct for many update rules such as the simple sgd above and adagrad [16],
+other update rules such as sgd with momentum [46] or adam [34] perform updates even on
+steps where gradients are zero, and will therefore not produce exactly the same results when
+sparse updates are performed.1
+
+6.2 minibatching
+
+minibatching takes multiple training examples and groups them together to be processed si-
+multaneously, often allowing for large gains in computational e   ciency due to the fact that
+
+1while there are computational tricks that perform just-in-time update of parameters to allow both e   cient
+and correct updates [51], in interest of maintaining the simplicity of the programming interface, these are not
+implemented in dynet at this time.
+
+19
+
+figure 7: an example of minibatching for an a   ne transform followed by a tanh nonlinearity.
+
+modern hardware (particularly gpus, but also cpus) have very e   cient vector processing
+instructions that can be exploited with appropriately structured inputs. as shown in fig-
+ure 7, common examples of this in neural networks include grouping together matrix-vector
+multiplies from multiple examples into a single matrix-matrix multiply, or performing an
+element-wise operation (such as tanh) over multiple vectors at the same time as opposed to
+processing single vectors individually.
+
+in most neural network toolkits, mini-batching is largely left to the user, with a bit of help
+from the toolkit. this is usually done by adding an additional dimension to the tensor that
+they are interested in processing, and ensuring that all operations consider this dimension
+when performing processing. this adds some cognitive load, as the user must keep track of
+this extra batch dimension in all their calculations, and also ensure that they use the correct
+ordering of the batch dimensions to achieve maximum computational e   ciency. users must
+also be careful when performing operations that combine batched and unbatched elements
+(such as batched hidden states of a neural network and unbatched parameter matrices or
+vectors), in which case they must concatenate vectors into batches, or    broadcast    the un-
+batched element, duplicating it along the batch dimension to ensure that there are no illegal
+dimension mismatches.
+
+dynet hides much of this complexity from the user through the use of specially designed
+batching operations which treat the number of mini-batch elements not as another standard
+dimension, but as a special dimension with particular semantics. broadcasting is done behind
+the scenes by each operation implemented in dynet, and thus the user must only think about
+inputting multiple pieces of data for each batch, and calculating losses using multiple labels.
+an example of this is shown in figure 8. this example implements the lines 13 and 14 of
+the text classi   er in figure 1, which performs the main computation of the id168 for
+training using batches. we can see there are only 4 major changes: the word ids need to
+be transformed into lists of ids instead of a single id, we need to call lookup batch instead
+of the standard lookup, we need to call pickneglogsoftmax batch instead of the unbatched
+version, and we need to call sum batches at the end to sum the loss from all the batches.1
+
+1in
+
+the
+
+case
+
+and
+pickneglogsoftmax batch in lock-step across identical time-steps in multiple sentences. example code
+for how to do so is included in the benchmarks in   7, but a detailed description is beyond the scope of this
+
+perform lookup batch
+
+of minibatching
+
+sequences,
+
+necessary
+
+is
+
+it
+
+20
+
+x1operations w/o minibatchingwb+tanh(                 )wbx2+tanh(                 )wbx3+tanh(                 )operations with minibatchingx1b+tanh(                         )x2x3concatxbwbroadcast1 # in_words is a tuple (word_1, word_2)
+2 # out_label is an output label
+3 word_1 = e[in_words[0]]
+4 word_2 = e[in_words[1]]
+5 scores_sym = dy.softmax(w*dy.concatenate([word_1, word_2])+b)
+6 loss_sym = dy.pickneglogsoftmax(scores_sym, out_label)
+
+(a) non-minibatched classi   cation.
+
+1 # in_words is a list [(word_{1,1}, word_{1,2}), (word_{2,1}, word_{2,2}), ...]
+2 # out_labels is a list of output labels [label_1, label_2, ...]
+3 word_1_batch = dy.lookup_batch(e, [x[0] for x in in_words])
+4 word_2_batch = dy.lookup_batch(e, [x[1] for x in in_words])
+5 scores_sym = dy.softmax(w*dy.concatenate([word_1_batch, word_2_batch])+b)
+6 loss_sym = dy.sum_batches( dy.pickneglogsoftmax_batch(scores_sym, out_labels) )
+
+(b) minibatched classi   cation.
+
+figure 8: a contrast of non-minibatched and mini-batched classi   ers. the only di   erences
+are the necessity to input multiple word ids, and calculate loss over multiple labels.
+
+6.3 parallel processing
+
+in addition to minibatch support, dynet also supports training models using many cpu cores.
+again, dynet abstracts most of the behind-the-scenes grit from the user. the user de   nes a
+function to be called for each datum in the training data set, and passes this function, along
+with an array of data, to dynet. internally, dynet launches a pool of training processes and
+automatically handles passing data examples to each worker. each worker process individually
+processes a datum, computing the results of the forward and backward passes, computes
+gradients with respect to each parameter, and passes these results back to the parent process
+via a shared memory variable. whenever the parent process, which is also processing data,
+completes a gradient computation, it averages all of the gradients currently in the shared
+memory gradient storage and updates all parameters with respect to that average gradient. in
+this way running training on n cores is similar to training with a stochastic minibatch size with
+expected value     n. this method is quite e   cient, achieving nearly perfectly linear speedups
+with increasing numbers of cores, due to its lockless nature. though lockless optimization
+methods compute only approximate gradients due to overlapping parameter reads and writes,
+in practice they show virtually no degradation in performance versus fully serial or lock-based
+methods [50, 57].
+
+paper. minibatching across more complex structures such as trees requires more complex algorithms [43], and
+integrating these into dynet is an interesting challenge for the future.
+
+21
+
+7 empirical comparison
+
+in this section, we compare the c++ and python interfaces to dynet to three other popular
+libraries: theano [7], tensorflow [1], and chainer [62].1 we choose these2 because theano
+and tensorflow are currently arguably the most popular deep learning libraries, and because
+chainer   s de   ne-by-run philosophy is similar to dynet   s.
+
+7.1 tasks
+
+we evaluate dynet on 4 natural language processing tasks. code implementing these bench-
+marks is available at http://github.com/neulab/dynet-benchmark.
+
+recurrent neural network language model: similarly to [58], we train a recurrent
+neural network language model using lstm units. this is arguably one of the most com-
+monly, and also most simply structured tasks in natural language processing. because
+of this simplicity it is relatively simple to implement in the static declaration paradigm,
+and due to its wide recognition most toolkits have been explicitly tested on this task,
+and arguably will be able to perform at the top of their ability, making it an ideal stress-
+test. it is also conducive to mini-batching, so we examine models using mini-batching
+as well, set to 16 sentences unless otherwise speci   ed. models are trained and tested on
+tomas mikolov   s version of the id32,3 using the standard id121 and
+speci   cation of unknown words, and measured using dev-set perplexity.
+
+bi-directional lstm named entity tagger: similarly to the bi-lstm model of huang
+et al. [32], we train a tagger that uses a bi-directional lstm to extract features from
+the input sentence, which are then passed through a multi-layer id88 to predict
+the tag of the word. this is also a relatively simple task to implement in all toolkits
+described above. models were trained and tested on the wikiner english corpus [48],
+and all words with frequency less than    ve were treated as unknowns. accuracy is
+measured using tag-by-tag accuracy.
+
+bi-directional lstm tagger w/ optional character features: we create a tagger iden-
+
+tical to the one above with one change: words that have a frequency of at least    ve use
+an embedding speci   cally for that word, and less frequent words use an embedding
+calculated by running a bi-directional lstm over the characters in the word and con-
+catenating the resulting representation into a id27. this model has the
+potential to allow for better generalization, as it can use the spelling of low-frequency
+words to improve generalization. however, it is also a model that is more di   cult to
+implement e   ciently in the static declaration paradigm, as it has a switch to trade
+between looking up id27s or performing character-based embedding combi-
+nation, making the    ow control more di   cult than the standard bilstm tagger.
+
+tree-structured lstm sentiment analyzer: finally, we create a sentiment analyzer
+based on tree-structured lstms [61]. this model has a complicated structure that
+
+1 dynet used the jan 4 09:02:17 of the sequence-ops branch, theano used version 0.8.2, tensorflow used
+
+version 0.12.0, and chainer used version 1.19.0.
+
+2among the myriad of others such as torch [13], mxnet [10], and cntk [64].
+3in the    basic examples    download at http://www.fit.vutbr.cz/~imikolov/id56lm/.
+
+22
+
+model
+train sentences
+train words
+input vocabulary
+output vocabulary
+id27
+word lstm nodes
+id88 nodes
+char embedding
+
+id56lm bilstm tag
+142k
+3.50m
+69.5k
+9
+128
+50
+32
+-
+
+42.1k
+888k
+10k
+10k
+128
+256
+-
+-
+
+bilstm tag+char tree lstm
+8.54k
+164k
+18.3k
+5
+128
+128
+-
+-
+
+142k
+3.50m
+30.6k word, 887 char
+9
+128
+50
+32
+20
+
+table 1: data and default con   gurations used for each task
+
+changes based on the tree in every sentence, and thus is quite di   cult to implement in
+the static declaration architecture. thus, we compare solely with chainer, which is the
+only toolkit of the three baselines that allows for simple implementation of these models.
+accuracy is measured using    ne-grained sentiment tagging accuracy at the root of the
+tree.
+
+various statistics for each task are shown in table 1. all models are optimized using
+adam [34] with a learning rate of 0.001, and trained until the dev accuracy peaks (in cases
+where we measure accuracy), or for 10 minutes (in cases where we simply measure processing
+speed). default net sizes were chosen somewhat arbitrarily, although they are similar to those
+in the original papers, and the respective models achieve reasonable accuracies. 1
+
+7.2 id74
+
+we compare based on several evaluation measures that are desirable in our toolkits:
+
+computation speed: we measure computation speed in wall-clock words/sec or sentences/sec
+
+on both cpu (single-thread intel xeon e5-2686 v4) and gpu (nvidia tesla k80). to
+ensure that no quirks or issues due to busy machines result in unrealistic speed numbers,
+we perform three runs of training for each model and take the fastest of the three runs.
+
+startup time: as theano and tensorflow require a graph compilation step before per-
+forming any computation, we also measure the amount of time required from starting
+the program to starting processing of the    rst training instance (including time to read
+training data). this time can be amortized over training instances, but does play a role
+in the development process, requiring developers to wait between when they modify
+their implementation and when they begin to view results.
+
+characters of code: to give a very rough estimate of the amount of work that needs
+to be done to implement in each language, we measure the number of characters of
+non-whitespace, non-comment code in each implementation. all implementations were
+written in natural python or c++, and a conscious attempt was made to follow the
+dynet python implementation where possible.
+
+1note that we are not aiming to achieve state-of-the-art accuracy, but want to ensure that we are using
+
+reasonable settings for our speed comparison.
+
+23
+
+metric
+
+words/sec
+id56lm (mb=1)
+words/sec
+id56lm (mb=4)
+words/sec
+id56lm (mb=16)
+id56lm (mb=64)
+words/sec
+words/sec
+bilstm tag
+words/sec
+bilstm tag +sparse
+words/sec
+bilstm tag+char
+bilstm tag+char +sparse words/sec
+sents/sec
+treelstm
+treelstm +sparse
+sents/sec
+
+dyc++ dypy chainer dyc++ seq theano tf
+298
+473
+606
+636
+143
+
+494
+1510
+2400
+2820
+
+190
+830
+1820
+2440
+427
+8410
+419
+6530
+91.6
+186
+
+190
+825
+1880
+2470
+428
+7990
+413
+6320
+88.1
+173
+
+114
+295
+794
+1340
+22.7
+-
+22.0
+-
+7.21
+-
+
+189
+567
+1100
+1260
+102
+-
+94.3
+-
+-
+-
+
+-
+-
+-
+-
+-
+
+-
+-
+-
+-
+-
+-
+
+table 2: processing speed for each toolkit on cpu. speeds are measured in words/sec for
+id56lm and tagger and sentences/sec for treelstm. lines with +sparse indicate sparse up-
+dates for the lookupparameters, which is the default behavior in dynet, but not comparable
+to the implementations in other toolkits, which are performing dense updates.
+
+accuracy: in order to con   rm that the code in each library is doing the same thing, we
+compared accuracies and ensure that they are in the same general range with only small
+di   erences, and thus do not include these statistics in our main comparison. however,
+in some cases we will show accuracies for each task: per-word negative log likelihood
+for the id56lm, tagging accuracy for the bilstm tagger, and    ne-grained sentiment
+classi   cation accuracy at the root for the tree lstm.
+
+7.3 evaluation results
+
+7.3.1 cross-toolkit comparison
+
+first, we perform a comparison of computation speed over the four tasks across the dynet
+python interface, the dynet c++ interface, chainer, theano, and tensorflow. additionally,
+as discussed in   5.1, dynet also has experimental support for e   cient sequence-level process-
+ing such as that implemented in theano and tensorflow, so we present numbers for this on
+the id56lm task as well (labeled dyc++ seq) to examine the e   ect of sharing computations
+at the sequence level. we also vary the mini-batch size of the id56lm to demonstrate the
+e   ect of mini-batching. the results are shown in table 2 and table 3.
+
+comparison on cpu: first focusing on the cpu results, we can see that dynet handily
+outperforms the other toolkits in e   ciency. this is true for the more standard and straight-
+forward id56lms (where speeds are 1.66x to 3.20x faster than the fastest counterpart), par-
+ticularly for the more complicated tasks such as the bilstm tagger (gains of 2.99x to 4.44x)
+and treelstm (a gain of 12.7x). this is a result of the dynet design described in   4, which
+focuses on minimizing overhead in graph construction and focuses on optimizing for speed on
+both cpu and gpu.
+
+in addition, comparing the various dynet interfaces, we see that there is a negligible
+di   erence between the c++ and python interfaces, due to the fact that python simply places
+a thin wrapper of the core c++ code. on the other hand, utilizing the sequence-based
+computation interface provides signi   cant improvements, particularly at smaller id56lm
+
+24
+
+metric
+
+words/sec
+id56lm (mb=1)
+id56lm (mb=4)
+words/sec
+id56lm (mb=16) words/sec
+id56lm (mb=64) words/sec
+words/sec
+bilstm tag+char words/sec
+sents/sec
+
+bilstm tag
+
+treelstm
+
+dyc++ dypy chainer dyc++ seq theano
+1040
+2560
+6370
+6420
+823
+434
+-
+
+1060
+1660
+5730
+18500
+1250
+1010
+73.3
+
+1060
+1660
+5740
+18500
+1250
+1010
+73.5
+
+290
+972
+3810
+14400
+147
+122
+9.27
+
+1810
+3980
+10400
+21200
+
+-
+-
+-
+
+tf
+1030
+3830
+13900
+37000
+492
+-
+-
+
+table 3: processing speed for each toolkit on gpu. speeds are measured in words/sec for
+id56lm and tagger and sentences/sec for treelstm.
+
+batch sizes. this demonstrates the utility of sharing computations across di   erent time steps,
+particularly when fewer computations are shared across training instances.1
+
+next, we turn to the +sparse results, which use the sparse updates that are described in
+  6.1 and are on by default in dynet. from these results, we can see that we obtain further
+large gains in speed, particularly for the bilstm tagger, which demonstrated gains of up
+to 19.7x over dense updates. while these results are not directly comparable to the dense
+updates used in the implementations in the other toolkits, they do demonstrate that further
+large speed gains can be achieved through the use of the sparse update strategy. we present
+more results and analysis comparing dense and sparse update strategies on both cpu and
+gpu in   7.3.2.
+
+comparison on gpu: next, we discuss the results when performing computation on
+gpu. from the    gure, we can see that for id56lm with smaller batch sizes, and for all
+settings of the bilstm tagger and treelstm tasks, dynet signi   cantly outperforms the
+other implementations, although the gap is smaller than on cpu. on the other hand, for large
+batch sizes of the id56lm, tensorflow scales well in the size of the minibatch, outperforming
+dynet after a mini-batch size of 16, likely a result of its highly optimized methods to e   ciently
+schedule computation on the gpu. regardless, the results for dynet are still competitive,
+outperforming the other baseline toolkits, and given the other advantages of the dynamic dec-
+laration paradigm (intuitive programming and debugging), we believe it presents an attractive
+alternative even in situations where static declaration toolkits are highly optimized.
+
+it is also interesting to compare the speed results for cpu and gpu. it is notable that for
+the relatively simple id56 with large mini-batches, computation on the gpu is much more
+e   cient, as mini-batches get smaller or models get more complicated, this advantage shrinks,
+and for tree-based networks, the implementation on cpu is more e   cient. this stems from
+the fact that gpus excel at performing large operations, but for smaller nets the overhead
+for launching operations on the gpu is large enough that computation on the gpu is not
+bene   cial. in addition, as we will show in   7.3.2, sparse updates provide limited bene   t to
+gpu processing, and thus for the bilstm and treelstm, sparse updates on the cpu are
+the most e   cient training strategy.
+
+comparison of startup time: finally, we compare startup time between the toolkits,
+
+1recently, [43] have proposed a method for dynamically combining similar calculations in computation
+graphs, and it is possible that by applying this or similar methods to computation graphs generated by the
+canonical dynet implementation, this gap could be closed.
+
+25
+
+id56lm
+
+bilstm tag
+
+bilstm tag+char
+
+treelstm
+
+dyc++ dypy chainer theano
+17.2
+46.4
+93.1
+-
+
+0.727
+7.23
+9.03
+4.86
+
+1.29
+5.64
+7.18
+1.94
+
+1.41
+8.45
+9.90
+5.42
+
+tf
+2.73
+9.16
+
+-
+-
+
+table 4: time from program start to processing the    rst instance for each toolkit (seconds).
+
+speed
+
+accuracy
+
+dense
+
+sparse
+
+dense
+
+sparse
+
+id56lm (mb=1)
+id56lm (mb=16)
+
+bilstm tag
+
+bilstm tag+char
+
+treelstm
+
+cpu gpu cpu gpu cpu gpu cpu gpu
+-5.29
+-4.89
+92.9
+93.4
+47.1
+
+-5.55
+-5.19
+92.4
+93.4
+47.2
+
+-5.22
+-4.86
+93.2
+93.9
+47.6
+
+-5.65
+-5.18
+94.1
+94.6
+48.1
+
+1070
+5320
+1700
+1290
+76.3
+
+190
+1820
+427
+419
+91.6
+
+1060
+5730
+1250
+1010
+73.3
+
+205
+1920
+8410
+6530
+186
+
+table 5: processing speed and accuracy after 10 minutes with dense or sparse updates.
+
+as shown in table 4. from the results we can see that in general the dynamic declaration
+toolkits dynet and chainer tend to have shorter startup time, as there is no separate graph
+compilation step. in particular, the overhead for this compilation step is large, and increases
+as models get more complicated to taking over a minute and a half for the bilstm tagger
+with character features.1
+
+7.3.2 e   ect of sparse updates
+next, we discuss in detail the e   ect of sparse updates described in   6.1, with results shown
+in table 5. first concentrating on the cpu results, we can see that we can achieve uniform
+speed improvements, although the improvement greatly varies, from a mere 1.05x speedup
+for id56lm with minibatch size of 16, to a 20x improvement for the bilstm tagger. the
+di   erence between tasks can be attributed to the sparseness of the id27s and their
+size compared to the other parts of the computation graph. in the id56lm, in addition to
+the input id27s, there is also a large softmax layer that is updated in a dense
+fashion at every time step, so even with sparse updates on the input site, there is a signi   cant
+amount of other calculation that prevents large speedups.2 on the other hand, the bilstm
+tagger has a large input vocabulary, but only a small output vocabulary of 9 tags, and thus
+preventing excess calculation over the input is e   ective. looking at accuracy after training
+for 10 minutes, it is clear that cpu with sparse updates gives the best accuracy of the various
+settings for the bilstm tagger and treelstm, indicating that this may be a good choice
+for similar natural language analysis tasks.
+
+1this does not include an additional step necessary to compile operations used in the graph, which required
+
+approximately an additional 2 minutes, but can be cached on succeeding runs.
+
+2results would likely be di   erent if using a more su   cient softmax implementation such as those described
+
+in   5.3
+
+26
+
+id56lm
+
+bilstm tag
+
+bilstm tag+char
+
+treelstm
+
+dyc++ dypy chainer dyc++ seq theano
+4257
+5581
+5636
+-
+
+4744
+5245
+6180
+6869
+
+3766
+4532
+5324
+5242
+
+3553
+4412
+5028
+5492
+
+4659
+
+-
+-
+-
+
+tf
+4922
+5137
+
+-
+-
+
+table 6: number of non-comment characters in the implementation of each toolkit.
+
+on the other hand, on gpu the training speeds are only nominally faster for sparse
+updates in most cases, and even slower in some cases. from these results, we can conclude
+that sparse updates are an attractive option for tasks in which there are large embedding
+matrices and cpu training is an option, but less so for training on gpu.
+
+7.3.3 code complexity
+
+finally, to give a very rough estimate of the amount of e   ort required to implement tasks
+in each toolkit, we compare the number of non-comment characters in each implementation,
+with the results shown in table 6. it should be noted that all of the implementations are
+written to be natural and readable, with no e   ort to reduce the number of characters therein.
+from the results we can see that among the programs implemented in python (dypy,
+chainer, theano, tf), both the dynet and chainer implementations are consistently shorter
+than the theano and tensorflow implementations, an indication that the dynamic declaration
+paradigm allows for simpler implementation in fewer characters of code. this conciseness is
+orthogonal the previously mentioned advantages of dynamically declared graphs being able
+to write programs in a form that is more intuitive and closer to the standard api, which is
+not directly re   ected in these numbers.
+
+8 use cases
+
+dynet is already in active use, and has been used for a wide variety of projects, mostly
+related to natural language processing. dynet itself contains a number of examples (in the
+examples/ directory) of minimal to moderate complexity. we also list a number of full-scale
+research projects, to allow interested readers to    nd reference implementations that match
+their application of interest.
+
+syntactic parsing: parsing is currently the most prominent scenario in which dynet has
+been used, and dynet was behind the development of a number of methods such as stack
+lstms [17] (https://github.com/clab/lstm-parser), bi-directional lstm feature
+extractors for id33 [36] (https://github.com/elikip/bist-parser),
+recurrent neural network grammars [18] (https://github.com/clab/id56g), and hier-
+archical tree lstms [35] (https://github.com/elikip/htparser).
+
+machine translation: dynet has contributed to creation of methods for incorporating
+biases in attention [12] (https://github.com/trevorcohn/mantis) character-based
+
+27
+
+methods for translation [42].
+it also powers a number of machine translation toolk-
+its such as lamtram (https://github.com/neubig/lamtram) and id4kit (https://
+github.com/odashi/id4kit).
+
+id38: dynet has been used in the development of hybrid neural/id165
+language models [47] (https://github.com/neubig/modlm), and generative syntactic
+language models [18] (https://github.com/clab/id56g).
+
+tagging: dynet was used in development of methods for id39 [40]
+(https://github.com/clab/stack-lstm-ner), pos-tagging [49], semantic role label-
+ing [60] (https://github.com/clab/joint-lstm-parser), punctuation prediction [5]
+(https://github.com/miguelballesteros/lstm-punctuation), and multi-task learn-
+ing for sequence processing [37, 56], as well as creation of new architectures such
+as segmental recurrent neural networks [38](https://github.com/clab/dynet/tree/
+master/examples/cpp/segid56-sup).
+
+morphology: dynet has been used for morphological in   ection generation [21, 2]
+
+(https://github.com/mfaruqui/morph-trans
+https://github.com/roeeaharoni/morphological-reinflection).
+
+misc: dynet has been used developing specialized networks for detection of coordination
+structures [22]; semi-supervised preposition-sense disambiguation [23]; and for identify-
+ing lexical semantic relations [53, 52] (https://github.com/vered1986/hypenet).
+
+9 conclusion
+
+in this paper, we introduced dynet, a toolkit designed for creation of dynamic neural networks
+such as those commonly used in natural language processing. as shown in the experimental
+evaluation, dynet has a number of advantages over existing toolkits in conceptual simplic-
+ity and ability to handle more complicated neural network structures with a minimum of
+overhead.
+
+the work is far from complete, however, and we have a number of projects in store for
+
+the future:
+
+multi-device support: currently, dynet supports execution on a single gpu or cpu, but
+does not allow model parallelism. we plan to introduce the ability to execute a single
+computation graph on multiple devices in the near future.
+
+on-the-   y graph optimization: as mentioned in   7.3.1, dynet   s optimized sequence-
+based interface shows improvements because it is able to combine together operations
+of similar shapes. an interesting challenge is functionality to do this automatically, on
+the    y, which would allow users to program in the intuitive canonical dynet interface
+but still reap the bene   t of combining similar operations.
+
+support for operations and optimizers: dynet continues to grow its library of sup-
+ported operations and optimizers to allow implementation of new methods proposed in
+the literature.
+
+finally, dynet is a community e   ort, and we welcome creative contributions from the com-
+munity to make it a better tool for all.
+
+28
+
+10 acknowledgements
+
+dynet has been developed by a community of users, and as such, it has been supported
+indirectly by numerous funding sources. the initial development of dynet (when it was
+called id98) was supported in large part by the u. s. army research laboratory and the u.
+s. army research o   ce under contract/grant number w911nf-10-1-0533, and continued
+development has been supported in large part by jsps kakenhi grant number 16h05873.
+the python bindings development was supported by the israeli science foundation (grant
+number 1555/15).
+
+references
+
+[1] mart  n abadi, ashish agarwal, paul barham, eugene brevdo, zhifeng chen, craig citro, greg s
+corrado, andy davis, je   rey dean, matthieu devin, et al. tensor   ow: large-scale machine
+learning on heterogeneous distributed systems. arxiv preprint arxiv:1603.04467, 2016.
+
+[2] roee aharoni, yoav goldberg, and yonatan belinkov. improving sequence to sequence learning
+for morphological in   ection generation: the biu-mit systems for the sigmorphon 2016
+shared task for morphological rein   ection. pages 41   48, 2016.
+
+[3] jacob andreas, marcus rohrbach, trevor darrell, and dan klein. learning to compose neural
+networks for id53. in conference of the north american chapter of the association
+for computational linguistics (naacl), pages 1545   1554, 2016.
+
+[4] dzmitry bahdanau, kyunghyun cho, and yoshua bengio. id4 by jointly
+learning to align and translate. in international conference on learning representations (iclr),
+2015.
+
+[5] miguel ballesteros and leo wanner. a neural network architecture for multilingual punctuation
+generation. in conference on empirical methods in natural language processing (emnlp), pages
+1048   1053, 2016.
+
+[6] yoshua bengio, r  ejean ducharme, pascal vincent, and christian jauvin. a neural probabilistic
+
+language model. journal of machine learning research, 3(feb):1137   1155, 2003.
+
+[7] james bergstra, olivier breuleux, fr  ed  eric bastien, pascal lamblin, razvan pascanu, guillaume
+desjardins, joseph turian, david warde-farley, and yoshua bengio. theano: a cpu and gpu
+math compiler in python. in proc. 9th python in science conf, pages 1   7, 2010.
+
+[8] samuel r. bowman, jon gauthier, abhinav rastogi, raghav gupta, christopher d. manning,
+and christopher potts. a fast uni   ed model for parsing and sentence understanding. in annual
+conference of the association for computational linguistics (acl), pages 1466   1477, 2016.
+
+[9] jacob buckman, miguel ballesteros, and chris dyer. transition-based id33 with
+in conference on empirical methods in natural language processing
+
+heuristic backtracking.
+(emnlp), pages 2313   2318, 2016.
+
+[10] tianqi chen, mu li, yutian li, min lin, naiyan wang, minjie wang, tianjun xiao, bing xu,
+chiyuan zhang, and zheng zhang. mxnet: a    exible and e   cient machine learning library for
+heterogeneous distributed systems. arxiv preprint arxiv:1512.01274, 2015.
+
+[11] junyoung chung, caglar gulcehre, kyunghyun cho, and yoshua bengio. empirical evaluation
+of gated recurrent neural networks on sequence modeling. arxiv preprint arxiv:1412.3555, 2014.
+
+29
+
+[12] trevor cohn, cong duy vu hoang, ekaterina vymolova, kaisheng yao, chris dyer, and gho-
+lamreza ha   ari. incorporating structural alignment biases into an attentional neural translation
+model. in conference of the north american chapter of the association for computational lin-
+guistics (naacl), pages 876   885, 2016.
+
+[13] ronan collobert, samy bengio, and johnny mari  ethoz. torch: a modular machine learning
+
+software library. technical report, idiap, 2002.
+
+[14] ronan collobert, jason weston, l  eon bottou, michael karlen, koray kavukcuoglu, and pavel
+kuksa. natural language processing (almost) from scratch. journal of machine learning research,
+12(aug):2493   2537, 2011.
+
+[15] trinh-minh-tri do and thierry arti`eres. neural conditional random    elds. in proceedings of the
+
+thirteenth international conference on arti   cial intelligence and statistics, 2010.
+
+[16] john duchi, elad hazan, and yoram singer. adaptive subgradient methods for online learning
+
+and stochastic optimization. journal of machine learning research, 12(jul):2121   2159, 2011.
+
+[17] chris dyer, miguel ballesteros, wang ling, austin matthews, and noah a. smith. transition-
+in annual conference of the
+
+based id33 with stack long short-term memory.
+association for computational linguistics (acl), pages 334   343, 2015.
+
+[18] chris dyer, adhiguna kuncoro, miguel ballesteros, and noah a. smith. recurrent neural network
+grammars. in conference of the north american chapter of the association for computational
+linguistics (naacl), pages 199   209, 2016.
+
+[19] jason eisner, eric goldlust, and noah a. smith. compiling comp ling: practical weighted
+id145 and the dyna language. in conference on empirical methods in natural
+language processing (emnlp), 2005.
+
+[20] je   rey l elman. finding structure in time. cognitive science, 14(2):179   211, 1990.
+
+[21] manaal faruqui, yulia tsvetkov, graham neubig, and chris dyer. morphological in   ection
+generation using character sequence to sequence learning. in conference of the north american
+chapter of the association for computational linguistics (naacl), pages 634   643, 2016.
+
+[22] jessica ficler and yoav goldberg. a neural network for coordination boundary prediction. in
+conference on empirical methods in natural language processing (emnlp), pages 23   32, 2016.
+
+[23] hila gonen and yoav goldberg. semi supervised preposition-sense disambiguation using multi-
+lingual data. in international conference on computational linguistics (coling), pages 2718   
+2729, 2016.
+
+[24] joshua goodman. classes for fast maximum id178 training. in ieee international conference
+
+on acoustics, speech, and signal processing (icassp), volume 1, pages 561   564. ieee, 2001.
+
+[25] matthew r. gorid113y, mark dredze, and jason eisner. approximation-aware id33
+
+by belief propagation. transactions of the association for computational linguistics, 3, 2015.
+
+[26] alex graves, santiago fern  andez, faustino gomez, and j  urgen schmidhuber. connectionist
+temporal classi   cation: labelling unsegmented sequence data with recurrent neural networks. in
+international conference on machine learning (icml), 2006.
+
+[27] andreas griewank. automatic di   erentiation of algorithms: theory, implementation, and appli-
+
+cation. in proceedings of the    rst siam workshop on automatic di   erentiation, 1991.
+
+[28] ga  el guennebaud, beno    t jacob, et al. eigen v3. http://eigen.tuxfamily.org, 2010.
+
+[29] geo   rey hinton, li deng, dong yu, george e dahl, abdel-rahman mohamed, navdeep jaitly,
+andrew senior, vincent vanhoucke, patrick nguyen, tara n sainath, et al. deep neural networks
+for acoustic modeling in id103: the shared views of four research groups. ieee signal
+processing magazine, 29(6):82   97, 2012.
+
+30
+
+[30] sepp hochreiter and j  urgen schmidhuber. long short-term memory. neural computation,
+
+9(8):1735   1780, 1997.
+
+[31] robin j. hogan. fast reverse-mode automatic di   erentiation using expression templates in c++.
+
+acm transactions on mathematical software (toms), 40(4):26, 2014.
+
+[32] zhiheng huang, wei xu, and kai yu. bidirectional lstm-crf models for sequence tagging.
+
+arxiv preprint arxiv:1508.01991, 2015.
+
+[33] mohit iyyer, jordan boyd-graber, leonardo claudino, richard socher, and hal daum  e iii.
+a neural network for factoid id53 over paragraphs. in conference on empirical
+methods in natural language processing (emnlp), pages 633   644, 2014.
+
+[34] diederik kingma and jimmy ba. adam: a method for stochastic optimization. arxiv preprint
+
+arxiv:1412.6980, 2014.
+
+[35] eliyahu kiperwasser and yoav goldberg. easy-   rst id33 with hierarchical tree
+
+lstms. transactions of the association for computational linguistics, 4:445   461, 2016.
+
+[36] eliyahu kiperwasser and yoav goldberg. simple and accurate id33 using bidi-
+rectional lstm feature representations. transactions of the association for computational lin-
+guistics, 4:313   327, 2016.
+
+[37] sigrid klerke, yoav goldberg, and anders s  gaard. improving sentence compression by learning to
+predict gaze. in conference of the north american chapter of the association for computational
+linguistics (naacl), pages 1528   1533, 2016.
+
+[38] lingpeng kong, chris dyer, and noah a. smith. segmental recurrent neural networks.
+
+in
+
+international conference on learning representations (iclr), 2016.
+
+[39] alex krizhevsky, ilya sutskever, and geo   rey e hinton. id163 classi   cation with deep con-
+volutional neural networks. in neural information processing systems (nips), pages 1097   1105,
+2012.
+
+[40] guillaume lample, miguel ballesteros, sandeep subramanian, kazuya kawakami, and chris
+dyer. neural architectures for id39. in conference of the north american
+chapter of the association for computational linguistics (naacl), pages 260   270, 2016.
+
+[41] xiaodan liang, xiaohui shen, jiashi feng, liang lin, and shuicheng yan. semantic object parsing
+
+with graph lstm. 2016.
+
+[42] wang ling, isabel trancoso, chris dyer, and alan w black. character-based neural machine
+
+translation. arxiv preprint arxiv:1511.04586, 2015.
+
+[43] moshe looks, marcello herresho   , delesley hutchins, and peter norvig. deep learning with dy-
+namic computation graphs. in submitted to international conference on learning representations
+(iclr), 2017.
+
+[44] tom  a  s mikolov, stefan kombrink, luk  a  s burget, jan   cernock`y, and sanjeev khudanpur. exten-
+sions of recurrent neural network language model. in ieee international conference on acoustics,
+speech, and signal processing (icassp), pages 5528   5531. ieee, 2011.
+
+[45] volodymyr mnih, koray kavukcuoglu, david silver, andrei a rusu, joel veness, marc g belle-
+mare, alex graves, martin riedmiller, andreas k fidjeland, georg ostrovski, et al. human-level
+control through deep id23. nature, 518(7540):529   533, 2015.
+
+[46] yurii nesterov. a method of solving a convex programming problem with convergence rate o
+
+(1/k2). in soviet mathematics doklady, volume 27, pages 372   376, 1983.
+
+31
+
+[47] graham neubig and chris dyer. generalizing and hybridizing count-based and neural language
+models. in conference on empirical methods in natural language processing (emnlp), pages
+1163   1172, 2016.
+
+[48] joel nothman, nicky ringland, will radford, tara murphy, and james r. curran. learning
+multilingual id39 from wikipedia. arti   cial intelligence, 194:151   175, 2012.
+
+[49] barbara plank, anders s  gaard, and yoav goldberg. multilingual part-of-speech tagging with
+in annual conference of the
+
+bidirectional long short-term memory models and auxiliary loss.
+association for computational linguistics (acl), pages 412   418, 2016.
+
+[50] benjamin recht, christopher re, stephen wright, and feng niu. hogwild: a lock-free approach
+to parallelizing stochastic id119. in neural information processing systems (nips),
+pages 693   701, 2011.
+
+[51] shai shalev-shwartz, yoram singer, nathan srebro, and andrew cotter. pegasos: primal esti-
+
+mated sub-gradient solver for id166. mathematical programming, 127(1):3   30, 2011.
+
+[52] vered shwartz and ido dagan. cogalex-v shared task: lexnet - integrated path-based and distri-
+butional method for the identi   cation of semantic relations. in proceedings of the 5th workshop
+on cognitive aspects of the lexicon (cogalex - v), pages 80   85, 2016.
+
+[53] vered shwartz, yoav goldberg, and ido dagan.
+tegrated path-based and distributional method.
+computational linguistics (acl), pages 2389   2398, 2016.
+
+improving hypernymy detection with an in-
+in annual conference of the association for
+
+[54] david silver, aja huang, chris j maddison, arthur guez, laurent sifre, george van den driess-
+che, julian schrittwieser, ioannis antonoglou, veda panneershelvam, marc lanctot, et al. mas-
+tering the game of go with deep neural networks and tree search. nature, 529(7587):484   489,
+2016.
+
+[55] richard socher, cli    c lin, chris manning, and andrew y ng. parsing natural scenes and nat-
+ural language with id56s. in international conference on machine learning
+(icml), pages 129   136, 2011.
+
+[56] anders s  gaard and yoav goldberg. deep id72 with low level tasks supervised
+at lower layers. in proceedings of the 54th annual meeting of the association for computational
+linguistics (volume 2: short papers), pages 231   235, 2016.
+
+[57] xu sun. asynchronous parallel learning for neural networks and structured models with dense
+features. in international conference on computational linguistics (coling), pages 192   202,
+2016.
+
+[58] martin sundermeyer, ralf schl  uter, and hermann ney. lstm neural networks for language
+modeling. in annual conference of the international speech communication association (inter-
+speech), 2012.
+
+[59] ilya sutskever, oriol vinyals, and quoc vv le. sequence to sequence learning with neural
+
+networks. in neural information processing systems (nips), pages 3104   3112, 2014.
+
+[60] swabha swayamdipta, miguel ballesteros, chris dyer, and noah a. smith. greedy,
+
+joint
+in conference on natural language learning
+
+syntactic-id29 with id200s.
+(conll), pages 187   197, 2016.
+
+[61] kai sheng tai, richard socher, and christopher d. manning. improved semantic representations
+from tree-structured id137. in annual conference of the association
+for computational linguistics (acl), 2015.
+
+32
+
+[62] seiya tokui, kenta oono, shohei hido, and justin clayton. chainer: a next-generation open
+source framework for deep learning. in proceedings of workshop on machine learning systems
+(learningsys) in the twenty-ninth annual conference on neural information processing systems
+(nips), 2015.
+
+[63] r.e. wengert. a simple automatic derivative evaluation program. communications of the acm,
+
+7(8):463   464, 1964.
+
+[64] dong yu, adam eversole, mike seltzer, kaisheng yao, oleksii kuchaiev, yu zhang, frank seide,
+zhiheng huang, brian guenter, huaming wang, jasha droppo, geo   rey zweig, chris rossbach,
+jie gao, andreas stolcke, jon currey, malcolm slaney, guoguo chen, amit agarwal, chris
+basoglu, marko padmilac, alexey kamenev, vladimir ivanov, scott cypher, hari parthasarathi,
+bhaskar mitra, baolin peng, and xuedong huang. an introduction to computational networks
+and the computational network toolkit. technical report, microsoft research, october 2014.
+
+[65] heiga zen, andrew senior, and mike schuster. statistical parametric id133 using deep
+neural networks. in ieee international conference on acoustics, speech, and signal processing
+(icassp), pages 7962   7966. ieee, 2013.
+
+33
+
+

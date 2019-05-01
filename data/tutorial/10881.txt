@@ -1,0 +1,757 @@
+sentence similarity learning by lexical decomposition and composition
+
+zhiguo wang and haitao mi and abraham ittycheriah
+
+ibm t.j. watson research center
+
+yorktown heights, ny, usa
+
+{zhigwang, hmi, abei}@us.ibm.com
+
+7
+1
+0
+2
+
+ 
+l
+u
+j
+ 
+
+4
+1
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+9
+1
+0
+7
+0
+
+.
+
+2
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+most conventional sentence similarity methods only focus on similar parts of two input sen-
+tences, and simply ignore the dissimilar parts, which usually give us some clues and semantic
+meanings about the sentences. in this work, we propose a model to take into account both the
+similarities and dissimilarities by decomposing and composing lexical semantics over sentences.
+the model represents each word as a vector, and calculates a semantic matching vector for each
+word based on all words in the other sentence. then, each word vector is decomposed into a sim-
+ilar component and a dissimilar component based on the semantic matching vector. after this,
+a two-channel id98 model is employed to capture features by composing the similar and dis-
+similar components. finally, a similarity score is estimated over the composed feature vectors.
+experimental results show that our model gets the state-of-the-art performance on the answer
+sentence selection task, and achieves a comparable result on the paraphrase identi   cation task.
+
+1
+
+introduction
+
+sentence similarity is a fundamental metric to measure the degree of likelihood between a pair of sen-
+tences. it plays an important role for a variety of tasks in both nlp and ir communities. for example, in
+paraphrase identi   cation task, sentence similarity is used to determine whether two sentences are para-
+phrases or not (yin and sch  utze, 2015; he et al., 2015). for id53 and information retrieval
+tasks, sentence similarities between query-answer pairs are used for assessing the relevance and ranking
+all the candidate answers (severyn and moschitti, 2015; wang and ittycheriah, 2015).
+
+however, sentence similarity learning has following challenges:
+
+1. there is a lexical gap between semantically equivalent sentences. take the e1 and e2 in table 1
+
+for example, they have the similar meaning but with different lexicons.
+
+2. semantic similarity should be measured at different levels of granularity (word-level, phrase-level
+and syntax-level). e.g.,    not related    in e2 is an indivisible phrase when matching with    irrelevant   
+in e1 (shown in square brackets).
+
+3. the dissimilarity (shown in angle brackets) between two sentences is also a signi   cant clue (qiu et
+al., 2006). for example, by judging the dissimilar parts, we can easily identify that e3 and e5 share
+the similar meaning    the study is about salmon   , because    sockeye    belongs to the salmon family,
+and       ounder    does not. whereas the meaning of e4 is quite different from e3, which emphasizes
+   the study is about red (a special kind of) salmon   , because both    sockeye    and    coho    are in the
+salmon family. how we can extract and utilize those information becomes another challenge.
+
+in order to handle the above challenges, researchers have been working on sentence similarity al-
+gorithms for a long time. to bridge the lexical gap (challenge 1), some word similarity metrics were
+proposed to match different but semantically related words. examples include knowledge-based met-
+rics (resnik, 1995) and corpus-based metrics (jiang and conrath, 1997; yin and sch  utze, 2015; he et
+al., 2015). to measure sentence similarity from various granularities (challenge 2), researchers have ex-
+plored features extracted from id165s, continuous phrases, discontinuous phrases, and parse trees (yin
+and sch  utze, 2015; he et al., 2015; heilman and smith, 2010). the third challenge did not get much
+
+e1 the research is [irrelevant] to sockeye.
+e2 the study is [not related] to salmon.
+e3 the research is relevant to salmon.
+e4 the study is relevant to sockeye, (cid:104)instead of coho(cid:105).
+e5 the study is relevant to sockeye, (cid:104)rather than    ounder(cid:105).
+
+table 1: examples for sentence similarity learning, where sockeye means    red salmon   , and coho means
+   silver salmon   .    coho    and    sockeye    are in the salmon family, while       ounder    is not.
+
+attention in the past, the only related work of qiu et al. (2006) explored the dissimilarity between sen-
+tences in a pair for paraphrase identi   cation task, but they require human annotations in order to train a
+classi   er, and their performance is still below the state of the art.
+
+in this paper, we propose a novel model to tackle all these challenges jointly by decomposing and
+composing lexical semantics over sentences. given a sentence pair, the model represents each word as
+a low-dimensional vector (challenge 1), and calculates a semantic matching vector for each word based
+on all words in the other sentence (challenge 2). then based on the semantic matching vector, each word
+vector is decomposed into two components: a similar component and a dissimilar component (challenge
+3). we use similar components of all the words to represent the similar parts of the sentence pair, and dis-
+similar components of every word to model the dissimilar parts explicitly. after this, a two-channel id98
+operation is performed to compose the similar and dissimilar components into a feature vector (challenge
+2 and 3). finally, the composed feature vector is utilized to predict the sentence similarity. experimental
+results on two tasks show that our model gets the state-of-the-art performance on the answer sentence
+selection task, and achieves a comparable result on the paraphrase identi   cation task.
+
+in following parts, we start with a brief overview of our model (section 2), followed by the details of
+our end-to-end implementation (section 3). then we evaluate our model on answer sentence selection
+and paraphrase identi   cations tasks (section 4).
+
+2 model overview
+
+in this section, we propose a sentence similarity learning model to tackle all three challenges (mentioned
+in section 1). to deal with the    rst challenge, we represent each word as a distributed vector, so that
+we can calculate similarities for formally different but semantically related words. to tackle the second
+challenge, we assume that each word can be semantically matched by several words in the other sentence,
+and we calculate a semantic matching vector for each word vector based on all the word vectors in the
+other side. to cope with the third challenge, we assume that each semantic unit (word) can be partially
+matched, and can be decomposed into a similar component and a dissimilar component based on its
+semantic matching vector.
+
+figure 1 shows an overview of our sentence similarity model. given a pair of sentences s and t , our
+
+task is to calculate a similarity score sim(s, t ) in following steps:
+
+word representation. id27 of mikolov et al. (2013) is an effective way to handle the
+lexical gap challenge in the sentence similarity task, as it represents each word with a distributed vector,
+and words appearing in similar contexts tend to have similar meanings (mikolov et al., 2013). with
+those pre-trained embeddings, we transform s and t into sentence matrixes s = [s1, ..., si, ..., sm] and
+t = [t1, ..., tj, ..., tn], where si and tj are d-dimension vectors of the corresponding words, and m and
+n are sentence length of s and t respectively.
+
+semantic matching. in order to judge the similarity between two sentences, we need to check whether
+each semantic unit in one sentence is covered by the other sentence, or vice versa. for example, in
+table 1, to check whether e2 is a paraphrase of e1, we need to know the single word    irrelevant    in e1
+is matched or covered by the phrase    not related    in e2. in our model, we treat each word as a primitive
+semantic unit, and calculate a semantic matching vector   si for each word si by composing part or full
+word vectors in the other sentence t . in this way, we can match a word si to a word or phrase in t .
+
+figure 1: model overview.
+
+similarly, for the reverse direction, we also calculate all semantic matching vectors   tj in t .
+
+  si = fmatch(si, t )
+  tj = fmatch(tj, s)
+
+   si     s
+   tj     t
+
+(1)
+
+we explore different fmatch functions later in section 3.
+
+decomposition. after the semantic matching phase, we have the semantic matching vectors of   si and
+  tj. we interpret   si (or   tj) as a semantic coverage of word si (or tj) by the sentence t (or s). however,
+it is not necessary that all the semantics of si (or tj) are fully covered by   si (or   tj). take the e1 and e2
+in table 1 for example, the word    sockeye    in e1 is only partially matched by the word    salmon    (the
+similar part) in e2, as the full meaning of    sockeye    is    red salmon    (the semantic meaning of    red   
+is the dissimilar part). motivated by this phenomenon, our model further decomposes word si (or tj),
+based on its semantic matching vector   si (or   tj), into two components: similar component s+
+j ) and
+dissimilar component s   
+
+j ). formally, we de   ne the decomposition function as:
+
+i (or t   
+
+i (or t+
+
+i ; s   
+[s+
+j ; t   
+[t+
+
+i ] = fdecomp(si,   si)
+j ] = fdecomp(tj,   tj)
+
+   si     s
+   tj     t
+
+(2)
+
+composition. given a similar component matrix s+ = [s+
+m] (or t     = [t   
+
+m] (or t + = [t+
+n ]) and a
+dissimilar component matrix s    = [s   
+n ]), our goal in this step is how
+to utilize those information. besides the suggestion from qiu et al. (2006) that the signi   cance of the
+dissimilar parts alone between two sentences has a great effect of their similarity, we also think that the
+dissimilar and similar components have strong connections. for example, in table 1, if we only look at
+the dissimilar or similar part alone, it is hard to judge which one between e4 and e5 is more similar to e3.
+we can easily identify that e5 is more similar to e3, when we consider both the similar and dissimilar
+
+1 , ..., s+
+1 , ..., t   
+
+1 , ..., s   
+
+1 , ..., t+
+
+sentence s similar  component s+ dissimilar component s- decomposition feature vector 	
+   sentence t composition feature vector word representation similarity assessing s1,   ,si,   ,sm dissimilar component t- !s!tsimilarity sim(s,t) t1,   ,tj,   ,tn word similarity am  nsimilar component t+ ai,j  t1,...,  tj,...,  tn  s1,...,  si,...,  snsematic matching parts. therefore, our model composes the similar component matrix and dissimilar component matrix
+into a feature vector (cid:126)s (or (cid:126)t ) with the composition function:
+(cid:126)s = fcomp(s+, s   )
+(cid:126)t = fcomp(t +, t    )
+
+(3)
+
+similarity assessing. in the    nal stage, we concatenate the two feature vectors ((cid:126)s and (cid:126)t ) and predict
+
+the    nal similarity score:
+
+sim(s, t ) = fsim((cid:126)s, (cid:126)t )
+
+(4)
+
+3 an end-to-end implementation
+section 2 gives us a glance of our model. in this section, we describe details of each phase.
+
+3.1 semantic matching functions
+this subsection describes our speci   cations for the semantic matching function fmatch in eq. (1). the
+goal of fmatch is to generate a semantic matching vector   si for si by composing the vectors from t .
+for a sentence pair s and t , we    rst calculate a similarity matrix am  n, where each element ai,j    
+
+am  n computes the cosine similarity between words si and tj as
+
+then, we de   ne three different semantic matching functions over am  n:
+
+ai,j =
+
+st
+i tj
+
+(cid:107)si(cid:107)    (cid:107)tj(cid:107)
+
+   si     s,   tj     t.
+
+(cid:80)n
+(cid:80)n
+(cid:80)k+w
+(cid:80)k+w
+
+j=0 ai,j tj
+j=0 ai,j
+j=k   w ai,j tj
+j=k   w ai,j
+
+                           
+
+tk
+
+global
+
+local-w
+
+max
+
+fmatch(si, t ) =
+
+(5)
+
+(6)
+
+where k = argmaxj ai,j. the idea of the global function is to consider all word vectors tj in t . a
+semantic matching vector   si is a weighted sum vector of all words tj in t , where each weight is the
+normalized word similarity ai,j. the max function moves to the other extreme. it generates the semantic
+matching vector by selecting the most similar word vector tk from t . the local-w function takes a
+compromise between global and max, where w indicates the size of the window to consider centered at
+k (the most similar word position). so the semantic matching vector is a weighted average vector from
+tk   w to tk+w.
+3.2 decomposition functions
+this subsection describes the implementations for the decomposition function fdecomp in eq. (2). the
+intention of fdecomp is to decompose a word vector sj based on its semantic matching vector   sj into a
+similar component s+
+indicates the semantics of si covered
+by   si and s   
+indicates the uncovered part. we implement three types of decomposition function: rigid,
+linear and orthogonal.
+
+i and a dissimilar component s   
+
+i , where s+
+i
+
+i
+
+the rigid decomposition only adapts to the max version of fmatch. first, it detects whether there is
+an exactly matched word in the other sentence, or si equal to   si. if yes, the vector si is dispatched to
+i , and the dissimilar component is assigned with a zero vector 0. otherwise, the
+the similar component s+
+vector si is assigned to the dissimilar component s   
+i = 0]
+i = si]
+
+i . eq. (7) gives the formal de   nition:
+
+i = si; s   
+[s+
+i = 0; s   
+[s+
+
+if si =   si
+otherwise
+
+(7)
+
+the motivation for the linear decomposition is that the more similar between si and   si, the higher
+proportion of si should be assigned to the similar component. first, we calculate the cosine similarity
+
+   between si and   si. then, we decompose si linearly based on   . eq. (8) gives the corresponding
+de   nition:
+
+   =
+
+st
+i   si
+
+(cid:107)si(cid:107)    (cid:107)   si(cid:107)
+
+s+
+i =   si
+s   
+i = (1       )si
+
+(8)
+
+the orthogonal decomposition is to decompose a vector in the geometric space. based on the semantic
+matching vector   si, our model decomposes si into a parallel component and a perpendicular component.
+then, the parallel component is viewed as the similar component s+
+i , and perpendicular component is
+taken as the dissimilar component s   
+
+i . eq. (9) gives the concrete de   nitions.
+
+si      si
+s+
+  si      si
+  si
+i =
+s   
+i = si     s+
+
+i
+
+parallel
+
+perpendicular
+
+(9)
+
+3.3 composition functions
+the aim of composition function fcomp in eq. (3) is to extract features from both the similar component
+matrix and the dissimilar component matrix. we also want to acquire similarities and dissimilarities of
+various granularity during the composition phase. inspired from kim (2014), we utilize a two-channel
+convolutional neural networks (id98) and design    lters based on various order of id165s, e.g., unigram,
+bigram and trigram.
+the id98 model involves two sequential operations: convolution and max-pooling. for the convolu-
+tion operation, we de   ne a list of    lters {wo}. the shape of each    lter is d   h, where d is the dimension
+of word vectors and h is the window size. each    lter is applied to two patches (a window size h of
+vectors) from both similar and dissimilar channels, and generates a feature. eq. (10) expresses this
+process.
+
+co,i = f (wo     s+
+
+[i:i+h] + wo     s   
+
+[i:i+h] + bo)
+
+(10)
+
+where the operation a     b sums up all elements in b with the corresponding weights in a, s+
+and s   
+[i:i+h] indicate the patches from s+ and s   , bo is a bias term and f is a non-linear function (we
+use tanh in this work). we apply this    lter to all possible patches, and produce a series of features
+(cid:126)co = [co,1, co,2, ..., co,o]. the number of features in (cid:126)co depends on the shape of the    lter wo and the
+length of the input sentence. to deal with variable feature size, we perform a max-pooling operation
+over (cid:126)co by selecting the maximum value co = max (cid:126)co. therefore, after these two operations, each    lter
+generates only one feature. we de   ne several    lters by varying the window size and the initial values.
+eventually, a vector of features is captured by composing the two component matrixes, and the feature
+dimension is equal to the number of    lters.
+
+[i:i+h]
+
+3.4 similarity assessment function
+(4) predicts a similarity score by taking two feature
+the similarity assessment function fsim in eq.
+vectors as input. we employ a linear function to sum up all the features and apply a sigmoid function to
+constrain the similarity within the range [0, 1].
+
+3.5 training
+we train our sentence similariy model by maximizing the likelihood on a training set. each training
+instance in the training set is represented as a triple (si, ti, li), where si and ti are a pair of sentences,
+and li     {0, 1} indicates the similarity between them. we assign li = 1 if ti is a paraphrase of si for
+the paraphrase identi   cation task, or ti is a correct answer for si for the answer sentence selection task.
+otherwise, we assign li = 0. we implement the mathematical expressions with theano (bastien et al.,
+2012) and use adam (kingma and ba, 2014) for optimization.
+
+4 experiment
+4.1 experimental setting
+we evaluate our model on two tasks: answer sentence selection and paraphrase identi   cation. the answer
+sentence selection task is to rank a list of candidate answers based on their similarities to a question
+sentence, and the performance is measured by mean average precision (map) and mean reciprocal rank
+(mrr). we experiment on two datasets: qasent and wikiqa. the statistics of the two datasets can be
+found in yang et al. (2015), where qasent (wang et al., 2007) was created from the trec qa track,
+and wikiqa (yang et al., 2015) is constructed from real queries of bing and wikipedia. the paraphrase
+identi   cation task is to detect whether two sentences are paraphrases based on the similarity between
+them. the metrics include the accuracy and the positive class f1 score. we experiment on the microsoft
+research paraphrase corpus (msrp) (dolan et al., 2004), which includes 2753 true and 1323 false
+instances in the training set, and 1147 true and 578 false instances in the test set. we build a development
+set by randomly selecting 100 true and 100 false instances from the training set. in all experiments, we
+set the size of word vector dimension as d =300, and pre-train the vectors with the id97 toolkit
+(mikolov et al., 2013) on the english gigaword (ldc2011t07).
+
+4.2 model properties
+there are several alternative options in our model, e.g., the semantic matching functions, the decom-
+position operations, and the    lter types. the choice of these options may affect the    nal performance.
+in this subsection, we present some experiments to demonstrate the properties of our model, and    nd a
+good con   guration that we use to evaluate our    nal model. all the experiments in this subsection were
+performed on the qasent dataset and evaluated on the development set.
+first, we evaluated the effectiveness of various semantic matching functions. we switched the seman-
+tic matching functions among {max, global, local-l}, where l     {1, 2, 3, 4}, and    xed the other options
+as: the linear decomposition, the    lter types including {unigram, bigram, trigram}, and 500    lters for
+each type. figure 2 (a) presents the results. we found that the max function worked better than the
+global function on both map and mrr. by increasing the window size, the local-l function acquired
+progressive improvements when the window size is smaller than 4. but after we enlarged the window
+size to 4, the performance dropped. the local-3 function worked better than the max function in term
+of the map, and also got a comparable mrr. therefore, we use the local-3 function in the following
+experiments.
+second, we studied the effect of various decomposition operations. we varied the decomposition
+operation among {rigid, linear, orthogonal}, and kept the other options unchanged. figure 2 (b) shows
+the performance. we found that the rigid operation got the worst result. this is reasonable, because the
+rigid operation decomposes word vectors by exactly matching words. the orthogonal operation got a
+similar map as the linear operation, and it worked better in term of mrr. therefore, we choose the
+orthogonal operation in the following experiments.
+
+third, we tested the in   uence of various    lter types. we constructed 5 groups of    lters: win-1 contains
+only the unigram    lters, win-2 contains both unigram and bigram    lters, win-3 contains all the    lters in
+win-2 plus trigram    lters, win-4 extends    lters in win-3 with 4-gram    lters, and win-5 adds 5-gram    lters
+into win-4. we generate 500    lters for each    lter type (with different initial values). experimental
+results are shown in figure 2 (c). at the beginning, adding higher-order ngram    lters was helpful for the
+performance. the performance reached to the peak, when we used the win-3    lters. after that, adding
+more complex    lters decreased the performance. therefore, the trigram is the best granularity for our
+model. in the following experiments, we utilize    lter types in win-3.
+
+4.3 comparing with state-of-the-art models
+in this subsection, we evaluated our model on the test sets of qasent, wikiqa and msrp.
+
+qasent dataset. table 2 presents the performances of the state-of-the-art systems and our model,
+where the performances were evaluated with the standard trec eval-8.1 script 1. given a pair of sentences,
+
+1http://trec.nist.gov/trec eval/
+
+figure 2: in   uence of different con   guration.
+
+models
+severyn and moschitti (2015)
+(id98 only)
+severyn and moschitti (2015)
+(id98 + sparse features)
+wang and ittycheriah (2015)
+(id27 alignment)
+dos santos et al. (2016)
+(attention-based id98)
+
+this work
+
+map
+
+mrr
+
+0.6709
+
+0.7280
+
+0.7459
+
+0.8078
+
+0.7460
+
+0.8200
+
+0.7530
+
+0.8511
+
+0.7714
+
+0.8447
+
+models
+yang et al. (2015)
+(2-gram id98)
+dos santos et al. (2016)
+(attention-based id98)
+miao et al. (2015)
+(attention-based lstm)
+yin et al. (2015)
+(attention-based id98)
+
+this work
+
+map
+
+mrr
+
+0.6520
+
+0.6652
+
+0.6886
+
+0.6957
+
+0.6886
+
+0.7069
+
+0.6921
+
+0.7108
+
+0.7058
+
+0.7226
+
+table 2: results on the qasent dataset.
+
+table 3: results on the wikiqa dataset.
+
+severyn and moschitti (2015) employed a id98 model to compose each sentence into a vector separately,
+and joined the two sentence vectors to compute the sentence similarity. because only the sentence-
+level granularity was used, the performance is much lower (the second row of table 2). after adding
+some word overlap features between the two sentences, the performance was improved signi   cantly
+(the third row of table 2). therefore, the lower-level granularity is an indispensable factor for a good
+performance. wang and ittycheriah (2015) conducted word alignment for a sentence pair based on word
+vectors, and measured the sentence similarity based on a couple of word alignment features. they got
+a slightly better performance (the fourth row of table 2), which indicates that the vector representation
+for words is helpful to bridging the lexical gap problem. dos santos et al. (2016) introduced the attention
+mechanism into the id98 model, and learnt sentence representation by considering the in   uence of the
+other sentence. they got better performance than all the other previous work. our model makes use
+of all these useful factors and also considers the dissimilarities of a sentence pair. we can see that our
+model (the last row of table 2) got the best map among all previous work, and a comparable mrr than
+dos santos et al. (2016).
+
+wikiqa dataset. table 3 presents the results of our model and several state-of-the-art models. yang
+et al. (2015) constructed the dataset and reimplemented several baseline models. the best performance
+(shown at the second row of table 3) was acquired by a bigram id98 model combining with the word
+overlap features. miao et al. (2015) models the sentence similarity by enriching lstms with a latent
+stochastic attention mechanism. the corresponding performance is given at the fourth row of table
+3. yin et al. (2015) introduced the attention mechanism into the id98 model, and captured the best
+performance (the    fth row of table 3). the semantic matching phase in our model is similar to the
+attention mechanism. but different from the previous models, our model utilizes both the similarity and
+dissimilarity simultaneously. the last row of table 3 shows that our model is more effective than the
+other models.
+
+msrp dataset. table 4 summarized the results from our model and several state-of-the-art models.
+yin and sch  utze (2015) employed a id98 model to learn sentence representations on multiple level of
+
+              (a) semantic matching.                                      (b) decomposition.                                          (c) filter types in composition. 0.720.740.760.780.80.820.840.860.88mapmrrwin-1win-2win-3win-4win-50.730.750.770.790.810.830.85mapmrrmaxgloballocal-1local-2local-3local-40.60.650.70.750.80.850.9mapmrrrigidlinearorthogonal0.720.740.760.780.80.820.840.860.88mapmrrwin-1win-2win-3win-4win-5models
+yin and sch  utze (2015) (without pretraining)
+yin and sch  utze (2015) (with pretraining)
+he et al. (2015) (without pos embeddings)
+he et al. (2015) (without para. embeddings)
+he et al. (2015) (pos and para. embeddings)
+yin et al. (2015) (with sparse features)
+ji and eisenstein (2013)
+
+this work
+
+f1
+acc
+81.4
+72.5
+78.4
+84.6
+77.8 n/a
+77.3 n/a
+78.6
+84.7
+84.8
+78.9
+80.4
+86.0
+
+78.4
+
+84.7
+
+table 4: experimental results for paraphrase identi   cation on msrp corpus.
+
+granularity and modeled interaction features at each level for a pair of sentences. they obtained their best
+performance by pretraining the model on a id38 task (the 3rd row of table 4). however,
+their model heavily depends on the pretraining strategy. without pretraining, they got a much worse
+performance (the second row of table 4). he et al. (2015) proposed a similar model to yin and sch  utze
+(2015). similarly, they also used a id98 model to extract features at multiple levels of granularity.
+differently, they utilized some extra annotated resources, e.g., embeddings from part-of-speech (pos)
+tags and paragram vectors trained from the paraphrase database (ganitkevitch et al., 2013). their
+model outperformed yin and sch  utze (2015) without the need of pretraining (the sixth row of table 4).
+however, the performance was reduced after removing the extra resources (the fourth and    fth rows of
+table 4). yin et al. (2015) applied their attention-based id98 model on this dataset. by adding a couple of
+sparse features and using a layerwise training strategy, they got a pretty good performance. comparing to
+these neural network based models, our model obtained a comparable performance (the last row of table
+4) without using any sparse features, extra annotated resources and speci   c training strategies. however,
+the best performance so far on this dataset is obtained by ji and eisenstein (2013). in their model, they
+just utilized several hand-crafted features in a support vector machine (id166) model. therefore, the
+deep learning methods still have a long way to go for this task.
+
+5 related work
+
+the semantic matching functions in subsection 3.1 are inspired from the attention-based neural machine
+translation (bahdanau et al., 2014; luong et al., 2015). however, most of the previous work using the
+attention mechanism in only lstm models. whereas our model introduces the attention mechanism
+into the id98 model. a similar work is the attention-based id98 model proposed by yin et al. (2015).
+they    rst build an attention matrix for a sentence pair, and then directly take the attention matrix as a
+new channel of the id98 model. differently, our model uses the attention matrix (or similarity matrix)
+to decompose the original sentence matrix into a similar component matrix and a dissimilar component
+matrix, and then feeds these two matrixes into a two-channel id98 model. the model can then focus
+much on the interactions between similar and dissimilar parts of a sentence pair.
+
+6 conclusion
+
+in this work, we proposed a model to assess sentence similarity by decomposing and composing lexical
+semantics. to bridge the lexical gap problem, our model represents each word with its context vector.
+to extract features from both the similarity and dissimilarity of a sentence pair, we designed several
+methods to decompose the word vector into a similar component and a dissimilar component. to extract
+features at multiple levels of granularity, we employed a two-channel id98 model and equipped it with
+multiple types of ngram    lters. experimental results show that our model is quite effective on both the
+
+answer sentence selection task and the paraphrase identi   cation task .
+
+acknowledgments
+
+we thank the anonymous reviewers for useful comments.
+
+references
+[bahdanau et al.2014] dzmitry bahdanau, kyunghyun cho, and yoshua bengio. 2014. id4
+
+by jointly learning to align and translate. arxiv preprint arxiv:1409.0473.
+
+[bastien et al.2012] fr  ed  eric bastien, pascal lamblin, razvan pascanu, james bergstra, ian j. goodfellow, arnaud
+bergeron, nicolas bouchard, and yoshua bengio. 2012. theano: new features and speed improvements. deep
+learning and unsupervised id171 nips 2012 workshop.
+
+[dolan et al.2004] bill dolan, chris quirk, and chris brockett. 2004. unsupervised construction of large para-
+phrase corpora: exploiting massively parallel news sources. in proceedings of the 20th international conference
+on computational linguistics, page 350. association for computational linguistics.
+
+[dos santos et al.2016] c    cero nogueira dos santos, ming tan, bing xiang, and bowen zhou. 2016. attentive
+
+pooling networks.
+
+[ganitkevitch et al.2013] juri ganitkevitch, benjamin van durme, and chris callison-burch. 2013. ppdb: the
+
+paraphrase database. in hlt-naacl, pages 758   764.
+
+[he et al.2015] hua he, kevin gimpel, and jimmy lin. 2015. multi-perspective sentence similarity modeling
+with convolutional neural networks. in proceedings of the 2015 conference on empirical methods in natural
+language processing, pages 1576   1586.
+
+[heilman and smith2010] michael heilman and noah a smith. 2010. tree edit models for recognizing textual
+in human language technologies: the 2010 annual
+entailments, paraphrases, and answers to questions.
+conference of the north american chapter of the association for computational linguistics, pages 1011   1019.
+association for computational linguistics.
+
+[ji and eisenstein2013] yangfeng ji and jacob eisenstein. 2013. discriminative improvements to distributional
+
+sentence similarity. in emnlp, pages 891   896.
+
+[jiang and conrath1997] jay j jiang and david w conrath. 1997. semantic similarity based on corpus statistics
+
+and lexical taxonomy. arxiv preprint cmp-lg/9709008.
+
+[kim2014] yoon kim. 2014. convolutional neural networks for sentence classi   cation. in proceedings of the
+
+2014 conference on empirical methods in natural language processing, pages 1746   1751.
+
+[kingma and ba2014] diederik kingma and jimmy ba. 2014. adam: a method for stochastic optimization. in
+
+international conference on learning representation (iclr).
+
+[luong et al.2015] minh-thang luong, hieu pham, and christopher d manning. 2015. effective approaches to
+
+attention-based id4. arxiv preprint arxiv:1508.04025.
+
+[miao et al.2015] yishu miao, lei yu, and phil blunsom. 2015. neural variational id136 for text processing.
+
+arxiv preprint arxiv:1511.06038.
+
+[mikolov et al.2013] tomas mikolov, kai chen, greg corrado, and jeffrey dean. 2013. ef   cient estimation of
+
+word representations in vector space. arxiv preprint arxiv:1301.3781.
+
+[qiu et al.2006] long qiu, min-yen kan, and tat-seng chua. 2006. paraphrase recognition via dissimilarity
+signi   cance classi   cation. in proceedings of the 2006 conference on empirical methods in natural language
+processing, pages 18   26. association for computational linguistics.
+
+[resnik1995] philip resnik. 1995. using information content to evaluate semantic similarity in a taxonomy. arxiv
+
+preprint cmp-lg/9511007.
+
+[severyn and moschitti2015] aliaksei severyn and alessandro moschitti. 2015. learning to rank short text pairs
+with convolutional deep neural networks. in proceedings of the 38th international acm sigir conference on
+research and development in information retrieval, pages 373   382. acm.
+
+[wang and ittycheriah2015] zhiguo wang and abraham ittycheriah. 2015. faq-based id53 via
+
+word alignment. arxiv preprint arxiv:1507.02628.
+
+[wang et al.2007] mengqiu wang, noah a smith, and teruko mitamura. 2007. what is the jeopardy model? a
+
+quasi-synchronous grammar for qa. in emnlp-conll, volume 7, pages 22   32.
+
+[yang et al.2015] yi yang, wen-tau yih, and christopher meek. 2015. wikiqa: a challenge dataset for open-
+in proceedings of the conference on empirical methods in natural language
+
+domain id53.
+processing.
+
+[yin and sch  utze2015] wenpeng yin and hinrich sch  utze. 2015. convolutional neural network for paraphrase
+identi   cation. in proceedings of the 2015 conference of the north american chapter of the association for
+computational linguistics: human language technologies, pages 901   911.
+
+[yin et al.2015] wenpeng yin, hinrich sch  utze, bing xiang, and bowen zhou. 2015. abid98: attention-based
+
+convolutional neural network for modeling sentence pairs.
+
+

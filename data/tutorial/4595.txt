@@ -1,0 +1,1535 @@
+    #[1]r2rt full atom feed [2]r2rt categories atom feed
+
+   (button) toggle navigation [3]r2rt
+
+deconstruction with discrete embeddings
+
+   wed 15 february 2017
+
+   in my post [4]beyond binary, i showed how easy it is to create
+   trainable    one-hot    neurons with the straight-through estimator. my
+   motivation for this is made clear in this post, in which i demonstrate
+   the potential of discrete embeddings. in short, discrete embeddings
+   allow for explicit deconstruction of inherently fuzzy data, which
+   allows us to apply explicit reasoning and algorithms over the data, and
+   communicate fuzzy ideas with concrete symbols. using discrete
+   embeddings, we can (1) create a language model over the embeddings,
+   which immediately gives us access to id56-based generation of internal
+   embeddings (and sequences thereof), and (2) index sub-parts of the
+   embeddings, instead of entire embedding vectors, which gives us (i.e.,
+   our agents) access to search techniques that go beyond cosine
+   similarity, such as phrase search and search using lightweight
+   structure.
+
+   the ultimate task we will tackle in this post is as follows:
+
+   suppose we arranged the mnist training images in a sequence. does it
+   contain any subsequences of three consecutive digits that have the
+   following three features, respectively, and if so, where:
+   png png
+
+   the proposed solution presented does not use class labels, and does not
+   involve any vectors representing sequences of digits such as id56
+   states. instead, we will make use of an inverted index over the
+   symbolic language that discrete embeddings provide. the proposed
+   solution is not perfect, and reveals the general challenge that we will
+   face in our quest to enable ais to represent fuzzy concepts with
+   explicit symbols. it will be interesting to see if the approach
+   presented can be improved to the point where it becomes practical to
+   use as a general technique.
+
+   link to ipython notebook: this post is available [5]here as an ipython
+   notebook, together with the supporting code and trained models.
+
+human language and stage iii architectures
+
+   a comparison to human language is apt: although our thoughts are
+   generally fuzzy and fraught with ambiguities (like real-valued
+   embeddings (e.g., consider how many reasonable sequences could be
+   decoded from the dense vector representation of a sequence in a
+   sequence autoencoder)), much of our communication is explicit (of
+   course, there is also body language, intonation, etc., which might be
+   considered as real-valued, fuzzy communication channels).
+
+   if we think about the future of ai, i think this comparison is doubly
+   important. in my mind, to date, there have been two major paradigms in
+   ai:
+     * stage i: traditional ai based on explicit programming
+       in the 20th century, many advances in ai were based explicit
+       algorithms and data structures, such as [6]id67, [7]frames,
+       [8]case-based reasoning, etc.. a representative computer program
+       based primarily on traditional ai was ibm   s [9]deep blue.
+     * stage ii: machine learning based on implicit programming
+       more recently, the advances in ai have been primarily based on
+       data, which is used to implicitly program the computer. we tell the
+       computer what we want it to do by defining objectives and rewards,
+       providing it with a general learning algorithm, and feeding it
+       data. it learns on its own how to accomplish those ends: the means
+       are never made explicit. a representative computer program based
+       primarily on machine learning is deepmind   s [10]alphago.
+
+   inevitably, i see the third major paradigm of ai to be the following
+   hybrid:
+     * stage iii implicit programming via explicit symbols, aka
+       programming via natural language:
+       as a prerequisite to strong ai, our computers will need to be able
+       to communicate with humans via a higher-order interface like
+       natural language. if such an interface becomes strong enough, and
+       computers are given sufficient dominion over their internal
+       functionality, we can teach them by talking to them. this requires
+       that the computer be able to represent fuzzy concepts using
+       explicit symbols. a representative (fictional) computer program
+       that employed this approach is iron man   s [11]j.a.r.v.i.s..
+
+   one very cool example of an architecture exhibiting stage iii abilities
+   is the vae-gan, presented in [12]larsen et al. (2016). the vae-gan is
+   able to generate new images and modify old images according to
+   high-order discrete features. here is the impressive figure 6 from
+   larsen et al. (2016):
+   png png
+
+   you can see how given certain discrete features (bald, bangs, black
+   hair, etc.), the vae-gan can modify the input image so as to include
+   those features. in the same way, it can also generate new samples. this
+   is a human-like ability that falls squarely within stage iii.
+
+   this ability is similar in function to, but (per my current
+   understanding) quite different in implementation from, the generative
+   method we explore below. because i   ve read next to nothing about gans,
+   i won   t be able to give good commentary in this post. nevertheless, i
+   think the similarities are strong enough to merit an in-depth analysis.
+   indeed, a quick scan shows that certain vae and gan architectures have
+   already adopted a form of discrete embeddings (e.g., [13]this paper
+   (infogan) and [14]this paper (discrete vae)), but i haven   t had a
+   chance to actually read any of these papers yet. i   m not sure how
+   similar/different they are from what i present in this post, and i plan
+   to report back on vaes/gans and other architectures after i   ve gotten
+   my hands dirty with them.[15]^1
+
+   because i only discuss discrete embeddings below, i wanted to emphasize
+   here the dual nature of discrete and real embeddings. certainly a
+   discrete symbol can be embedded in real space (see, e.g., id97). in
+   this post, we are specifically concerned with embedding real vectors in
+   discrete space (maybe i should have titled this post    vec2word   ). each
+   approach has its own advantanges. for example, it is far more difficult
+   to capture continuous features like width, height, weight, angle, etc.
+   with discrete features. there is nothing stopping us from creating
+   models that have both real and discrete internal embeddings (either as
+   a mixed embedding, or as separate/interchangeable dual embeddings). in
+   fact, we can keep all of our models that use real embeddings exactly
+   the way they are, and add an internal discrete dual of the real
+   embeddings via a discrete autoencoder (a la part i of this post)   this
+   alone will give us access to the capabilities demonstrated in this
+   post.
+
+   with that said, let   s dive in. the ideas in this post are a long ways
+   away from taking us all the way to stage iii, but i think they   re a
+   step in the right direction. we proceed as follows:
+     * first, we   ll build a dead simple mnist autoencoder with an explicit
+       hidden layer and demonstrate that discrete embeddings are
+       sufficiently expressive to achieve good performance. we   ll then
+       visualize the embeddings to get a sense of what each neuron
+       represents.
+     * then, we   ll show how we can create an id56-based generative model of
+       mnist, and demonstrate a few cool things that it can do, including
+       generating samples based on a prototype (i.e., generate    more like
+       this   ) and generating samples based on specific feature.
+     * finally, we   ll show how we can apply traditional information
+       retrieval (ir)   which falls squarely within the stage i paradigm   to
+       do post-classification over the features of a stage ii model, and
+       in particular, over sequences of such features.
+
+   throughout our journey, we will repeatedly come face-to-face with the
+   following general challenge:
+     * in order to represent certain fuzzy ideas with explicit codes
+       (words), we need a lot of explicit codes (words). but what happens
+       if the fuzzy ideas are larger than a single word? then we need to
+       compose words. but no matter how we compose words, we have a
+       line-drawing problem: what is included inside the fuzzy concept,
+       and what is not?
+
+   this challenge is inherent to language in general, and is one of the
+   fundamental problems of the legal domain. if it had an easy solution,
+   legalese would not exist, judicial dockets would not be so full, and
+   policy drafting would be a whole lot easier. i will refer to this
+   problem throughout as the problem of explicit definition.
+
+part i: an autocoder with discrete embeddings
+
+   the purpose of this part is to (1) prepare us for parts ii and iii, and
+   (2) to give us some intuitions about how discrete embeddings might
+   represent real-valued embeddings, but also (3) to show that real
+   embeddings and discrete embeddings can effectively be interchanged (we
+   can encode one into the other and back), and can therefore co-exist
+   within the same model. this means that everything we do in parts ii and
+   iii can be applied to any layer of a real-valued model by discretely
+   autoencoding that layer.
+
+imports and helper functions
+
+import numpy as np, tensorflow as tf, matplotlib.pyplot as plt
+from tensorflow.examples.tutorials.mnist import input_data
+%matplotlib inline
+mnist = input_data.read_data_sets('mnist_data', one_hot=true)
+
+# deconstruction.py: https://github.com/spitis/r2rt-deconstruction/blob/master/d
+econstruction.py
+from deconstruction import *
+
+autoencoder architecture
+
+   the architecture of our autoencoder is very simple. we use a single
+   convolutional layer with 16 5x5 filters, followed by a 2x2 max pooling
+   layer. then there is the fully-connected (fc) embedding layer, which
+   consists of either explicit (one-hot) neurons, real neurons, or both.
+   the embedding layer is then projected back into the original input
+   space using a fully-connected projection followed by a sigmoid.
+
+   for our explicit autoencoder, we use 80 explicit neurons, each with 8
+   dimensions. we also enforce, via training, that the first dimension of
+   each neuron is dead by requiring the network to project all 0s when the
+   explicit neurons are all hot in the first dimension (this will be
+   useful for certain visualizations).
+
+   to recap, the layers used are:
+    1. input
+    2. 5x5 conv (16 dims)
+    3. fc with 8-dimensional one-hot activation (80 neurons, 640 binary
+       dimensions), dead in the first dimension
+    4. fc softmax projection
+
+   we train the network with simple id119 with a batch size of
+   50 and a learning rate of 1e-1, after an initial    warm-up    epoch that
+   uses a learning rate of 1e-4 (so that the one-hot neurons learn to fire
+   more predictably).
+
+   important note on mixed embeddings: in case you try this at home with a
+   mix of real and explicit neurons (within the same layer), beware that
+   the explicit neurons are noisy during training. this will cause the
+   model to put its faith in the real neurons (which fire
+   deterministically), and will cause the most important information to be
+   stored in the real neurons. if training a mixed model, it is advised
+   that you either apply heavy noise to the real neurons (e.g., via
+   dropout or gaussian noise) or pretrain the explicit neurons to capture
+   as much information as they can, and then train the real neurons
+   afterwards so that they finetune the explicit neurons (because it makes
+   much more sense, at least to me, to finetune explicit chunks with real
+   values, than vice versa).
+g = build_classifier(onehot_dims = 8, explicit_neurons = 80)
+sess = tf.interactivesession()
+sess.run(tf.global_variables_initializer())
+
+# uncomment to run training, or use the below checkpoint to load
+# tr, va = train_autoencoder(g, sess, num_epochs=30)
+
+saver = tf.train.saver()
+saver.restore(sess, './ckpts/trained_80x8_autoencoder')
+
+autoencoder results
+
+   training for 30 epochs gets us to a loss between 5.5 and 6.0 on the
+   validation set, and with some more training, we can get the loss down
+   to 5.0. by comparison if we train the same architecture using 80 real
+   neurons, we can easily achieve losses under 4.0. nevertheless, while
+   our 8-dimensional (really 7, because of the dead dimension) one-hot
+   neurons are less expressive, they still have a lot of power: \(7^{80}\)
+   possible combinations is a big number. a visual comparison of inputs
+   and projections on the first 12 images of the mnist test set is shown
+   below.
+
+original mnist (top) vs projections (bottom)
+
+projs = sess.run(g['projection'], feed_dict={g['x']: mnist.test.images[:12], g['
+stochastic']: false})
+plot_2xn(12,np.concatenate((mnist.test.images[:12], projs)))
+
+   png png
+
+   as you can see, our projections of the first 12 mnist test images are
+   only slightly corrupted. the major features of the original images
+   remain, with a few faded portions.
+
+visualizing features
+
+   given that our features are explicit, we can visualize each one
+   precisely. let   s have a go at it, by setting all neurons in the    off   
+   position (first dimension), except for one, chosen at random. you can
+   view the results below for 24 random samples that have a single random
+   feature of a single random neuron turned on.
+emb_feed = np.tile(np.array([[[1,0,0,0,0,0,0,0]]]), (24, 80, 1))
+for i in range(24):
+    emb_feed[i][i%80] = np.eye(8)[np.random.randint(1,8)]
+projs = sess.run(g['projection'], feed_dict={g['embedding']: emb_feed, g['stocha
+stic']: false})
+plot_2xn(12,projs)
+
+   png png
+
+   notice how several of the features are pure noise. this is because some
+   neurons have activations that never fire: despite being able to fire in
+   7 different live positions, some neurons fire only in a subset of those
+   7. let   s see the firing densities of the first 5 neurons on the mnist
+   validation set:
+embs = sess.run(g['embedding'], feed_dict={g['x']: mnist.validation.images, g['s
+tochastic']: false})
+densities = np.sum(embs, axis=0) / np.sum(np.sum(embs, axis=0), axis = 1, keepdi
+ms=true)
+for i in range(5):
+    print("{:.2f} - {:.2f} - {:.2f} - {:.2f} - {:.2f} - {:.2f} - {:.2f} - {:.2f}
+".format(*densities[i]))
+
+0.00 - 0.16 - 0.21 - 0.17 - 0.16 - 0.18 - 0.00 - 0.12
+0.00 - 0.00 - 0.14 - 0.18 - 0.18 - 0.17 - 0.19 - 0.14
+0.00 - 0.22 - 0.19 - 0.15 - 0.16 - 0.15 - 0.00 - 0.13
+0.00 - 0.26 - 0.20 - 0.00 - 0.23 - 0.12 - 0.07 - 0.11
+0.00 - 0.09 - 0.00 - 0.22 - 0.29 - 0.10 - 0.12 - 0.18
+
+   because we trained our network to consider the first dimension as dead,
+   it never fires. additionally, we see that the network has learned a few
+   more dead dimensions: the first and third neurons never fire in the 7th
+   position, the second neuron never fires in the 2nd position, the fourth
+   neuron never fires in the 4th position, and the last neuron never fires
+   in the 3rd position.
+
+   these positions correspond to the    noisy    items in the grid above. if
+   we only plot live features according to the densities we just computed,
+   we eliminate the noisy features:
+emb_feed = np.tile(np.array([[[1,0,0,0,0,0,0,0]]]), (100, 80, 1))
+for i in range(100):
+    emb_feed[i][i%80] = np.eye(8)[np.random.choice([0,1,2,3,4,5,6,7], p=densitie
+s[i%80])]
+projs = sess.run(g['projection'], feed_dict={g['embedding']: emb_feed, g['stocha
+stic']: false})
+plot_nxn(10,projs)
+
+   png png
+
+   pretty cool. there seems to be a fairly even distribution between sharp
+   positive features, negative hole features (the ones that look like
+   black holes), and somewhat random features. note that these features
+   are all very faint individually (the function that plots the images is
+   automatically normalizing the white level), and they only become sharp
+   once you add many of them together.
+
+   in fact, let   s do that now. if we ignore the fact that neurons are
+   dependent (there is a complex joint id203 distribution), we can
+   sample them according to their raw densities:
+emb_feed = np.tile(np.array([[[1,0,0,0,0,0,0,0]]]), (100, 80, 1))
+for i in range(100):
+    for j in range(80):
+        emb_feed[i][j] = np.eye(8)[np.random.choice([0,1,2,3,4,5,6,7], p=densiti
+es[j])]
+
+projs = sess.run(g['projection'], feed_dict={g['embedding']: emb_feed, g['stocha
+stic']: false})
+plot_nxn(10,projs)
+
+   png png
+
+   this generates some pretty cool looking designs that look more like
+   murky shadows of numbers than numbers themselves.
+
+   note that despite the almost random appearance of these designs, they
+   can each be precisely communicated in a sparse binary code consisting
+   of exactly 560 zeros and 80 ones.
+
+part ii: generating digits with an id56
+
+   our neurons are explicit, and so we can think of each neuron as a word
+   in a language, where each mnist digit is made up of 80 different words.
+   modeling the joint distribution then, is very much like modeling a
+   language, which is an area in which id56s shine. in this section we
+   create an id56-based generator that models the joint distribution of the
+   explicit mnist embeddings.
+
+data
+
+   we want to feed our id56 sequences of 80 neurons, but our neurons have
+   no predetermined order (query how to give them a heirarchical
+   structure, which would greatly expand their usefulness). thus, in order
+   to allow the id56 to generate the remainder of an embedding given
+   arbitrary neurons, we randomize the order in which the neurons are
+   presented to the id56 during training. this forces us to use
+   640-dimensional one-hot vectors for our model inputs and targets (using
+   8-dimensional vectors would pre-suppose an order).
+
+   to illustrate precisely what our training sequences look like, below is
+   our data generator, and two different training sequences generated by
+   the first image in the mnist training set (note how they just
+   permutations of each other). each index indicates where the flattened
+   embedding layer is    hot   .
+def imgs_to_indices(imgs):
+    embs = sess.run(g['embedding'], feed_dict={g['x']: imgs, g['stochastic']: fa
+lse}) #[n, 80, 8]
+    idx = np.argmax(embs, axis=2) #[n, 80]
+    res = []
+    for img in range(len(imgs)):
+        neuron_perm = np.random.permutation(list(range(80))) #order of neurons w
+e will present
+        res.append(idx[img][neuron_perm] + neuron_perm * 8)
+    return np.array(res)
+
+def gen_random_neuron_batch(n):
+    x, _ = mnist.train.next_batch(n) # [n, 784]
+    res = imgs_to_indices(x)
+    return res[:,:-1], res[:,1:]
+
+for i in range(2):
+    print(imgs_to_indices(mnist.train.images[:1]))
+
+[[ 18 167 116 546 122 180 236 145 563  13 101 249 575 446 475 347  73 194
+  583 283 131 354 393 523 204 365 339 469  54 259 187   3 625  37 223 228
+   47 457 489 419 242 175  83 385 383 110 518 141 484 589 412 157 305 500
+  613 543 291 210  70  90 313 433 594 634 509 299 426  28 404 617 372  58
+  329 273 603 325 265 557 451 531]]
+[[404  70 339 634 236 223 433 419 329  90  13 583 157 457 110 116 543  37
+  523  54  28  83 500 575 283 180 141 451 594 325 347 475 204 393   3 365
+  175 291 265 518 259 531 167 228 299 354 305 589 372 187  58 446 625 210
+  563 557 249 426 412 101 613 489 469 313  47 617 385 131 242 509 484  18
+  603 194  73 122 145 383 273 546]]
+
+model
+
+   the architecture of our id56 is very simple. we use a 1000-unit gru
+   cell, with a 100-dimensional (real-valued) embedding layer. the network
+   is trained for 10 epochs with adam at an initial learning rate 2e-3. as
+   the number of possible input sequences is practically limitless (each
+   of the 55000 training examples can generate 80! permuted sequences), no
+   id173 is used. the norm of the gradient is clipped at 1.0. i
+   did not do a hyperparameter search, or even early stopping, so this is
+   likely far from an optimal generator.
+h = build_recurrent_generator()
+sess.run(tf.variables_initializer([v for v in tf.global_variables() if 'generato
+r' in v.name]))
+
+# uncomment to run training, or use the below checkpoint to load
+# train_id56(h, sess, batch_generator=gen_random_neuron_batch, epochs=10)
+
+saver = tf.train.saver()
+saver.restore(sess, './ckpts/gen_80x8_1000state_randomperm_10epochs_')
+
+generation
+
+   after some helper functions:
+def gen_next_step(current_input, prior_state=none):
+    """accepts a current input (index) (shape (batch_size, 1)) and a prior_state
+    (shape (batch_size, 1000)). returns dist over the next step, and the resulti
+ng state."""
+    if prior_state is none:
+        feed_dict={h['x']: current_input}
+    else:
+        feed_dict={h['x']: current_input, h['init_state']: prior_state}
+    return sess.run([h['next_y_dist'], h['final_state']], feed_dict=feed_dict)
+
+def generate_embedding(prompt=np.array([2]), top_choices = 1):
+    """ accepts a prompt, and generates the rest"""
+    state = none
+
+    while len(prompt) < 80:
+        if state is not none:
+            y_dist, state = gen_next_step(np.expand_dims([prompt[-1]], 0), state
+)
+        else:
+            y_dist, state = gen_next_step(np.expand_dims(prompt, 0))
+
+        p = y_dist[0]
+        p[np.argsort(p)[:-top_choices]] = 0
+        p = p / np.sum(p)
+        next_idx = np.random.choice(640, p=p)
+
+        prompt = np.concatenate((prompt, [next_idx]))
+
+    return prompt
+
+def emb_idx_to_emb(emb_idx):
+    emb = np.eye(8)[np.array(sorted(emb_idx)) % 8]
+    return np.reshape(emb, (1, 80, 8))
+
+   we can now generate some digits. below, we sample 12 random images from
+   the mnist validation set, transform them into their neuron indices,
+   randomly permute the indices, and take the first n-indices (for n in
+   {5, 10, 20, 40}) as the prompt to our id56. the id56 generates the rest,
+   which we convert back into 80x8 embeddings, feed into our decoder, and
+   plot. the top rows of each figure are the orginal digits, and the
+   bottom rows are the digits generated from using their neuron
+   activations as prompts.
+def generate_from_originals(size_of_prompt):
+    originals, generated = [], []
+    for i in range(12):
+        img_idx = np.random.randint(0, 5000)
+        originals.append(mnist.validation.images[img_idx:img_idx+1])
+    for i in range(12):
+        img = imgs_to_indices(originals[i])
+        emb_idx = generate_embedding(img[0][:size_of_prompt], 3)
+        emb = emb_idx_to_emb(emb_idx)
+        generated.append(emb)
+    originals, generated = np.squeeze(originals), np.squeeze(generated)
+    projs = sess.run(g['projection'], feed_dict={g['embedding']: generated, g['s
+tochastic']: false})
+    plot_2xn(12, np.concatenate((originals, projs)))
+
+generate_from_originals(size_of_prompt=5)
+
+   png png
+generate_from_originals(size_of_prompt=10)
+
+   png png
+generate_from_originals(size_of_prompt=20)
+
+   png png
+generate_from_originals(size_of_prompt=40)
+
+   png png
+
+   from the above, we can see how important each neuron is. with only a 5
+   neuron prompt, our generator is about 50/50 to generate the same digit
+   vs another digit (again, originals are on the top row, and generated
+   digits are on the bottom). when it generates the same digit, it varies
+   quite a bit from the original. as we ramp up the prompt to 40 neurons
+   from the original, our generator starts to generate samples that look
+   more and more like the original.
+
+generated samples vs. the prompts used to generate them
+
+   to get an idea of how the prompt conditions the model, we plot some
+   samples (top) against the prompts they were generated from (bottom).
+   all come from the same random image, and the prompt sizes from left to
+   right start are [1, 5, 9     37].
+res, prompts = [], []
+img_idx = np.random.randint(0, 5000)
+img = imgs_to_indices(mnist.validation.images[img_idx:img_idx+1])[0]
+for i in range(10):
+    prompts.append(np.random.permutation(img))
+    emb_idx = generate_embedding(prompts[-1][:(4*i)+1],3)
+    emb = emb_idx_to_emb(emb_idx)
+    res.append(emb)
+for i in range(10):
+    set_neurons = set(prompts[i][:(4*i)+1] // 8)
+    neurons_indices = np.array([8*j for j in range(80) if j not in set_neurons])
+    emb = emb_idx_to_emb(np.concatenate((prompts[i][:(4*i)+1],neurons_indices)))
+    res.append(emb)
+res = np.squeeze(res)
+
+projs = sess.run(g['projection'], feed_dict={g['embedding']: res, g['stochastic'
+]: false})
+plot_2xn(10, projs)
+
+   png png
+
+generating by prototype:    more like this    samples
+
+   below, we use a prompt of 30 neurons to generate    more like this    of a
+   rather distinctive 7 from the mnist test set. as demonstrated above, we
+   could make our generated samples more similar or less similar by
+   varying the length of our prompt. note how our generator sometimes
+   generates 9 instead of 7.
+plot_nxn(1, mnist.test.images[80:81])
+
+   png png
+res = []
+for i in range(0, 100):
+    img_idx = np.random.randint(0, 5000)
+    img = imgs_to_indices(mnist.test.images[80:81])
+    emb_idx = generate_embedding(img[0][:30], 2)
+    emb = emb_idx_to_emb(emb_idx)
+    res.append(emb)
+res = np.squeeze(res)
+projs = sess.run(g['projection'], feed_dict={g['embedding']: res, g['stochastic'
+]: false})
+plot_nxn(10, projs)
+
+   png png
+
+generating samples with distinct features
+
+   now let   s do something really cool. we   ll draw eight of our own small
+   features, find out which explicit dimensions they correspond to, and
+   then use those dimensions as prompts to generate samples that have that
+   feature.
+
+   here, we run up against the general challenge of explicit definition
+   for the first time. while we can draw the features, and see the
+   features, when does an mnist digit have that feature? given that
+   reasonable people can disagree on the answer, it is unreasonable for us
+   to try expect a single explicit feature specification (in our case, a
+   prompt) to be perfect. nevertheless, we need to provide our id56 with a
+   prompt in order for it to generate samples.
+
+   the method we use below is more than a little brittle, and takes a bit
+   of trial and error to get right. to find the embeddings that each
+   feature corresponds to we add random noise the image of the feature,
+   and run a batch of the noisy images through our encoder. we then
+   construct our prompts by subsampling the activations that fire often
+   for that feature.
+
+   based on trial and error, i defined    fire often    to mean firing in more
+   than 5/6 of all noisy samples, and chose to subsample 60% of the
+   activations for each prompt. obviously, this is not a practical
+   approach for the general case, and additional work will need to be done
+   in order to find something that generalizes well to other cases.
+import matplotlib.image as mpimg
+
+features = []
+for i in range(8):
+    features.append(np.reshape(1. - mpimg.imread('./images/feature_{}.png'.forma
+t(i), format='grayscale')[:,:,0] / 255., (1,784)))
+features = np.array(features)
+features *= 1.5
+
+plot_mxn(1, 8, features)
+
+   png png
+def get_noisy_imgs(feature):
+    noisy_imgs = []
+    for img in range(300):
+        noisy_img = feature.copy()
+        for i in range(784):
+            while np.random.random() > 0.75:
+                noisy_img[0, i] += min(0.2, 1-noisy_img[0, i])
+        noisy_imgs.append(noisy_img)
+    return np.squeeze(noisy_imgs)
+
+first_feature_with_noise = get_noisy_imgs(features[0])[:20]
+plot_2xn(10, first_feature_with_noise)
+
+   png png
+
+   just for fun, below are the projections of the first feature. you can
+   see that the autoencoder can   t autoencode the noise properly, as it was
+   trained on regular looking digits, but that the feature we asked for is
+   present in all of them.
+projs = sess.run(g['projection'], feed_dict={g['x']: first_feature_with_noise, g
+['stochastic']: false})
+plot_2xn(10, projs[:20])
+
+   png png
+
+   we generate noisy images for each feature, and collect the firing
+   patterns:
+firing_patterns = []
+for feature in range(8):
+    noisy_imgs = get_noisy_imgs(features[feature])
+    embs = sess.run(g['embedding'], feed_dict={g['x']: noisy_imgs, g['stochastic
+']: false})
+    firing_patterns.append(np.sum(embs, axis=0))
+
+   for reference, here are the firing patterns for the first three neurons
+   of the first feature:
+firing_patterns[0][:3]
+
+array([[   0.,    0.,    6.,  141.,  130.,   10.,    0.,   13.],
+       [   0.,    0.,    5.,    8.,  216.,   64.,    5.,    2.],
+       [   0.,   52.,    0.,    1.,    1.,   87.,    0.,  159.]], dtype=float32)
+
+   as described above, we use those firing patterns to create prompts. we
+   generate 7 samples for each feature:
+generated_samples = []
+for feature in range(8):
+    num_common_activations = np.sum(firing_patterns[feature] > 250)
+    prompt = np.array(list(range(640)))[np.argsort(np.reshape(firing_patterns[fe
+ature],
+                                                    (640)))[::-1][:num_common_ac
+tivations]]
+    nums = np.sort(np.reshape(firing_patterns[feature], (640)))[::-1][:num_commo
+n_activations]
+    den = np.sum(nums)
+    p = nums/den
+    generated_samples.append([])
+    for sample in range(0, 7):
+        emb_idx = generate_embedding(np.random.choice(prompt,
+                            size=max(int(num_common_activations*.6), min(int(num
+_common_activations), 5)),
+                                                      replace=false, p=p), 2)
+        emb = emb_idx_to_emb(emb_idx)
+        generated_samples[-1].append(emb)
+generated_samples = np.squeeze(generated_samples)
+generated_samples = np.reshape(np.swapaxes(generated_samples, 0, 1), (56, 80, 8)
+)
+
+projs = sess.run(g['projection'], feed_dict={g['embedding']: generated_samples,
+g['stochastic']: false})
+plot_nxn(8, np.concatenate((np.squeeze(features), projs)))
+
+   png png
+
+   the original features are shown in the top row, and the samples
+   generated based on that feature are shown below.
+
+   although most generated samples have the feature we wanted, many do
+   not, and for some features, there is not much diversity in the samples
+   (they seem to be biased towards a single digit, whereas multiple digits
+   might contain the desired feature). we might consider a few techniques
+   to improve the results:
+     * first, we can make the feature more fuzzy   instead of just adding
+       noise, we can also randomly shift and scale it, so as to capture a
+       more diverse set of neuron activations, and create more diverse
+       samples.
+     * second, we might think that instead of sampling neuron activations,
+       we can obtain the networks    confidence    in each neuron activation
+       (e.g., the real number from the softmax activation, before it is
+       turned into a one-hot vector); this might give a better sense of
+       the importance of each neuron activation.
+     * third, we might take more care in designing our id56 generator
+       (e.g., actually validate it   s performance, and not just use our
+       first random guess at a workable architecture/hyperparameters).
+     * finally, i note that our autoencoder could not be much simpler than
+       it already is. if we had multiple convolutional and deconvolutional
+       layers in both the encoding and decoding sections, i suspect that
+       generated samples would contain the feature in much more abstract
+       and diverse ways.
+
+   below, we   ll see how we can take advantage of memory to create better
+   prompt and improve the generation results.
+
+part iii: structured information retrieval using discrete embeddings
+
+   now we get to the most interesting part of our little journey. as we
+   noted above, using discrete embeddings to represent data is very much
+   like using a language, which means that everything we know and love
+   above searching for language applies to searching for embeddings.
+
+   we proceed as follows:
+    1. we   ll do a crash course on search, and comment on the relations
+       between search, classification and generation.
+    2. we   ll take a look at the how the memory of the memnn architecture
+       uses a cosine distance-like measure to achieve impressive results.
+    3. we   ll take a look at the effectiveness of cosine distance-based
+       retrieval of individual mnist digits. this will help develop an
+       intuition for why cosine distance-based retrieval is effective for
+       memnns. we   ll also see how we can use our memory to improve the
+       feature-based generator we made above.
+    4. finally, we   ll get to the point: we   ll look at the effectiveness
+       (or lack thereof) of cosine distance-based retrieval over sequences
+       of mnist digits, and consider the challenges that sequences of
+       memories pose for cosine distance-based retrieval. this is key,
+       because an agent that cannot deal with sequences is a mere function
+       approximator, not an intelligent actor. we   ll show how retrieval
+       over the explicit embedding space is able to effectively deal with
+       sequences, where cosine distance-based retrieval fails.
+
+a crash course on search
+
+   i recently had the pleasure of reading the textbook [16]information
+   retrieval: implementing and evaluating search engines by stefan
+   b  ttcher, charles l. a. clarke, and gordon v. cormack, which this
+   section is heavily based upon. this is a gem among textbooks, up there
+   with great math books like axler   s id202 done right and
+   abbott   s understanding analysis, and was my inspiration for thinking
+   about discrete embeddings. it   s not short, but it   s a page turner, and
+   i highly recommend it.
+
+   to some extent, we all understand search, because we use it every day.
+   a search engine takes some words (the query), and finds the documents
+   that contain them. the key data structure used in search is the
+   [17]inverted index, which you can consider as a hash table that maps
+   each word to its postings list. the postings of a word contain all the
+   positions that the word appears in a document collection. for example,
+   the postings for the word    deconstruction    might look something like
+   this:
+"deconstruction":
+    <document: 23, positions: 1, 55 ... 1554>,
+    <document: 45, positions: 6, 8>,
+    ...,
+    <document: 2442, positions: 52>
+
+   where each document, and each position within a document has been given
+   a number. postings are a sorted list of those documents and positions.
+   because they are sorted, postings lists can be merged efficiently
+   during query evaluation, so that we can iterate over the postings to
+   find which documents in our collection contain multiple terms, or, if
+   doing a phrase search, find those documents containing the phrase being
+   searched. in addition to the postings list, most search engines also
+   store some global information about the words and documents themselves,
+   including:
+     * total documents indexed
+     * the length of each document
+     * the frequency of each word within a document (usually included in
+       the postings list itself)
+     * number of documents in the collection
+
+   using the above information, search engines can efficiently score each
+   document in the collection according to some scoring function of the
+   document and the query, and return the top results. scoring functions
+   often treat both the query and the document as a bag of words, which
+   ignores proximity, order and other relationships between the terms
+   (i.e., each term is treated as independent). using the bag of words
+   assumption, we can model each query or document as a term vector of
+   length |v|, where |v| is the size of our vocabulary. given the 5-term
+   vocabulary, \(\{t_1, t_2 ... t_5\}\), the document or query \(\{t_1,
+   t_2, t_1, t_4\}\) might have the vector \([2, 1, 0, 1, 0]\). scoring
+   functions in the bag of words paradigm can be expressed in the
+   following form (equation 5.16 from b  ttcher et al.):
+
+   \[\text{score}(q, d) = \text{quality}(d) + \sum_{t \in
+   q}\text{score}(t, d)\]
+
+   where q, d, and t refer to a query, document, and term, respectively.
+   an example of a quality function is google   s [18]id95 algorithm. in
+   our mnist example, the quality of an example might be some measure of
+   how characteristic of the dataset a digit is (e.g., how    clean    the
+   digit is). this quality rating is independent of the query. the
+   \(\text{score}(t, d)\) function in the second term can usually be
+   dissected into the following form:
+
+   \[\text{score}(t, d) = tf \cdot idf\]
+
+   where tf is the term frequency of t in document d, and idf is t   s
+   inverse document frequency. term frequency is a measure (function) of
+   how often the query term appears in a document, and inverse document
+   frequency is a measure of how frequent the term is across all
+   documents. the idf term appears because, intuitively, if a term is very
+   common across all documents (low idf), we don   t want it to contribute a
+   lot to the score. vice versa if the term is very rare across all
+   documents (high idf)   we want it to contribute a lot to the score if it
+   shows up in a document. idf usually takes on a    standard form   
+   (equation 2.13 of b  ttcher et al.):
+
+   \[idf = \log(n/n_t).\]
+
+   let us take a moment to appreciate that summing tf-idf scores is
+   actually very similar to taking the cosine similarity of the query   s
+   term vector and document   s term vector, given that each vector is
+   adjusted appropriately. starting with the vector consisting of the
+   count of each term in the query, adjust it by multiplying each entry by
+   the idf for that term. starting with the vector consisting of the count
+   of each term in the document, adjust it by the length of the document
+   (i.e., normalize the vector). if we now take their dot product and
+   adjust by the query length, we obtain the cosine similarity between our
+   idf-adjusted query vector and the document vector. when ranking
+   results, we don   t care about the scores themselves, and only the order,
+   and thus the final step of adjusting the dot product by the query
+   length is unnecessary. thus, bag of words scoring models are closely
+   related to cosine distance. below, we   ll do a visual demonstration of
+   the effectiveness of cosine distance, and adjusted cosine distance (a
+   la tf-idf), for retrieving relevant memories.
+
+   the above said, it is important to recognize that not all tf-idf
+   methods can be easily cast to cosine similarity: in particular, the tf
+   component is usually taken as a function of the term frequency, rather
+   than a simple count thereof, resulting in more complex search methods.
+
+search vs classification, and the relationship between search and generation
+
+   search and classification are closely related: whereas classification
+   takes and instance and places it in a category, search takes a category
+   and finds instances in that category. a key point to note here is that
+   information needs during search can be incredibly diverse: whereas
+   classification usually involves only a handful of relevant categories,
+   the number of potential queries in a search is limitless. i like to
+   think of search as post-classification: we define a category ex-post
+   (after the fact), and then find examples of that category that are
+   stored in our memory.
+
+   if we think about the way humans search and classify, we note that
+   classification usually occurs at the high levels of abstraction with
+   little subtlety (categories in italics):
+     * this is a pen.
+     * the sky is blue.
+     * boy, was that [thing] cool!
+
+   on the contrary, when we search our memory (or generate hypotheticals
+   and new ideas) the details become very important:
+     * that reminds of the time that x, y, and z happened, because of a,
+       b, c.
+     * we could differentiate our product by adding [some specific
+       detail].
+
+   in order for our networks / agents to do the latter, we require them to
+   operate and reason over individual features or details. i call this
+   deconstruction, in order to connect it to what humans do (this is
+   related to, but different from, from the more mainstream ml concepts of
+   id171 and learned representations). humans are very good at
+   calling out explicit details, and this is the point of this post: to
+   give our networks explicit representations that they can operate over.
+
+   note that generation and memory are very closely related, in that their
+   outcomes are often interchangeable. if we need to come up with an
+   example of something, we often search our memories first, before trying
+   to generate one. we can even go a step further, and say that all of our
+   human memories are    generated   , not remembered   consider what would
+   happen if we overtrained the id56 in part ii above to the point where it
+      memorized the training set   .
+
+   it will be useful to have a specific example of external memory that is
+   not mnist, so let us now consider now the memnn. we   ll examine how its
+   external memory works, and how it might be replaced by an external
+   generator to accomplish similar ends.
+
+an introduction to memnns
+
+   the memnn, introduced by [19]weston et al. (2014) and expanded upon in
+   [20]weston et al. (2015), is a very basic, memory-augmented neural
+   network that has been proven effective on a variety of
+   question-answering tasks. for our purposes, it will be sufficient to
+   look specifically at the type of task it was used to solve, how the
+   external memory module enabled this, and how we could extend its
+   capabilities by using a memory-generation (mem-gen) module. below is a
+   description of the most basic memnn presented in weston et al. (2014)
+   as it relates to the above   a full description of the architecture is
+   presented in weston et al. (2014), and improvements thereon, in weston
+   et al. (2015).
+
+   an example of the basic qa task, and the memnn   s responses (in caps),
+   is shown below (this is a reproduction of figure 1 from weston et al.
+   (2014)):
+joe went to the kitchen.
+fred went to the kitchen.
+joe picked up the milk.
+joe travelled to the office.
+joe left the milk.
+joe went to the bathroom.
+
+where is the milk now?
+    office
+where is joe?
+    bathroom
+where was joe before the office?
+    kitchen
+
+   isn   t that awesome? the memnn is able to answer these questions by (1)
+   retrieving relevant memories (retrieval), (2) using the retrieved
+   memories together with the input to generate a response (response).
+
+   each memory of the memnn is stored as a bag of words representation of
+   a sequence of text. in the above example, each sentence is such a
+   sequence (   joe went to the kitchen   ). the bag of words representation
+   is as described above in    a crash course on search   : a sparse vector,
+   with a 1 in the indices corresponding to    joe   ,    went   ,    to   ,    the   ,
+   and    kitchen   . weston et al. also provide a method for dealing with
+   arbitrarily long sequences of text: they propose a    segmenter    to
+   divide long sequences into smaller units (e.g., sentences), and then
+   use the bag of words representations of those sub-sequences as inputs
+   and memories.
+
+   the inputs to the memnn have the same bag of words representation.
+   memories are retrieved one-by-one, where earlier memories retrieved
+   impact the search for later memories. a memory is retrieved based on
+   the input (if it is a question) and any previously retrieved memories
+   by:
+    1. embedding the input into a real-valued vector, \(x\).
+    2. embedding any previously retrieved memories into a real-valued
+       vector, \(m\).
+    3. embedding the each candidate memory, \(i\), into a real-valued
+       vector, \(c_i\).
+    4. retrieving the candidate memory whose embedded vector, \(c_i\),
+       gives the highest dot product with the vector \(x + m\).
+
+   the embeddings used in steps 1, 2 and 3 are all different. step 4 is
+   like taking the cosine similarity (without normalizing for length)
+   between the embeddings of the model   s current concious representation
+   (its query), and each potential memory. the resulting retrieval model
+   is reminscent of the basic tf-idf retrieval model presented above: we
+   are doing something similar to cosine distance over the bag of words
+   vectors, except that we first adjust the vectors appropriately (by the
+   embeddings (cf. adjustment by idf above)); in both cases we do not
+   normalize our vectors. the beauty of this retrieval model is that the
+   memnn can learn effective embeddings for querying and retrieval.
+
+   to bring generation back into the picture, let us consider two more
+   questions about the above story:
+can joe pick up the milk?
+can fred pick up the milk?
+
+   both questions ask about a hypothetical situation. a memory and a
+   generated sample actually serve the same function here: if the memnn
+   can retrieve an example of joe/fred picking up the milk, then it can
+   answer yes; but if it cannot, a high id203 generated example will
+   suffice. thus, we might think of augmenting our architectures with an
+   external generator (and perhaps a paired discriminator to determine the
+   plausibility of generated samples), in addition to an external memory.
+   this would expand the memnn   s capabilities and allow it to answer
+   hypothetical questions. as noted, these two modules would be
+   complementary, and the memory module would often provide useful
+   information for use during generation.
+
+retrieval of individual mnist digits
+
+   in this part, we   ll show how cosine distance-based retrieval fairs on
+   mnist digits, which will provide some visual intuitions for why cosine
+   distance-based retrieval works for memnns, and in general. we   ll also
+   get to see, visually, the interchangeability of generation and
+   retrieval, and demonstrate the use of memory to improve generation.
+
+   below, we   ll use numpy to do exhaustive nearest neighbors search using
+   cosine distance over the mnist training set. we   ll do experiments on
+   both the original input space (784 pixel vectors) and the explicit
+   embedding space (640 sparse binary vectors). we   ll use the same
+   distinctive 7 we used above when generated by prototype.
+normalized_mnist = mnist.train.images / np.linalg.norm(mnist.train.images, axis=
+1, keepdims=true)
+nns = np.argsort(np.dot(normalized_mnist, mnist.test.images[80]))[::-1][:9] # 9
+nearest neighbors to first validation image
+res = np.array([mnist.test.images[80]] + [mnist.train.images[i] for i in nns])
+plot_mxn(1,10, res)
+
+   png png
+
+   the first image above is the query, and the next 9 are the nearest
+   neighbors from the training set (in order), measured by cosine distance
+   over the 784-pixel input space.
+explicit_mnist = []
+for i in range(550):
+    imgs = sess.run(g['embedding'], feed_dict={g['x']: mnist.train.images[i*100:
+(i+1)*100], g['stochastic']: false})
+    explicit_mnist.append(np.reshape(imgs, (-1, 640)))
+explicit_mnist = np.concatenate(explicit_mnist)
+normalized_exp_mnist = explicit_mnist / np.linalg.norm(explicit_mnist, axis=1, k
+eepdims=true)
+query = np.reshape(sess.run(g['embedding'], feed_dict={g['x']: mnist.test.images
+[80:81], g['stochastic']: false}), (640,))
+
+nns = np.argsort(np.dot(normalized_exp_mnist, query))[::-1][:9] # 9 nearest neig
+hbors to first validation image
+res = np.array([mnist.test.images[80]] + [mnist.train.images[i] for i in nns])
+plot_mxn(1,10, res)
+
+   png png
+
+   the first image above is the query, and the next 9 are the nearest
+   neighbors from the training set (in order), measured by cosine distance
+   over the 640-dimensional explicit embedding space.
+
+   we might also see if we can improve this result by modifying our query
+   vector. our retrieval will no longer be strict cosine distance, but
+   rather cosine distance-based, like the tf-idf and memnn retrieval
+   methods described above.
+
+   we adjust our query vector by multiplying each dimension by its    idf   
+   (the logarithm of the ratio of the number of training samples to the
+   frequency of that dimension in the training set):
+embs =  np.reshape(explicit_mnist, (55000, 80, 8))
+idf_vector = np.log(55000 / (np.reshape(np.sum(embs, axis=0), (640)) + 1))
+query = np.reshape(sess.run(g['embedding'],
+                            feed_dict={g['x']: mnist.test.images[80:81], g['stoc
+hastic']: false}),
+                   (640,)) * idf_vector
+
+nns = np.argsort(np.dot(normalized_exp_mnist, query))[::-1][:9] # 9 nearest neig
+hbors to first validation image
+res = np.array([mnist.test.images[80]] + [mnist.train.images[i] for i in nns])
+plot_mxn(1,10, res)
+
+   png png
+
+   the first image above is the query, and the next 9 are the nearest
+   neighbors from the training set (in order), measured by the cosine
+   distance between the modified query (query vector * the idf vector) and
+   the embedding of each training sample.
+
+   the results of our modified query are not clearly better or worse, so
+   the most we can conclude from this demonstration is that adjusting our
+   query by the idf of each feature did not seem to hurt.
+
+   notice how the practical utility of these nearest neighbors would be
+   similar to the generated samples in the generating by prototype example
+   from part ii.
+
+retrieval of individual mnist digits by feature
+
+   now let   s do the equivalent of generation based on features, first over
+   the original input space, and then over the explicit embedding space.
+   take note of how the resulting figures are similar to the figure we
+   produced above when generating samples with these same specific
+   features.
+res = [f[0] for f in features]
+nns = []
+for idx in range(8):
+    nns.append(np.argsort(np.dot(normalized_mnist, res[idx]))[::-1][:7])
+nns = np.array(nns).t.reshape((56))
+for n in nns:
+    res.append(mnist.train.images[n])
+res = np.array(res)
+plot_nxn(8, res)
+
+   retrieval by feature over the original input space:
+   png png
+firing_patterns = []
+for feature in range(8):
+    noisy_imgs = get_noisy_imgs(features[feature])
+    embs = sess.run(g['embedding'], feed_dict={g['x']: noisy_imgs, g['stochastic
+']: false})
+    firing_patterns.append(np.sum(embs, axis=0))
+
+feature_embs = np.array(firing_patterns)
+feature_embs[feature_embs < 200] = 0. # get rid of the random neurons that were
+firing
+feature_embs = feature_embs*feature_embs # amplify the effect of the neurons tha
+t fire most often
+
+feature_embs = np.reshape(feature_embs, (8, 640)) * idf_vector # adjust the by a
+ctivation idfs
+
+res = [f[0] for f in features]
+nns = []
+for idx in range(8):
+    nns.append(np.argsort(np.dot(normalized_exp_mnist, feature_embs[idx]))[::-1]
+[:7])
+nns = np.array(nns).t.reshape((56))
+for n in nns:
+    res.append(mnist.train.images[n])
+res = np.array(res)
+
+plot_nxn(8, res)
+
+   retrieval by feature over the explicit embedding space:
+   png png
+
+using memory for generation
+
+   now that we have a working memory system, we can use it to demonstrate
+   the interaction of memory and generation. suppose we want to generate
+   samples from features like we did in part ii. instead of defining
+   prompts for the features by using noise, we can instead use the
+   activations from the nearest neighbors. this is definition by
+   association (e.g., a unknown word that you can nevertheless guess the
+   meaning of, due to its context).
+
+   we find the 30 nearest neighbors, and subsample their most common
+   activations to define each prompt.
+res = [f[0] for f in features]
+firing_patterns = []
+for idx in range(8):
+    nns = np.argsort(np.dot(normalized_mnist, res[idx]))[::-1][:30]
+    embs = sess.run(g['embedding'], feed_dict={g['x']: [mnist.train.images[n] fo
+r n in nns], g['stochastic']: false})
+    firing_patterns.append(np.sum(embs, axis=0))
+
+generated_samples = []
+for feature in range(8):
+    num_common_activations = np.sum(firing_patterns[feature] > 18)
+    prompt = np.array(list(range(640)))[np.argsort(np.reshape(firing_patterns[fe
+ature], (640)))[::-1][:num_common_activations]]
+    nums = np.sort(np.reshape(firing_patterns[feature], (640)))[::-1][:num_commo
+n_activations]
+    den = np.sum(nums)
+    p = nums/den
+    generated_samples.append([])
+    for sample in range(0, 7):
+        emb_idx = generate_embedding(np.random.choice(prompt, size=min(int(num_c
+ommon_activations*.8), 8), replace=false, p=p), 3)
+        emb = emb_idx_to_emb(emb_idx)
+        generated_samples[-1].append(emb)
+generated_samples = np.squeeze(generated_samples)
+generated_samples = np.reshape(np.swapaxes(generated_samples, 0, 1), (56, 80, 8)
+)
+
+projs = sess.run(g['projection'], feed_dict={g['embedding']: generated_samples,
+g['stochastic']: false})
+plot_nxn(8, np.concatenate((np.squeeze(features), projs)))
+
+   png png
+
+   generation by feature with memory-based feature definitions.
+
+   this approach to defining prompts seems to provide a bit more
+   stability, and diversity, than the noise-based approach above. if
+   you   re familiar with information retrieval, this should remind you of
+   [21]pseudo-relevance feedback.
+
+some takeaways
+
+   there are a few key takeaways from the above discussion:
+     * first, we visually demonstrated the relationship between generation
+       and memory: the outputs are more or less interchangeable (of
+       course, the digits in memory are of superior quality   though as
+       noted in part ii, the generator has a lot of room for improvement).
+     * second, we visually demonstrated the power of cosine distance: we
+       can retrieve entire images based on only a fragment, which provides
+       us with a content-addressable memory. we can now see why memnn   s
+       can work effectively: they only need a small fragment of what they
+       are trying to retrieve from memory in order to retrieve it. the
+       embedding layers that are used before taking the cosine distance
+       can amplify the most relevant parts of the query.
+     * third, using context provided by memory can result in better
+       definitions when facing the general problem of explicit definition.
+       even so, the definitions used were still brittle, as several of the
+       samples we generated do not match the desired feature at all.
+
+enter sequences: where cosine distance fails
+
+   although this post has so far dealt with mnist, a non-sequential
+   dataset of individual digits, what i   m truly interested in is how we
+   deal with sequences or sets. we   ve actually already seen two instances
+   of set-based recall:
+     * the first is the memnn. if you had been paying close attention to
+       my description of the memnn above, you may have realized that the
+       basic memnn architecture i described has no way of answering the
+       sample questions provided. this is because each of the sample
+       questions has a sequential component: where is the milk now? where
+       is joe [now]? where was joe before the office? in order for the
+       memnn to answer questions of this nature, weston et al. augment the
+       basic architecture with a mechanism for modeling the time of each
+       memory. their approach is described in section 3.4 of [22]weston et
+       al. (2015). notably, their approach involves iterating over
+       timestamped memories.
+     * the second is actually feature-based generation and retrieval. if
+       we view each mnist digit as a sum of its features, then we are
+       actually retrieving a set from a subset thereof.
+
+   the recall of sequences and sets is critical for agents that experience
+   time (e.g., id56s), and also has many practical applications (the most
+   notable being plain old text-based search, where we recall documents
+   based on their words (features)). we   ve seen how cosine distance-based
+   search can be extremely effective for set retrieval, if we have a
+   vector that represents the entire set.
+
+   cosine distance can also be effective for sequence retrieval, if we
+   have a vector that represents the sequence. for example, the vectors
+   used by the memnn as memories and inputs are precisely this: vectors
+   representing an entire sentence (sequence of words). for cosine
+   distance to work on sequences, we not only need a vector that
+   represents the sequence, but it must also represent the temporal
+   features of the sequence that we are interested in (if any). the memnn
+   sequence vectors use a id159 and do not contain any
+   temporal features.
+
+   consider the following toy retrieval tasks:
+
+   if we were to write out the entire mnist training sequence,
+     * are there any instances of the consecutive digits    5134    in the
+       sequence, and if so, where?
+     * how many times does the digit    6    appear within four digits of the
+       digit    3   ?
+     * are there any strings of ten digits that contain all features in
+       some given set of sub-digit features?
+
+   for an agent that works only with vector-based memories and cosine
+   distance-based retrieval, all three are quite difficult.
+
+   if we index each digit as a separate memory, all involve multiple
+   queries. for example, in the first instance we would have to (1)
+   retrieve the positions of all 5s in memory, and (2) filter out the 5s
+   that are not followed by a 1 and a 3, which requires us to either
+   retrieve the positions of all 1s and 3s, or examine the digits
+   following each 5. the second and third tasks are even more difficult.
+
+   if instead we index sequences of digits, we run into a few problems:
+     * how do we represent sequences in memory? bag of words (adding
+       individual vectors) might work for problems that ignore order and
+       temporal structure, but will fail for any problem that does not.
+       use a sequence autoencoder is one solution, but it is fraught with
+       ambiguity and may not contain the necessary information to properly
+       execute the query. how could we design a sequence vector that
+       contains the information required for the second and third tasks
+       above, in addition to other such questions?
+     * how do we represent the query as a vector? we already ran into some
+       trouble with this when trying to represent small features as entire
+       vectors of discrete embeddings: we ended up simulating a bunch of
+       noisy sets and then finding the most important activations across
+       all simulations. this did ok, but was unprincipled and had
+       lackluster results.
+     * what length of sequence do we want to index? it is impractical to
+       index all sequence lengths, so we need to make an ex ante choice.
+       this runs counter to our idea of search as ex post classification.
+
+   these are hard problems, so let us table cosine distance, and instead
+   take a look at what i call structured information retrieval, which,
+   with a little bit of work, we can make work with our discrete
+   embeddings.
+
+structured information retrieval
+
+   when you do a phrase search on google, i.e., a search with    double
+   quotes   , you are doing structured information retrieval. cosine
+   distance is still in the picture, but it is no longer the critical
+   ingredient: phrase search requires us to first identity all documents
+   that contain the phrase. recall that query terms are stored in an
+   inverted index together with their postings. the phrase search
+   algorithm operates on the postings list and find all instances of a
+   phrase, without ever needing to retrieve an entire document. you can
+   see the details of the phrase search algorithm in section 2.1.1 of
+   b  ttcher et al..
+
+   phrase search is just one example of a more general class of
+   constraint-based queries that define a structure on a set of terms.
+   within this class of queries, we can include boolean search, passage
+   retrieval, and more general query languages that allow users to define
+   lightweight structure such as    find sentences containing terms x and y   
+   or the third task above (see section 5.2 of b  ttcher et al. for a
+   detailed discussion).
+
+   structured information retrieval cannot be done with cosine distance:
+   it requires access to the postings list of each query term. with
+   real-valued embeddings, there is no principled way to create such an
+   index (or at least, none that i could think of). with one-hot
+   embeddings, however, we have some additional flexibility.
+
+   below we will take a simple approach to information retrieval over the
+   sequence of the mnist training images. in particular, we will show how
+   discrete embeddings allow us to solve the following problem:
+
+   does the ordered sequence of mnist training images (55000 images)
+   contain any subsequences of four consecutive digits that have the
+   following four features, respectively, and if so, where:
+   png png
+
+indexing one-hot features
+
+   to begin, we need to build our index, which is a dictionary mapping
+   features to a positions vector. we will treat each dimension of our
+   explicit embedding as a feature (so that there are 640 total features),
+   and we will index the entire mnist training sequence in order. we also
+   define a functions to find the intersection and union of postings
+   lists, which will allow us to compose postings lists to create postings
+   lists for features.
+embs = explicit_mnist.t
+postings = [none] * 640
+for i, positions in enumerate(embs):
+    postings[i] = np.squeeze(np.argwhere(positions))
+
+from itertools import chain
+
+def ipostings(idx_list):
+    """gets the intersection of postings for the activations in idx_list"""
+    res = postings[idx_list[0]]
+    for i in range(1, len(idx_list)):
+        res = list(intersect_sorted(res, postings[idx_list[i]]))
+    return np.array(res)
+
+def upostings(list_of_postings):
+    """gets the union of postings"""
+    return np.array(sorted(set(chain.from_iterable(list_of_postings))))
+
+# positions where the activation 1 is hot
+postings[1]
+
+> array([    4,     6,    18, ..., 54972, 54974, 54980])
+
+
+# positions where activations 1 and 10 co-occur
+ipostings([1, 10])
+
+> array([   32,    84,    95, ..., 54680, 54702, 54966])
+
+
+# positions where activations 1 and 5 co-occur (empty, because they are from the
+ same neuron)
+ipostings([1, 5])
+
+> array([], dtype=float64)
+
+
+# positions where activation 1 co-occurs with any of the activations 10, 15, or
+23
+upostings((ipostings([1, 10]), ipostings([1, 15]), ipostings([1, 23])))
+
+> array([   18,    32,    38, ..., 54972, 54974, 54980])
+
+finding consecutive features
+
+   to find subsequences with the desired features, we first identify what
+   those feature are, and then run a phrase search using their postings
+   list. we obtain the feature posting lists by (1) finding the posting
+   list for each group of three activations in the five most common
+   activations for that features, (2) taking their union.
+
+   our definition of the features is extremely brittle. here we have even
+   less flexibility than we did when retrieving nearest neighbors or
+   generating samples because we need to use exact definitions. our
+   process is far from perfect: we use the noise-based approach to produce
+   firing patterns, and then define the feature to be any instance where
+   any combination of 4 such common activations fire together. this no
+   doubt misses a lot of digits that do contain the features, but trial
+   and error shows that using less than the intersection of 4 common
+   activations produces very noisy results (we obtain a lot of matches
+   that do not contain the feature).
+firing_patterns = []
+for feature in range(8):
+    noisy_imgs = get_noisy_imgs(features[feature])
+    embs = sess.run(g['embedding'], feed_dict={g['x']: noisy_imgs, g['stochastic
+']: false})
+    firing_patterns.append(np.sum(embs, axis=0))
+
+f1, f2, f3 = 1, 3, 6 # the indices of the features that make up our query
+
+from itertools import combinations
+
+# get the common activations
+neuron_lists = []
+for feature in [f1, f2, f3]:
+    num_common_activations = np.sum(firing_patterns[feature] > 260)
+    firing_pattern = np.reshape(firing_patterns[feature], (640)).astype(np.int32
+)
+    neuron_lists.append(
+        np.array(list(range(640)))[np.argsort(firing_pattern)[::-1][:min(10, num
+_common_activations)]]
+    )
+
+# get intersected postings for each combination of 3 activations in the most com
+mon
+combo_lists = [list(map(ipostings, combinations(l, max(len(l) - 4, 4)))) for l i
+n neuron_lists]
+# get the union of the above for each feature
+positions = list(map(upostings, combo_lists))
+
+"""because our data is small, we take a naive approach to phrase search.
+a more efficient algorithm is presented in section 2.1.1 of b  ttcher et al."""
+
+res12 = [np.concatenate([features[f1], features[f2]])]
+res123 = [np.concatenate([features[f1], features[f2], features[f3]])]
+for p in positions[0]:
+    if p+1 in positions[1]:
+        if p+2 in positions[2]:
+            print("full phrase match found in positions", p, "to", p+2)
+            res123.append(mnist.train.images[p:p+3])
+        res12.append(mnist.train.images[p:p+2])
+        print("partial phrase match of 1st and 2nd query elements found in posit
+ions", p, "to", p+1)
+
+res23 = [np.concatenate([features[f2], features[f3]])]
+for p in positions[1]:
+    if p+1 in positions[2]:
+        res23.append(mnist.train.images[p:p+2])
+        print("partial phrase match of 2nd and 3rd query elements found in posit
+ions", p, "to", p+1)
+
+partial phrase match of 1st and 2nd query elements found in positions 1151 to 11
+52
+partial phrase match of 1st and 2nd query elements found in positions 39054 to 3
+9055
+partial phrase match of 2nd and 3rd query elements found in positions 14294 to 1
+4295
+partial phrase match of 2nd and 3rd query elements found in positions 14436 to 1
+4437
+partial phrase match of 2nd and 3rd query elements found in positions 17310 to 1
+7311
+partial phrase match of 2nd and 3rd query elements found in positions 20984 to 2
+0985
+partial phrase match of 2nd and 3rd query elements found in positions 21198 to 2
+1199
+partial phrase match of 2nd and 3rd query elements found in positions 27052 to 2
+7053
+partial phrase match of 2nd and 3rd query elements found in positions 28786 to 2
+8787
+partial phrase match of 2nd and 3rd query elements found in positions 45352 to 4
+5353
+partial phrase match of 2nd and 3rd query elements found in positions 47446 to 4
+7447
+partial phrase match of 2nd and 3rd query elements found in positions 54635 to 5
+4636
+
+matches
+
+   our approach found no matches for three consecutive features. we did,
+   however, find matches for each pair of consecutive features.
+# there are no matches for all three features
+plot_mxn(len(res123), 3, np.concatenate(res123))
+
+   png png
+# there are 2 matches for the first and second features
+plot_mxn(len(res12), 2, np.concatenate(res12))
+
+   png png
+# there are several matches for the second and third features
+plot_mxn(len(res23), 2, np.concatenate(res23))
+
+   png png
+
+   given that we can obtain the positions vector for individual features,
+   using other structured information retrieval techniques is as
+   straightforward as using them on text. with relative ease we could
+   answer much more complex queries such as: are there any strings of 10
+   digits that contain the three features in order?
+
+   at the same time, these abilities are limited by the quality of our
+   positions vectors, which are in turn limited by the quality of our
+   feature definitions.
+
+further work
+
+   in this post, we played with discrete embeddings and saw that they can
+   be used in much the same way as language. we also ran into several
+   problems as a result of the basic challenge of language, which is
+   semantic ambiguity: what   s in a definition? as a result of this
+   challenge, i do not think the approach presented in this post is
+   practical in its current form. nevertheless, i think this is a good
+   direction to be thinking about as we try to make progress toward to
+   stage iii architectures.
+
+   some of the questions i   m interested in working on going forward are:
+     * mnist is perhaps too simple; are the various tasks we carried out
+       (generation and memory) using discrete embeddings practical for
+       more complex datasets?
+     * is there a way to create discrete embeddings with fewer
+       activations, but where each activation is more meaningful, so that
+       feature definitions will be easier?
+     * is there a useful distribution that we could enforce on discrete
+       embeddings to make feature definitions easier to work with? is
+       there someway to enforce, e.g., [23]zipf   s law on the definitions
+       of certain landmark features?
+     * is there a general method for constructing feature definitions in
+       terms of an explicit embedding that will extend to other use cases?
+     * one of the key motivations behind the use of a symbolic language is
+       communication. but here, all symbols were created intra-agent: they
+       have meaning only within the agent   s mind (we constructed symbolic
+       definitions of our features by feeding the agent real-valued
+       vectors). how could we design a useful inter-agent model, so that
+       agents could use symbols to communicate?
+     * how do the methods here relate to gans and vaes? can they be
+       combined in a useful way?
+     * is there a good way to define a feature discriminator (i.e., to
+       decide whether something is an instance of a feature or not
+       (remember, it has only 1 sample of the feature to learn from)).
+     * indexing discrete features requires that representations remain
+       static. is there a good way to reindex past features so that we can
+       overcome this limitation?
+     * is there a way we can take advantage of the distribution of the
+       softmax activations in the embedding layer (before we turn it into
+       a one-hot vector)? for instance, to give us a measure of our
+       network   s confidence in its final predictions, or the quality of
+       the discrete embeddings?
+
+   and also two specific questions about particular architectures:
+     * would adding an external generator to the memnn increase the range
+       of tasks it can solve? (e.g., to qa about hypothetical scenarios).
+     * can we create discrete embeddings of word vectors that behave like
+       id97, and perhaps offer some of the advantages of discrete
+       embeddings? cf. [24]faruqui et al. (2015).
+     __________________________________________________________________
+
+    1. if this is something you   re interested in exploring yourself, my
+       planned starting point is this [25]post by [26]hardmaru (and the
+       underlying [27]implementation), which uses a tensorflow-based
+       vae-gan to turn mnist into something quite beautiful.[28]   
+
+   (button)
+
+   meditations
+
+   please enable javascript to view the [29]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://r2rt.com/feeds/all.atom.xml
+   2. https://r2rt.com/feeds/meditations.atom.xml
+   3. https://r2rt.com/
+   4. http://r2rt.com/beyond-binary-ternary-and-one-hot-neurons.html
+   5. https://github.com/spitis/r2rt-deconstruction
+   6. https://en.wikipedia.org/wiki/a*_search_algorithm
+   7. https://en.wikipedia.org/wiki/frame_(artificial_intelligence)
+   8. https://en.wikipedia.org/wiki/case-based_reasoning
+   9. https://en.wikipedia.org/wiki/deep_blue_(chess_computer)
+  10. https://en.wikipedia.org/wiki/alphago
+  11. https://en.wikipedia.org/wiki/edwin_jarvis
+  12. http://www.jmlr.org/proceedings/papers/v48/larsen16.html
+  13. https://arxiv.org/abs/1606.03657
+  14. https://arxiv.org/abs/1609.02200
+  15. https://r2rt.com/deconstruction-with-discrete-embeddings.html#fn1
+  16. http://www.ir.uwaterloo.ca/book/
+  17. https://en.wikipedia.org/wiki/inverted_index
+  18. https://en.wikipedia.org/wiki/id95
+  19. https://arxiv.org/abs/1410.3916
+  20. https://arxiv.org/abs/1502.05698
+  21. https://en.wikipedia.org/wiki/relevance_feedback
+  22. https://arxiv.org/abs/1410.3916
+  23. https://en.wikipedia.org/wiki/zipf's_law
+  24. https://arxiv.org/abs/1506.02004
+  25. http://blog.otoro.net/2016/04/01/generating-large-images-from-latent-vectors/
+  26. https://github.com/hardmaru
+  27. https://github.com/hardmaru/cppn-gan-vae-tensorflow
+  28. https://r2rt.com/deconstruction-with-discrete-embeddings.html#fnref1
+  29. https://disqus.com/?ref_noscript
+
+   hidden links:
+  31. https://r2rt.com/category/meditations.html

@@ -1,0 +1,732 @@
+    #[1]index [2]search [3]creating extensions using numpy and scipy
+   [4]dcgan tutorial
+
+     * [5]get started
+     * [6]features
+     * [7]ecosystem
+     * [8]blog
+     * [9]tutorials
+     * [10]docs
+     * [11]resources
+     * [12]github
+
+   table of contents
+
+   1.0.0.dev20190327
+   ____________________
+
+   getting started
+     * [13]deep learning with pytorch: a 60 minute blitz
+     * [14]data loading and processing tutorial
+     * [15]learning pytorch with examples
+     * [16]id21 tutorial
+     * [17]deploying a id195 model with the hybrid frontend
+     * [18]saving and loading models
+     * [19]what is torch.nn really?
+
+   image
+     * [20]finetuning torchvision models
+     * [21]spatial transformer networks tutorial
+     * [22]neural transfer using pytorch
+     * [23]adversarial example generation
+     * [24]transfering a model from pytorch to caffe2 and mobile using
+       onnx
+
+   text
+     * [25]chatbot tutorial
+     * [26]generating names with a character-level id56
+     * [27]classifying names with a character-level id56
+     * [28]deep learning for nlp with pytorch
+     * [29]translation with a sequence to sequence network and attention
+
+   generative
+     * [30]dcgan tutorial
+
+   id23
+     * [31]id23 (id25) tutorial
+
+   extending pytorch
+     * [32]creating extensions using numpy and scipy
+     * [33]custom c++ and cuda extensions
+     * [34]extending torchscript with custom c++ operators
+
+   production usage
+     * [35]writing distributed applications with pytorch
+     * [36]pytorch 1.0 distributed trainer with amazon aws
+     * [37]onnx live tutorial
+     * [38]loading a pytorch model in c++
+
+   pytorch in other languages
+     * [39]using the pytorch c++ frontend
+
+     * [40]tutorials >
+     * id23 (id25) tutorial
+     * [41][view-page-source-icon.svg]
+
+   shortcuts
+
+   intermediate/reinforcement_q_learning
+   [pytorch-colab.svg]
+   run in google colab
+   colab
+   [pytorch-download.svg]
+   download notebook
+   notebook
+   [pytorch-github.svg]
+   view on github
+   github
+
+   note
+
+   click [42]here to download the full example code
+
+id23 (id25) tutorial[43]  
+
+   author: [44]adam paszke
+
+   this tutorial shows how to use pytorch to train a deep id24 (id25)
+   agent on the cartpole-v0 task from the [45]openai gym.
+
+   task
+
+   the agent has to decide between two actions - moving the cart left or
+   right - so that the pole attached to it stays upright. you can find an
+   official leaderboard with various algorithms and visualizations at the
+   [46]gym website.
+   cartpole
+
+   cartpole
+
+   as the agent observes the current state of the environment and chooses
+   an action, the environment transitions to a new state, and also returns
+   a reward that indicates the consequences of the action. in this task,
+   rewards are +1 for every incremental timestep and the environment
+   terminates if the pole falls over too far or the cart moves more then
+   2.4 units away from center. this means better performing scenarios will
+   run for longer duration, accumulating larger return.
+
+   the cartpole task is designed so that the inputs to the agent are 4
+   real values representing the environment state (position, velocity,
+   etc.). however, neural networks can solve the task purely by looking at
+   the scene, so we   ll use a patch of the screen centered on the cart as
+   an input. because of this, our results aren   t directly comparable to
+   the ones from the official leaderboard - our task is much harder.
+   unfortunately this does slow down the training, because we have to
+   render all the frames.
+
+   strictly speaking, we will present the state as the difference between
+   the current screen patch and the previous one. this will allow the
+   agent to take the velocity of the pole into account from one image.
+
+   packages
+
+   first, let   s import needed packages. firstly, we need [47]gym for the
+   environment (install using pip install gym). we   ll also use the
+   following from pytorch:
+     * neural networks (torch.nn)
+     * optimization (torch.optim)
+     * automatic differentiation (torch.autograd)
+     * utilities for vision tasks (torchvision - [48]a separate package).
+
+import gym
+import math
+import random
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+from collections import namedtuple
+from itertools import count
+from pil import image
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as f
+import torchvision.transforms as t
+
+
+env = gym.make('cartpole-v0').unwrapped
+
+# set up matplotlib
+is_ipython = 'inline' in matplotlib.get_backend()
+if is_ipython:
+    from ipython import display
+
+plt.ion()
+
+# if gpu is to be used
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+replay memory[49]  
+
+   we   ll be using experience replay memory for training our id25. it stores
+   the transitions that the agent observes, allowing us to reuse this data
+   later. by sampling from it randomly, the transitions that build up a
+   batch are decorrelated. it has been shown that this greatly stabilizes
+   and improves the id25 training procedure.
+
+   for this, we   re going to need two classses:
+     * transition - a named tuple representing a single transition in our
+       environment. it maps essentially maps (state, action) pairs to
+       their (next_state, reward) result, with the state being the screen
+       difference image as described later on.
+     * replaymemory - a cyclic buffer of bounded size that holds the
+       transitions observed recently. it also implements a .sample()
+       method for selecting a random batch of transitions for training.
+
+transition = namedtuple('transition',
+                        ('state', 'action', 'next_state', 'reward'))
+
+
+class replaymemory(object):
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.memory = []
+        self.position = 0
+
+    def push(self, *args):
+        """saves a transition."""
+        if len(self.memory) < self.capacity:
+            self.memory.append(none)
+        self.memory[self.position] = transition(*args)
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
+
+   now, let   s define our model. but first, let quickly recap what a id25
+   is.
+
+id25 algorithm[50]  
+
+   our environment is deterministic, so all equations presented here are
+   also formulated deterministically for the sake of simplicity. in the
+   id23 literature, they would also contain expectations
+   over stochastic transitions in the environment.
+
+   our aim will be to train a policy that tries to maximize the
+   discounted, cumulative reward \(r_{t_0} = \sum_{t=t_0}^{\infty}
+   \gamma^{t - t_0} r_t\), where \(r_{t_0}\) is also known as the return.
+   the discount, \(\gamma\), should be a constant between \(0\) and \(1\)
+   that ensures the sum converges. it makes rewards from the uncertain far
+   future less important for our agent than the ones in the near future
+   that it can be fairly confident about.
+
+   the main idea behind id24 is that if we had a function \(q^*:
+   state \times action \rightarrow \mathbb{r}\), that could tell us what
+   our return would be, if we were to take an action in a given state,
+   then we could easily construct a policy that maximizes our rewards:
+   \[\pi^*(s) = \arg\!\max_a \ q^*(s, a)\]
+
+   however, we don   t know everything about the world, so we don   t have
+   access to \(q^*\). but, since neural networks are universal function
+   approximators, we can simply create one and train it to resemble
+   \(q^*\).
+
+   for our training update rule, we   ll use a fact that every \(q\)
+   function for some policy obeys the bellman equation:
+   \[q^{\pi}(s, a) = r + \gamma q^{\pi}(s', \pi(s'))\]
+
+   the difference between the two sides of the equality is known as the
+   temporal difference error, \(\delta\):
+   \[\delta = q(s, a) - (r + \gamma \max_a q(s', a))\]
+
+   to minimise this error, we will use the [51]huber loss. the huber loss
+   acts like the mean squared error when the error is small, but like the
+   mean absolute error when the error is large - this makes it more robust
+   to outliers when the estimates of \(q\) are very noisy. we calculate
+   this over a batch of transitions, \(b\), sampled from the replay
+   memory:
+   \[\mathcal{l} = \frac{1}{|b|}\sum_{(s, a, s', r) \ \in \ b}
+   \mathcal{l}(\delta)\]
+   \[\begin{split}\text{where} \quad \mathcal{l}(\delta) = \begin{cases}
+   \frac{1}{2}{\delta^2} & \text{for } |\delta| \le 1, \\ |\delta| -
+   \frac{1}{2} & \text{otherwise.} \end{cases}\end{split}\]
+
+q-network[52]  
+
+   our model will be a convolutional neural network that takes in the
+   difference between the current and previous screen patches. it has two
+   outputs, representing \(q(s, \mathrm{left})\) and \(q(s,
+   \mathrm{right})\) (where \(s\) is the input to the network). in effect,
+   the network is trying to predict the expected return of taking each
+   action given the current input.
+class id25(nn.module):
+
+    def __init__(self, h, w, outputs):
+        super(id25, self).__init__()
+        self.conv1 = nn.conv2d(3, 16, kernel_size=5, stride=2)
+        self.bn1 = nn.batchnorm2d(16)
+        self.conv2 = nn.conv2d(16, 32, kernel_size=5, stride=2)
+        self.bn2 = nn.batchnorm2d(32)
+        self.conv3 = nn.conv2d(32, 32, kernel_size=5, stride=2)
+        self.bn3 = nn.batchnorm2d(32)
+
+        # number of linear input connections depends on output of conv2d layers
+        # and therefore the input image size, so compute it.
+        def conv2d_size_out(size, kernel_size = 5, stride = 2):
+            return (size - (kernel_size - 1) - 1) // stride  + 1
+        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w)))
+        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
+        linear_input_size = convw * convh * 32
+        self.head = nn.linear(linear_input_size, outputs)
+
+    # called with either one element to determine next action, or a batch
+    # during optimization. returns tensor([[left0exp,right0exp]...]).
+    def forward(self, x):
+        x = f.relu(self.bn1(self.conv1(x)))
+        x = f.relu(self.bn2(self.conv2(x)))
+        x = f.relu(self.bn3(self.conv3(x)))
+        return self.head(x.view(x.size(0), -1))
+
+input extraction[53]  
+
+   the code below are utilities for extracting and processing rendered
+   images from the environment. it uses the torchvision package, which
+   makes it easy to compose image transforms. once you run the cell it
+   will display an example patch that it extracted.
+resize = t.compose([t.topilimage(),
+                    t.resize(40, interpolation=image.cubic),
+                    t.totensor()])
+
+
+def get_cart_location(screen_width):
+    world_width = env.x_threshold * 2
+    scale = screen_width / world_width
+    return int(env.state[0] * scale + screen_width / 2.0)  # middle of cart
+
+def get_screen():
+    # returned screen requested by gym is 400x600x3, but is sometimes larger
+    # such as 800x1200x3. transpose it into torch order (chw).
+    screen = env.render(mode='rgb_array').transpose((2, 0, 1))
+    # cart is in the lower half, so strip off the top and bottom of the screen
+    _, screen_height, screen_width = screen.shape
+    screen = screen[:, int(screen_height*0.4):int(screen_height * 0.8)]
+    view_width = int(screen_width * 0.6)
+    cart_location = get_cart_location(screen_width)
+    if cart_location < view_width // 2:
+        slice_range = slice(view_width)
+    elif cart_location > (screen_width - view_width // 2):
+        slice_range = slice(-view_width, none)
+    else:
+        slice_range = slice(cart_location - view_width // 2,
+                            cart_location + view_width // 2)
+    # strip off the edges, so that we have a square image centered on a cart
+    screen = screen[:, :, slice_range]
+    # convert to float, rescale, convert to torch tensor
+    # (this doesn't require a copy)
+    screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
+    screen = torch.from_numpy(screen)
+    # resize, and add a batch dimension (bchw)
+    return resize(screen).unsqueeze(0).to(device)
+
+
+env.reset()
+plt.figure()
+plt.imshow(get_screen().cpu().squeeze(0).permute(1, 2, 0).numpy(),
+           interpolation='none')
+plt.title('example extracted screen')
+plt.show()
+
+training[54]  
+
+hyperparameters and utilities[55]  
+
+   this cell instantiates our model and its optimizer, and defines some
+   utilities:
+     * select_action - will select an action accordingly to an epsilon
+       greedy policy. simply put, we   ll sometimes use our model for
+       choosing the action, and sometimes we   ll just sample one uniformly.
+       the id203 of choosing a random action will start at eps_start
+       and will decay exponentially towards eps_end. eps_decay controls
+       the rate of the decay.
+     * plot_durations - a helper for plotting the durations of episodes,
+       along with an average over the last 100 episodes (the measure used
+       in the official evaluations). the plot will be underneath the cell
+       containing the main training loop, and will update after every
+       episode.
+
+batch_size = 128
+gamma = 0.999
+eps_start = 0.9
+eps_end = 0.05
+eps_decay = 200
+target_update = 10
+
+# get screen size so that we can initialize layers correctly based on shape
+# returned from ai gym. typical dimensions at this point are close to 3x40x90
+# which is the result of a clamped and down-scaled render buffer in get_screen()
+init_screen = get_screen()
+_, _, screen_height, screen_width = init_screen.shape
+
+# get number of actions from gym action space
+n_actions = env.action_space.n
+
+policy_net = id25(screen_height, screen_width, n_actions).to(device)
+target_net = id25(screen_height, screen_width, n_actions).to(device)
+target_net.load_state_dict(policy_net.state_dict())
+target_net.eval()
+
+optimizer = optim.rmsprop(policy_net.parameters())
+memory = replaymemory(10000)
+
+
+steps_done = 0
+
+
+def select_action(state):
+    global steps_done
+    sample = random.random()
+    eps_threshold = eps_end + (eps_start - eps_end) * \
+        math.exp(-1. * steps_done / eps_decay)
+    steps_done += 1
+    if sample > eps_threshold:
+        with torch.no_grad():
+            # t.max(1) will return largest column value of each row.
+            # second column on max result is index of where max element was
+            # found, so we pick action with the larger expected reward.
+            return policy_net(state).max(1)[1].view(1, 1)
+    else:
+        return torch.tensor([[random.randrange(n_actions)]], device=device, dtyp
+e=torch.long)
+
+
+episode_durations = []
+
+
+def plot_durations():
+    plt.figure(2)
+    plt.clf()
+    durations_t = torch.tensor(episode_durations, dtype=torch.float)
+    plt.title('training...')
+    plt.xlabel('episode')
+    plt.ylabel('duration')
+    plt.plot(durations_t.numpy())
+    # take 100 episode averages and plot them too
+    if len(durations_t) >= 100:
+        means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
+        means = torch.cat((torch.zeros(99), means))
+        plt.plot(means.numpy())
+
+    plt.pause(0.001)  # pause a bit so that plots are updated
+    if is_ipython:
+        display.clear_output(wait=true)
+        display.display(plt.gcf())
+
+training loop[56]  
+
+   finally, the code for training our model.
+
+   here, you can find an optimize_model function that performs a single
+   step of the optimization. it first samples a batch, concatenates all
+   the tensors into a single one, computes \(q(s_t, a_t)\) and
+   \(v(s_{t+1}) = \max_a q(s_{t+1}, a)\), and combines them into our loss.
+   by defition we set \(v(s) = 0\) if \(s\) is a terminal state. we also
+   use a target network to compute \(v(s_{t+1})\) for added stability. the
+   target network has its weights kept frozen most of the time, but is
+   updated with the policy network   s weights every so often. this is
+   usually a set number of steps but we shall use episodes for simplicity.
+def optimize_model():
+    if len(memory) < batch_size:
+        return
+    transitions = memory.sample(batch_size)
+    # transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
+    # detailed explanation). this converts batch-array of transitions
+    # to transition of batch-arrays.
+    batch = transition(*zip(*transitions))
+
+    # compute a mask of non-final states and concatenate the batch elements
+    # (a final state would've been the one after which simulation ended)
+    non_final_mask = torch.tensor(tuple(map(lambda s: s is not none,
+                                          batch.next_state)), device=device, dty
+pe=torch.uint8)
+    non_final_next_states = torch.cat([s for s in batch.next_state
+                                                if s is not none])
+    state_batch = torch.cat(batch.state)
+    action_batch = torch.cat(batch.action)
+    reward_batch = torch.cat(batch.reward)
+
+    # compute q(s_t, a) - the model computes q(s_t), then we select the
+    # columns of actions taken. these are the actions which would've been taken
+    # for each batch state according to policy_net
+    state_action_values = policy_net(state_batch).gather(1, action_batch)
+
+    # compute v(s_{t+1}) for all next states.
+    # expected values of actions for non_final_next_states are computed based
+    # on the "older" target_net; selecting their best reward with max(1)[0].
+    # this is merged based on the mask, such that we'll have either the expected
+    # state value or 0 in case the state was final.
+    next_state_values = torch.zeros(batch_size, device=device)
+    next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)
+[0].detach()
+    # compute the expected q values
+    expected_state_action_values = (next_state_values * gamma) + reward_batch
+
+    # compute huber loss
+    loss = f.smooth_l1_loss(state_action_values, expected_state_action_values.un
+squeeze(1))
+
+    # optimize the model
+    optimizer.zero_grad()
+    loss.backward()
+    for param in policy_net.parameters():
+        param.grad.data.clamp_(-1, 1)
+    optimizer.step()
+
+   below, you can find the main training loop. at the beginning we reset
+   the environment and initialize the state tensor. then, we sample an
+   action, execute it, observe the next screen and the reward (always 1),
+   and optimize our model once. when the episode ends (our model fails),
+   we restart the loop.
+
+   below, num_episodes is set small. you should download the notebook and
+   run lot more epsiodes, such as 300+ for meaningful duration
+   improvements.
+num_episodes = 50
+for i_episode in range(num_episodes):
+    # initialize the environment and state
+    env.reset()
+    last_screen = get_screen()
+    current_screen = get_screen()
+    state = current_screen - last_screen
+    for t in count():
+        # select and perform an action
+        action = select_action(state)
+        _, reward, done, _ = env.step(action.item())
+        reward = torch.tensor([reward], device=device)
+
+        # observe new state
+        last_screen = current_screen
+        current_screen = get_screen()
+        if not done:
+            next_state = current_screen - last_screen
+        else:
+            next_state = none
+
+        # store the transition in memory
+        memory.push(state, action, next_state, reward)
+
+        # move to the next state
+        state = next_state
+
+        # perform one step of the optimization (on the target network)
+        optimize_model()
+        if done:
+            episode_durations.append(t + 1)
+            plot_durations()
+            break
+    # update the target network, copying all weights and biases in id25
+    if i_episode % target_update == 0:
+        target_net.load_state_dict(policy_net.state_dict())
+
+print('complete')
+env.render()
+env.close()
+plt.ioff()
+plt.show()
+
+   here is the diagram that illustrates the overall resulting data flow.
+   ../_images/reinforcement_learning_diagram.jpg
+
+   actions are chosen either randomly or based on a policy, getting the
+   next step sample from the gym environment. we record the results in the
+   replay memory and also run optimization step on every iteration.
+   optimization picks a random batch from the replay memory to do training
+   of the new policy.    older    target_net is also used in optimization to
+   compute the expected q values; it is updated occasionally to keep it
+   current.
+
+   total running time of the script: ( 0 minutes 0.000 seconds)
+   [57]download python source code: reinforcement_q_learning.py
+   [58]download jupyter notebook: reinforcement_q_learning.ipynb
+
+   [59]gallery generated by sphinx-gallery
+
+   [60]next [chevron-right-orange.svg] [61][chevron-right-orange.svg]
+   previous
+     __________________________________________________________________
+
+   was this helpful?
+   yes
+   no
+   thank you
+     __________________________________________________________________
+
+      copyright 2017, pytorch.
+   built with [62]sphinx using a [63]theme provided by [64]read the docs.
+     * [65]id23 (id25) tutorial
+          + [66]replay memory
+          + [67]id25 algorithm
+               o [68]q-network
+               o [69]input extraction
+          + [70]training
+               o [71]hyperparameters and utilities
+               o [72]training loop
+
+   [tr?id=243028289693773&amp;ev=pageview &amp;noscript=1]
+
+docs
+
+   access comprehensive developer documentation for pytorch
+   [73]view docs
+
+tutorials
+
+   get in-depth tutorials for beginners and advanced developers
+   [74]view tutorials
+
+resources
+
+   find development resources and get your questions answered
+   [75]view resources
+
+     * [76]pytorch
+     * [77]get started
+     * [78]features
+     * [79]ecosystem
+     * [80]blog
+     * [81]resources
+
+     * [82]support
+     * [83]tutorials
+     * [84]docs
+     * [85]discuss
+     * [86]github issues
+     * [87]slack
+     * [88]contributing
+
+     * follow us
+     * email address ____________________
+       ____________________
+       submit
+
+   to analyze traffic and optimize your experience, we serve cookies on
+   this site. by clicking or navigating, you agree to allow our usage of
+   cookies. as the current maintainers of this site, facebook   s cookies
+   policy applies. learn more, including about available controls:
+   [89]cookies policy.
+   [pytorch-x.svg]
+
+     * [90]get started
+     * [91]features
+     * [92]ecosystem
+     * [93]blog
+     * [94]tutorials
+     * [95]docs
+     * [96]resources
+     * [97]github
+
+references
+
+   visible links
+   1. https://pytorch.org/tutorials/genindex.html
+   2. https://pytorch.org/tutorials/search.html
+   3. https://pytorch.org/tutorials/advanced/numpy_extensions_tutorial.html
+   4. https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html
+   5. https://pytorch.org/get-started
+   6. https://pytorch.org/features
+   7. https://pytorch.org/ecosystem
+   8. https://pytorch.org/blog/
+   9. https://pytorch.org/tutorials
+  10. https://pytorch.org/docs/stable/index.html
+  11. https://pytorch.org/resources
+  12. https://github.com/pytorch/pytorch
+  13. https://pytorch.org/tutorials/beginner/deep_learning_60min_blitz.html
+  14. https://pytorch.org/tutorials/beginner/data_loading_tutorial.html
+  15. https://pytorch.org/tutorials/beginner/pytorch_with_examples.html
+  16. https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
+  17. https://pytorch.org/tutorials/beginner/deploy_id195_hybrid_frontend_tutorial.html
+  18. https://pytorch.org/tutorials/beginner/saving_loading_models.html
+  19. https://pytorch.org/tutorials/beginner/nn_tutorial.html
+  20. https://pytorch.org/tutorials/beginner/finetuning_torchvision_models_tutorial.html
+  21. https://pytorch.org/tutorials/intermediate/spatial_transformer_tutorial.html
+  22. https://pytorch.org/tutorials/advanced/neural_style_tutorial.html
+  23. https://pytorch.org/tutorials/beginner/fgsm_tutorial.html
+  24. https://pytorch.org/tutorials/advanced/super_resolution_with_caffe2.html
+  25. https://pytorch.org/tutorials/beginner/chatbot_tutorial.html
+  26. https://pytorch.org/tutorials/intermediate/char_id56_generation_tutorial.html
+  27. https://pytorch.org/tutorials/intermediate/char_id56_classification_tutorial.html
+  28. https://pytorch.org/tutorials/beginner/deep_learning_nlp_tutorial.html
+  29. https://pytorch.org/tutorials/intermediate/id195_translation_tutorial.html
+  30. https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html
+  31. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  32. https://pytorch.org/tutorials/advanced/numpy_extensions_tutorial.html
+  33. https://pytorch.org/tutorials/advanced/cpp_extension.html
+  34. https://pytorch.org/tutorials/advanced/torch_script_custom_ops.html
+  35. https://pytorch.org/tutorials/intermediate/dist_tuto.html
+  36. https://pytorch.org/tutorials/beginner/aws_distributed_training_tutorial.html
+  37. https://pytorch.org/tutorials/advanced/onnxlive.html
+  38. https://pytorch.org/tutorials/advanced/cpp_export.html
+  39. https://pytorch.org/tutorials/advanced/cpp_frontend.html
+  40. https://pytorch.org/tutorials/index.html
+  41. https://pytorch.org/tutorials/_sources/intermediate/reinforcement_q_learning.rst.txt
+  42. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#sphx-glr-download-intermediate-reinforcement-id24-py
+  43. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#reinforcement-learning-id25-tutorial
+  44. https://github.com/apaszke
+  45. https://gym.openai.com/
+  46. https://gym.openai.com/envs/cartpole-v0
+  47. https://gym.openai.com/docs
+  48. https://github.com/pytorch/vision
+  49. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#replay-memory
+  50. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#id25-algorithm
+  51. https://en.wikipedia.org/wiki/huber_loss
+  52. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#q-network
+  53. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#input-extraction
+  54. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#training
+  55. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#hyperparameters-and-utilities
+  56. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#training-loop
+  57. https://pytorch.org/tutorials/_downloads/b8954cc7b372cac10a92b8c6183846a3/reinforcement_q_learning.py
+  58. https://pytorch.org/tutorials/_downloads/2b3f06b04b5e96e4772746c20fcb4dcc/reinforcement_q_learning.ipynb
+  59. https://sphinx-gallery.readthedocs.io/
+  60. https://pytorch.org/tutorials/advanced/numpy_extensions_tutorial.html
+  61. https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html
+  62. http://sphinx-doc.org/
+  63. https://github.com/rtfd/sphinx_rtd_theme
+  64. https://readthedocs.org/
+  65. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  66. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#replay-memory
+  67. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#id25-algorithm
+  68. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#q-network
+  69. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#input-extraction
+  70. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#training
+  71. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#hyperparameters-and-utilities
+  72. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html#training-loop
+  73. https://pytorch.org/docs/stable/index.html
+  74. https://pytorch.org/tutorials
+  75. https://pytorch.org/resources
+  76. https://pytorch.org/
+  77. https://pytorch.org/get-started
+  78. https://pytorch.org/features
+  79. https://pytorch.org/ecosystem
+  80. https://pytorch.org/blog/
+  81. https://pytorch.org/resources
+  82. https://pytorch.org/support
+  83. https://pytorch.org/tutorials
+  84. https://pytorch.org/docs/stable/index.html
+  85. https://discuss.pytorch.org/
+  86. https://github.com/pytorch/pytorch/issues
+  87. https://pytorch.slack.com/
+  88. https://github.com/pytorch/pytorch/blob/master/contributing.md
+  89. https://www.facebook.com/policies/cookies/
+  90. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  91. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  92. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+  93. https://pytorch.org/blog/
+  94. https://pytorch.org/tutorials
+  95. https://pytorch.org/docs/stable/index.html
+  96. https://pytorch.org/resources
+  97. https://github.com/pytorch/pytorch
+
+   hidden links:
+  99. https://pytorch.org/
+ 100. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+ 101. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
+ 102. https://pytorch.org/
+ 103. https://www.facebook.com/pytorch
+ 104. https://twitter.com/pytorch
+ 105. https://pytorch.org/
+ 106. https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html

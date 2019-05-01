@@ -1,0 +1,1176 @@
+5
+1
+0
+2
+
+ 
+
+v
+o
+n
+9
+2
+
+ 
+
+ 
+ 
+]
+i
+
+a
+.
+s
+c
+[
+ 
+ 
+
+1
+1
+v
+6
+1
+9
+3
+
+.
+
+0
+1
+4
+1
+:
+v
+i
+x
+r
+a
+
+published as a conference paper at iclr 2015
+
+memory networks
+
+jason weston, sumit chopra & antoine bordes
+facebook ai research
+770 broadway
+new york, usa
+{jase,spchopra,abordes}@fb.com
+
+abstract
+
+we describe a new class of learning models called memory networks. memory
+networks reason with id136 components combined with a long-term memory
+component; they learn how to use these jointly. the long-term memory can be
+read and written to, with the goal of using it for prediction. we investigate these
+models in the context of id53 (qa) where the long-term mem-
+ory effectively acts as a (dynamic) knowledge base, and the output is a textual
+response. we evaluate them on a large-scale qa task, and a smaller, but more
+complex, toy task generated from a simulated world. in the latter, we show the
+reasoning power of such models by chaining multiple supporting sentences to an-
+swer questions that require understanding the intension of verbs.
+
+1
+
+introduction
+
+most machine learning models lack an easy way to read and write to part of a (potentially very
+large) long-term memory component, and to combine this seaid113ssly with id136. hence, they
+do not take advantage of one of the great assets of a modern day computer. for example, consider
+the task of being told a set of facts or a story, and then having to answer questions on that subject.
+in principle this could be achieved by a language modeler such as a recurrent neural network (id56)
+(mikolov et al., 2010; hochreiter & schmidhuber, 1997) as these models are trained to predict the
+next (set of) word(s) to output after having read a stream of words. however, their memory (en-
+coded by hidden states and weights) is typically too small, and is not compartmentalized enough
+to accurately remember facts from the past (knowledge is compressed into dense vectors). id56s
+are known to have dif   culty in performing memorization, for example the simple copying task of
+outputting the same input sequence they have just read (zaremba & sutskever, 2014). the situation
+is similar for other tasks, e.g., in the vision and audio domains a long term memory is required to
+watch a movie and answer questions about it.
+
+in this work, we introduce a class of models called memory networks that attempt to rectify this
+problem. the central idea is to combine the successful learning strategies developed in the machine
+learning literature for id136 with a memory component that can be read and written to. the
+model is then trained to learn how to operate effectively with the memory component. we introduce
+the general framework in section 2, and present a speci   c implementation in the text domain for
+the task of id53 in section 3. we discuss related work in section 4, describe our
+experiments in 5, and    nally conclude in section 6.
+
+2 memory networks
+
+a memory network consists of a memory m (an array of objects1 indexed by mi) and four (poten-
+tially learned) components i, g, o and r as follows:
+
+i: (input feature map)     converts the incoming input to the internal feature representation.
+
+1for example an array of vectors or an array of strings.
+
+1
+
+published as a conference paper at iclr 2015
+
+g: (generalization)     updates old memories given the new input. we call this generalization
+as there is an opportunity for the network to compress and generalize its memories at this
+stage for some intended future use.
+
+o: (output feature map)     produces a new output (in the feature representation space), given
+
+the new input and the current memory state.
+
+r: (response)     converts the output into the response format desired. for example, a textual
+
+response or an action.
+
+given an input x (e.g., an input character, word or sentence depending on the granularity chosen, an
+image or an audio signal) the    ow of the model is as follows:
+
+1. convert x to an internal feature representation i(x).
+2. update memories mi given the new input: mi = g(mi, i(x), m),    i.
+3. compute output features o given the new input and the memory: o = o(i(x), m).
+4. finally, decode output features o to give the    nal response: r = r(o).
+
+this process is applied at both train and test time, if there is a distinction between such phases, that
+is, memories are also stored at test time, but the model parameters of i, g, o and r are not updated.
+memory networks cover a wide class of possible implementations. the components i, g, o and r
+can potentially use any existing ideas from the machine learning literature, e.g., make use of your
+favorite models (id166s, id90, etc.).
+
+i component: component i can make use of standard pre-processing, e.g., parsing, coreference
+and entity resolution for text inputs. it could also encode the input into an internal feature represen-
+tation, e.g., convert from text to a sparse or dense feature vector.
+
+g component: the simplest form of g is to store i(x) in a    slot    in the memory:
+
+mh(x) = i(x),
+
+(1)
+where h(.) is a function selecting the slot. that is, g updates the index h(x) of m, but all other
+parts of the memory remain untouched. more sophisticated variants of g could go back and update
+earlier stored memories (potentially, all memories) based on the new evidence from the current input
+x. if the input is at the character or word level one could group inputs (i.e., by segmenting them into
+chunks) and store each chunk in a memory slot.
+
+if the memory is huge (e.g., consider all of freebase or wikipedia) one needs to organize the memo-
+ries. this can be achieved with the slot choosing function h just described: for example, it could be
+designed, or trained, to store memories by entity or topic. consequently, for ef   ciency at scale, g
+(and o) need not operate on all memories: they can operate on only a retrieved subset of candidates
+(only operating on memories that are on the right topic). we explore a simple variant of this in our
+experiments.
+
+if the memory becomes full, a procedure for    forgetting    could also be implemented by h as it
+chooses which memory is replaced, e.g., h could score the utility of each memory, and overwrite
+the least useful. we have not explored this experimentally yet.
+
+o and r components: the o component is typically responsible for reading from memory and
+performing id136, e.g., calculating what are the relevant memories to perform a good response.
+the r component then produces the    nal response given o. for example in a id53
+setup o    nds relevant memories, and then r produces the actual wording of the answer, e.g., r
+could be an id56 that is conditioned on the output of o. our hypothesis is that without conditioning
+on such memories, such an id56 will perform poorly.
+
+3 a memnn implementation for text
+
+one particular instantiation of a memory network is where the components are neural networks. we
+refer to these as memory neural networks (memnns). in this section we describe a relatively simple
+implementation of a memnn with textual input and output.
+
+2
+
+published as a conference paper at iclr 2015
+
+3.1 basic model
+
+in our basic architecture, the i module takes an input text. let us    rst assume this to be a sentence:
+either the statement of a fact, or a question to be answered by the system (later we will consider
+word-based input sequences). the text is stored in the next available memory slot in its original
+form2, i.e., s(x) returns the next empty memory slot n : mn = x, n = n + 1. the g module
+is thus only used to store this new memory, so old memories are not updated. more sophisticated
+models are described in subsequent sections.
+
+the core of id136 lies in the o and r modules. the o module produces output features by
+   nding k supporting memories given x. we use k up to 2, but the procedure is generalizable to
+larger k. for k = 1 the highest scoring supporting memory is retrieved with:
+
+o1 = o1(x, m) = arg max
+i=1,...,n
+
+so(x, mi)
+
+(2)
+
+where so is a function that scores the match between the pair of sentences x and mi. for the case
+k = 2 we then    nd a second supporting memory given the    rst found in the previous iteration:
+
+o2 = o2(x, m) = arg max
+i=1,...,n
+
+so([x, mo1 ], mi)
+
+(3)
+
+where the candidate supporting memory mi is now scored with respect to both the original in-
+put and the    rst supporting memory, where square brackets denote a list3. the    nal output o is
+[x, mo1 , mo2], which is input to the module r.
+finally, r needs to produce a textual response r. the simplest response is to return mok, i.e.,
+to output the previously uttered sentence we retrieved. to perform true sentence generation, one
+can instead employ an id56. in our experiments we also consider an easy to evaluate compromise
+approach where we limit textual responses to be a single word (out of all the words seen by the
+model) by ranking them:
+
+r = argmaxw   w sr([x, mo1 , mo2], w)
+
+(4)
+
+where w is the set of all words in the dictionary, and sr is a function that scores the match.
+an example task is given in figure 1. in order to answer the question x =    where is the milk now?   ,
+the o module    rst scores all memories, i.e., all previously seen sentences, against x to retrieve the
+most relevant fact, mo1 =    joe left the milk    in this case. then, it would search the memory again
+to    nd the second relevant fact given [x, mo1], that is mo2 =    joe travelled to the of   ce    (the last
+place joe went before dropping the milk). finally, the r module using eq. (4) would score words
+given [x, mo1 , mo2] to output r =    of   ce   .
+in our experiments, the scoring functions so and sr have the same form, that of an embedding
+model:
+
+s(x, y) =   x(x)   u    u   y(y).
+
+(5)
+where u is a n    d matrix where d is the number of features and n is the embedding dimension.
+the role of   x and   y is to map the original text to the d-dimensional feature space. the simplest
+feature space to choose is a bag of words representation, we choose d = 3|w | for so, i.e., every
+word in the dictionary has three different representations: one for   y(.) and two for   x(.) depending
+on whether the words of the input arguments are from the actual input x or from the supporting
+memories so that they can be modeled differently.4 similarly, we used d = 3|w | for sr as well.
+so and sr use different weight matrices uo and ur.
+
+2technically, we will be using an embedding model to represent text, so we could store the incoming input
+using its learned embedding vector in memory instead. the downside of such a choice is that during learning
+the embedding parameters are changing, and hence the stored vectors would go stale. however, at test time
+(where the parameters are not changing) storing as embedding vectors could make sense, as this is faster than
+reading the original words and then embedding them repeatedly.
+
+3as we will use a bag-of-words model where both x and mo1 are represented in the bag (but with two differ-
+ent dictionaries) this is equivalent to using the sum so(x, mi) + so(mo1 , mi), however a more sophisticated
+modeling of the inputs (e.g., with nonlinearities) may not separate into a sum.
+
+4experiments with only a single dictionary and linear embeddings performed worse (not shown). in order
+to model with only a single dictionary, one could consider deeper networks that transform the words dependent
+on their context. we leave this to future work.
+
+3
+
+published as a conference paper at iclr 2015
+
+figure 1: example    story    statements, questions and answers generated by a simple simulation.
+answering the question about the location of the milk requires comprehension of the actions    picked
+up    and    left   . the questions also require comprehension of the time elements of the story, e.g., to
+answer    where was joe before the of   ce?   .
+
+joe went to the kitchen. fred went to the kitchen. joe picked up the milk.
+joe travelled to the of   ce. joe left the milk. joe went to the bathroom.
+where is the milk now? a: of   ce
+where is joe? a: bathroom
+where was joe before the of   ce? a: kitchen
+
+training we train in a fully supervised setting where we are given desired inputs and responses,
+and the supporting sentences are labeled as such in the training data (but not in the test data, where
+we are given only the inputs). that is, during training we know the best choice of both max functions
+in eq. (2) and (3)5. training is then performed with a margin ranking loss and stochastic gradient
+descent (sgd). speci   cally, for a given question x with true response r and supporting sentences
+mo1 and mo2 (when k = 2), we minimize over model parameters uo and ur:
+
+max(0,        so(x, mo1 ) + so(x,   f )) +
+
+p  f 6=mo1
+max(0,        so([x, mo1], mo2]) + so([x, mo1 ],   f    ])) +
+
+max(0,        sr([x, mo1 , mo2], r) + sr([x, mo1 , mo2],   r]))
+
+p  f    6=mo2
+p  r6=r
+
+(6)
+
+(7)
+
+(8)
+
+where   f ,   f     and   r are all other choices than the correct labels, and    is the margin. at every step
+of sgd we sample   f ,   f    ,   r rather than compute the whole sum for each training example, following
+e.g., weston et al. (2011).
+
+in the case of employing an id56 for the r component of our memnn (instead of using a single
+word response as above) we replace the last term with the standard log likelihood used in a language
+modeling task, where the id56 is fed the sequence [x, o1, o2, r]. at test time we output its prediction
+r given [x, o1, o2]. in contrast the absolute simplest model, that of using k = 1 and outputting the
+located memory mo1 as response r, would only use the    rst term to train.
+in the following subsections we consider some extensions of our basic model.
+
+3.2 word sequences as input
+
+if input is at the word rather than sentence level, that is words arrive in a stream (as is often done, e.g.,
+with id56s) and not already segmented as statements and questions, we need to modify the approach
+we have so far described. we hence add a    segmentation    function, to be learned, which takes as in-
+put the last sequence of words that have so far not been segmented and looks for breakpoints. when
+the segmenter    res (indicates the current sequence is a segment) we write that sequence to memory,
+and can then proceed as before. the segmenter is modeled similarly to our other components, as an
+embedding model of the form:
+
+seg(c) = w    
+
+segus  seg(c)
+
+(9)
+
+where wseg is a vector (effectively the parameters of a linear classi   er in embedding space), and c is
+the sequence of input words represented as bag of words using a separate dictionary. if seg(c) >   ,
+where    is the margin, then this sequence is recognised as a segment. in this way, our memnn has
+a learning component in its write operation. we consider this segmenter a    rst proof of concept:
+of course, one could design something much more sophisticated. further details on the training
+mechanism are given in appendix b.
+
+5 however, note that methods like id56s and lstms cannot easily use this information.
+
+4
+
+published as a conference paper at iclr 2015
+
+3.3 efficient memory via hashing
+
+if the set of stored memories is very large it is prohibitively expensive to score all of them as in
+equations (2) and (3). instead we explore hashing tricks to speed up lookup: hash the input i(x) into
+one or more buckets and then only score memories mi that are in the same buckets. we investigated
+two ways of doing hashing: (i) via hashing words; and (ii) via id91 id27s. for (i)
+we construct as many buckets as there are words in the dictionary, then for a given sentence we hash
+it into all the buckets corresponding to its words. the problem with (i) is that a memory mi will
+only be considered if it shares at least one word with the input i(x). method (ii) tries to solve this
+by id91 instead. after training the embedding matrix uo, we run id116 to cluster word
+vectors (uo)i, thus giving k buckets. we then hash a given sentence into all the buckets that its
+individual words fall into. as word vectors tend to be close to their synonyms, they cluster together
+and we thus also will score those similar memories as well. exact word matches between input and
+memory will still be scored by de   nition. choosing k controls the speed-accuracy trade-off.
+
+3.4 modeling write time
+
+we can extend our model to take into account when a memory slot was written to. this is not
+important when answering questions about    xed facts (   what is the capital of france?   ) but is
+important when answering questions about a story, see e.g., figure 1. one obvious way to implement
+this is to add extra features to the representations   x and   y that encode the index j of a given
+memory mj, assuming that j follows write time (i.e., no memory slot rewriting). however, that
+requires dealing with absolute rather than relative time. we had more success empirically with the
+following procedure: instead of scoring input, candidate pairs with s as above, learn a function on
+triples sot (x, y, y   ):
+
+sot (x, y, y   ) =   x(x)   uot
+
+   uot(cid:16)  y(y)       y(y   ) +   t(x, y, y   )(cid:17).
+
+(10)
+  t(x, y, y   ) uses three new features which take on the value 0 or 1: whether x is older than y, x is
+older than y   , and y older than y   . (that is, we extended the dimensionality of all the    embeddings
+by 3, and set these three dimensions to zero when not used.) now, if sot (x, y, y   ) > 0 the model
+prefers y over y   , and if sot (x, y, y   ) < 0 it prefers y   . the argmax of eq. (2) and (3) are replaced by
+a loop over memories i = 1, . . . , n , keeping the winning memory (y or y   ) at each step, and always
+comparing the current winner to the next memory mi. this procedure is equivalent to the argmax
+before if the time features are removed. more details are given in appendix c.
+
+3.5 modeling previously unseen words
+
+even for humans who have read a lot of text, new words are continuously introduced. for example,
+the    rst time the word    boromir    appears in lord of the rings (tolkien, 1954). how should a
+machine learning model deal with this? ideally it should work having seen only one example. a
+possible way would be to use a language model: given the neighboring words, predict what the word
+should be, and assume the new word is similar to that. our proposed approach takes this idea, but
+incorporates it into our networks so and sr, rather than as a separate step.
+concretely, for each word we see, we store a bag of words it has co-occurred with, one bag for the
+left context, and one for the right. any unknown word can be represented with such features. hence,
+we increase our feature representation d from 3|w | to 5|w | to model these contexts (|w | features
+for each bag). our model learns to deal with new words during training using a kind of    dropout   
+technique: d% of the time we pretend we have not seen a word before, and hence do not have a
+n-dimensional embedding for that word, and represent it with the context instead.
+
+3.6 exact matches and unseen words
+
+embedding models cannot ef   ciently use exact word matches due to the low dimensionality n. one
+solution is to score a pair x, y with
+
+(11)
+instead. that is, add the    bag of words    matching score to the learned embedding score (with a
+mixing parameter   ). another, related way, that we propose is to stay in the n-dimensional em-
+bedding space, but to extend the feature representation d with matching features, e.g., one per
+
+  x(x)   u    u   y(y) +     x(x)     y(y)
+
+5
+
+published as a conference paper at iclr 2015
+
+word. a matching feature indicates if a word occurs in both x and y. that is, we score with
+  x(x)   u    u   y(y, x) where   y is actually built conditionally on x:
+if some of the words in y
+match the words in x we set those matching features to 1. unseen words can be modeled similarly
+by using matching features on their context words. this then gives a feature space of d = 8|w |.
+
+4 related work
+
+classical qa methods use a set of documents as a kind of memory, and information retrieval meth-
+ods to    nd answers, see e.g., (kolomiyets & moens, 2011) and references therein. more recent
+methods try instead to create a graph of facts     a knowledge base (kb)     as their memory, and map
+questions to logical queries (berant et al., 2013; 2014). neural network and embedding approaches
+have also been recently explored (bordes et al., 2014a; iyyer et al., 2014; yih et al., 2014). com-
+pared to recent knowledge base approaches, memory networks differ in that they do not apply a
+two-stage strategy: (i) apply information extraction principles    rst to build the kb; followed by (ii)
+id136 over the kb. instead, extraction of useful information to answer a question is performed
+on-the-   y over the memory which can be stored as raw text, as well as other choices such as embed-
+ding vectors. this is potentially less brittle as the    rst stage of building the kb may have already
+thrown away the relevant part of the original data.
+
+classical neural network memory models such as associative memory networks aim to provide
+content-addressable memory, i.e., given a key vector to output a value vector, see e.g., haykin (1994)
+and references therein. typically this type of memory is distributed across the whole network of
+weights of the model rather than being compartmentalized into memory locations. memory-based
+learning such as nearest neighbor, on the other hand, does seek to store all (typically labeled) exam-
+ples in compartments in memory, but only uses them for    nding closest labels. memory networks
+combine compartmentalized memory with neural network modules that can learn how to (poten-
+tially successively) read and write to that memory, e.g., to perform reasoning they can iteratively
+read salient facts from the memory.
+
+however, there are some notable models that have attempted to include memory read and write
+operations from the 90s. in particular (das et al., 1992) designed differentiable push and pop actions
+called a neural network pushdown automaton. the work of schmidhuber (1992) incorporated the
+concept of two neural networks where one has very fast changing weights which can potentially be
+used as memory. schmidhuber (1993) proposed to allow a network to modify its own weights    self-
+referentially    which can also be seen as a kind of memory addressing. finally two other relevant
+works are the discern model of script processing and memory (miikkulainen, 1990) and the
+narx recurrent networks for modeling long term dependencies (lin et al., 1996).
+
+our work was submitted to arxiv just before the id63 work of graves et al. (2014),
+which is one of the most relevant related methods. their method also proposes to perform (sequence)
+prediction using a    large, addressable memory    which can be read and written to. in their experi-
+ments, the memory size was limited to 128 locations, whereas we consider much larger storage (up
+to 14m sentences). the experimental setups are notably quite different also: whereas we focus on
+language and reasoning tasks, their paper focuses on problems of sorting, copying and recall. on the
+one hand their problems require considerably more complex models than the memory network de-
+scribed in section 3. on the other hand, their problems have known algorithmic solutions, whereas
+(non-toy) language problems do not.
+
+there are other recent related works. id56search (bahdanau et al., 2014) is a method of machine
+translation that uses a learned alignment mechanism over the input sentence representation while
+predicting an output in order to overcome poor performance on long sentences. the work of (graves,
+2013) performs handwriting recognition by dynamically determining    an alignment between the text
+and the pen locations    so that    it learns to decide which character to write next   . one can view these
+as particular variants of memory networks where in that case the memory only extends back a single
+sentence or character sequence.
+
+6
+
+published as a conference paper at iclr 2015
+
+table 1: results on the large-scale qa task of (fader et al., 2013).
+
+method
+(fader et al., 2013)
+(bordes et al., 2014b)
+memnn (embedding only)
+memnn (with bow features)
+
+f1
+0.54
+0.73
+0.72
+0.82
+
+table 2: memory hashing results on the large-scale qa task of (fader et al., 2013).
+
+method
+memnn (no hashing)
+memnn (word hash)
+memnn (cluster hash)
+
+embedding f1 embedding + bow f1 candidates (speedup)
+
+0.72
+0.63
+0.71
+
+0.82
+0.68
+0.80
+
+14m (0x)
+13k (1000x)
+177k (80x)
+
+5 experiments
+
+5.1 large-scale qa
+
+we perform experiments on the qa dataset introduced in fader et al. (2013). it consists of 14m
+statements, stored as (subject, relation, object) triples, which are stored as memories in the memnn
+model. the triples are reverb extractions mined from the clueweb09 corpus and cover di-
+verse topics such as (milne, authored, winnie-the-pooh) and (sheep, be-afraid-of, wolf). following
+fader et al. (2013) and bordes et al. (2014b), training combines pseudo-labeled qa pairs made of a
+question and an associated triple, and 35m pairs of paraphrased questions from wikianswers like
+   who wrote the winnie the pooh books?    and    who is poohs creator?   .
+
+we performed experiments in the framework of re-ranking the top returned candidate answers by
+several systems measuring f1 score over the test set, following bordes et al. (2014b). these answers
+have been annotated as right or wrong by humans, whereas other answers are ignored at test time as
+we do not know their label. we used a memnn model of section 3 with a k = 1 supporting memory,
+which ends up being similar to the approach of bordes et al. (2014b).6 we also tried adding the bag
+of words features of section 3.6 as well. time and unseen word modeling were not used. results
+are given in table 1. the results show that memnns are a viable approach for large scale qa in
+terms of performance. however, lookup is linear in the size of the memory, which with 14m facts is
+slow. we therefore implemented the memory hashing techniques of section 3.3 using both hashing
+of words and clustered embeddings. for the latter we tried k = 1000 clusters. the results given in
+table 2 show that one can get signi   cant speedups (   80x) while maintaining similar performance
+using the cluster-based hash. the string hash on the other hand loses performance (whilst being a
+lot faster) because answers which share no words are now no longer matched.
+
+5.2 simulated world qa
+
+similar to the approach of bordes et al. (2010) we also built a simple simulation of 4 characters, 3
+objects and 5 rooms     with characters moving around, picking up and dropping objects. the actions
+are transcribed into text using a simple automated grammar, and labeled questions are generated in
+a similar way. this gives a qa task on simple    stories    such as in figure 1. the overall dif   culty of
+the task is that multiple statements have to be used to do id136 when asking where an object is,
+e.g. to answer where is the milk in figure 1 one has to understand the meaning of the actions    picked
+up    and    left    and the in   uence of their relative order. we generated 7k statements and 3k questions
+from the simulator for training7, and an identical number for testing and compare memnns to id56s
+and lstms (long short term memory id56s (hochreiter & schmidhuber, 1997)) on this task. to
+
+6we use a larger 128 dimension for embeddings, and no    ne tuning, hence the result of memnn slightly
+
+differs from those reported in bordes et al. (2014b).
+
+7learning curves with different numbers of training examples are given in appendix d.
+
+7
+
+published as a conference paper at iclr 2015
+
+table 3: test accuracy on the simulation qa task.
+
+method
+id56
+lstm
+memnn k = 1
+memnn k = 1 (+time)
+memnn k = 2 (+time)
+
+actor w/o before
+
+dif   culty 1
+actor
+60.9%
+64.8%
+31.0%
+60.2%
+100%
+
+dif   culty 5
+
+actor+object
+
+27.9%
+49.1%
+24.0%
+42.5%
+100%
+
+actor
+23.8%
+35.2%
+21.9%
+60.8%
+100%
+
+actor+object
+
+17.8%
+29.0%
+18.5%
+44.4%
+99.9%
+
+100%
+100%
+97.8%
+99.9%
+100%
+
+test with sequences of words as input (section 3.2) the statements are joined together again with a
+simple grammar8, to produce sentences that may contain multiple statements, see e.g., figure 2.
+we control the complexity of the task by setting a limit on the number of time steps in the past the
+entity we ask the question about was last mentioned. we try two experiments: using a limit of 1, and
+of 5, i.e., if the limit is 5 then we pick a random sentence between 1-5 time steps in the past. if this
+chosen sentence only mentions an actor, e.g.,    bill is in the kitchen    then we generate the question
+   where is bill?    or    where was bill before the kitchen?   . if the sentence mentions an object, e.g.,
+   bill dropped the football    then we ask the question    where is the football?   . for the answers we
+consider two options: (i) single word answers; and (ii) a simple grammar for generating true answers
+in sentence form, e.g.,    kitchen    for (i) and    he is in the kitchen i believe    (and other variants) for
+(ii). more details on the dataset generation are given in appendix a. note that in the object case
+the supporting statements necessary to deduce the answer may not lie in the last 5 sentences, e.g.,
+in this example the answer depends on other sentences to    nd out where bill actually was when he
+dropped the football. in fact, in the dataset we generated necessary supporting statements can be
+up to 65 sentences before (but are usually closer). for that reason, we also conducted two further
+types of experiments: where we only ask questions about actors (easier) and about actors and objects
+(harder). we also consider the actor-based questions without the    before    questions for the simplest
+possible task (i.e.    where is bill?    but not    where was bill before the kitchen?    questions).
+
+figure 2: sample test set predictions (in red) for the simulation in the setting of word-based input
+and where answers are sentences and an lstm is used as the r component of the memnn.
+
+joe went to the garden then fred picked up the milk; joe moved to the bathroom and fred dropped the
+milk, and then dan moved to the living room.
+where is dan? a: living room i believe
+where is joe? a: the bathroom
+fred moved to the bedroom and joe went to the kitchen then joe took the milk there and dan journeyed
+to the bedroom; joe discarded the milk.
+where is the milk now ? a: the milk is in the kitchen
+where is dan now? a: i think he is in the bedroom
+joe took the milk there, after that mike travelled to the of   ce, then joe went to the living room, next dan
+went back to the kitchen and joe travelled to the of   ce.
+where is joe now? a: i think joe is in the of   ce
+
+for the baseline id56 and lstm systems we perform id38 with id26
+through time (mikolov et al., 2010), but where we backprop only on answer words9. we optimized
+the hyperparameters: size of the hidden layer, bptt steps, and learning rate for each dataset. for
+memnns we    xed the embedding dimension to 100, learning rate to 0.01 and margin    to 0.1 and
+10 epochs of training in all experiments.
+
+results the results for the single word answer setting (i) are given in table 3. for the actor-only
+tasks, id56 and lstms solve the simpler dif   culty level 1 task without before questions (   w/o
+
+8we also tried the same kind of experiments with sentence-level rather than word-sequence input, without
+
+joining sentences, giving results with similar overall conclusions, see appendix e.
+
+9we tried using standard id38 on the questions as well, with slightly worse results.
+
+8
+
+published as a conference paper at iclr 2015
+
+figure 3: an example story with questions correctly answered by a memnn. the memnn was
+trained on the simulation described in section 5.2 and had never seen many of these words before,
+e.g., bilbo, frodo and gollum.
+
+bilbo travelled to the cave. gollum dropped the ring there. bilbo took the ring.
+bilbo went back to the shire. bilbo left the ring there. frodo got the ring.
+frodo journeyed to mount-doom. frodo dropped the ring there. sauron died.
+frodo went back to the shire. bilbo travelled to the grey-havens. the end.
+where is the ring? a: mount-doom
+where is bilbo now? a: grey-havens
+where is frodo now? a: shire
+
+figure 4: an example dialogue with a memnn system trained on both the simulation data and
+the large-scale qa data. the system is able to (attempt to) answer questions about general world
+knowledge and about speci   c story-based statements in the dialogue.
+
+fred went to the kitchen. fred picked up the milk. fred travelled to the of   ce.
+where is the milk ? a: of   ce
+where does milk come from ? a: milk come from cow
+what is a cow a type of ? a: cow be female of cattle
+where are cattle found ? a: cattle farm become widespread in brazil
+what does milk taste like ? a: milk taste like milk
+what does milk go well with ? a: milk go with coffee
+where was fred before the of   ce ? a: kitchen
+
+before   ), but perform worse with before questions, and even worse on the dif   culty 5 tasks. this
+demonstrates that the poor performance of the id56 is due to its failure to encode long(er)-term
+memory. this would likely deteriorate even further with higher dif   culty levels (distances). lstms
+are however better than id56s, as expected, as they are designed with a more sophisticated memory
+model, but still have trouble remembering sentences too far in the past. memnns do not have
+this memory limitation and its mistakes are instead due to incorrect usage of its memory, when the
+wrong statement is picked by so. time features are necessary for good performance on before
+questions or dif   culty > 1 (i.e., when the answer is not in the last statement), otherwise so can pick
+a statement about a person   s whereabouts but they have since moved. finally, results on the harder
+actor+object task indicate that memnn also successfully perform 2-stage id136 using k = 2,
+whereas memnns without such id136 (with k = 1) and id56s and lstms fail.
+we also tested memnns in the multi-word answer setting (ii) with similar results, whereby
+memnns outperform id56s and lstms, which are detailed in appendix f. example test prediction
+output demonstrating the model in that setting is given in figure 2.
+
+5.2.1 qa with previously unseen words
+
+we then tested the ability of memnns to deal with previously unseen words at test time using the
+unseen word modeling approach of sections 3.5 and 3.6. we trained the memnn on the same sim-
+ulated dataset as before and test on the story given in figure 3. this story is generated using similar
+structures as in the simulation data, except that the nouns are unknowns to the system at training
+time. despite never seeing any of the lord of the rings speci   c words before (e.g., bilbo, frodo,
+sauron, gollum, shire and mount-doom), memnns are able to correctly answer the questions.
+
+memnns can discover simple linguistic patterns based on verbal forms such as (x, dropped, y), (x,
+took, y) or (x, journeyed to, y) and can successfully generalize the meaning of their instantiations
+using unknown words to perform 2-stage id136. without the unseen word modeling described
+in section 3.5, they completely fail on this task.
+
+9
+
+published as a conference paper at iclr 2015
+
+5.3 combining simulated data and large-scale qa
+
+combining simulated world learning with real-world data might be one way to show the power and
+generality of the models we design. we implemented a naive setup towards that goal: we took the
+two models from sections 5.1 and 5.2, trained on large-scale qa and simulated data respectively,
+and built an ensemble of the two. we present the input to both systems and then for each question
+simply output the response of the two choices with the highest score. this allows us to perform
+simple dialogues with our combined memnn system. the system is then capable of answering both
+general knowledge questions and speci   c statements relating to the previous dialogue. an example
+dialogue trace is given in fig. 4. some answers appear    ne, whereas others are nonsensical. future
+work should combine these models more effectively, for example by multitasking directly the tasks
+with a single model.
+
+6 conclusions and future work
+
+in this paper we introduced a powerful class of models, memory networks, and showed one instanti-
+ation for qa. future work should develop memnns for text further, evaluating them on harder qa
+and open-domain machine comprehension tasks (richardson et al., 2013). for example, large scale
+qa tasks that require multi-hop id136 such as webquestions should also be tried berant et al.
+(2013). more complex simulation data could also be constructed in order to bridge that gap, e.g.,
+requiring coreference, involving more verbs and nouns, sentences with more structure and requiring
+more temporal and causal understanding. more sophisticated architectures should also be explored
+in order to deal with these tasks, e.g., using more sophisticated memory management via g and
+more sophisticated sentence representations. weakly supervised settings are also very important,
+and should be explored, as many datasets only have supervision in the form of question answer
+pairs, and not supporting facts as well as we used here. finally, we believe this class of models is
+much richer than the one speci   c variant we detail here, and that we have currently only explored
+one speci   c variant of memory networks. memory networks should be applied to other text tasks,
+and other domains, such as vision, as well.
+
+acknowledgments
+
+we thank tomas mikolov for useful discussions.
+
+references
+bahdanau, dzmitry, cho, kyunghyun, and bengio, yoshua. id4 by jointly
+
+learning to align and translate. arxiv preprint arxiv:1409.0473, 2014.
+
+berant, jonathan, chou, andrew, frostig, roy, and liang, percy. id29 on freebase from
+
+question-answer pairs. in emnlp, pp. 1533   1544, 2013.
+
+berant, jonathan, srikumar, vivek, chen, pei-chun, huang, brad, manning, christopher d, van-
+der linden, abby, harding, brittany, and clark, peter. modeling biological processes for reading
+comprehension. in proc. emnlp, 2014.
+
+bordes, antoine, usunier, nicolas, collobert, ronan, and weston, jason. towards understanding
+
+situated natural language. in aistats, 2010.
+
+bordes, antoine, chopra, sumit, and weston, jason. id53 with subgraph embed-
+
+dings. in proc. emnlp, 2014a.
+
+bordes, antoine, weston, jason, and usunier, nicolas. open id53 with weakly su-
+
+pervised embedding models. ecml-pkdd, 2014b.
+
+das, sreerupa, giles, c lee, and sun, guo-zheng. learning context-free grammars: capabilities
+and limitations of a recurrent neural network with an external stack memory. in proceedings of
+the fourteenth annual conference of cognitive science society. indiana university, 1992.
+
+fader, anthony, zettlemoyer, luke, and etzioni, oren. paraphrase-driven learning for open question
+
+answering. in acl, pp. 1608   1618, 2013.
+
+10
+
+published as a conference paper at iclr 2015
+
+graves, alex.
+
+generating sequences with recurrent neural networks.
+
+arxiv:1308.0850, 2013.
+
+graves, alex, wayne, greg, and danihelka, ivo. id63s.
+
+arxiv:1410.5401, 2014.
+
+haykin, simon. neural networks: a comprehensive foundation. 1994.
+
+arxiv preprint
+
+arxiv preprint
+
+hochreiter, sepp and schmidhuber, j  urgen. long short-term memory. neural computation, 9(8):
+
+1735   1780, 1997.
+
+iyyer, mohit, boyd-graber, jordan, claudino, leonardo, socher, richard, and iii, hal daum  e. a
+neural network for factoid id53 over paragraphs. in proceedings of the 2014 con-
+ference on empirical methods in natural language processing (emnlp), pp. 633   644, 2014.
+
+kolomiyets, oleksandr and moens, marie-francine. a survey on id53 technology
+
+from an information retrieval perspective. information sciences, 181(24):5412   5434, 2011.
+
+lin, tsungnam, horne, bil g, ti  no, peter, and giles, c lee. learning long-term dependencies in
+narx recurrent neural networks. neural networks, ieee transactions on, 7(6):1329   1338, 1996.
+
+miikkulainen, risto. {discern}:{a} distributed arti   cial neural network model of script process-
+
+ing and memory. 1990.
+
+mikolov, tomas, kara     at, martin, burget, lukas, cernock`y, jan, and khudanpur, sanjeev. recur-
+
+rent neural network based language model. in interspeech, pp. 1045   1048, 2010.
+
+richardson, matthew, burges, christopher jc, and renshaw, erin. mctest: a challenge dataset for
+
+the open-domain machine comprehension of text. in emnlp, pp. 193   203, 2013.
+
+schmidhuber, j  urgen. learning to control fast-weight memories: an alternative to dynamic recur-
+
+rent networks. neural computation, 4(1):131   139, 1992.
+
+schmidhuber, j  urgen. a self-referentialweight matrix. in icann93, pp. 446   450. springer, 1993.
+
+tolkien, john ronald reuel. the fellowship of the ring. george allen & unwin, 1954.
+
+weston, jason, bengio, samy, and usunier, nicolas. wsabie: scaling up to large vocabulary im-
+age annotation. in proceedings of the twenty-second international joint conference on arti   cial
+intelligence-volume volume three, pp. 2764   2770. aaai press, 2011.
+
+yih, wen-tau, he, xiaodong, and meek, christopher. id29 for single-relation question
+answering. in proceedings of acl. association for computational linguistics, june 2014. url
+http://research.microsoft.com/apps/pubs/default.aspx?id=214353.
+
+zaremba, wojciech and sutskever, ilya. learning to execute. arxiv preprint arxiv:1410.4615, 2014.
+
+11
+
+published as a conference paper at iclr 2015
+
+a simulation data generation
+
+aim we have built a simple simulation which behaves much like a classic text adventure game.
+the idea is that generating text within this simulation allows us to ground the language used.
+
+some comments about our intent:
+
+    firstly, while this currently only encompasses a very small part of the kind of language and
+understanding we want a model to learn to move towards full language understanding, we
+believe it is a prerequisite that models should perform well on this kind of task for them to
+work on real-world environments.
+
+    secondly, our aim is to make this simulation more complex and to release improved ver-
+sions over time. hopefully it can then scale up to evaluate more and more useful properties.
+
+currently, tasks within the simulation are restricted to id53 tasks about the location
+of people and objects. however, we envisage other tasks should be possible, including asking the
+learner to perform actions within the simulation (   please pick up the milk   ,    please    nd john and
+give him the milk   ) and asking the learner to describe actions (   what did john just do?   ).
+
+actions the underlying actions in the simulation consist of the following:
+
+go <location>,
+get <object>,
+put <object1> in/on <object2>,
+drop <object>,
+
+look,
+
+inventory,
+
+get <object1> from <object2>,
+give <object> to <actor>,
+
+examine <object>.
+
+there are a set of constraints on those actions. for example an actor cannot get something that they
+or someone else already has, they cannot go to a place they are already at, cannot drop something
+they do not already have, and so on.
+
+executing actions and asking questions using the underlying actions and their constraints,
+there is then a (hand-built) model that de   nes how actors act. currently this is very simple: they try
+to make a random valid action, at the moment restricted to go or go, get and drop depending on the
+which of two types of experiments we are running: (i) actor; or (ii) actor + object.
+
+if we write these actions down in text form this gives us a very simple    story    which is executable
+by the simulation, e.g.,
+joe go kitchen; fred go kitchen; joe get milk; joe go of   ce; joe drop milk;
+joe go bathroom. this example corresponds to the story given in figure 1. the system can then ask
+questions about the state of the simulation e.g., where milk?, where joe?, where joe before of   ce? it
+is easy to calculate the true answers for these questions as we have access to the underlying world.
+what remains is to convert both the statements and the questions to look more like natural language.
+
+simple grammar for generating language
+in order to produce more natural looking text with
+lexical variety we built a simple automated grammar. each verb is assigned a set of synonyms,
+e.g., the simulation command get is replaced with either picked up, got, grabbed or took, and drop
+is replace with either dropped, left, discarded or put down. similarly, each object and actor can
+have a set of replacement synonyms as well, although currently there is no ambiguity there in our
+experiments, we simply add articles or not. we do add lexical variation to questions, e.g.,    where is
+john ?    or    where is john now ?   .
+
+joining statements finally, for the word sequence training setting, we join the statements above
+into compound sentences. to do this we simply take the set of statements and then join them
+randomly with one of the following:    .   ,    and   ,    then   ,    , then   ,    ;   ,    , later   ,    , after that   ,    , and
+then   , or    , next   . example output can be seen in figure 2.
+
+issues there are a great many aspects of language not yet modeled. for example, currently coref-
+erence is not modeled (e.g.,    he picked up the milk   ) and similarly there are no compound noun
+phrases (   john and fred went to the kitchen   ). some of these seem easy to add to the simulation.
+the hope is that adding these complexities will help evaluate models in a controlled way, within the
+simulated environment, which is hard to do with real data. of course, this is not a substitute for real
+data which our models should be applied to as well, but does serve as a useful testbed.
+
+12
+
+published as a conference paper at iclr 2015
+
+b word sequence training
+
+for segmenting an input word stream as generated in appendix a we use a segmenter of the form:
+
+seg(c) = w    
+
+segus  seg(c)
+
+where wseg is a vector (effectively the parameters of a linear classi   er in embedding space). as we
+are already in the fully supervised setting, where for each question in the training set we are given
+the answer and the supporting facts from the input stream, we can also use that supervision for the
+segmenter as well. that is, for any known supporting fact, such as    bill is in the kitchen    for the
+question    where is bill?    we wish the segmenter to    re for such a statement, but not for un   nished
+statements such as    bill is in the   . we can thus write our training criterion for segmentation as the
+minimization of:
+
+x
+
+f    f
+
+max(0,        seg(f )) + x
+
+  f       f
+
+max(0,    + seg(   f ))
+
+(12)
+
+where f are all known supporting segments in the labeled training set, and   f are all other segments
+in the training set.
+
+c write time feature training
+
+the training procedure to take into account modeling write time is slightly different to that described
+in section 3.1. write time features are important so that the memnn knows when each memory
+was written, and hence knows the ordering of statements that comprise a story or dialogue. note
+that this is different to time information described in the text of a statement, such as the tense of a
+statement, or statements containing time expressions, e.g.,    he went to the of   ce yesterday   . for
+such cases, write time features are not directly necessary, and they could (potentially) be modeled
+directly from the text.
+
+as was described in section 3.4 we add three write time features to the model and score triples
+using:
+
+sot (x, y, y   ) =   x(x)   uot
+
+   uot(cid:16)  y(y)       y(y   ) +   t(x, y, y   )(cid:17).
+
+(13)
+
+if so(x, y, y   ) > 0 the model prefers y over y   , and if so(x, y, y   ) < 0 it prefers y   . the argmax of
+eq. (2) and (3) are replaced by a loop over memories i = 1, . . . , n , keeping the winning memory
+(y or y   ) at each step, and always comparing the current winner to the next memory mi. that is,
+at id136 time, for a k = 2 model the arg max functions of eq. (2) and (3) are replaced with
+o1 = ot(x, m) and o2 = ot([x, mo1 ], m) where ot is de   ned in algorithm 1 below.
+
+algorithm 1 ot replacement to arg max when using write time features
+
+function ot(q, m)
+
+t     1
+for i = 2, . . . , n do
+
+if sot (q, mi, mt) > 0 then
+
+t     i
+
+end if
+
+end for
+return t
+end function
+
+  t(x, y, y   ) uses three new features which take on the value 0 or 1: whether x is older than y,
+x is older than y   , and y older than y   . when    nding the second supporting memory (computing
+ot([x, mo1], m)) we encode whether mo1 is older than y, mo1 is older than y   , and y older than y    to
+capture the relative age of the    rst supporting memory w.r.t. the second one in the    rst two features.
+note that when    nding the    rst supporting memory (i.e., for ot(x, m)) the    rst two features are
+useless as x is the last thing in the memory and hence y and y    are always older.
+
+13
+
+published as a conference paper at iclr 2015
+
+to train our model with write time features we need to replace the hinge loss in eqs. (6)-(7) with a
+loss that matches algorithm 1. to do this, we instead minimize:
+
+max(0,        sot (x, mo1 ,   f )) + p  f 6=mo1
+p  f 6=mo1
+max(0,        sot ([x, mo1], mo2 ,   f    )) + p  f    6=mo2
+
+p  f    6=mo2
+
+max(0,    + sot (x,   f , mo1)) +
+
+max(0,    + sot ([x, mo1],   f    , mo2) +
+
+max(0,        sr([x, mo1 , mo2], r) + sr([x, mo1 , mo2],   r]))
+
+p  r6=r
+
+the last term is the same as in eq. (8) and is for the    nal ranking of words to return a response,
+which remains unchanged (as usual, this can also be replaced by an id56 for a more sophisticated
+model). terms 1-4 replace eqs. (6)-(7) by considering triples directly. for both mo1 and mo2 we
+need to have two terms considering them as the second or third argument to sot as they may appear
+on either side during id136 (via algorithm 1). as before, at every step of sgd we sample   f ,   f    ,   r
+rather than compute the whole sum for each training example.
+
+d word-sequence learning curve experiments
+
+we computed the test accuracy of memnns k = 2 (+ time) for varying amounts of training data:
+100, 500, 1000 and 3000 training questions. the results are given in table 4. these results can be
+compared with id56s and lstms on the full data (3000 examples) by comparing with figure 3.
+for example, on the dif   culty 5 actor and actor + object tasks memnns outperform lstms even
+using 30 times less training examples.
+
+table 4: test accuracy of memnns k = 2 (+time) on the word-sequence simulation qa task for
+differing numbers of training examples (number of questions).
+
+num. training
+questions
+100
+500
+1000
+3000
+
+dif   culty 1
+actor
+
+actor
+
++ object
+73.8% 64.9%
+99.9% 99.2%
+99.9% 100%
+100%
+100%
+
+dif   culty 5
+
+actor
+
+actor
+
++ object
+74.4% 49.8%
+99.8% 95.1%
+100% 98.4%
+100% 99.9%
+
+e sentence-level experiments
+
+we conducted experiments where input was at the sentence-level, that is the data was already pre-
+segemented into statements and questions as input to the memnn (as opposed to being input as a
+stream of words). results comparing id56s with memnns are given in table 5. the conclusions
+are similar to those at the word level from section 5.2. that is, memnns outperform id56s, and
+that id136 that    nds k = 2 supporting statements and time features are necessary for the actor
+w/o before + object task.
+
+table 5: test accuracy on the sentence-level simulation qa task.
+
+method
+id56
+memnn k = 1
+memnn k = 1 (+time)
+memnn k = 2 (+time)
+
+dif   culty 1
+
+dif   culty 5
+
+actor
+
+w/o before
+
+actor w/o before
+
++ object
+
+actor
+
+w/o before
+
+actor w/o before
+
++ object
+
+29%
+46%
+100%
+100%
+
+17%
+21%
+73%
+99.4%
+
+100%
+90%
+100%
+100%
+
+58%
+9%
+73%
+
+99.95%
+
+14
+
+published as a conference paper at iclr 2015
+
+f multi-word answer setting experiments
+
+we conducted experiments for the simulation data in the case where the answers are sentences (see
+appendix a and figure 2). as the single word answer model can no longer be used, we simply
+compare memnns using either id56s or lstms for the response module r. as baselines we can
+still use id56s and lstms in the standard setting of being fed words only including the statements
+and the question as a word stream. in contrast, the memnn id56 and lstms are effectively fed
+the output of the o module (see section 3.1). in these experiments we only consider the dif   culty
+5 actor+object setting in the case of memnns with k = 2 iterations (eq. (3)), which means the
+module r is fed the features [x, mo1 , mo2] after the modules i, g and o have run.
+the sentence generation is performed on the test data, and the evaluation we chose is as follows. a
+correct generation has to contain the correct location answer, and can optionally contain the subject
+or a correct pronoun referring to it. for example the question    where is bill?    allows the correct
+answers    kitchen   ,    in the kitchen   ,    bill is in the kitchen   ,    he is in the kitchen    and    i think bill
+is in the kitchen   . however incorrect answers contain an incorrect location or subject reference, for
+example    joe is in the kitchen   ,    it is in the kitchen    or    bill is in the bathroom i believe   . we can
+then measure the percentage of text examples that are correct using this metric.
+
+the numerical results are given in table 6, and example output is given in figure 2. the results
+indicate that memnns with lstms perform quite strongly, outperforming memnns using id56s.
+however, both memnn variant outperform both id56s and lstms by some distance.
+
+table 6: test accuracy on the multi-word answer simulation qa task. we compare conventional
+id56 and lstms with memnns using an id56 or lstm module r (i.e., where r is fed features
+[x, mo1 , mo2] after the modules i, g and o have run).
+
+model memnn: igo features [x, mo1 , mo2] word features
+id56
+lstm
+
+68.83%
+90.98%
+
+13.97%
+14.01%
+
+15
+
+

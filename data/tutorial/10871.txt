@@ -1,0 +1,1582 @@
+neural episodic control
+
+7
+1
+0
+2
+
+ 
+r
+a
+
+m
+6
+
+ 
+
+ 
+ 
+]
+
+g
+l
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+8
+8
+9
+1
+0
+
+.
+
+3
+0
+7
+1
+:
+v
+i
+x
+r
+a
+
+alexander pritzel
+benigno uria
+sriram srinivasan
+adri`a puigdom`enech
+oriol vinyals
+demis hassabis
+daan wierstra
+charles blundell
+deepmind, london uk
+
+apritzel@google.com
+buria@google.com
+srsrinivasan@google.com
+adriap@google.com
+vinyals@google.com
+demishassabis@google.com
+wierstra@google.com
+cblundell@google.com
+
+abstract
+
+deep reinforcement
+learning methods attain
+super-human performance in a wide range of en-
+vironments. such methods are grossly inef   cient,
+often taking orders of magnitudes more data than
+humans to achieve reasonable performance. we
+propose neural episodic control: a deep rein-
+forcement learning agent that is able to rapidly
+assimilate new experiences and act upon them.
+our agent uses a semi-tabular representation of
+the value function: a buffer of past experience con-
+taining slowly changing state representations and
+rapidly updated estimates of the value function.
+we show across a wide range of environments
+that our agent learns signi   cantly faster than other
+state-of-the-art, general purpose deep reinforce-
+ment learning agents.
+
+1. introduction
+deep id23 agents have achieved state-of-
+the-art results in a variety of complex environments (mnih
+et al., 2015; 2016), often surpassing human perfor-
+mance (silver et al., 2016). although the    nal performance
+of these agents is impressive, these techniques usually re-
+quire several orders of magnitude more interactions with
+their environment than a human in order to reach an equiv-
+alent level of expected performance. for example, in the
+atari 2600 set of environments (bellemare et al., 2013),
+deep q-networks (mnih et al., 2016) require more than 200
+hours of gameplay in order to achieve scores similar to those
+a human player achieves after two hours (lake et al., 2016).
+the glacial learning speed of deep id23
+has several plausible explanations and in this work we focus
+on addressing these:
+
+1. stochastic id119 optimisation requires the use
+of small learning rates. due to the global approximation
+nature of neural networks, high learning rates cause catas-
+trophic interference (mccloskey & cohen, 1989). low
+learning rates mean that experience can only be incorpo-
+rated into a neural network slowly.
+2. environments with a sparse reward signal can be dif   cult
+for a neural network to model as there may be very few
+instances where the reward is non-zero. this can be viewed
+as a form of class imbalance where low-reward samples
+outnumber high-reward samples by an unknown number.
+consequently, the neural network disproportionately under-
+performs at predicting larger rewards, making it dif   cult for
+an agent to take the most rewarding actions.
+3. reward signal propagation by value-id64 tech-
+niques, such as id24, results in reward information
+being propagated one step at a time through the history of
+previous interactions with the environment. this can be
+fairly ef   cient if updates happen in reverse order in which
+the transitions occur. however, in order to train on uncorre-
+lated minibatches id25-style, algorithms train on randomly
+selected transitions, and, in order to further stabilise training,
+require the use of a slowly updating target network further
+slowing down reward propagation.
+in this work we shall focus on addressing the three con-
+cerns listed above; we must note, however, that other recent
+advances in exploration (osband et al., 2016), hierarchical
+id23 (vezhnevets et al., 2016) and trans-
+fer learning (rusu et al., 2016; fernando et al., 2017) also
+make substantial contributions to improving data ef   ciency
+in deep id23 over baseline agents.
+in this paper we propose neural episodic control (nec),
+a method which tackles the limitations of deep reinforce-
+ment learning listed above and demonstrates dramatic im-
+
+neural episodic control
+
+provements on the speed of learning for a wide range of
+environments. critically, our agent is able to rapidly latch
+onto highly successful strategies as soon as they are expe-
+rienced, instead of waiting for many steps of optimisation
+(e.g., stochastic id119) as is the case with id25
+(mnih et al., 2015) and a3c (mnih et al., 2016).
+our work is in part inspired by the hypothesised role of the
+hippocampus in decision making (lengyel & dayan, 2007;
+blundell et al., 2016) and also by recent work on one-shot
+learning (vinyals et al., 2016) and learning to remember
+rare events with neural networks (kaiser et al., 2016). our
+agent uses a semi-tabular representation of its experience
+of the environment possessing several of the features of
+episodic memory such as long term memory, sequentiality,
+and context-based lookups. the semi-tabular representation
+is an append-only memory that binds slow-changing keys
+to fast updating values and uses a context-based lookup on
+the keys to retrieve useful values during action selection
+by the agent. thus the agent   s memory operates in much
+the same way that traditional table-based rl methods map
+from state and action to value estimates. a unique aspect
+of the memory in contrast to other neural memory architec-
+tures for id23 (explained in more detail in
+section 3) is that the values retrieved from the memory can
+be updated much faster than the rest of the deep neural net-
+work. this helps alleviate the typically slow weight updates
+of stochastic id119 applied to the whole network
+and is reminiscent of work on fast weights (ba et al., 2016;
+hinton & plaut, 1987), although the architecture we present
+is quite different. another unique aspect of the memory
+is that unlike other memory architectures such as lstm
+and the differentiable neural computer (dnc; graves et al.,
+2016), our architecture does not try to learn when to write to
+memory, as this can be slow to learn and take a signi   cant
+amount of time. instead, we elect to write all experiences
+to the memory, and allow it to grow very large compared
+to existing memory architectures (in contrast to oh et al.
+(2015); graves et al. (2016) where the memory is wiped
+at the end of each episode). reading from this large mem-
+ory is made ef   cient using kd-tree based nearest neighbour
+(bentley, 1975).
+the remainder of the paper is organised as follows: in sec-
+tion 2 we review deep id23, in section 3
+the neural episodic control algorithm is described, in sec-
+tion 4 we report experimental results in the atari learning
+environment, in section 5 we discuss other methods that use
+memory for id23, and    nally in section 6
+we outline future work and summarise the main advantages
+of the nec algorithm.
+
+e   [(cid:80)
+
+2. deep id23
+the action-value function of a id23
+agent (sutton & barto, 1998) is de   ned as q  (s, a) =
+t   trt | s, a], where a is the initial action taken by
+the agent in the initial state s and the expectation denotes
+that the policy    is followed thereafter. the discount fac-
+tor        (0, 1) trades off favouring short vs.
+long term
+rewards.
+deep q-network agents (id25; mnih et al., 2015) use q-
+learning (watkins & dayan, 1992) to learn a value function
+q(st, at) to rank which action at is best to take in each
+state st at step t. the agent then executes an  -greedy policy
+based upon this value function to trade-off exploration and
+exploitation: with id203   the agent picks an action
+uniformly at random, otherwise it picks the action at =
+arg maxa q(st, a).
+in id25, the action-value function q(st, at) is parame-
+terised by a convolutional neural network that takes a 2d
+pixel representation of the state st as input, and outputs
+a vector containing the value of each action at that state.
+when the agent observes a transition, id25 stores the
+(st, at, rt, st+1) tuple in a replay buffer, the contents of
+which are used for training. this neural network is trained
+by minimizing the squared error between the network   s out-
+put and the id24 target yt = rt +    maxa   q(st+1, a),
+for a subset of transitions sampled at random from the replay
+buffer. the target network   q(st+1, a) is an older version of
+the value network that is updated periodically. the use of
+a target network and uncorrelated samples from the replay
+buffer are critical for stable training.
+a number of extensions have been proposed that improve
+id25. double id25 (van hasselt et al., 2016) reduces bias
+on the target calculation. prioritised replay (schaul et al.,
+2015b) further improves double id25 by optimising the
+replay strategy. several authors have proposed methods of
+improving reward propagation and the back up mechanism
+of id24 (harutyunyan et al., 2016; munos et al., 2016;
+he et al., 2016) by incorporating on-policy rewards or by
+adding constraints to the optimisation. q   (  ) (harutyunyan
+et al., 2016) and retrace(  ) (munos et al., 2016) change
+the form of the id24 target to incorporate on-policy
+samples and    uidly switch between on-policy learning and
+off-policy learning. munos et al. (2016) show that by incor-
+porating on-policy samples allows an agent to learn faster
+in atari environments, indicating that reward propagation
+is indeed a bottleneck to ef   ciency in deep reinforcement
+learning.
+a3c (mnih et al., 2016) is another well known deep re-
+inforcement learning algorithm that is very different from
+id25. it is based upon a policy gradient, and learns both a
+policy and its associated value function, which is learned
+
+neural episodic control
+
+entirely on-policy (similar to the    = 1 case of q(  )). inter-
+estingly, mnih et al. (2016) also added an lstm memory
+to the otherwise convolutional neural network architecture
+to give the agent a notion of memory, although this did not
+have signi   cant impact on the performance on atari games.
+
+3. neural episodic control
+our agent consists of three components: a convolutional neu-
+ral network that processes pixel images s, a set of memory
+modules (one per action), and a    nal network that converts
+read-outs from the action memories into q(s, a) values. for
+the convolutional neural network we use the same architec-
+ture as id25 (mnih et al., 2015).
+
+3.1. differentiable neural dictionary
+for each action a     a, nec has a simple memory module
+ma = (ka, va), where ka and va are dynamically sized
+arrays of vectors, each containing the same number of vec-
+tors. the memory module acts as an arbitrary association
+from keys to corresponding values, much like the dictionary
+data type found in programs. thus we refer to this kind of
+memory module as a differentiable neural dictionary (dnd).
+there are two operations possible on a dnd: lookup and
+write, as depicted in figure 1. performing a lookup on a
+dnd maps a key h to an output value o:
+
+(1)
+
+(2)
+
+where vi is the ith element of the array va and
+
+wi = k(h, hi)/
+
+k(h, hj),
+
+j
+
+where hi is the ith element of the array ka and k(x, y) is
+a kernel between vectors x and y, e.g., gaussian or inverse
+kernels. thus the output of a lookup in a dnd is a weighted
+sum of the values in the memory, whose weights are given
+by normalised kernels between the lookup key and the cor-
+responding key in memory. to make queries into very large
+memories scalable we shall make two approximations in
+practice:    rstly, we shall limit (1) to the top p-nearest neigh-
+bours (typically p = 50). secondly, we use an approximate
+nearest neighbours algorithm to perform the lookups, based
+upon kd-trees (bentley, 1975).
+after a dnd is queried, a new key-value pair is written into
+the memory. the key written corresponds to the key that
+was looked up. the associated value is application-speci   c
+(below we specify the update for the nec agent). writes to
+a dnd are append-only: keys and values are written to the
+memory by appending them onto the end of the arrays ka
+and va respectively. if a key already exists in the memory,
+then its corresponding value is updated, rather than being
+duplicated.
+
+o =
+
+wivi,
+
+(cid:88)
+
+i
+
+(cid:88)
+
+note that a dnd is a differentiable version of the memory
+module described in blundell et al. (2016).
+it is also a
+generalisation to the memory and lookup schemes described
+in (vinyals et al., 2016; kaiser et al., 2016) for classi   cation.
+
+3.2. agent architecture
+
+figure 2 shows a dnd as part of the nec agent for a single
+action, whilst algorithm 1 describes the general outline of
+the nec algorithm. the pixel state s is processed by a
+convolutional neural network to produce a key h. the key
+h is then used to lookup a value from the dnd, yielding
+weights wi in the process for each element of the memory
+arrays. finally, the output is a weighted sum of the values
+in the dnd. the values in the dnd, in the case of an
+nec agent, are the q values corresponding to the state that
+originally resulted in the corresponding key-value pair to
+be written to the memory. thus this architecture produces
+an estimate of q(s, a) for a single given action a. the
+architecture is replicated once for each action a the agent
+can take, with the convolutional part of the network shared
+among each separate dnd ma. the nec agent acts by
+taking the action with the highest q-value estimate at each
+time step. in practice, we use  -greedy policy during training
+with a low  .
+
+algorithm 1 neural episodic control
+
+d: replay memory.
+ma: a dnd for each action a.
+n: horizon for n-step q estimate.
+for each episode do
+
+for t = 1, 2, . . . , t do
+
+receive observation st from environment with em-
+bedding h.
+estimate q(st, a) for each action a via (1) from ma
+at      -greedy policy based on q(st, a)
+take action at, receive reward rt+1
+append (h, q(n )(st, at)) to mat.
+append (st, at, q(n )(st, at)) to d.
+train on a random minibatch from d.
+
+end for
+
+end for
+
+3.3. adding (s, a) pairs to memory
+
+as an nec agent acts, it continually adds new key-value
+pairs to its memory. keys are appended to the memory of
+the corresponding action, taking the value of the query key
+h encoded by the convolutional neural network. we now
+turn to the question of an appropriate corresponding value.
+in blundell et al. (2016), monte carlo returns were written
+to memory. we found that a mixture of monte carlo returns
+(on-policy) and off-policy backups worked better and so for
+nec we elect to use n-step id24 as in mnih et al.
+
+neural episodic control
+
+figure 1. illustration of operations on a differentiable neural dictionary.
+
+n   1(cid:88)
+
+(2016) (see also watkins, 1989; peng & williams, 1996).
+this adds the following n on-policy rewards and bootstraps
+the sum of discounted rewards for the rest of the trajectory,
+off-policy. the n-step q-value estimate is then
+
+j=0
+
+q(n )(st, a) =
+
+  jrt+j +   n max
+
+a(cid:48) q(st+n , a(cid:48)) . (3)
+the bootstrap term of (3), maxa(cid:48) q(st+n , a(cid:48)) is found by
+querying all memories ma for each action a and taking the
+highest estimated q-value returned. note that the earliest
+such values can be added to memory is n steps after a
+particular (s, a) pair occurs.
+when a state-action value is already present in a dnd (i.e
+the exact same key h is already in ka), the corresponding
+value present in va, qi, is updated in the same way as the
+classic tabular id24 algorithm:
+
+qi     qi +   (q(n )(s, a)     qi) .
+
+(4)
+
+where    is the learning rate of the q update. if the state is
+not already present q(n )(st, a) is appended to va and h is
+appended to ka. note that our agent learns the value func-
+tion in much the same way that a classic tabular id24
+agent does, except that the q-table grows with time. we
+found that    could take on a high value, allowing repeatedly
+visited states with a stable representation to rapidly update
+their value function estimate. additionally, batching up
+memory updates (e.g., at the end of the episode) helps with
+computational performance. we overwrite the item that has
+least recently shown up as a neighbour when we reach the
+memory   s maximum capacity.
+
+3.4. learning
+
+agent parameters are updated by minimising the l2 loss
+between the predicted q value for a given action and the
+q(n ) estimate on randomly sampled mini-batches from a
+replay buffer. in particular, we store tuples (st, at, rt) in
+
+the replay buffer, where n is the horizon of the n-step q
+rule, and rt = q(n )(st, a) plays the role of the target net-
+work seen in id25 (our replay buffer is signi   cantly smaller
+than id25   s). these (st, at, rt)-tuples are then sampled
+uniformly at random to form minibatches for training. note
+that the architecture in figure 2 is entirely differentiable and
+so we can minimize this loss by id119. backprop-
+agation updates the the weights and biases of the convolu-
+tional embedding network and the keys and values of each
+action-speci   c memory using gradients of this loss, using
+a lower learning rate than is used for updating pairs after
+queries (  ).
+
+4. experiments
+we investigated whether neural episodic control allows for
+more data ef   cient learning in practice in complex domains.
+as a problem domain we chose the atari learning environ-
+ment(ale; bellemare et al., 2013). we tested our method
+on the 57 atari games used by schaul et al. (2015a), which
+form an interesting set of tasks as they contain diverse chal-
+lenges such as sparse rewards and vastly different magni-
+tudes of scores across games. most common algorithms
+applied in these domains, such as variants of id25 and a3c,
+require in the thousands of hours of in-game time, i.e. they
+are data inef   cient.
+we consider 5 variants of a3c and id25 as baselines
+as well as mfec (blundell et al., 2016). we compare
+to the basic implementations of a3c (mnih et al., 2016)
+and id25 (mnih et al., 2015). we also compare to two
+algorithms incorporating    returns (sutton, 1988) aiming
+at more data ef   ciency by faster propagation of credit as-
+signments, namely q   (  ) (harutyunyan et al., 2016) and
+retrace(  ) (munos et al., 2016). we also compare to id25
+with prioritised replay, which improves data ef   ciency by
+replaying more salient transitions more frequently. we did
+not directly compare to drqn (hausknecht & stone, 2015)
+nor frmqn (oh et al., 2016) as results were not available
+
+writinglookupneural episodic control
+
+figure 2. architecture of episodic memory module for a single action a. pixels representing the current state enter through a convolutional
+neural network on the bottom left and an estimate of q(s, a) exits top right. gradients    ow through the entire architecture.
+
+for all atari games. note that in the case of drqn, reported
+performance is lower than that of prioritised replay.
+all algorithms were trained using discount rate    = 0.99,
+except mfec that uses    = 1.
+in our implementation
+of mfec we used random projections as an embedding
+function, since in the original publication it obtained better
+performance on the atari games tested.
+in terms of hyperparameters for nec, we chose the same
+convolutional architecture as id25, and store up to 5   
+105 memories per action. we used the rmsprop algo-
+rithm (tieleman & hinton, 2012) for id119 train-
+ing. we apply the same preprocessing steps as (mnih et al.,
+2015), including repeating each action four times. for the
+n-step q estimates we picked a horizon of n = 100. our
+replay buffer stores the only last 105 states (as opposed to
+106 for id25) observed and their n-step q estimates. we
+do one replay update for every 16 observed frames with a
+minibatch of size 32. we set the number of nearest neigh-
+bours p = 50 in all our experiments. for the id81
+we chose a function that interpolates between the mean
+for short distances and weighted inverse distance for large
+distances, more precisely:
+
+k(h, hi) =
+
+1
+
+(cid:107)h     hi(cid:107)2
+
+2 +   
+
+.
+
+(5)
+
+intuitively, when all neighbours are far away we want to
+avoid putting all weight onto one data point. a gaussian
+kernel, for example, would exponentially suppress all neigh-
+bours except for the closest one. the kernel we chose has
+the advantage of having heavy tails. this makes the algo-
+rithm more robust and we found it to be less sensitive to
+kernel hyperparameters. we set    = 10   3.
+in order to tune the remaining hyperparameters (sgd
+learning-rate, fast-update learning-rate    in equation 4, di-
+mensionality of the embeddings, q(n ) in equation 3, and  -
+greedy exploration-rate) we ran a hyperparameter sweep on
+six games: beam rider, breakout, pong, q*bert, seaquest
+and space invaders. we picked the hyperparameter values
+that performed best on the median for this subset of games (a
+
+common cross validation procedure described by bellemare
+et al. (2013), and adhered to by mnih et al. (2015)).
+data ef   ciency results are summarised in table 1. in the
+small data regime (less than 20 million frames) nec clearly
+outperforms all other algorithms. the difference is espe-
+cially pronounced before 5 million frames have been ob-
+served. only at 40 million frames does id25 with priori-
+tised replay outperform nec on average; note that this
+corresponds to 185 hours of gameplay.
+in order to provide a more detailed picture of nec   s per-
+formance, figures 3 to 7 show learning curves on 6 games
+(alien, bowling, boxing, frostbite, hero, ms. pac-man,
+pong), where several stereotypical cases of nec   s perfor-
+mance can be observed. all learning curves show the aver-
+age performance over 5 different initial random seeds. we
+evaluate mfec and nec every 200.000 frames, and the
+other algorithms are evaluated every million steps.
+across most games, nec is signi   cantly faster at learning
+in the initial phase (see also table 1), only comparable to
+mfec, which also uses an episodic-like q-function.
+nec also outperforms mfec on average (see table 2).
+in contrast with mfec, nec uses the reward signal to
+learn an embedding adequate for value interpolation. this
+difference is especially signi   cant in games where a few
+pixels determine the value of each action. the simpler
+version of mfec uses an approximation to l2 distances
+in pixel-space by means of random projections, and cannot
+focus on the small but most relevant details. another version
+of mfec calculated distances on the latent representation of
+a variational autoencoder (kingma & welling, 2013) trained
+to model frames. this latent representation does not depend
+on rewards and will be subject to irrelevant details like, for
+example, the display of the current score.
+a3c, id25 and related algorithms require rewards to be
+clipped to the range [   1, 1] for training stability1(mnih
+1see pop   art (van hasselt et al., 2016) for a id25-like algo-
+rithm that does not require reward-clipping. nec also outperforms
+
+neural episodic control
+
+frames nature id25 q   (  ) retrace(  )
+1m
+2m
+4m
+10m
+20m
+40m
+
+-0.8% -0.4%
+0.2%
+0.1%
+1.8%
+3.3%
+13.0% 17.3%
+26.9% 30.4%
+59.6% 60.5%
+
+-0.7%
+0.0%
+2.4%
+15.7%
+26.8%
+52.7%
+
+prioritised replay a3c
+nec
+mfec
+16.7% 12.8%
+-2.4%
+0.4%
+27.8% 16.7%
+0.9%
+0.0%
+36.0% 26.6%
+1.9%
+2.7%
+54.6% 45.4%
+3.6%
+22.4%
+72.0% 55.9%
+38.6%
+7.9%
+89.0%
+18.4% 83.3% 61.9%
+
+retrace(  )
+
+table 1. median across games of human-normalised scores for several algorithms at different points in training
+frames nature id25 q   (  )
+1m
+2m
+4m
+10m
+20m
+40m
+
+nec
+mfec
+prioritised replay a3c
+45.6% 28.4%
+5.2%
+-14.4%
+58.3% 39.4%
+8.0%
+-5.4%
+73.3% 53.4%
+10.2%
+11.8%
+99.8% 85.0%
+22.3%
+71.5%
+59.7%
+165.2%
+121.5% 113.6%
+255.4% 144.8% 142.2%
+332.3%
+
+-11.7% -10.5%
+-5.4%
+-7.5%
+6.2%
+6.2%
+46.3%
+52.7%
+135.4% 273.7%
+440.9% 386.5%
+
+-10.5%
+-5.8%
+8.8%
+51.3%
+94.5%
+151.2%
+
+table 2. mean human-normalised scores for several algorithms at different points in training
+
+et al., 2015). nec and mfec do not require reward clip-
+ping, which results in qualitative changes in behaviour and
+better performance relative to other algorithms on games
+requiring clipping (bowling, frostbite, h.e.r.o., ms. pac-
+man, alien out of the seven shown).
+
+figure 3. learning curve on bowling.
+
+alien and ms. pac-man both involve controlling a char-
+acter, where there is an easy way to collect small rewards
+by collecting items of which there are plenty, while avoid-
+ing enemies, which are invulnerable to the agent. on the
+other hand the agent can pick up a special item making ene-
+mies vulnerable, allowing the agent to attack them and get
+signi   cantly larger rewards than from collecting the small
+rewards. agents trained using existing parametric methods
+tend to show little interest in this as clipping implies there
+is no difference between large and small rewards. there-
+fore, as nec does not need reward clipping, it can strongly
+
+pop   art.
+
+figure 4. learning curve on frostbite.
+
+outperform other algorithms, since nec is maximising the
+non-clipped score (the true score). this can also be seen
+when observing the agents play: parametric methods will
+tend to collect small rewards, while nec will try to actively
+make the enemies vulnerable and attack them to get large
+rewards.
+nec also outperforms the other algorithms on pong and
+boxing where reward clipping does not affect any of the
+algorithms as all original rewards are in the range [   1, 1];
+as can be expected, nec does not outperform others in
+terms of maximally achieved score, but it is vastly more
+data ef   cient.
+in figure 10 we show a chart of human-normalised scores
+across all 57 atari games at 10 million frames comparing to
+prioritised replay and mfec. we rank the games indepen-
+dently for each algorithm, and on the y-axis the deciles are
+
+neural episodic control
+
+figure 5. learning curve on h.e.r.o.
+
+figure 7. learning curve on alien.
+
+figure 6. learning curve on ms. pac-man.
+
+figure 8. learning curve on pong.
+
+shown.
+we can see that nec gets to a human level performance in
+about 25% of the games within 10 million frames. as we
+can see nec outperforms mfec and prioritised replay.
+
+5. related work
+there has been much recent work on memory architec-
+tures for neural networks (lstm; hochreiter & schmidhu-
+ber, 1997), dnc (graves et al., 2016), memory networks
+(sukhbaatar et al., 2015; miller et al., 2016)). recurrent neu-
+ral network representations of memory (lstms and dncs)
+are trained by truncated id26 through time, and
+are subject to the same slow learning of non-recurrent neural
+networks.
+some of these models have been adapted to their use in rl
+agents (lstms; bakker et al., 2003; hausknecht & stone,
+2015), dncs (graves et al., 2016), memory networks (oh
+et al., 2016). however, the contents of these memories is
+typically reset at the beginning of every episode. this is ap-
+
+propriate when the goal of the memory is tracking previous
+observations in order to maximise rewards in partially ob-
+servable or non-markovian environments. therefore, these
+implementations can be thought of as a type of working
+memory, and solve a different problem than the one ad-
+dressed in this work.
+id56s can learn to quickly write highly rewarding states into
+memory and may even be able to learn entire reinforcement
+learning algorithms (wang et al., 2016; duan et al., 2016).
+however, doing so can take an arbitrarily long time and the
+learning time likely scales strongly with the complexity of
+the task.
+the work of oh et al. (2016) is also reminiscent of the ideas
+presented here. they introduced (fr)mqn, an adaptation
+of memory networks used in the top layers of a q-network.
+kaiser et al. (2016) introduced a differentiable layer of key-
+value pairs that can be plugged into a neural network. this
+layer uses cosine similarity to calculate a weighted average
+of the values associated with the k most similar memories.
+their use of a moving average update rule is reminiscent of
+
+neural episodic control
+
+figure 9. learning curve on boxing.
+
+the one presented in section 3. the authors reported results
+on a set of supervised tasks, however they did not consider
+applications to id23. other deep rl meth-
+ods keep a history of previous experience. indeed, id25
+itself has an elementary form of memory: the replay buffer
+central to its stable training can be viewed as a memory
+that is frequently replayed to distil the contents into id25   s
+value network. kumaran et al. (2016) suggest that training
+on replayed experiences from the replay buffer in id25 is
+similar to the replay of experiences from episodic mem-
+ory during sleep in animals. id25   s replay buffer differs
+from most other work on memory for deep reinforcement
+learning in its sheer scale: it is common for id25   s replay
+buffer to hold millions of (s, a, r, s(cid:48)) tuples. the use of lo-
+cal regression techniques for q-function approximation has
+been suggested before: santamar    a et al. (1997) proposed
+the use of k-nearest-neighbours regression with a heuris-
+tic for adding memories based on the distance to previous
+memories. munos & moore (1998) proposed barycentric
+interpolators to model the value function and proved their
+convergence to the optimal value function under mild con-
+ditions, but no empirical results were presented. gabel &
+riedmiller (2005) also suggested the use of local regression,
+under the paradigm of case-based-reasoning that included
+heuristics for the deletion of stored cases. blundell et al.
+(2016, mfec) recently used local regression for q-function
+estimation using the mean of the k-nearest neighbours, ex-
+cept in the case of an exact match of the query point, in
+which case the stored value was returned. they also pro-
+pose the use of the latent variable obtained from a variational
+autoencoder (rezende et al., 2014) as an embedding space,
+but showed random projections often obtained better results.
+in contrast with the ideas presented here, none of the local-
+regression work aforementioned uses the reward signal to
+learn an embedding space of covariates in which to perform
+the local-regression. we learn this embedding space using
+temporal-difference learning; a crucial difference, as we
+
+figure 10. human-normalised scores of games, independently
+ranked per algorithm; labels on y-axis denote quantiles.
+
+showed in the experimental comparison to mfec.
+
+6. discussion
+we have proposed neural episodic control (nec): a deep
+id23 agent that learns signi   cantly faster
+than other baseline agents on a wide range of atari 2600
+games. at the core of nec is a memory structure: a differ-
+entiable neural dictionary (dnd), one for each potential
+action. nec inserts recent state representations paired with
+corresponding value functions into the appropriate dnd.
+our experiments show that nec requires an order of mag-
+nitude fewer interactions with the environment than agents
+previously proposed for data ef   ciency, such as prioritised
+replay (schaul et al., 2015b) and retrace(  ) (munos et al.,
+2016). we speculate that nec learns faster through a com-
+
+neural episodic control
+
+bination of three features of the agent: the memory archi-
+tecture (dnd), the use of n-step q estimates, and a state
+representation provided by a convolutional neural network.
+the memory architecture, dnd, rapidly integrates recent
+experience   state representations and corresponding value
+estimates   allowing this information to be rapidly inte-
+grated into future behaviour. such memories persist across
+many episodes, and we use a fast approximate nearest neigh-
+bour algorithm (kd-trees) to ensure that such memories can
+be ef   ciently accessed. estimating q-values by using the
+n-step q value function interpolates between monte carlo
+value estimates and backed up off-policy estimates. monte
+carlo value estimates re   ect the rewards an agent is actu-
+ally receiving, whilst backed up off-policy estimates should
+be more representative of the value function at the optimal
+policy, but evolve much slower. by using both estimates,
+nec can trade-off between these two estimation procedures
+and their relative strengths and weaknesses (speed of reward
+propagation vs optimality). finally, by having a slow chang-
+ing, stable representation provided by a convolutional neural
+network, keys stored in the dnd remain relative stable.
+our work suggests that non-parametric methods are a
+promising addition to the deep id23 tool-
+box, especially where data ef   ciency is paramount. in our
+experiments we saw that at the beginning of learning nec
+outperforms other agents in terms of learning speed. we
+saw that later in learning prioritised replay has higher per-
+formance than nec. we leave it to future work to further
+improve nec so that its long term    nal performance is sig-
+ni   cantly superior to parametric agents. another avenue of
+further research would be to apply the method discussed in
+this paper to a wider range of tasks such as visually more
+complex 3d worlds or real world tasks where data ef   ciency
+is of great importance due to the high cost of acquiring data.
+
+acknowledgements the authors would like to thank
+daniel zoran, dharshan kumaran, jane wang, dan belov,
+ruiqi guo, yori zwols, jack rae, andreas kirsch, peter
+dayan, david silver and many others at deepmind for in-
+sightful discussions and feedback. we also thank georg
+ostrovski, tom schaul, and hubert soyer for providing
+baseline learning curves.
+
+references
+ba, jimmy, hinton, geoffrey e, mnih, volodymyr, leibo,
+joel z, and ionescu, catalin. using fast weights to attend
+to the recent past. in advances in neural information
+processing systems, pp. 4331   4339, 2016.
+
+bakker, bram, zhumatiy, viktor, gruener, gabriel, and
+schmidhuber, j  urgen. a robot that reinforcement-learns
+to identify and memorize important previous observations.
+
+in intelligent robots and systems, 2003.(iros 2003).
+proceedings. 2003 ieee/rsj international conference
+on, volume 1, pp. 430   435. ieee, 2003.
+
+bellemare, m. g., naddaf, y., veness, j., and bowling, m.
+the arcade learning environment: an evaluation plat-
+form for general agents. journal of arti   cial intelligence
+research, 47:253   279, 06 2013.
+
+bellemare, marc g, naddaf, yavar, veness, joel, and bowl-
+ing, michael. the arcade learning environment: an
+evaluation platform for general agents. j. artif. intell.
+res.(jair), 47:253   279, 2013.
+
+bentley, jon louis. multidimensional binary search trees
+used for associative searching. commun. acm, 18(9):
+509   517, september 1975.
+
+blundell, charles, uria, benigno, pritzel, alexander, li,
+yazhe, ruderman, avraham, leibo, joel z, rae, jack,
+wierstra, daan, and hassabis, demis. model-free
+episodic control. arxiv preprint arxiv:1606.04460, 2016.
+
+duan, yan, schulman, john, chen, xi, bartlett, peter l,
+sutskever, ilya, and abbeel, pieter. rl2: fast reinforce-
+ment learning via slow id23. arxiv
+preprint arxiv:1611.02779, 2016.
+
+fernando, chrisantha, banarse, dylan, blundell, charles,
+zwols, yori, ha, david, rusu, andrei a, pritzel, alexan-
+der, and wierstra, daan. pathnet: evolution channels
+id119 in super neural networks. arxiv preprint
+arxiv:1701.08734, 2017.
+
+gabel, thomas and riedmiller, martin. cbr for state value
+function approximation in id23.
+in
+international conference on case-based reasoning, pp.
+206   221. springer, 2005.
+
+graves, alex, wayne, greg, reynolds, malcolm, harley,
+tim, danihelka, ivo, grabska-barwi  nska, agnieszka,
+colmenarejo, sergio g  omez, grefenstette, edward, ra-
+malho, tiago, agapiou, john, et al. hybrid computing
+using a neural network with dynamic external memory.
+nature, 538(7626):471   476, 2016.
+
+harutyunyan, anna, bellemare, marc g, stepleton, tom,
+and munos, r  emi. q (\ lambda) with off-policy cor-
+in international conference on algorithmic
+rections.
+learning theory, pp. 305   320. springer, 2016.
+
+hausknecht, matthew and stone, peter. deep recurrent q-
+learning for partially observable mdps. arxiv preprint
+arxiv:1507.06527, 2015.
+
+he, frank s, liu, yang, schwing, alexander g, and peng,
+jian. learning to play in a day: faster deep reinforce-
+ment learning by optimality tightening. arxiv preprint
+arxiv:1611.01606, 2016.
+
+neural episodic control
+
+hinton, geoffrey e and plaut, david c. using fast weights
+in proceedings of the ninth
+to deblur old memories.
+annual conference of the cognitive science society, pp.
+177   186, 1987.
+
+hochreiter, sepp and schmidhuber, j  urgen. long short-term
+memory. neural comput., 9(8):1735   1780, november
+1997.
+issn 0899-7667. doi: 10.1162/neco.1997.9.8.
+1735.
+
+kaiser, lukasz, nachum, o   r, roy, aurko, and bengio,
+
+samy. learning to remember rare events. 2016.
+
+kingma, diederik p and welling, max. auto-encoding
+id58. arxiv preprint arxiv:1312.6114, 2013.
+
+kumaran, dharshan, hassabis, demis, and mcclelland,
+james l. what learning systems do intelligent agents
+need? complementary learning systems theory updated.
+trends in cognitive sciences, 20(7):512   534, 2016.
+
+lake, brenden m, ullman, tomer d, tenenbaum, joshua b,
+and gershman, samuel j. building machines that learn
+and think like people. arxiv preprint arxiv:1604.00289,
+2016.
+
+lengyel, m. and dayan, p. hippocampal contributions to
+control: the third way. in nips, volume 20, pp. 889   896,
+2007.
+
+mccloskey, michael and cohen, neal j. catastrophic inter-
+ference in connectionist networks: the sequential learn-
+ing problem. psychology of learning and motivation, 24:
+109   165, 1989.
+
+miller, alexander, fisch, adam, dodge, jesse, karimi,
+amir-hossein, bordes, antoine, and weston, jason. key-
+value memory networks for directly reading documents.
+arxiv preprint arxiv:1606.03126, 2016.
+
+mnih, volodymyr, kavukcuoglu, koray, silver, david,
+rusu, andrei a, veness, joel, bellemare, marc g, graves,
+alex, riedmiller, martin, fidjeland, andreas k, ostro-
+vski, georg, et al. human-level control through deep re-
+inforcement learning. nature, 518(7540):529   533, 2015.
+
+mnih, volodymyr, badia, adria puigdomenech, mirza,
+mehdi, graves, alex, lillicrap, timothy p, harley, tim,
+silver, david, and kavukcuoglu, koray. asynchronous
+methods for deep id23. in international
+conference on machine learning, 2016.
+
+munos, remi and moore, andrew w. barycentric interpola-
+tors for continuous space and time id23.
+in nips, pp. 1024   1030, 1998.
+
+munos, r  emi, stepleton, tom, harutyunyan, anna, and
+bellemare, marc. safe and ef   cient off-policy reinforce-
+ment learning. in advances in neural information pro-
+cessing systems, pp. 1046   1054, 2016.
+
+oh, junhyuk, guo, xiaoxiao, lee, honglak, lewis,
+richard l, and singh, satinder. action-conditional video
+prediction using deep networks in atari games. in ad-
+vances in neural information processing systems, pp.
+2845   2853, 2015.
+
+oh, junhyuk, chockalingam, valliappa, lee, honglak, et al.
+control of memory, active perception, and action in
+in proceedings of the 33rd international
+minecraft.
+conference on machine learning, pp. 2790   2799, 2016.
+
+osband, ian, blundell, charles, pritzel, alexander, and
+van roy, benjamin. deep exploration via bootstrapped
+id25. in advances in neural information processing sys-
+tems, pp. 4026   4034, 2016.
+
+peng, jing and williams, ronald j. incremental multi-step
+
+id24. machine learning, 22(1-3):283   290, 1996.
+
+rezende, danilo jimenez, mohamed, shakir, and wierstra,
+daan. stochastic id26 and approximate infer-
+ence in deep generative models. in proceedings of the
+31st international conference on machine learning, pp.
+1278   1286, 2014.
+
+rusu, andrei a, rabinowitz, neil c, desjardins, guillaume,
+soyer, hubert, kirkpatrick, james, kavukcuoglu, koray,
+pascanu, razvan, and hadsell, raia. progressive neural
+networks. arxiv preprint arxiv:1606.04671, 2016.
+
+santamar    a, juan c, sutton, richard s, and ram, ashwin.
+experiments with id23 in problems
+with continuous state and action spaces. adaptive behav-
+ior, 6(2):163   217, 1997.
+
+schaul, tom, quan, john, antonoglou, ioannis, and sil-
+prioritized experience replay. corr,
+
+ver, david.
+abs/1511.05952, 2015a.
+
+schaul, tom, quan, john, antonoglou, ioannis, and silver,
+david. prioritized experience replay. arxiv preprint
+arxiv:1511.05952, 2015b.
+
+silver, david, huang, aja, maddison, chris j, guez, arthur,
+sifre, laurent, van den driessche, george, schrittwieser,
+julian, antonoglou, ioannis, panneershelvam, veda,
+lanctot, marc, et al. mastering the game of go with
+deep neural networks and tree search. nature, 529(7587):
+484   489, 2016.
+
+sukhbaatar, sainbayar, weston, jason, fergus, rob, et al.
+end-to-end memory networks. in advances in neural
+information processing systems, pp. 2440   2448, 2015.
+
+sutton, richard s. learning to predict by the methods of
+temporal differences. machine learning, 3(1):9   44, 1988.
+
+sutton, richard s and barto, andrew g. reinforcement
+
+learning: an introduction. mit press, 1998.
+
+neural episodic control
+
+tieleman, tijmen and hinton, geoffrey. lecture 6.5-
+rmsprop: divide the gradient by a running average of
+its recent magnitude. coursera: neural networks for
+machine learning, 4:2, 2012.
+
+van hasselt, h., guez, a., hessel, m., and silver, d. learn-
+ing functions across many orders of magnitudes. arxiv
+e-prints, february 2016.
+
+van hasselt, hado, guez, arthur, and silver, david. deep
+id23 with double id24. in aaai,
+pp. 2094   2100, 2016.
+
+vezhnevets, alexander, mnih, volodymyr, osindero, si-
+mon, graves, alex, vinyals, oriol, agapiou, john, et al.
+strategic attentive writer for learning macro-actions. in
+advances in neural information processing systems, pp.
+3486   3494, 2016.
+
+vinyals, oriol, blundell, charles, lillicrap, tim, wierstra,
+daan, et al. matching networks for one shot learning. in
+advances in neural information processing systems, pp.
+3630   3638, 2016.
+
+wang, jane x, kurth-nelson, zeb, tirumala, dhruva, soyer,
+hubert, leibo, joel z, munos, remi, blundell, charles,
+kumaran, dharshan, and botvinick, matt. learning to
+reinforcement learn. arxiv preprint arxiv:1611.05763,
+2016.
+
+watkins, christopher jch and dayan, peter. id24.
+
+machine learning, 8(3-4):279   292, 1992.
+
+watkins, christopher john cornish hellaby. learning from
+delayed rewards. phd thesis, university of cambridge
+england, 1989.
+
+a. scores on atari games
+
+neural episodic control
+
+a3c nature id25
+
+mfec
+
+alien
+amidar
+assault
+asterix
+asteroids
+atlantis
+bank heist
+battlezone
+beamrider
+berzerk
+bowling
+boxing
+breakout
+centipede
+chopper command
+crazy climber
+defender
+demon attack
+double dunk
+enduro
+fishing derby
+freeway
+frostbite
+gopher
+gravitar
+h.e.r.o.
+ice hockey
+james bond
+kangaroo
+krull
+kung fu master
+montezuma   s revenge
+ms. pac-man
+name this game
+phoenix
+pitfall!
+pong
+private eye
+q*bert
+river raid
+road runner
+robot tank
+seaquest
+skiing
+solaris
+space invaders
+stargunner
+surround
+tennis
+time pilot
+tutankham
+up   n down
+venture
+video pinball
+wizard of wor
+yars    revenge
+zaxxon
+
+415.5
+96.3
+720.8
+301.6
+1360.1
+36383
+15.8
+2354.2
+450.2
+593.6
+25
+2.5
+1.5
+3228
+1036.7
+70103.5
+4596
+346.8
+-17.2
+0
+-89.5
+0
+218.9
+854.1
+215.8
+4598.2
+-8.1
+31.5
+55.2
+3627.6
+6634.6
+0.1
+770
+2745.1
+2542.5
+-43.9
+-20.3
+86.3
+438.9
+2312.6
+759.9
+2.4
+514.1
+-20002.7
+2932.7
+201
+613.6
+-9.9
+-23.8
+3683.5
+108.3
+3322.3
+0
+30548.5
+876
+9953
+39.7
+
+634.8
+126.8
+1489.5
+2989.1
+395.3
+14210.5
+29.3
+6961.0
+3741.7
+484.2
+35.0
+31.3
+36.8
+4401.4
+827.2
+66061.6
+2877.9
+5541.9
+-19.0
+364.9
+-81.6
+21.5
+339.1
+1111.2
+154.7
+1050.7
+-4.5
+165.9
+519.6
+6015.1
+17166.1
+0.0
+1657.0
+6380.2
+5357.0
+0.0
+-3.2
+100.0
+2372.5
+3144.9
+7285.4
+14.6
+618.7
+-19818.0
+1343.0
+642.2
+604.8
+-9.7
+0.0
+1952.0
+148.7
+18964.9
+3.8
+14316.0
+401.4
+7614.1
+200.3
+
+1717.7
+370.9
+510.2
+1776.6
+4706.8
+95499.4
+163.7
+19053.6
+858.8
+924.2
+51.8
+10.7
+86.2
+20608.8
+3075.6
+9892.2
+10052.8
+1081.8
+-13.2
+0.0
+-90.3
+0.6
+925.1
+4412.6
+1011.3
+14767.7
+-6.5
+244.7
+2465.7
+4555.2
+12906.5
+76.4
+3802.7
+4845.1
+5334.5
+-79.0
+-20.0
+3963.8
+12500.4
+4195.0
+5432.1
+7.3
+711.6
+-15278.9
+8717.5
+2027.8
+14843.9
+-9.9
+-23.7
+10751.3
+86.3
+22320.8
+0.0
+90507.7
+12803.1
+5956.7
+6288.1
+
+nec prioritised
+replay
+800.5
+99.1
+1339.9
+2599.7
+854.0
+12579.1
+70.1
+13500.0
+3249.6
+575.6
+30.0
+64.7
+17.7
+4694.1
+1426.5
+76574.1
+3486.4
+6503.6
+-15.9
+1125.8
+-48.2
+18.6
+711.3
+1235.3
+218.9
+5164.5
+-10.2
+203.8
+616.7
+6700.7
+21456.2
+0.0
+1558.3
+7525.0
+11813.3
+0.0
+6.6
+100.0
+839.0
+4871.8
+24746.6
+8.5
+1192.2
+-12762.4
+1397.1
+673.0
+1131.4
+-8.5
+0.0
+2430.2
+194.0
+11856.2
+0.0
+24254.5
+1146.6
+9228.5
+3123.5
+
+3460.6
+811.3
+599.9
+2480.4
+2496.1
+51208.0
+343.3
+13345.5
+749.6
+852.8
+71.8
+72.8
+13.6
+12314.5
+5070.3
+34344.0
+6126.1
+641.4
+1.8
+1.4
+-72.2
+13.5
+2747.4
+2432.3
+1257.0
+16265.3
+-1.6
+376.8
+2489.1
+5179.2
+30568.1
+42.1
+4142.8
+5532.0
+5756.5
+0.0
+20.4
+162.2
+7419.2
+5498.1
+12661.4
+11.1
+1015.3
+-26340.7
+7201.0
+1016.0
+1171.4
+-7.9
+-1.8
+10282.7
+121.6
+39823.3
+0.0
+22842.6
+8480.7
+21490.5
+10082.4
+
+q   (  ) retrace(  )
+
+476.8
+134.5
+1026.6
+2588.6
+569.8
+28818.8
+32.8
+8227.2
+656.2
+647.9
+28.4
+22.3
+6.3
+4097.5
+760.6
+64980.6
+3260.8
+4914.8
+-18.2
+396.0
+-84.2
+22.2
+407.2
+2292.4
+121.9
+2223.3
+-11.1
+64.5
+520.7
+8169.8
+13874.7
+0.4
+1289.9
+5378.5
+5771.2
+-4.4
+-18.9
+1230.4
+1812.4
+2787.1
+3133.1
+10.1
+611.7
+-17055.7
+2460.0
+545.6
+877.0
+-9.8
+-4.3
+2323.7
+108.3
+11961.2
+21.5
+11507.3
+526.8
+8884.4
+278.3
+
+541.2
+162.9
+1331.1
+2520.3
+579.2
+44771.1
+26.3
+6762.2
+725.4
+701.5
+39.9
+30.7
+10.2
+4792.9
+801.6
+54177.6
+3275.6
+4836.6
+-18.3
+440.6
+-79.8
+17.1
+325.0
+3050.4
+108.9
+3298.2
+-9.1
+67.2
+554.6
+7399.3
+18065.8
+2.6
+1401.6
+5227.8
+6046.7
+-1.5
+-13.3
+80.2
+2582.1
+2671.0
+6285.0
+9.1
+574.3
+-13880.4
+3211.8
+527.9
+886.7
+-9.9
+0.0
+2576.0
+122.4
+13308.4
+75.6
+14178.9
+420.4
+8532.7
+168.3
+
+table 3. scores at 10 million frames
+
+

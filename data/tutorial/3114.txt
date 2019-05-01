@@ -1,0 +1,437 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]become a member[7]sign in[8]get started
+     __________________________________________________________________
+
+   [1*cpi-6ztpyfmyv3btt8eumq.jpeg]
+   source: [9]unikaz.asia
+
+building a simple neural network         tensorflow for hackers (part ii)
+
+do students drink too much?
+
+   [10]go to the profile of venelin valkov
+   [11]venelin valkov (button) blockedunblock (button) followfollowing
+   may 2, 2017
+
+   part 2 deserves its own introductory video:
+
+   iframe: [12]/media/d12ca3b565ec8e71d65830aee1e2665a?postid=2d6779d2f91b
+
+   in this one, you will learn how to create a neural network (nn) and use
+   it for deciding whether a student has alcohol consumption problems.
+
+   do students drink too much? how can you predict that? what predicts it
+   best? how much too much is exactly?
+
+   those questions might be difficult to answer, yet we can start
+   somewhere. we can use a very limited dataset to get a sense of what the
+   answers might look like. something like [13]this one.
+
+   the dataset contains 1044 instances and 32 variables (most of which
+   binary and categorical). actually, it consists of 2 other datasets. the
+   first provides data for students enrolled in portuguese class. the
+   second describes students enrolled in a math course. there is overlap
+   (yep, i know) between the datasets, that is some students attend both
+   classes.
+
+   let   s build an nn model for classifying whether a student has alcohol
+   consumption problem. for that, we will use our trusty old
+   friend         tensorflow.
+
+   before getting there, we have a bit of dirty work to do. our dataset is
+   not clean enough to just start and feed the data to our nn model. a bit
+   of wrangling is required. but first, let   s start with some setting up:
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from math import floor, ceil
+from pylab import rcparams
+%matplotlib inline
+
+   some styling and making our experiments reproducible:
+sns.set(style='ticks', palette='spectral', font_scale=1.5)
+material_palette = ["#4caf50", "#2196f3", "#9e9e9e", "#ff9800", "#607d8b", "#9c2
+7b0"]
+sns.set_palette(material_palette)
+rcparams['figure.figsize'] = 16, 8
+plt.xkcd();
+random_state = 42
+np.random.seed(random_state)
+tf.set_random_seed(random_state)
+
+1. preparing the data
+
+   remember, our data is stored in two separate files. let   s load them,
+   assign proper course attendance to each student and merge them into
+   one:
+math_df = pd.read_csv("data/student/student-mat.csv", sep=";")
+port_df = pd.read_csv("data/student/student-por.csv", sep=";")
+math_df["course"] = "math"
+port_df["course"] = "portuguese"
+merged_df = math_df.append(port_df)
+merged_df.shape
+
+   here it is:
+(1044, 34)
+
+   exactly as promised         1044 rows, but we have duplicates. the dataset
+   archive contains instructions on how to find them. the merged result
+   contains 382 instances. we will update the course column for those
+   students, too:
+merge_vector = ["school","sex","age","address",
+                "famsize","pstatus","medu","fedu",
+                "mjob","fjob","reason","nursery","internet"]
+duplicated_mask = merged_df.duplicated(keep=false, subset=merge_vector)
+duplicated_df = merged_df[duplicated_mask]
+unique_df = merged_df[~duplicated_mask]
+both_courses_mask = duplicated_df.duplicated(subset=merge_vector)
+both_courses_df = duplicated_df[~both_courses_mask].copy()
+both_courses_df["course"] = "both"
+students_df = unique_df.append(both_courses_df)
+
+   we will use the following formula to quantify the amount of alcohol
+   taken during the week per student:
+   [1*cpetu01sm4pkdwykdmesxa.png]
+
+   the new value changes in the interval . furthermore, we will classify
+   student as a drinker if that value is greater than 2.
+students_df = students_df.sample(frac=1)
+students_df['alcohol'] = (students_df.walc * 2 + students_df.dalc * 5) / 7
+students_df['alcohol'] = students_df.alcohol.map(lambda x: ceil(x))
+students_df['drinker'] = students_df.alcohol.map(lambda x: "yes" if x > 2 else "
+no")
+
+2. exploration
+
+   finally, we can get a feel for our data. let   s take a look at the
+   course distribution:
+students_df.course.value_counts().plot(kind="bar", rot=0);
+
+   [1*8giykudubjhbwh_8rxs7oq.png]
+
+   and the alcohol consumption from the formula:
+students_df.alcohol.value_counts().plot(kind="bar", rot=0);
+
+   [1*lj874jwkbadvimuxfab0lq.png]
+
+   the actual variable that we are going to predict:
+students_df.drinker.value_counts().plot(kind="bar", rot=0);
+
+   [1*mcew87hjsu6wl3gwniq1hq.png]
+
+   somewhat more comprehensive overview:
+sns.pairplot(students_df[['age', 'absences', 'g3', 'goout', 'freetime', 'studyti
+me', 'drinker']], hue='drinker');
+
+   [1*neucqlpb6fjhnyggy5vmgw.png]
+
+   let   s have a look at a general correlations matrix:
+corr_mat = students_df.corr()
+fig, ax = plt.subplots(figsize=(20, 12))
+sns.heatmap(corr_mat, vmax=1.0, square=true, ax=ax);
+
+   [1*9eazf9_7ekkfdqdnangamq.png]
+
+3. building our model
+
+   it is time for the fun part. well, not just yet.
+
+3.1 encoding the data
+
+   most of our variables are categorical and we must one-hot encode them
+   four our nn to work properly. first, let   s define a little helper
+   function:
+def encode(series):
+  return pd.get_dummies(series.astype(str))
+
+   our features and target variable using our little helper function:
+train_x = pd.get_dummies(students_df.school)
+train_x['age'] = students_df.age
+train_x['absences'] = students_df.absences
+train_x['g1'] = students_df.g1
+train_x['g2'] = students_df.g2
+train_x['g3'] = students_df.g3
+train_x = pd.concat([train_x, encode(students_df.sex), encode(students_df.pstatu
+s),
+                     encode(students_df.medu), encode(students_df.fedu),
+                     encode(students_df.guardian), encode(students_df.studytime)
+,
+                     encode(students_df.failures), encode(students_df.activities
+),
+                     encode(students_df.higher), encode(students_df.romantic),
+                     encode(students_df.reason), encode(students_df.paid),
+                     encode(students_df.goout), encode(students_df.health),
+                     encode(students_df.famsize), encode(students_df.course)
+                    ], axis=1)
+train_y = encode(students_df.drinker)
+
+3.2 splitting the data
+
+   let   s allocate 90% of the data for training and use 10% for testing:
+train_size = 0.9
+train_cnt = floor(train_x.shape[0] * train_size)
+x_train = train_x.iloc[0:train_cnt].values
+y_train = train_y.iloc[0:train_cnt].values
+x_test = train_x.iloc[train_cnt:].values
+y_test = train_y.iloc[train_cnt:].values
+
+3.3 building our neural network
+
+   our nn consists of input, output and 1 hidden layer. we are using relu
+   as activation function of the hidden layer and softmax for our output
+   layer. as an additional bonus we will use dropout         simple way to
+   reduce overfitting during the training of our network. let   s wrap our
+   model in a little helper function:
+def multilayer_id88(x, weights, biases, keep_prob):
+    layer_1 = tf.add(tf.matmul(x, weights['h1']), biases['b1'])
+    layer_1 = tf.nn.relu(layer_1)
+    layer_1 = tf.nn.dropout(layer_1, keep_prob)
+    out_layer = tf.matmul(layer_1, weights['out']) + biases['out']
+    return out_layer
+
+   let   s set the number of neurons in the hidden layer to 38 and randomly
+   initialize the weights and biases considering their proper dimensions:
+n_hidden_1 = 38
+n_input = train_x.shape[1]
+n_classes = train_y.shape[1]
+weights = {
+    'h1': tf.variable(tf.random_normal([n_input, n_hidden_1])),
+    'out': tf.variable(tf.random_normal([n_hidden_1, n_classes]))
+}
+biases = {
+    'b1': tf.variable(tf.random_normal([n_hidden_1])),
+    'out': tf.variable(tf.random_normal([n_classes]))
+}
+keep_prob = tf.placeholder("float")
+
+   we will train our model for 5,000 epochs (training steps) with a batch
+   size of 32. that is, at each step, we will train our nn using 32 rows
+   of our data. granted, in our case you can just train on the whole
+   dataset. however, when the data is huge and you can   t fit it in memory,
+   you would love to split it and feed it to the model at batches
+   (chunks):
+training_epochs = 5000
+display_step = 1000
+batch_size = 32
+x = tf.placeholder("float", [none, n_input])
+y = tf.placeholder("float", [none, n_classes])
+
+3.4 training
+
+   in order for our model to learn, we need to define what is good.
+   actually, we will define what is bad and try to minimize it. we will
+   call the    badness            error or cost (hence, the cost function). it
+   represents how far off of the true result our model is at some point
+   during training. we would love that error to be 0 for all possible
+   inputs. currently, that happens only in sci-fi novels (not that i
+   discourage dreaming about it).
+
+   the cost function that we are going to use is called cross-id178. it
+   is defined as:
+   [1*fu9azn-z53nfpvy92pyldq.png]
+
+   where y is the predicted distribution for our alcohol consumption and
+   y    is the ground truth. [14]this guide might be helpful for better
+   understanding cross-id178. tensorflow has a little helper function
+   with the sweet little name softmax_cross_id178_with_logits. it uses
+   softmax as activation function for our output layer and cross-id178
+   as error function.
+cost = tf.reduce_mean(tf.nn.softmax_cross_id178_with_logits(logits=predictions
+, labels=y))
+
+   now, for the actual workhorse         adam (nope, not the from the
+   bible         although, that would   ve been fun). adam is a type of gradient
+   descent optimization algorithm which essentially tries as hard as he
+   can to find proper weights and biases for our network via minimizing
+   the cost function that we specified above. it is well beyond the scope
+   of this post to describe adam in details, but you can find all the
+   necessary information [15]over here         with tons of nice pictures!
+
+   using adam in tensorflow is quite easy, we just have to specify
+   learning rate (you can fiddle with that one) and pass the cost function
+   we defined above:
+optimizer = tf.train.adamoptimizer(learning_rate=0.0001).minimize(cost)
+
+   our model is created by just calling our helper function with the
+   proper arguments:
+predictions = multilayer_id88(x, weights, biases, keep_prob)
+
+   our finished nn looks something like this (much reduced input and
+   hidden layer sizes):
+   [1*lt_lo9dqqz7kf1griofnzw.png]
+
+4. evaluation
+
+   time to see how well our model can predict. during the training, we
+   will set the keep id203 of the dropout to 0.8 and reset it to 1.0
+   during test time:
+with tf.session() as sess:
+    sess.run(tf.global_variables_initializer())
+
+    for epoch in range(training_epochs):
+        avg_cost = 0.0
+        total_batch = int(len(x_train) / batch_size)
+        x_batches = np.array_split(x_train, total_batch)
+        y_batches = np.array_split(y_train, total_batch)
+        for i in range(total_batch):
+            batch_x, batch_y = x_batches[i], y_batches[i]
+            _, c = sess.run([optimizer, cost],
+                            feed_dict={
+                                x: batch_x,
+                                y: batch_y,
+                                keep_prob: 0.8
+                            })
+            avg_cost += c / total_batch
+        if epoch % display_step == 0:
+            print("epoch:", '%04d' % (epoch+1), "cost=", \
+                "{:.9f}".format(avg_cost))
+    print("optimization finished!")
+    correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+    print("accuracy:", accuracy.eval({x: x_test, y: y_test, keep_prob: 1.0}))
+
+   here are the results:
+epoch: 0001 cost= 103.346587711
+epoch: 1001 cost= 2.053295698
+epoch: 2001 cost= 0.464109008
+epoch: 3001 cost= 0.304592287
+epoch: 4001 cost= 0.284183074
+optimization finished!
+accuracy: 0.731343
+
+5. conclusion
+
+   yes, you did it! you survived another part of this tutorial. but what
+   did you achieved? our model got roughly 73% accuracy on the test set.
+   is this good? well    no, it is not!
+
+   how is that possible? the authors of the paper linked from the dataset
+   attained 92% accuracy. which is (as they state) acceptable. so, why our
+   model performs so badly?
+
+   for one thing, we excluded overlapping student data, which made our
+   dataset considerably smaller         from 1044 to just 662 instances (i
+   haven   t found any type of duplicate reduction technique used by the
+   authors. please, write me a comment if i am wrong about that one). due
+   to the high prevalence of no drinkers, this might have a decremental
+   effect on our model performance.
+
+   of course, you can try different parameters, architecture, training
+   epochs etc    feel free to do so! till next time!
+
+references
+
+   [16]student alcohol consumption         description of the used dataset
+    [17]using data mining to predict secondary school student alcohol
+   consumption         a paper using this dataset and comparing 3 different
+   models on it (including nn)
+    [18]student alcohol consumption prediction         possibly source code used
+   in the previous paper
+    [19]mnist classification using tensorflow         use deep neural network to
+   classify handwritten digits
+    [20]how to choose the number of hidden layers and neurons in nn?
+    [21]how to handle ordinal data in nn models         lots of the variables
+   are ordinal. this paper presents an approach to handling that kind of
+   data in nn models
+    [22]simpler way to handle ordinal data in nn models
+     __________________________________________________________________
+
+   more from tensorflow for hackers series:
+    1. [23]tensorflow basics
+    2. building a simple neural network
+    3. [24]building a cat detector using convolutional neural networks
+    4. [25]creating a neural network from scratch
+    5. [26]making a predictive keyboard using recurrent neural networks
+    6. [27]human activity recognition using lstms on android
+    7. [28]credit card fraud detection using autoencoders in keras
+     __________________________________________________________________
+
+   originally published at [29]curiousily.com on february 7, 2017.
+     __________________________________________________________________
+
+   iframe: [30]/media/6f59e6bca9afebadf7961d320db9a8b8?postid=2d6779d2f91b
+
+     * [31]machine learning
+     * [32]tensorflow
+     * [33]deep learning
+     * [34]data science
+     * [35]artificial intelligence
+
+   (button)
+   (button)
+   (button) 553 claps
+   (button) (button) (button) 9 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [36]go to the profile of venelin valkov
+
+[37]venelin valkov
+
+   adventures in artificial intelligence [38]https://leanpub.com/hmls
+
+     * (button)
+       (button) 553
+     * (button)
+     *
+     *
+
+   [39]go to the profile of venelin valkov
+   never miss a story from venelin valkov, when you sign up for medium.
+   [40]learn more
+   never miss a story from venelin valkov
+   (button) blockedunblock (button) followget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/2d6779d2f91b
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/membership?source=upgrade_membership---nav_full
+   7. https://medium.com/m/signin?redirect=https://medium.com/@curiousily/tensorflow-for-hackers-part-ii-building-simple-neural-network-2d6779d2f91b&source=--------------------------nav_reg&operation=login
+   8. https://medium.com/m/signin?redirect=https://medium.com/@curiousily/tensorflow-for-hackers-part-ii-building-simple-neural-network-2d6779d2f91b&source=--------------------------nav_reg&operation=register
+   9. http://www.unikaz.asia/en/content/why-it-neural-network-and-why-expanses-internet
+  10. https://medium.com/@curiousily?source=post_header_lockup
+  11. https://medium.com/@curiousily
+  12. https://medium.com/media/d12ca3b565ec8e71d65830aee1e2665a?postid=2d6779d2f91b
+  13. https://archive.ics.uci.edu/ml/datasets/student+alcohol+consumption
+  14. https://colah.github.io/posts/2015-09-visual-information/
+  15. http://sebastianruder.com/optimizing-gradient-descent/
+  16. https://archive.ics.uci.edu/ml/datasets/student+alcohol+consumption
+  17. https://www.researchgate.net/publication/296695247_using_data_mining_to_predict_secondary_school_student_alcohol_consumption
+  18. https://github.com/aman181993/student-alcohol-consumption-prediction
+  19. https://github.com/aymericdamien/tensorflow-examples/blob/master/notebooks/3_neuralnetworks/multilayer_id88.ipynb
+  20. https://stats.stackexchange.com/questions/181/how-to-choose-the-number-of-hidden-layers-and-nodes-in-a-feedforward-neural-netw/1097#1097
+  21. https://arxiv.org/abs/0704.1028
+  22. https://stackoverflow.com/questions/38375401/neural-network-ordinal-classification-for-age
+  23. http://bit.ly/part-1-tf-basics
+  24. http://bit.ly/part-3-cat-detector
+  25. http://bit.ly/part-4-neural-network-from-scratch
+  26. http://bit.ly/part-5-predictive-keyboard
+  27. http://bit.ly/part-6-human-activity-recognition
+  28. http://bit.ly/part-7-credit-card-fraud-detection
+  29. http://curiousily.com/data-science/2017/02/07/tensorflow-for-hackers-part-2.html
+  30. https://medium.com/media/6f59e6bca9afebadf7961d320db9a8b8?postid=2d6779d2f91b
+  31. https://medium.com/tag/machine-learning?source=post
+  32. https://medium.com/tag/tensorflow?source=post
+  33. https://medium.com/tag/deep-learning?source=post
+  34. https://medium.com/tag/data-science?source=post
+  35. https://medium.com/tag/artificial-intelligence?source=post
+  36. https://medium.com/@curiousily?source=footer_card
+  37. https://medium.com/@curiousily
+  38. https://leanpub.com/hmls
+  39. https://medium.com/@curiousily
+  40. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  42. https://medium.com/p/2d6779d2f91b/share/twitter
+  43. https://medium.com/p/2d6779d2f91b/share/facebook
+  44. https://medium.com/p/2d6779d2f91b/share/twitter
+  45. https://medium.com/p/2d6779d2f91b/share/facebook

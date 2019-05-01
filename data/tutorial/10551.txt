@@ -1,0 +1,1116 @@
+swivel: improving embeddings by noticing what   s missing
+
+6
+1
+0
+2
+
+ 
+
+b
+e
+f
+6
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+5
+1
+2
+2
+0
+
+.
+
+2
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+noam shazeer
+ryan doherty
+colin evans
+chris waterson
+google inc., 1600 amphitheatre parkway, mountain view, ca 94043
+
+noam@google.com
+portalfire@google.com
+colinhevans@google.com
+waterson@google.com
+
+abstract
+
+we present submatrix-wise vector embedding
+learner (swivel), a method for generating low-
+dimensional feature embeddings from a feature
+co-occurrence matrix. swivel performs approx-
+imate factorization of the point-wise mutual in-
+formation matrix via stochastic id119.
+it uses a piecewise loss with special handling
+for unobserved co-occurrences, and thus makes
+use of all the information in the matrix. while
+this requires computation proportional to the size
+of the entire matrix, we make use of vectorized
+multiplication to process thousands of rows and
+columns at once to compute millions of predicted
+values. furthermore, we partition the matrix
+into shards in order to parallelize the computa-
+tion across many nodes. this approach results in
+more accurate embeddings than can be achieved
+with methods that consider only observed co-
+occurrences, and can scale to much larger cor-
+pora than can be handled with sampling methods.
+
+1. introduction
+dense vector representations of words have proven to be
+useful for natural language tasks such as determining se-
+mantic similarity, parsing, and translation. recently, work
+by mikolov et al. (2013a) and others has inspired an investi-
+gation into the construction of word vectors using stochas-
+tic id119 methods. models tend to fall into one
+of two categories: id105 or sampling from
+a sliding window: baroni et al. (2014) refers to these as
+   count    and    predict    methods, respectively.
+in this paper, we present the submatrix-wise vector embed-
+ding learner (swivel), a    count-based    method for gen-
+erating low-dimensional feature embeddings from a co-
+occurrence matrix. swivel uses stochastic gradient de-
+scent to perform a weighted approximate matrix factoriza-
+tion, ultimately arriving at embeddings that reconstruct the
+
+point-wise mutual information (pmi) between each row
+and column feature. swivel uses a piecewise loss func-
+tion to differentiate between observed and unobserved co-
+occurrences.
+swivel is designed to work in a distributed environment.
+the original co-occurrence matrix (which may contain mil-
+lions of rows and millions of columns) is    sharded    into
+smaller submatrices, each containing thousands of rows
+and columns. these can be distributed across multiple
+workers, each of which uses vectorized matrix multiplica-
+tion to rapidly produce predictions for millions of individ-
+ual pmi values. this allows the computation to be dis-
+tributed across a cluster of computers, resulting in an ef   -
+cient way to learn embeddings.
+this paper is organized as follows. first, we describe re-
+lated id27 work and note how two popular
+methods are similar to one another in their optimization
+objective. we then discuss swivel in detail, and describe
+experimental results on several standard id27
+evaluation tasks. we conclude with analysis of our results
+and discussion of the algorithm with regard to the other ap-
+proaches.
+
+2. related work
+while there are a number of interesting approaches to
+creating id27s, skipgram negative sampling
+(mikolov et al., 2013a) and glove (pennington et al., 2014)
+are two relatively recent approaches that have received
+quite a bit of attention. these methods compress the distri-
+butional structure of the raw language co-occurrence statis-
+tics, yielding compact representations that retain the prop-
+erties of the original space. the intrinsic quality of the
+embeddings can be evaluated in two ways. first, words
+with similar distributional contexts should be near to one
+another in the embedding space. second, manipulating the
+distributional context directly by adding or removing words
+ought to lead to similar translations in the embedded space,
+allowing    analogical    traversal of the vector space.
+
+swivel: improving embeddings by noticing what   s missing
+
+skipgram negative sampling. the id97 program
+released by mikolov et al. (2013a) generates word embed-
+dings by sliding a window over a large corpus of text. the
+   focus    word in the center of the window is trained to pre-
+dict each    context    word that surrounds it by 1) maximiz-
+ing the dot product between the sampled words    embed-
+dings, and 2) minimizing the dot product between the fo-
+cus word and a randomly sampled non-context word. this
+method of training is called skipgram negative sampling
+(sgns).
+levy and goldberg (2014) examine sgns and suggest that
+the algorithm is implicitly performing weighted low-rank
+factorization of a matrix whose cell values are related to
+the point-wise mutual information between the focus and
+context words. point-wise mutual information (pmi) is a
+measure of association between two events, de   ned as fol-
+lows:
+
+pmi(i; j) = log
+
+p (i, j)
+
+p (i) p (j)
+
+(1)
+
+in the case of language, the frequency statistics of co-
+occurring words in a corpus can be used to estimate the
+probabilities that comprise pmi. let xij be the number of
+times that focus word i co-occurs with the context word j,
+j xij be total number of times that focus word i
+i xij be the total number
+of times that context word j appears appears in the corpus,
+i,j xij be the total number of co-occurrences.
+
+xi    = (cid:80)
+appears in the corpus, x   j = (cid:80)
+and |d| =(cid:80)
+
+then we can re-write (1) as:
+
+pmi(i; j) = log
+
+xij|d|
+xi    x   j
+
+= log xij + log |d|     log xi        log x   j
+
+it is important to note that, in the case that xij is zero    
+i.e., no co-occurrence of i and j has been observed     pmi
+is in   nitely negative.
+sgns can be seen as producing two matrices, w for fo-
+cus words and   w for context words, such that their prod-
+uct w   w(cid:62) approximates the observed pmi between re-
+spective word/context pairs. given a speci   c focus word
+i and context word j, sgns minimizes the magnitude of
+the difference between w(cid:62)
+i   wj and pmi(i; j), tempered by
+a monotonically increasing weighting function of the ob-
+served co-occurrence count, f (xij):
+
+(cid:88)
+(cid:88)
+
+i,j
+
+i,j
+
+lsgns =
+
+=
+
+f (xij)(cid:0)w(cid:62)
+
+i   wj     pmi(i; j)(cid:1)2
+
+f (xij)(w(cid:62)
+
+i   wj     log xij     log|d|
+
++ log xi    + log x   j)2
+
+due to the fact that sgns slides a sampling window
+through the entire training corpus, a signi   cant drawback
+of the algorithm is that it requires training time proportional
+to the size of the corpus.
+glove. pennington et al.   s 2014 glove is an approach that
+instead works from the precomputed corpus co-occurrence
+statistics. the authors posit several constraints that should
+lead to preserving the    linear directions of meaning   .
+based on ratios of conditional probabilities of words in
+context, they suggest that a natural model for learning such
+linear structure should minimize the following cost func-
+tion for a given focus word i and context word j:
+
+(cid:88)
+
+f (xij)(cid:0)w(cid:62)
+
+i   wj     log xij + bi + bj
+
+(cid:1)2
+
+lglove =
+
+i,j
+
+here, bi and bj are bias terms that are speci   c to each focus
+word and each context word, respectively. again f (xij) is
+a function that weights the cost according to the frequency
+of the co-occurrence count xij. using stochastic gradient
+descent, glove learns the model parameters for w, b,   w,
+and   b: it selects a pair of words observed to co-occur in the
+corpus, retrieves the corresponding embedding parameters,
+computes the loss, and back-propagates the error to update
+the parameters. glove therefore requires training time pro-
+portional to the number of observed co-occurrence pairs,
+allowing it to scale independently of corpus size.
+although glove was developed independently from sgns
+(and, as far as we know, without knowledge of levy and
+goldberg   s 2014 analysis), it is interesting how similar
+these two models are.
+
+    both seek to minimize the difference between the
+model   s estimate and the log of the co-occurrence
+count. glove has additional free    bias    parameters
+that, in sgns, are pegged to the corpus frequency of
+the individual words. empirically, it can be observed
+that the bias terms are highly correlated to the fre-
+quency of the row and column features in a trained
+glove model.
+    both weight
+
+the loss according to the frequency
+
+swivel: improving embeddings by noticing what   s missing
+
+of the co-occurrence count such that frequent co-
+occurrences incur greater penalty than rare ones.1
+
+levy et al. (2015) note these algorithmic similarities. in
+their controlled empirical comparison of several different
+embedding approaches, results produced by sgns and
+glove differ only modestly.
+there are subtle differences, however. the negative sam-
+pling regime of sgns ensures that the model does not
+place features near to one another in the embedding space
+whose co-occurrence isn   t observed in the corpus. this is
+distinctly different from glove, which trains only on the
+observed co-occurrence statistics. the glove model incurs
+no penalty for placing features near to one another whose
+co-occurrence has not been observed. as we shall see in
+section 4, this can result in poor estimates for uncommon
+features.
+
+3. swivel
+swivel is an attempt to have our cake and eat it, too. like
+glove, it works from co-occurrence statistics rather than
+by sampling; like sgns, it makes use of the fact that many
+co-occurrences are unobserved in the corpus. like both,
+swivel performs a weighted approximate matrix factoriza-
+tion of the pmi between features. furthermore, swivel is
+designed to work well in a distributed environment; e.g.,
+distbelief (dean et al., 2012).
+at a high level, swivel begins with an m  n co-occurrence
+matrix between m row and n column features. each
+row feature and each column feature is assigned a d-
+dimensional embedding vector. the vectors are grouped
+into blocks, each of which de   nes a submatrix    shard   .
+training proceeds by selecting a shard (and thus, its cor-
+responding row block and column block), and performing
+a id127 of the associated vectors to produce
+an estimate of the pmi values for each co-occurrence. this
+is compared with the observed pmi, with special handling
+for the case where no co-occurrence was observed and the
+pmi is unde   ned. stochastic id119 is used to
+update the individual vectors and minimize the difference.
+as will be discussed in more detail below, splitting the ma-
+trix into shards allows the problem to be distributed across
+many workers in a way that allows for utilization of high-
+performance vectorized hardware, amortizes the overhead
+of transferring model parameters, and distributes parameter
+updates evenly across the feature embeddings.
+
+1this latter similarity is reminiscent of weighted alternating
+least squares (hu et al., 2008), which treats f (xij) as a con   dence
+estimate that favors accurate estimation of certain parameters over
+uncertain ones.
+
+the marginal counts of each row feature (xi    = (cid:80)
+and each column feature (x   j = (cid:80)
+|d| =(cid:80)
+
+3.1. construction
+to begin, an m   n co-occurrence matrix x is constructed,
+where each cell xij in the matrix contains the observed co-
+occurrence count of row feature i with column feature j.
+j xij)
+i xij) are computed,
+as well as the overall sum of all the cells in the matrix,
+i,j xij. as with other embedding methods, swivel
+is agnostic to both the domain from which the features are
+drawn, and to the exact set of features that are used. fur-
+thermore, the    feature vocabulary    used for the rows need
+not necessarily be the same as that which is used for the
+columns.
+the rows are sorted in descending order of feature fre-
+quency, and are then collected into k-element row blocks,
+where k is chosen based on computational ef   ciency con-
+siderations discussed below. this results in m/k row
+blocks whose elements are selected by choosing rows that
+are congruent mod m/k. for example, if there are 225 to-
+tal rows in the co-occurrence matrix, for k = 4096, every
+225/4096 = 8, 192th row is selected to form a row block:
+the    rst row block contains rows (0, 8192, 16384, ...), the
+second row block contains rows (1, 8193, 16385, ...), and
+so on. since rows were originally frequency-sorted, this
+construction results in each row block containing a mix of
+common and rare row features.
+the process is repeated for the columns to yield n/k col-
+umn blocks. as with the row blocks, each column block
+contains a mix of common and rare column features.
+for each (row block, column block) pair (i, j), we con-
+struct a k    k submatrix shard xij from the original
+co-occurrence matrix by selecting the appropriate co-
+occurrence cells:
+
+                     
+
+xij =
+
+xi,j
+
+xi,j+ n
+xi,j+2 n
+
+k
+
+k
+
+...
+
+xi,j+(k   1) n
+
+k
+
+xi+ m
+
+k ,j
+
+. . . xi+(k   1) m
+
+k ,j
+
+...
+
+                     
+
+this results in mn/k2 shards in all. typically, the vast
+majority of these elements are zero. figure 1 illustrates
+this process:
+lighter pixels represent more frequent co-
+occurrences, which naturally tend to occur for more fre-
+quent features.
+
+swivel: improving embeddings by noticing what   s missing
+
+figure 1. the matrix re-organization process creates shards with
+a mixture of common and rare features, which naturally leads to
+a mixture of large and small co-occurrence values (brighter and
+darker pixels, respectively).
+
+3.2. training
+
+j
+
+prior to training, the two d-dimensional feature embed-
+dings are initialized with small, random values.2 w    
+rm  d is the matrix of embeddings for the m row features
+(e.g., words),   w     rn  d is the matrix of embeddings for
+the n column features (e.g., word contexts).
+training then proceeds iteratively as follows. a subma-
+trix shard xij is chosen at random, along with the k row
+embedding vectors wi     w from row block i, and the k
+column vectors   wj       w from column block j. the ma-
+trix product wi   w(cid:62)
+is computed to produce k2 predicted
+pmi values, which are then compared to the observed pmi
+values for shard xij. the error between the predicted and
+actual values is used to compute gradients: these are accu-
+mulated for each row and column. figure 2 illustrates this
+process. the id119 is dampened using adagrad
+(duchi et al., 2011), and the process repeats until the error
+no longer decreases appreciably.
+although each shard is considered separately, it shares the
+embedding parameters wi for all other shards in the same
+row block, and the embedding parameters   wj for all the
+other shards in the same column block. by storing the pa-
+rameters in a central parameter server (dean et al., 2012),
+it is possible to distribute training by processing several
+shards in parallel on different worker machines. an indi-
+vidual worker selects a shard, retrieves the appropriate em-
+bedding parameters, performs the cost and gradient compu-
+tation, and then communicates the parameter updates back
+to the parameter server. we do this in a lock-free fashion
+(recht et al., 2011) using google   s asynchronous stochas-
+tic id119 infrastructure distbelief (dean
+et al., 2012).
+even on a very fast network, transferring the parameters be-
+tween the parameter server and a worker machine is expen-
+
+2we speci   cally used values drawn from n (0,
+
+the
+choice was arbitrary and we did not investigate the effects of other
+initialization schemes.
+
+   
+d):
+
+figure 2. a shard xij is selected for training. the corresponding
+row vectors wi and column vectors   wj are multiplied to produce
+estimates that are compared to the observed pmi derived from the
+count statistics. error is computed and back-propagated.
+
+sive: for each k    k block, we must retrieve (and then up-
+date) k parameter values each for wi and   wj. fortunately,
+this cost is amortized over the k2 individual estimates that
+are computed by the id127. choosing a rea-
+sonable value for k is therefore a balancing act between
+compute and network throughput: the larger the value of
+k, the more we amortize the cost of communicating with
+the parameter server. and up to a point, vectorized matrix
+multiplication is essentially a constant-time operation on a
+high-performance gpu. clearly, this is all heavily depen-
+dent on the underlying hardware fabric; we achieved good
+performance in our environment with k = 4096.
+
+3.3. training objective and cost function
+
+i   wj for an arbitrary objective value of 2.0.
+
+swivel approximates the observed pmi of row feature i and
+column feature j with w(cid:62)
+i   wj. it uses a piecewise loss func-
+tion that treats observed and unobserved co-occurrences
+distinctly. table 1 summarizes the piecewise cost function,
+and figure 3 shows the different id168 variants with
+respect to w(cid:62)
+observed co-occurrences. for co-occurrences that have
+been observed (xij > 0), we   d like w(cid:62)
+i wj to accurately
+estimate pmi(i; j) subject to how con   dent we are in the
+observed count xij. swivel computes the weighted squared
+error between the embedding dot product and the pmi of
+feature i and feature j:
+
+l1(i, j) =
+
+=
+
+1
+2
+1
+2
+
+f (xij)(cid:0)w(cid:62)
+
+i   wj     pmi(i; j)(cid:1)2
+
+f (xij)(w(cid:62)
+
+i   wj     log xij     log|d|
++ log xi    + log x   j)2
+
+this encourages w(cid:62)
+
+i   wj to correctly estimate the observed
+
+swivel: improving embeddings by noticing what   s missing
+
+table 1. training objective and cost functions. the pmi    function refers to the    smoothed    pmi function described in the text, where
+the actual value of 0 for xij is replaced with 1.
+
+cost
+
+intuition
+
+squared error: the model must accurately reconstruct ob-
+served pmi subject to our con   dence in xij.
+   soft hinge:    the model must not over-estimate the pmi
+of common features whose co-occurrence is unobserved.
+
+numerically, l0 behaves as follows. if features i and j are
+common, the marginal terms xi    and x   j are large. in or-
+der to minimize the loss, the model must produce a small    
+or even negative     value for w(cid:62)
+i   wj, thus capturing the anti-
+correlation between features i and j. on the other hand, if
+features i and j are rare, then the marginal terms are also
+small, so the model is allowed much more latitude with
+respect to w(cid:62)
+i   wj before incurring serious penalty. in this
+way, the    soft hinge    loss enforces an upper bound on the
+model   s estimate for pmi(i; j) that re   ects the our con   -
+dence in the unobserved co-occurrence.
+
+count
+
+xij > 0
+
+xij = 0
+
+1
+2
+
+f (xij)(w(cid:62)
+
+log(cid:2)1 + exp(cid:0)w(cid:62)
+
+i   wj     pmi(i; j))2
+
+i   wj     pmi   (i; j)(cid:1)(cid:3)
+
+pmi, as figure 3 illustrates. the loss is modulated by a
+monotonically increasing con   dence function f (xij): the
+more frequently a co-occurrence is observed, the more the
+model is required to accurately approximate pmi(i; j). we
+experimented with several different variants for f (xij), and
+discovered that a linear transformation of x1/2
+produced
+ij
+good results.
+unobserved co-occurrences. unfortunately, if feature
+i and feature j are never observed together, xij = 0,
+pmi(i; j) =       , and the squared error cannot be com-
+puted.
+what would we like the model to do in this case? treating
+xij as a sample, we can ask: how signi   cant is it that its
+observed value is zero? if the two features i and j are rare,
+their co-occurrence could plausibly have gone unobserved
+due to the fact that we simply haven   t seen enough data.
+on the other hand, if features i and j are common, this
+is less likely: it becomes signi   cant that a co-occurrence
+hasn   t been observed, so perhaps we ought to consider that
+the features are truly anti-correlated.
+in either case, we
+certainly don   t want the model to over-estimate the pmi
+between features, and so we can encourage the model to
+respect an upper bound on its pmi estimate w(cid:62)
+we address this by smoothing the pmi value as if a single
+co-occurrence had been observed (i.e., computing pmi as
+if xij = 1), and using an asymmetric cost function that
+penalizes over-estimation of the smoothed pmi. the fol-
+lowing    soft hinge    cost function (plotted as the dotted line
+in figure 3) accomplishes this:
+
+i wj.
+
+l0(i, j) = log [1 + exp(w(cid:62)
+= log [1 + exp(w(cid:62)
+
+i   wj     pmi   (i; j))]
+i   wj     log|d|
+
++ log xi    + log x   j)]
+
+figure 3. loss as a function of predicted value wi   w(cid:62)
+j , evaluated
+for arbitrary objective value of 2.0. the solid line shows l1
+(squared error); the dotted line shows l0 (the    soft hinge   ).
+
+here, pmi    refers to the smoothed pmi computation
+where xij   s actual count of 0 is replaced with 1. this
+loss penalizes the model for over-estimating the objective
+value; however, it applies negligible penalty     i.e., is non-
+committal     if the model under-estimates it.
+
+4. experiments
+we performed several experiments to evaluate the embed-
+dings produced by swivel.
+corpora. following pennington et al. (2014), we pro-
+
+swivel: improving embeddings by noticing what   s missing
+
+table 2. performance of sgns, glove, and swivel vectors across different tasks with respect to methods tested by levy et al. (2015),
+with cbow is included for reference. word similarity tasks report spearman   s    with human annotation; analogy tasks report accuracy.
+in all cases, larger numbers indicate better performance.
+
+method wordsim
+similarity
+0.737
+sgns
+0.651
+glove
+0.748
+swivel
+cbow
+0.700
+
+wordsim
+relatedness
+
+0.592
+0.541
+0.616
+0.527
+
+bruni et al.
+
+men
+0.743
+0.738
+0.762
+0.708
+
+radinsky et al.
+
+m. turk
+0.686
+0.627
+0.720
+0.664
+
+luong et al.
+rare words
+
+0.467
+0.386
+0.483
+0.439
+
+hill et al.
+siid113x
+0.397
+0.360
+0.403
+0.358
+
+google msr
+
+0.692
+0.716
+0.739
+0.667
+
+0.592
+0.578
+0.622
+0.570
+
+duced 300-dimensional embeddings from an august 2015
+wikipedia dump combined with the gigaword5 corpus.
+the corpus was tokenized, lowercased, and split into sen-
+tences. punctuation was discarded, but hyphenated words
+and contractions were preserved. the resulting training
+data included 3.3 billion tokens across 89 million sen-
+tences. the most frequent 397,312 unigram tokens were
+used to produce the vocabulary, and the same vocabulary is
+used for all experiments.
+baselines. in order to ensure a careful comparison, we re-
+created embeddings using these corpora with the publicly-
+available id973 and glove4 programs as our base-
+lines.
+id97 was con   gured to generate skipgram embed-
+dings using    ve negative samples. we set the window size
+so that it would include ten tokens to the left of the focus
+and ten tokens to the right. we ran it for    ve iterations over
+the input corpus. since the least frequent word in the cor-
+pus occurs 65 times, training samples the rarest words at
+least 300 times each. since the same vocabulary is used for
+both word and context features, we modi   ed id97 to
+emit both word and context embeddings. we experimented
+with adding word vector wi with its corresponding context
+vector   wi (pennington et al., 2014); however, best perfor-
+mance was achieved using the word vector wi alone, as was
+originally reported by mikolov et al. (2013a).
+glove was similarly con   gured to use its    symmetric    co-
+occurrence window that spans ten tokens to the left of the
+focus word and ten tokens to the right. we ran glove
+for 100 training epochs using the default parameter set-
+tings for initial learning rate (   = 0.05), the weighting
+exponent (   = 0.75), and the weighting function cut-off
+(xmax = 100). glove produces both word and context
+vectors: unlike id97, the sum of the word vector wi
+with its corresponding context vector   wi produced slightly
+better results than the word vector alone. (this was also
+noted by pennington et al. (2014).)
+
+3https://code.google.com/p/id97
+4http://nlp.stanford.edu/projects/glove
+
+our results for these baselines vary slightly from those re-
+ported elsewhere. we speculate that this may be due to
+differences in corpora, preprocessing, and vocabulary se-
+lection, and simply note that this evaluation should at least
+be internally consistent.
+swivel training. the unigram vocabulary was used for
+both row and column features. co-occurrence was com-
+puted by examining ten words to the left and ten words to
+the right of the focus word. as with glove, co-occurrence
+counts were accumulated using a harmonically scaled win-
+dow: for example, a token that is three tokens away from
+3 of an occurrence.5 so it turns
+the focus was counted as 1
+out that glove and swivel were trained from identical co-
+occurrence statistics.6
+we trained the model for a million    steps   , where each
+step trains an individual submatrix shard. given a vocab-
+ulary size of roughly 400,000 words and k = 4096, there
+are approximately 100 row blocks and 100 column blocks,
+yielding 10,000 shards overall. therefore each shard was
+sampled about 100 times.
+we experimented with several different weighting func-
+tions to modulate the squared error based on cell frequency
+of the form f (xij) = b0 + bx  
+ij and found that    = 1
+2,
+b0 = 0.1, and b = 1
+finally, once the embeddings were produced, we discov-
+ered that adding the word vector wi to its corresponding
+context vector   wi produced better results than the word vec-
+tor wi alone, just as it did with glove.
+evaluation. we evaluated the embeddings using the same
+
+4 yielded good results.
+
+5we experimented with both linear and uniform scaling win-
+
+dows, and neither performed as well.
+
+6following levy and goldberg   s 2014 suggestion that sgns
+factors a shifted pmi matrix, we experimented with shifting the
+objective pmi value by a small amount. speci   cally, levy and
+goldberg (2014) suggest that the sgns pmi objective is shifted
+by log k, where k is the number of negative samples drawn from
+the unigram distribution. since we   d con   gured id97 with
+k = 5, we experimented with shifting the pmi objective by log 5
+(    1.61). this did not yield signi   cantly different results than
+just using the original pmi objective.
+
+swivel: improving embeddings by noticing what   s missing
+
+datasets that were used by levy et al. (2015). for word
+similarity, we used wordsim353 (finkelstein et al., 2001)
+partitioned into wordsim similarity and wordsim related-
+ness (zesch et al., 2008; agirre et al., 2009); bruni et al.   s
+2012 men dataset; radinsky et al.   s 2011 mechanical
+turk, luong et al.   s 2013 rare words; and hill et al.   s 2014
+siid113x-999 dataset. these datasets contain word pairs
+with human-assigned similarity scores:
+the word vectors
+are evaluated by ranking the pairs according to their cosine
+similarities and measuring the correlation with the human
+ratings using spearman   s   . out-of-vocabulary words are
+ignored.
+the analogy tasks present queries of the form    a is to b as
+c is to x   : the system must predict x from the entire vocab-
+ulary. as with levy et al. (2015), we evaluated swivel us-
+ing the msr and google datasets (mikolov et al., 2013b;a).
+the former contains syntactic analogies (e.g.,    good is to
+best as smart is to smartest   ). the latter contains a mix of
+syntactic and semantic analogies (e.g.,    paris is to france
+as tokyo is to japan   ). the evaluation metric is the num-
+ber of queries for which the embedding that maximizes the
+cosine similarity is the correct answer. as with (mikolov
+et al., 2013a), any query terms are discarded from the result
+set and out-of-vocabulary words are scored as losses.
+results. the results are summarized in table 2. embed-
+dings produced by id97   s cbow are also included
+for reference. as can be seen, swivel outperforms glove,
+sgns, and cbow on both the word similarity and anal-
+ogy tasks. we also note that, except for the google analogy
+task, sgns outperforms glove.
+our hypothesis is that this occurs because both sgns and
+swivel take unobserved co-occurrences into account, but
+glove does not. swivel incorporates information about un-
+observed co-occurrences directly, including them in among
+the predictions and applying the    soft hinge    loss to avoid
+over-estimating the feature pair   s pmi. sgns indirectly
+models unobserved co-occurrences through negative sam-
+pling. glove, on the other hand, only trains on positive
+co-occurrence data.
+we hypothesize that by not taking the unobserved co-
+occurrences into account, glove is under-constrained:
+there is no penalty for placing unobserved but unrelated
+embeddings near to one another. quantitatively, the fact
+that both sgns and swivel out-perform glove by a large
+margin on luong et al.   s 2013 rare words evaluation
+seems to support this hypothesis. inspection of some very
+rare words (table 3) shows that, indeed, sgns and swivel
+have produced reasonable neighbors, but glove has not.
+to be fair, glove was explicitly designed to capture the
+relative geometry in the embedding space: the intent was to
+optimize for performance on analogies rather than on word
+
+similarity. nevertheless, we see that word frequency has a
+marked effect on analogy performance, as well. figure 4
+plots analogy task accuracy against the base-10 log of the
+mean frequency of the four words involved.
+
+figure 4. analogy accuracy as a function of the log mean fre-
+quency of the four words.
+
+to produce the plot, we considered both the msr and
+google analogies. for each analogy, we computed the
+mean frequency of the four words involved, and then buck-
+eted it with other analogies that have similar mean frequen-
+cies. each bucket contains at least 100 analogies.
+notably, swivel performs better than sgns at all word fre-
+quencies, and better than glove on all but the most frequent
+words. glove under-performs sgns on rare words, but be-
+gins to out-perform sgns as the word frequency increases.
+we hypothesize that glove is    tting the common words at
+the expense of rare ones.
+it is also interesting to note that all algorithms tend to per-
+form poorly on the most frequent words. this is probably
+because very frequent words a) tend to appear in many con-
+texts, making it dif   cult to determine an accurate point rep-
+resentation, and b) they tend to be polysemous, appear as
+both verbs and nouns, and have subtle gradations in mean-
+ing (e.g., man and time).
+
+5. discussion
+swivel grew out of a need to build embeddings over larger
+feature sets and more training data. we wanted an algo-
+rithm that could both handle a large amount of data, and
+produced good estimates for both common and rare fea-
+
+swivel: improving embeddings by noticing what   s missing
+
+query
+
+vocabulary rank
+
+bootblack
+
+393,709
+
+chigger
+
+373,844
+
+decretal
+
+374,123
+
+tuxedoes
+
+396,973
+
+table 3. nearest neighbors for some very rare words.
+sgns
+
+glove
+
+shoeshiner, newsboy, shoeshine,
+stage-struck, bartender, bellhop, waiter,
+housepainter, tinsmith
+chiggers, webworm, hairballs, noctuid,
+sweetbread, psyllids, rostratus,
+narrowleaf, pigweed
+decretals, ordinatio, sacerdotalis,
+constitutiones, theodosianus, canonum,
+papae, romanae, episcoporum
+tuxedos, ballgowns, tuxes, well-cut,
+cable-knit, open-collared, organdy,
+high-collared,    ouncy
+
+redbull, 240, align=middle, 18, 119,
+dannit, concurrence/dissent, 320px,
+dannitdannit
+dannit, dannitdannit, upupidae, bungarus,
+applause., .774, amolops, maxillaria,
+paralympic.org
+regesta, agatho, a   .com.au, dannitdannit,
+dannit, emptores, beati   cations, 18, 545
+
+hairnets, dhotis, speedos, loincloths,
+zekrom, shakos, mortarboards, caftans,
+nightwear
+
+swivel
+
+newsboy, shoeshine, stevedore, bellboy,
+headwaiter, stowaway, tibbs, mister, tramp
+
+mite, chiggers, mites, batatas, infestation,
+jigger, infested, mumbo, frog   s
+
+decretals, decretum, apostolicae,
+sententiae, canonum, unigenitus, collectio,
+   dei, patristic
+ballgowns, tuxedos, tuxes, cummerbunds,
+daywear, bridesmaids   , gowns, strapless,
+   ouncy
+
+tures.
+statistics vs. sampling. like glove, swivel trains from
+co-occurrence statistics: once the co-occurrence matrix
+is constructed, training swivel requires computational re-
+sources in proportion to the matrix size. this allows swivel
+to handle much more data than can be practically processed
+with a sampling method like sgns, which requires train-
+ing time in proportion to the size of the corpus.
+unobserved co-occurrences. our experiments indicate
+that glove pays a performance cost for only training on
+observed co-occurrences. in particular, the model may pro-
+duce unstable estimates for rare features since there is no
+penalty for placing features near one another whose co-
+occurrence isn   t observed.
+nevertheless, computing values for every pair of features
+potentially entails signi   cantly more computation than is
+required by glove, whose training complexity is pro-
+portional to the number of non-zero entries in the co-
+occurrence matrix. swivel mitigates this in two ways.
+first, it makes use of vectorized hardware to perform ma-
+trix multiplication of thousands of embedding vectors at
+once. performing about a dozen 4096   4096 matrix multi-
+plications per gpu compute unit per second is typical: we
+have observed that a single gpu can estimate about 200
+million cell values per second for 1024-dimensional em-
+bedding vectors.
+second, the blocked matrix shards can be separately pro-
+cessed by several worker machines to allow for coarse-
+grained parallelism. the block structure amortizes the
+overhead of transferring embedding parameters to and from
+the parameter server across millions of individual esti-
+mates. we found that swivel did, in fact, parallelize easily
+in our environment, and have been able to run experiments
+that use hundreds of concurrent worker machines.
+piecewise loss.
+it seems fruitful to consider the co-
+occurrence matrix as itself containing estimates rather than
+point values. a corpus is really just a sample of language,
+and so a co-occurrence matrix derived from a corpus itself
+
+contains samples whose values are uncertain.
+we used a weighted piecewise id168 to capture this
+uncertainty. if a co-occurrence was observed, we can pro-
+duce a pmi estimate, and we require the model to    t it more
+or less accurately based on the observed co-occurrence fre-
+quency. if a co-occurrence was not observed, we simply
+require that the model avoid over-estimating a smoothed
+pmi value. while this works well, it does seem ad hoc: we
+hope that future investigation can yield a more principled
+approach.
+
+6. conclusion
+swivel produces low-dimensional
+feature embeddings
+from a co-occurrence matrix. it optimizes an objective that
+is very similar to that of sgns and glove: the dot prod-
+uct of a id27 with a context embedding ought
+to approximate the observed pmi of the two words in the
+corpus.
+unlike sgns, swivel   s computational requirements de-
+pend on the size of the co-occurrence matrix, rather than
+the size of the corpus. this means that it can be applied to
+much larger corpora.
+unlike glove, swivel explicitly considers all
+the co-
+occurrence information     including unobserved co-
+occurrences     to produce embeddings. in the case of un-
+observed co-occurrences, a    soft hinge    loss prevents the
+model from over-estimating pmi. this leads to demonstra-
+bly better embeddings for rare features without sacri   cing
+quality for common ones.
+swivel capitalizes on vectorized hardware, and uses block
+structure to amortize parameter transfer cost and avoid con-
+tention. this results in the ability to handle very large co-
+occurrence matrices in a scalable way that is easy to paral-
+lelize.
+we would like to thank andrew mccallum, samy bengio,
+and julian richardson for their thoughtful comments on
+this work.
+
+swivel: improving embeddings by noticing what   s missing
+
+minh-thang luong, richard socher, and christopher d
+manning. better word representations with recursive
+neural networks for morphology. conll-2013, 104,
+2013.
+
+tomas mikolov, kai chen, greg corrado, and jeffrey
+dean. ef   cient estimation of word representations in
+vector space. arxiv preprint arxiv:1301.3781, 2013a.
+
+tomas mikolov, wen-tau yih, and geoffrey zweig. lin-
+guistic regularities in continuous space word representa-
+tions. in hlt-naacl, pages 746   751, 2013b.
+
+jeffrey pennington, richard socher, and christopher d
+manning. glove: global vectors for word representa-
+tion. proceedings of the empirical methods in natural
+language processing (emnlp 2014), 12:1532   1543,
+2014.
+
+kira radinsky, eugene agichtein, evgeniy gabrilovich,
+and shaul markovitch. a word at a time: comput-
+ing word relatedness using temporal semantic analysis.
+in proceedings of the 20th international conference on
+world wide web, pages 337   346. acm, 2011.
+
+benjamin recht, christopher re, stephen wright, and
+feng niu. hogwild: a lock-free approach to paralleliz-
+ing stochastic id119. in advances in neural
+information processing systems, pages 693   701, 2011.
+
+torsten zesch, christof m  uller, and iryna gurevych. using
+wiktionary for computing semantic relatedness. in aaai,
+volume 8, pages 861   866, 2008.
+
+references
+eneko agirre, enrique alfonseca, keith hall, jana kraval-
+ova, marius pas  ca, and aitor soroa. a study on simi-
+larity and relatedness using distributional and id138-
+based approaches. in proceedings of human language
+technologies: the 2009 annual conference of the north
+american chapter of the association for computational
+linguistics, pages 19   27. association for computational
+linguistics, 2009.
+
+marco baroni, georgiana dinu, and germ  an kruszewski.
+dont count, predict! a systematic comparison of context-
+counting vs. context-predicting semantic vectors. in pro-
+ceedings of the 52nd annual meeting of the association
+for computational linguistics, volume 1, pages 238   
+247, 2014.
+
+elia bruni, gemma boleda, marco baroni, and nam-
+khanh tran. id65 in technicolor.
+in proceedings of the 50th annual meeting of the as-
+sociation for computational linguistics: long papers-
+volume 1, pages 136   145. association for computa-
+tional linguistics, 2012.
+
+jeffrey dean, greg corrado, rajat monga, kai chen,
+matthieu devin, mark mao, andrew senior, paul
+tucker, ke yang, quoc v le, et al. large scale dis-
+tributed deep networks. in advances in neural informa-
+tion processing systems, pages 1223   1231, 2012.
+
+john duchi, elad hazan, and yoram singer. adaptive sub-
+gradient methods for online learning and stochastic op-
+timization. the journal of machine learning research,
+12:2121   2159, 2011.
+
+lev finkelstein, evgeniy gabrilovich, yossi matias, ehud
+rivlin, zach solan, gadi wolfman, and eytan ruppin.
+placing search in context: the concept revisited. in pro-
+ceedings of the 10th international conference on world
+wide web, pages 406   414. acm, 2001.
+
+felix hill, roi reichart, and anna korhonen. siid113x-
+999: evaluating semantic models with (genuine) simi-
+larity estimation. arxiv preprint arxiv:1408.3456, 2014.
+
+yifan hu, yehuda koren, and chris volinsky. collabora-
+tive    ltering for implicit feedback datasets. in data min-
+ing, 2008. icdm   08. eighth ieee international confer-
+ence on, pages 263   272. ieee, 2008.
+
+omer levy and yoav goldberg. neural id27 as
+implicit id105. in advances in neural in-
+formation processing systems, pages 2177   2185, 2014.
+
+omer levy, yoav goldberg, and ido dagan.
+
+improving
+distributional similarity with lessons learned from word
+embeddings. transactions of the association for com-
+putational linguistics, 3:211   225, 2015.
+
+

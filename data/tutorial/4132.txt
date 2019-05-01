@@ -1,0 +1,543 @@
+   [1]ideas [2]learning platform [3]conferences [4]shop
+   search ____________________ submit
+   [5]sign in
+
+on our radar
+
+   [6]ai
+   [7]data
+   [8]economy
+   [9]operations
+   [10]software architecture
+   [11]software engineering
+   [12]web programming
+   [13]see all
+
+   [14]ideas [15]learning platform [16]conferences [17]shop search
+   ____________________ submit
+
+on our radar
+
+   [18]ai
+   [19]data
+   [20]economy
+   [21]operations
+   [22]software architecture
+   [23]software engineering
+   [24]web programming
+   [25]see all
+
+   [26]ai
+
+                  complex neural networks made easy by chainer
+
+   a define-by-run approach allows for flexibility and simplicity when
+   building deep learning networks.
+
+   by [27]shohei hido
+
+   november 8, 2016
+
+   neurons. neurons. (source: [28]pixabay)
+
+   chainer is an open source framework designed for efficient research
+   into and development of deep learning algorithms. in this post, we
+   briefly introduce chainer with a few examples and compare with other
+   frameworks such as caffe, theano, torch, and tensorflow.
+
+   most existing frameworks construct a computational graph in advance of
+   training. this approach is fairly straightforward, especially for
+   implementing fixed and layer-wise neural networks like convolutional
+   neural networks.
+
+   however, state-of-the-art performance and new applications are now
+   coming from more complex networks, such as recurrent or stochastic
+   neural networks. though existing frameworks can be used for these kinds
+   of complex networks, it sometimes requires (dirty) hacks that can
+   reduce development efficiency and maintainability of the code.
+
+   chainer   s approach is unique: building the computational graph
+   "on-the-fly" during training.
+
+   this allows users to change the graph at each iteration or for each
+   sample, depending on conditions. it is also easy to debug and refactor
+   chainer-based code with a standard debugger and profiler, since chainer
+   provides an imperative api in plain python and numpy. this gives much
+   greater flexibility in the implementation of complex neural networks,
+   which leads in turn to faster iteration, and greater ability to quickly
+   realize cutting-edge deep learning algorithms.
+
+   below, i describe how chainer actually works and what kind of benefits
+   users can get from it.
+
+chainer basics
+
+   chainer is a standalone deep learning framework based on python.
+
+   unlike other frameworks with a python interface such as theano and
+   tensorflow, chainer provides imperative ways of declaring neural
+   networks by supporting numpy-compatible operations between arrays.
+   chainer also includes a gpu-based numerical computation library named
+   cupy.
+>>> from chainer import variable
+>>> import numpy as np
+
+   a class variable represents the unit of computation by wrapping
+   numpy.ndarray in it (.data).
+>>> x = variable(np.asarray([[0, 2],[1, -3]]).astype(np.float32))
+>>> print(x.data)
+[[ 0.      2.]
+ [ 1.     -3.]]
+
+   users can define operations and functions (instances of function)
+   directly on variables.
+>>> y = x ** 2 - x + 1
+>>> print(y.data)
+[[  1.   3.]
+ [  1.  13.]]
+
+   since variables remember what they are generated from, variable y has
+   the additive operation as its parent (.creator).
+>>> print(y.creator)
+<chainer.functions.math.basic_math.addconstant at 0x7f939xxxxx>
+
+   this mechanism makes backword computation possible by tracking back the
+   entire path from the final id168 to the input, which is
+   memorized through the execution of forward computation   without defining
+   the computational graph in advance.
+
+   many numerical operations and id180 are given in
+   chainer.functions. standard neural network operations such as fully
+   connected linear and convolutional layers are implemented in chainer as
+   an instance of link. a link can be thought of as a function together
+   with its corresponding learnable parameters (such as weight and bias
+   parameters, for example). it is also possible to create a link that
+   itself contains several other links. such a container of links is
+   called a chain. this allows chainer to support modeling a neural
+   network as a hierarchy of links and chains. chainer also supports
+   state-of-the-art optimization methods, serialization, and cuda-powered
+   faster computations with cupy.
+>>> import chainer.functions as f
+>>> import chainer.links as l
+>>> from chainer import chain, optimizers, serializers, cuda
+>>> import cupy as cp
+
+chainer   s design: define-by-run
+
+   to train a neural network, three steps are needed: (1) build a
+   computational graph from network definition, (2) input training data
+   and compute the id168, and (3) update the parameters using an
+   optimizer and repeat until convergence.
+
+   usually, dl frameworks complete step one in advance of step two. we
+   call this approach define-and-run.
+   dl frameworks define-and-run figure 1. all images courtesy of shohei
+   hido.
+
+   this is straightforward but not optimal for complex neural networks
+   since the graph must be fixed before training. therefore, when
+   implementing recurrent neural networks, for examples, users are forced
+   to exploit special tricks (such as the scan() function in theano) which
+   make it harder to debug and maintain the code.
+
+   instead, chainer uses a unique approach called define-by-run, which
+   combines steps one and two into a single step.
+   chainer uses a unique approach called define-by-run
+
+   the computational graph is not given before training but obtained in
+   the course of training. since forward computation directly corresponds
+   to the computational graph and id26 through it, any
+   modifications to the computational graph can be done in the forward
+   computation at each iteration and even for each sample.
+
+   as a simple example, let   s see what happens using two-layer id88
+   for mnist digit classification.
+   two-layer id88 for mnist digit classification
+
+   the following code shows the implementation of two-layer id88 in
+   chainer:
+# 2-layer multi-layer id88 (mlp)
+class mlp(chain):
+
+    def __init__(self):
+        super(mlp, self).__init__(
+            l1=l.linear(784, 100),  # from 784-dimensional input to hidden unit
+with 100 nodes
+            l2=l.linear(100, 10),  # from hidden unit with 100 nodes to output u
+nit with 10 nodes  (10 classes)
+        )
+
+    # forward computation
+    def __call__(self, x):
+        h1 = f.tanh(self.l1(x))     # forward from x to h1 through activation wi
+th tanh function
+        y = self.l2(h1)                 # forward from h1to y
+                                return y
+
+   in the constructer (__init__), we define two linear transformations
+   from the input to hidden units, and hidden to output units,
+   respectively. note that no connection between these transformations is
+   defined at this point, which means that the computation graph is not
+   even generated, let alone fixed.
+
+   instead, their relationship will be later given in the forward
+   computation (__call__), by defining the activation function (f.tanh)
+   between the layers. once forward computation is finished for a
+   minibatch on the mnist training data set (784 dimensions), the
+   following computational graph can be obtained on-the-fly by
+   backtracking from the final node (the output of the id168) to
+   the input (note that softmaxcrossid178 is also introduced as the loss
+   function):
+   computational graph
+
+   the point is that the network definition is simply represented in
+   python rather than a domain-specific language, so users can make
+   changes to the network in each iteration (forward computation).
+
+   this imperative declaration of neural networks allows users to use
+   standard python syntax for branching, without studying any domain
+   specific language (dsl), which can be beneficial as compared to the
+   symbolic approaches that tensorflow and theano utilize and also the
+   text dsl that caffe and cntk rely on.
+
+   in addition, a standard debugger and profiler can be used to find the
+   bugs, refactor the code, and also tune the hyper-parameters. on the
+   other hand, although torch and mxnet also allow users to employ
+   imperative modeling of neural networks, they still use the
+   define-and-run approach for building a computational graph object, so
+   debugging requires special care.
+
+implementing complex neural networks
+
+   the above is just an example of a simple and fixed neural network.
+   next, let   s look at how complex neural networks can be implemented in
+   chainer.
+
+   a recurrent neural network is a type of neural network that takes
+   sequence as input, so it is frequently used for tasks in natural
+   language processing such as sequence-to-sequence translation and
+   id53 systems. it updates the internal state depending not
+   only on each tuple from the input sequence, but also on its previous
+   state so it can take into account dependencies across the sequence of
+   tuples.
+
+   since the computational graph of a recurrent neural network contains
+   directed edges between previous and current time steps, its
+   construction and id26 are different from those for fixed
+   neural networks, such as convolutional neural networks. in current
+   practice, such cyclic computational graphs are unfolded into a directed
+   acyclic graph each time for model update by a method called truncated
+   id26 through time.
+
+   for this example, the target task is to predict the next word given a
+   part of sentence. a successfully trained neural network is expected to
+   generate syntactically correct words rather than random words, even if
+   the entire sentence does not make sense to humans. the following
+   example shows a simple recurrent neural network with one recurrent
+   hidden unit:
+# definition of simple recurrent neural network
+class simpleid56(chain):
+
+    def __init__(self, n_vocab, n_nodes):
+        super(simpleid56, self).__init__(
+            embed=l.embedid(n_vocab, n_nodes),  # id27
+            x2h=l.linear(n_nodes, n_nodes),  # the first linear layer
+            h2h=l.linear(n_nodes, n_nodes),  # the second linear layer
+            h2y=l.linear(n_nodes, n_vocab),  # the feed-forward output layer
+        )
+        self.h_internal=none # recurrent state
+
+    def forward_one_step(self, x, h):
+        x = f.tanh(self.embed(x))
+        if h is none: # branching in network
+            h = f.tanh(self.x2h(x))
+        else:
+            h = f.tanh(self.x2h(x) + self.h2h(h))
+        y = self.h2y(h)
+        return y, h
+
+    def __call__(self, x):
+        # given the current word id, predict the next word id.
+        y, h = self.forward_one_step(x, self.h_internal)
+        self.h_internal = h # update internal state
+        return y
+
+   only the types and size of layers are defined in the constructor as
+   well as on the multi-layer id88. given input word and current
+   state as arguments, forward_one_step() method returns output word and
+   new state. in the forward computation (__call__), forward_one_step() is
+   called for each step and updates the hidden recurrent state with a new
+   one.
+
+   by using the popular text data set [29]id32 (ptb), we trained
+   a model to predict the next word from probable vocabularies. then the
+   trained model is used to predict subsequent words using weighted
+   sampling.
+"if you build it," => "would a outlawed a out a tumor a colonial a"
+"if you build it, they" => " a passed a president a glad a senate a billion"
+"if you build it, they will" => " for a billing a jerome a contracting a surgica
+l a"
+"if you build it, they will come" => "a interviewed a invites a boren a illustra
+ted a pinnacle"
+
+   this model has learned   and then produced   many repeated pairs of    a    and
+   a noun or an adjective. which means    a    is one of the most probable
+   words, and a noun or adjective tend to follow after    a.   
+
+   to humans, the results look almost the same, being syntactically wrong
+   and meaningless, even when using different inputs. however, these are
+   definitely inferred based on the real sentences in the data set by
+   training the type of words and relationship between them.
+
+   though this is inevitable due to the lack of expressiveness in the
+   simpleid56 model, the point here is that users can implement any kinds
+   of recurrent neural networks just like simpleid56.
+
+   just for comparison, by using off-the-shelf mode of recurrent neural
+   network called [30]long short term memory (lstm), the generated texts
+   become more syntactically correct.
+"if you build it," => "pension say computer ira <eos> a week ago the japanese"
+"if you buildt it, they" => "were jointly expecting but too well put the <unknow
+n> to"
+"if you build it, they will" => "see the <unknown> level that would arrive in a
+relevant"
+"if you build it, they will come" => "to teachers without an mess <eos> but he s
+ays store"
+
+   since popular id56 components such as lstm and [31]gated recurrent unit
+   (gru) have already been implemented in most of the frameworks, users do
+   not need to care about the underlying implementations. however, if you
+   want to significantly modify them or make a completely new algorithm
+   and components, the flexibility of chainer makes a great difference
+   compared to other frameworks.
+
+stochastically changing neural networks
+
+   in the same way, it is very easy to implement stochastically changing
+   neural networks with chainer.
+
+   the following is mock code to implement stochastic resnet. in __call__,
+   just flip a skewed coin with id203 p, and change the forward path
+   by having or not having unit f. this is done at each iteration for each
+   minibatch, and the memorized computational graph is different each time
+   but updated accordingly with id26 after computing the loss
+   function.
+# mock code of stochastic resnet in chainer
+class stochasticresnet(chain):
+
+  def __init__(self, prob, size, **kwargs):
+    super(stochasticresnet, self).__init__(size, **kwargs)
+    self.p = prob # survival probabilities
+
+  def __call__ (self, h):
+    for i in range(self.size):
+      b = numpy.random.binomial(1, self.p[i])
+      c = self.f[i](h) + h if b == 1 else h
+      h = f.relu(c)
+    return h
+
+conclusion
+
+   in addition to the above, chainer has many features to help users to
+   realize neural networks for their tasks as easily and efficiently as
+   possible.
+
+   cupy is a numpy-equivalent array backend for gpus included in chainer,
+   which enables cpu/gpu-agnostic coding, just like numpy-based
+   operations. the training loop and data set handling can be abstracted
+   by trainer, which keeps users away from writing such routines every
+   time, and allows them to focus on writing innovative algorithms. though
+   scalability and performance are not the main focus of chainer, it is
+   still competitive with other frameworks, as shown in the [32]public
+   benchmark results, by making full use of nvidia's cuda and cudnn.
+
+   chainer has been used in many academic papers not only for computer
+   vision, but also speech processing, natural language processing, and
+   robotics. moreover, chainer is gaining popularity in many industries
+   since it is good for research and development of new products and
+   services. [33]toyota motors, panasonic, and [34]fanuc are among the
+   companies that use chainer extensively and have shown some
+   demonstrations, in partnership with the original chainer developement
+   team at preferred networks.
+
+   interested readers are encouraged to visit the [35]chainer website for
+   further details. i hope chainer will make a difference for many
+   cutting-edge research and real-world products based on deep learning!
+   article image: neurons. (source: [36]pixabay).
+
+   share
+    1. [37]tweet
+    2.
+    3.
+     __________________________________________________________________
+
+[38]shohei hido
+
+   shohei hido is the chief research officer of preferred networks, a
+   spin-off company of preferred infrastructure, inc., where he is
+   currently responsible for deep intelligence in motion, a software
+   platform for using deep learning in iot applications. previously,
+   shohei was the leader of preferred infrastructure's jubatus project, an
+   open source software framework for real-time, streaming machine
+   learning and worked at ibm research in tokyo for six years as a staff
+   researcher in machine learning and its applications to industries.
+   shohei holds a...
+   [39]more
+     __________________________________________________________________
+
+   [40]bots landscape.
+
+   [41]ai
+
+[42]infographic: the bot platform ecosystem
+
+   by [43]jon bruner
+
+   a look at the artificial intelligence and messaging platforms behind
+   the fast-growing chatbot community
+
+   video
+   [44]vertical forest, milan.
+
+   [45]ai
+
+[46]evolve ai
+
+   by [47]naveen rao
+
+   naveen rao explains how intel nervana is evolving the ai stack from
+   silicon to the cloud.
+
+   [48]welcome sign at o'reilly ai conference 2016
+
+   [49]ai
+
+[50]highlights from the o'reilly ai conference in new york 2016
+
+   by [51]mac slocum
+
+   watch highlights covering artificial intelligence, machine learning,
+   intelligence engineering, and more. from the o'reilly ai conference in
+   new york 2016.
+
+   video
+   [52]close up of uber's self driving car in pittsburgh.
+
+   [53]ai
+
+[54]how ai is propelling driverless cars, the future of surface transport
+
+   by [55]shahin farshchi
+
+   shahin farshchi examines role artificial intelligence will play in
+   driverless cars.
+
+about us
+
+     * [56]our company
+     * [57]teach/speak/write
+     * [58]careers
+     * [59]customer service
+     * [60]contact us
+
+site map
+
+     * [61]ideas
+     * [62]learning
+     * [63]topics
+     * [64]all
+
+     *
+     *
+     *
+     *
+     *
+
+      2019 o'reilly media, inc. all trademarks and registered trademarks
+   appearing on oreilly.com are the property of their respective owners.
+   [65]terms of service     [66]privacy policy     [67]editorial independence
+
+   animal
+
+   iframe: [68]https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+references
+
+   visible links
+   1. https://www.oreilly.com/ideas
+   2. https://learning.oreilly.com/
+   3. http://www.oreilly.com/conferences/
+   4. http://shop.oreilly.com/
+   5. https://www.oreilly.com/sign-in.html
+   6. https://www.oreilly.com/topics/ai
+   7. https://www.oreilly.com/topics/data
+   8. https://www.oreilly.com/topics/economy
+   9. https://www.oreilly.com/topics/operations
+  10. https://www.oreilly.com/topics/software-architecture
+  11. https://www.oreilly.com/topics/software-engineering
+  12. https://www.oreilly.com/topics/web-programming
+  13. https://www.oreilly.com/topics
+  14. https://www.oreilly.com/ideas
+  15. https://learning.oreilly.com/
+  16. http://www.oreilly.com/conferences/
+  17. http://shop.oreilly.com/
+  18. https://www.oreilly.com/topics/ai
+  19. https://www.oreilly.com/topics/data
+  20. https://www.oreilly.com/topics/economy
+  21. https://www.oreilly.com/topics/operations
+  22. https://www.oreilly.com/topics/software-architecture
+  23. https://www.oreilly.com/topics/software-engineering
+  24. https://www.oreilly.com/topics/web-programming
+  25. https://www.oreilly.com/topics
+  26. https://www.oreilly.com/topics/ai
+  27. https://www.oreilly.com/people/d5bf7-shohei-hido
+  28. https://pixabay.com/en/neurons-brain-cells-brain-structure-582054/
+  29. http://www.cis.upenn.edu/~treebank/home.html
+  30. https://en.wikipedia.org/wiki/long_short-term_memory
+  31. https://en.wikipedia.org/wiki/gated_recurrent_unit
+  32. https://github.com/soumith/convnet-benchmarks
+  33. http://www.wsj.com/articles/japan-seeks-tech-revival-with-artificial-intelligence-1448911981
+  34. http://www.fanucamerica.com/fanucamerica-news/press-releases/pressreleasedetails.aspx?id=79
+  35. http://chainer.org/
+  36. https://pixabay.com/en/neurons-brain-cells-brain-structure-582054/
+  37. https://twitter.com/share
+  38. https://www.oreilly.com/people/d5bf7-shohei-hido
+  39. https://www.oreilly.com/people/d5bf7-shohei-hido
+  40. https://www.oreilly.com/ideas/infographic-the-bot-platform-ecosystem
+  41. https://www.oreilly.com/topics/ai
+  42. https://www.oreilly.com/ideas/infographic-the-bot-platform-ecosystem
+  43. https://www.oreilly.com/people/b1d73-jon-bruner
+  44. https://www.oreilly.com/ideas/evolve-ai
+  45. https://www.oreilly.com/topics/ai
+  46. https://www.oreilly.com/ideas/evolve-ai
+  47. https://www.oreilly.com/people/14d38-naveen-rao
+  48. https://www.oreilly.com/ideas/keynotes-from-ai-new-york-2016
+  49. https://www.oreilly.com/topics/ai
+  50. https://www.oreilly.com/ideas/keynotes-from-ai-new-york-2016
+  51. https://www.oreilly.com/people/0d2c1-mac-slocum
+  52. https://www.oreilly.com/ideas/how-ai-is-propelling-driverless-cars-the-future-of-surface-transport
+  53. https://www.oreilly.com/topics/ai
+  54. https://www.oreilly.com/ideas/how-ai-is-propelling-driverless-cars-the-future-of-surface-transport
+  55. https://www.oreilly.com/people/c7521-shahin-farshchi
+  56. http://oreilly.com/about/
+  57. http://oreilly.com/work-with-us.html
+  58. http://oreilly.com/careers/
+  59. http://shop.oreilly.com/category/customer-service.do
+  60. http://shop.oreilly.com/category/customer-service.do
+  61. https://www.oreilly.com/ideas
+  62. https://www.oreilly.com/topics/oreilly-learning
+  63. https://www.oreilly.com/topics
+  64. https://www.oreilly.com/all
+  65. http://oreilly.com/terms/
+  66. http://oreilly.com/privacy.html
+  67. http://www.oreilly.com/about/editorial_independence.html
+  68. https://www.googletagmanager.com/ns.html?id=gtm-5p4v6z
+
+   hidden links:
+  70. https://www.oreilly.com/
+  71. https://www.facebook.com/oreilly/
+  72. https://twitter.com/oreillymedia
+  73. https://www.youtube.com/user/oreillymedia
+  74. https://plus.google.com/+oreillymedia
+  75. https://www.linkedin.com/company/oreilly-media
+  76. https://www.oreilly.com/

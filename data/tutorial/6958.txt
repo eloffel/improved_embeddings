@@ -1,0 +1,346 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]towards data science
+     * [9]data science
+     * [10]machine learning
+     * [11]programming
+     * [12]visualization
+     * [13]ai
+     * [14]data journalism
+     * [15]contribute
+     __________________________________________________________________
+
+do filters dream of convolutional cats?
+
+   go to the profile of naoki shibuya
+   [16]naoki shibuya (button) blockedunblock (button) followfollowing
+   oct 25, 2017
+
+   a convolutional neural network typically has multiple convolutional
+   layers (hence, the name).
+
+   conceptually, we understand each convolutional layer extracts spatial
+   features from their inputs. earlier layer detects low-level features
+   like color, texture, lines, curves, etc. later layers detect higher
+   abstraction like eyes, tail, etc.
+
+   but we can   t see them visually. or, can we?
+
+   in this article, i demonstrate how to use a pre-trained convolutional
+   neural network to see what kind of input images strongly activate
+   filters in convolutional layers.
+
+   [17]this notebook code is largely based on the blog article [18]how
+   convolutional neural networks see the world by francois chollet.
+
+vgg 16
+
+   i use the pre-trained vgg16 available in keras. the details of vgg 16
+   is in [19]very deep convolutional networks for large-scale image
+   recognition by karen simonyan, andrew zisserman.
+
+   let   s examines the available convolutional layers.
+import numpy as np
+import keras.backend as k
+from keras.applications.vgg16 import vgg16
+# include_top=false means we do not include the last dense layers
+# and uses only convolutional layers
+model = vgg16(include_top=false)
+model.summary()
+
+   this gives the following output:
+_________________________________________________________________
+layer (type)                 output shape              param #
+=================================================================
+input_1 (inputlayer)         (none, none, none, 3)     0
+_________________________________________________________________
+block1_conv1 (conv2d)        (none, none, none, 64)    1792
+_________________________________________________________________
+block1_conv2 (conv2d)        (none, none, none, 64)    36928
+_________________________________________________________________
+block1_pool (maxpooling2d)   (none, none, none, 64)    0
+_________________________________________________________________
+block2_conv1 (conv2d)        (none, none, none, 128)   73856
+_________________________________________________________________
+block2_conv2 (conv2d)        (none, none, none, 128)   147584
+_________________________________________________________________
+block2_pool (maxpooling2d)   (none, none, none, 128)   0
+_________________________________________________________________
+block3_conv1 (conv2d)        (none, none, none, 256)   295168
+_________________________________________________________________
+block3_conv2 (conv2d)        (none, none, none, 256)   590080
+_________________________________________________________________
+block3_conv3 (conv2d)        (none, none, none, 256)   590080
+_________________________________________________________________
+block3_pool (maxpooling2d)   (none, none, none, 256)   0
+_________________________________________________________________
+block4_conv1 (conv2d)        (none, none, none, 512)   1180160
+_________________________________________________________________
+block4_conv2 (conv2d)        (none, none, none, 512)   2359808
+_________________________________________________________________
+block4_conv3 (conv2d)        (none, none, none, 512)   2359808
+_________________________________________________________________
+block4_pool (maxpooling2d)   (none, none, none, 512)   0
+_________________________________________________________________
+block5_conv1 (conv2d)        (none, none, none, 512)   2359808
+_________________________________________________________________
+block5_conv2 (conv2d)        (none, none, none, 512)   2359808
+_________________________________________________________________
+block5_conv3 (conv2d)        (none, none, none, 512)   2359808
+_________________________________________________________________
+block5_pool (maxpooling2d)   (none, none, none, 512)   0
+=================================================================
+total params: 14,714,688
+trainable params: 14,714,688
+non-trainable params: 0
+
+   the output shapes all begin with (none, none, none). it is because we
+   didn   t specify the input shape. in other words, the model can handle
+   any image shape.
+
+   the last dimension of each output shape is the number of filters
+   (channels). for example, the layer block5_conv1 has 512 filters
+   (indexed from 0 to 511).
+
+a random image as input
+
+   typically, the input to the vgg16 model is an image to classify such as
+   cats and dogs. here, however, we use a randomly generated noise image
+   and feed it to vgg16 model to calculate filter activations and their
+   gradients.
+def make_random_image(height=128, width=128, mean=127, std=10):
+    return np.random.normal(loc=mean, scale=std, size=(height, width, 3))
+
+   let   s generate a random image:
+random_img = make_random_image()
+plt.imshow(random_img)
+plt.xticks([])
+plt.yticks([])
+plt.show()
+
+   [1*w8keduct9insptd8-axxlw.png]
+   randomly generated noise image
+
+nudge the image to strongly activate the filter
+
+   we can calculate the activations of a filter with the random image.
+   most likely, the activations are not very strong.
+
+   however, using the gradients, we adjust the image data to make the
+   activations stronger. in other words, we nudge the input image pixel
+   values to increase the activation using the gradients as our guide. it
+   is a gradient ascent process in that we maximize the activation by
+   adjusting the input image.
+
+   after some repetition of this process, the output tells us what kind of
+   image triggers the filter to activate strongly, through which we can
+   have some insight into what kind of things the filter detects.
+def layer_image(model, layer_name, filter_index, input_img,
+                steps=20, step_size=1.0):
+    layer = find_layer(model, layer_name)
+
+    # we want to maximize the mean activation of the filter
+    activation = k.mean(layer.output[:, :, :, filter_index])
+
+    # the gradients of the activations of the filter of the layer
+    grads = k.gradients(activation, model.input)[0]
+
+    # normalize the gradients to avoid very small/large gradients
+    grads /= k.sqrt(k.mean(k.square(grads))) + 1e-5
+
+    # calculate the mean activation and the gradients
+    calculate = k.function([model.input], [activation, grads])
+
+    # adjust input image suitable for the calculate function
+    input_img = np.copy(input_img)    # make a copy
+    input_img = np.float64(input_img) # float type
+    input_data = input_img.reshape((1, *input_img.shape))
+    # nudge the image data with the gradients
+    for i in range(steps):
+        _, grads_value = calculate([input_data])
+        input_data += grads_value * step_size
+    result = input_data[0]
+
+    return as_image(result)
+
+   for details, please see the [20]notebook available in my github. or
+   francois chollet   s [21]original code.
+
+   for example, the first filter of the block4_conv1 layer generated the
+   following image:
+result = layer_image(model,
+                     layer_name='block4_conv1',
+                     filter_index=0,
+                     input_img=random_img)
+plt.figure(figsize=(15,5))
+plt.imshow(result)
+plt.xticks([])
+plt.yticks([])
+plt.show()
+
+   [1*15kjffsk-5m0exvfp3yamq.png]
+   the first filter of the    block4_conv1    layer likes this image
+
+   it seems the filter likes an arc shape?
+
+   let   s pick some layers to examine generated images. i will use the
+   first 20 filters of each convolutional layers as examples:
+
+   block1_conv1
+
+   this is the first layer in vgg16. it seems to detect colors and
+   textures. i do not see much shapes here.
+   [1*_mvdbfclyqzdlqabfffk3w.png]
+   block1_conv1
+
+   block2_conv2
+
+   these filters shows directional things.
+   [1*gehcve0kwlyyr73awfyukq.png]
+   block2_conv2
+
+   block3_conv3
+
+   i see more shapes and patterns here. they are definitely higher level
+   of abstractions than the previous two examples.
+   [1*vwhpnasdr1g-zrdwtcmj3a.png]
+   block3_conv3
+
+   block4_conv1
+
+   more complex shapes are observed here.
+   [1*pfuk8y3it74xc6efp0ubkw.png]
+
+   block5_conv1
+
+   even more complex shapes are here.
+   [1*uu_8iqdzliyqea_li0d6ta.png]
+   block5_conv1
+
+how about a cat?
+
+   if we throw a cat into this experiment and let a filter to nudge the
+   image, what do we get?
+
+   this is a similar idea used in [22]inceptionism: going deeper into
+   neural networks.
+
+   i used the first filter in block5_conv3 layer on a cat image from
+   [23]dogs vs. cats redux: kernels edition.
+   [1*0xn-iw9nnl9hcpt2jr6slq.png]
+
+   did the filter detect the cat is angry? maybe not   
+
+reference:
+
+   [1] very deep convolutional networks for large-scale image recognition:
+   karen simonyan, andrew zisserman
+
+   [24]https://arxiv.org/abs/1409.1556
+
+   [2] how convolutional neural networks see the world: francois chollet
+
+   [25]https://blog.keras.io/how-convolutional-neural-networks-see-the-wor
+   ld.html
+
+   [3] inceptionism: going deeper into neural networks: alexander
+   mordvintsev, christopher olah and mike tyka
+
+   [26]https://research.googleblog.com/2015/06/inceptionism-going-deeper-i
+   nto-neural.html
+
+   [4] dogs vs. cats redux: kernels edition
+
+   [27]https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition
+
+     * [28]machine learning
+     * [29]deep learning
+     * [30]keras
+     * [31]tensorflow
+     * [32]numpy
+
+   (button)
+   (button)
+   (button) 51 claps
+   (button) (button) (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   go to the profile of naoki shibuya
+
+[33]naoki shibuya
+
+   medium member since mar 2017
+
+   senior research engineer @ ascent robotics
+
+     (button) follow
+   [34]towards data science
+
+[35]towards data science
+
+   sharing concepts, ideas, and codes.
+
+     * (button)
+       (button) 51
+     * (button)
+     *
+     *
+
+   [36]towards data science
+   never miss a story from towards data science, when you sign up for
+   medium. [37]learn more
+   never miss a story from towards data science
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://towardsdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/5cd5d1f7e2ff
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://towardsdatascience.com/do-filters-dream-of-convolutional-cats-5cd5d1f7e2ff&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://towardsdatascience.com/do-filters-dream-of-convolutional-cats-5cd5d1f7e2ff&source=--------------------------nav_reg&operation=register
+   8. https://towardsdatascience.com/?source=logo-lo_3ev94uvas7f9---7f60cf5620c9
+   9. https://towardsdatascience.com/data-science/home
+  10. https://towardsdatascience.com/machine-learning/home
+  11. https://towardsdatascience.com/programming/home
+  12. https://towardsdatascience.com/data-visualization/home
+  13. https://towardsdatascience.com/artificial-intelligence/home
+  14. https://towardsdatascience.com/data-journalism/home
+  15. https://towardsdatascience.com/contribute/home
+  16. https://towardsdatascience.com/@naokishibuya
+  17. https://github.com/naokishibuya/deep-learning/blob/master/python/visualizing_convolutional_layers.ipynb
+  18. https://blog.keras.io/how-convolutional-neural-networks-see-the-world.html
+  19. https://arxiv.org/abs/1409.1556
+  20. https://github.com/naokishibuya/deep-learning/blob/master/python/visualizing_convolutional_layers.ipynb
+  21. https://github.com/fchollet/keras/blob/master/examples/conv_filter_visualization.py
+  22. https://research.googleblog.com/2015/06/inceptionism-going-deeper-into-neural.html
+  23. https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition
+  24. https://arxiv.org/abs/1409.1556
+  25. https://blog.keras.io/how-convolutional-neural-networks-see-the-world.html
+  26. https://research.googleblog.com/2015/06/inceptionism-going-deeper-into-neural.html
+  27. https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition
+  28. https://towardsdatascience.com/tagged/machine-learning?source=post
+  29. https://towardsdatascience.com/tagged/deep-learning?source=post
+  30. https://towardsdatascience.com/tagged/keras?source=post
+  31. https://towardsdatascience.com/tagged/tensorflow?source=post
+  32. https://towardsdatascience.com/tagged/numpy?source=post
+  33. https://towardsdatascience.com/@naokishibuya
+  34. https://towardsdatascience.com/?source=footer_card
+  35. https://towardsdatascience.com/?source=footer_card
+  36. https://towardsdatascience.com/
+  37. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  39. https://towardsdatascience.com/@naokishibuya?source=post_header_lockup
+  40. https://medium.com/p/5cd5d1f7e2ff/share/twitter
+  41. https://medium.com/p/5cd5d1f7e2ff/share/facebook
+  42. https://towardsdatascience.com/@naokishibuya?source=footer_card
+  43. https://medium.com/p/5cd5d1f7e2ff/share/twitter
+  44. https://medium.com/p/5cd5d1f7e2ff/share/facebook

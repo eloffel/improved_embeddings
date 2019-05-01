@@ -1,0 +1,329 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]huggingface
+     * [9]artificial intelligence
+     * [10]natural language processing
+     * [11]ios applications
+     * [12]get the app
+     __________________________________________________________________
+
+understanding emotions         from keras to pytorch
+
+introducing torchmoji, a pytorch implementation of deepmoji
+
+   [13]go to the profile of thomas wolf
+   [14]thomas wolf (button) blockedunblock (button) followfollowing
+   oct 4, 2017
+
+   detecting emotions, sentiments & sarcasm is a critical element of our
+   natural language understanding pipeline at huggingface     . recently, we
+   have switched to [15]an integrated system based on a nlp model from the
+   mit media lab.
+
+     update: we   ve open sourced it! [16]repo on github
+
+   the model was initially designed in tensorflow/theano/keras, and we
+   ported it to pytorch. compared to keras, pytorch gives us more freedom
+   to develop and test custom neural network modules and uses an easy to
+   read numpy-style code. in this post, i will detail several interesting
+   points that arose during the reimplementation:
+     * how to make a custom pytorch lstm with custom id180,
+     * how the packedsequence object works and is built,
+     * how to convert an attention layer from keras to pytorch,
+     * how to load your data in pytorch: datasets and smart batching,
+     * how to reproduce keras weights initialization in pytorch.
+
+   first, let   s look at the torchmoji/deepmoji model. it is a fairly
+   standard and robust nlp neural net with two bi-lstm layers followed by
+   an attention layer and a classifier:
+   [1*coszkxlqaspa8f3b7rlwpg.png]
+   torchmoji/deepmoji model
+
+how to build a custom pytorch lstm module
+
+   a very nice feature of deepmoji is that bjarke felbo and co-workers
+   were able to train the model on a massive dataset of 1.6 billion
+   tweets. the pre-trained model thus carries a very rich representation
+   of the emotions and sentiments in the training set and we would like to
+   use the pre-trained weights.
+
+   however, the model was trained with theano/keras    default activation
+   for the recurrent kernel of the lstm: a [17]hard sigmoid, while pytorch
+   is tightly modeled around [18]nvidia   s cudnn library for efficient gpu
+   acceleration which [19]natively supports only lstm with standard
+   sigmoid recurrent activations:
+   [1*vdnpd5rrhc9fdygychfpdw.png]
+   keras default lstm vs pytorch default lstm
+
+   i thus wrote a custom lstm layer with hard sigmoid recurrent activation
+   functions:
+
+   iframe: [20]/media/5a92520a29c0877015c2022048b830aa?postid=3ccb61d5a983
+
+   this lstm cell has to be integrated in a full module that can make use
+   of all the pytorch facilities (variable number of layers and
+   directions, inputs as packedsequences). this integration is quite long
+   so i   ll refer you directly to [21]the relevant file of the repo.
+
+   writing a custom lstm cell also means that we lose some of the easy and
+   fast gpu capabilities of cudnn. as we mainly want to use the
+   pre-trained model in production on a cpu and maybe fine-tune a small
+   classifier on top of it, this is not a problem for us, but it means
+   that the model should be further adapted to make use of the gpu more
+   efficiently if you would like to re-train it from scratch.
+
+attention layer: side-by-side keras & pytorch
+
+   the attention layer of our model is an interesting module where we can
+   do a direct one-to-one comparison between the keras and the pytorch
+   code:
+
+   iframe: [22]/media/d221231a918f17069b6b8e4cc359d8e8?postid=3ccb61d5a983
+
+   pytorch attention module
+
+   iframe: [23]/media/f2bc9526a04d2f61861439fe2c33b23e?postid=3ccb61d5a983
+
+   keras attention layer
+
+   as you can see, the general algorithm is roughly identical but most of
+   the lines in the pytorch implementation are comments while a keras
+   implementation requires you to write several additional functions and
+   reshaping calls.
+
+     when it comes to writing and debugging custom modules and layers,
+     pytorch is a faster option while keras is clearly the fastest track
+     when you need to quickly train and test a model built from
+     standard layers.
+
+how the packedsequence object works
+
+   keras has a nice masking feature to deal with variable lengths
+   sequences. how do we do that in pytorch? we use [24]packedsequences!
+   packedsequence is not very detailed in the pytorch doc so i will spend
+   some time describing them in greater details.
+   [1*7qapfwtbd6rbuwc5qnhxnw.png]
+   a typical nlp batch with five sequences and a total of 18 tokens
+
+   let   s say we have a batch of sequences with variable lengths (as it is
+   often the case in nlp application). to parallelize the computation of
+   such a batch on the gpu we would like:
+     * to process the sequences in parallel as much as possible given that
+       the lstm hidden state need to depend from the previous time step of
+       each sequence, and
+     * to stop the computation of each sequence at the right time step
+       (the end of each sequence).
+
+   this can be done by using the packedsequence pytorch class as follow.
+   we first sort the sequences by decreasing lengths and gather them in a
+   (padded) tensor. then we call the [25]pack_padded_sequence function on
+   the padded tensor and the list of sequences lengths:
+
+   iframe: [26]/media/c1d647caa378911e9f222180f625661c?postid=3ccb61d5a983
+
+   packing a batch in a packedsequence object
+
+   the packedsequence object comprises:
+     * a `data` object: a torch.variable of shape (total # of tokens, dims
+       of each token), in our simple case with five sequences of token
+       (represented by integers): (18, 1)
+     * a `batch_sizes` object: a list of the number of token per
+       time-step, in our case: [5, 4, 3, 3, 2, 1]
+
+   how the [27]pack_padded_sequence function constructs this object is
+   simple:
+   [1*wf93eucogu834ensnnofzg.png]
+   how to construct a packedsequence object (with batch_first=true)
+
+   one nice properties of the packedsequence object is that we can perform
+   many operations directly on the packedsequence data variable without
+   having to unpack the sequence (which is a slow sequential operation).
+   in particular, we can perform any operation which is local in the
+   tokens (i.e. insensitive to the tokens order/context). of course, we
+   can also apply any pytorch modules that accept packedsequence inputs.
+
+   in our nlp model, we can, for example, [28]concatenate the outputs of
+   the two lstm modules without unpacking the packedsequence object and
+   apply a lstm on this object. we could also perform some operations of
+   our attention layer without unpacking (like vector product,
+   exponentiation).
+
+   another thing to note is to be careful about the ordering of the label
+   as you have now sorted the input sentence by length, you should sort
+   the labels as well, using the permutation indices you got when you
+   sorted the input:
+
+   labels = labels[perm_index]
+
+smart data loading in pytorch: datasets & batches
+
+   in keras, data loading and batching are often hidden in the
+   [29]fit_generator function. again, this is nice when you want to
+   quickly test a model but it also means we don   t fully control what is
+   happening in this    rather critical    part of the model.
+
+   in pytorch, we will combine three nice classes to do this task:
+     * a dataset to hold, pre-process and index the dataset,
+     * a batchsampler to control how the samples are gathered in batches,
+       and
+     * a dataloader that will take care of feeding these batches to our
+       model.
+
+   our dataset class is very simple:
+
+   iframe: [30]/media/3679f8e013ac480840b5d79cbd0675ea?postid=3ccb61d5a983
+
+   our batchsampler is more interesting.
+
+   we have several small nlp datasets that we would like to use to
+   fine-tune our model on emotion, sentiment and sarcasm detection. these
+   datasets have varying lengths and sometimes unbalanced classes so we
+   would like to design a batch sampler that could:
+     * gather batches in epochs of pre-defined number of samples so our
+       training process can be independent of the batches lengths, and
+     * be able to sample in a balanced way from the unbalanced datasets.
+
+   in pytorch, a batchsampler is a class on which you can iterate to yield
+   batches, each batch for the batchsampler comprises a list with the
+   indices of the samples to pick in the dataset.
+
+   we can thus define a batchsampler that will be initialized using a
+   dataset class label vector to construct a list of batches fulfilling
+   our needs:
+
+   iframe: [31]/media/b877c3bf87a2795b556f7f57bcc0f8ad?postid=3ccb61d5a983
+
+from keras to pytorch: don   t forget the initialization
+
+   one last thing you have to be careful when porting
+   keras/tensorflow/theano code in pytorch is the initialization of the
+   weights.
+
+   another powerful feature of keras in term of speed of development is
+   that the layers come with default initialization that makes a lot of
+   sense.
+
+   on the contrary, pytorch does not initialize the weights but let you
+   free to do as you please. to get consistent results when fine tuning
+   the weights we thus copy the default keras initialization of the
+   weights as follows:
+
+   iframe: [32]/media/488c761dfad6f22a736ced56d8581660?postid=3ccb61d5a983
+
+conclusion
+
+   keras and pytorch have differing philosophies and goals that we can
+   feel when we compare the two frameworks directly on a single model.
+
+   in my opinion and experience :
+     * keras is great for quickly testing various ways to combine standard
+       neural network blocks on a given task,
+     * pytorch is great to quickly develop and test a custom neural
+       network module with a great freedom and an easy to read numpy-style
+       code.
+
+   i took care to add a lot of comments in [33]my pytorch code and the
+   original [34]keras implementation of deepmoji is also well commented so
+   don   t hesitate to walk through them, use them, and modify them.
+
+   also, clap if you want us to share more of these!             
+
+   thanks to [35]cl  ment delangue.
+     * [36]machine learning
+     * [37]artificial intelligence
+     * [38]pytorch
+     * [39]keras
+     * [40]nlp
+
+   (button)
+   (button)
+   (button) 1.8k claps
+   (button) (button) (button) 5 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [41]go to the profile of thomas wolf
+
+[42]thomas wolf
+
+   natural language processing, deep learning and computational
+   linguistics     science lead [43]@huggingface | thomwolf.io
+
+     (button) follow
+   [44]huggingface
+
+[45]huggingface
+
+   stories @ hugging face
+
+     * (button)
+       (button) 1.8k
+     * (button)
+     *
+     *
+
+   [46]huggingface
+   never miss a story from huggingface, when you sign up for medium.
+   [47]learn more
+   never miss a story from huggingface
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/3ccb61d5a983
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://medium.com/huggingface/understanding-emotions-from-keras-to-pytorch-3ccb61d5a983&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://medium.com/huggingface/understanding-emotions-from-keras-to-pytorch-3ccb61d5a983&source=--------------------------nav_reg&operation=register
+   8. https://medium.com/huggingface?source=logo-lo_oggdgjnhkeq5---ba0dbdd23ac6
+   9. https://medium.com/huggingface/tagged/artificial-intelligence
+  10. https://medium.com/huggingface/tagged/nlp
+  11. https://medium.com/huggingface/tagged/ios
+  12. https://huggingface.co/
+  13. https://medium.com/@thomwolf?source=post_header_lockup
+  14. https://medium.com/@thomwolf
+  15. https://github.com/huggingface/torchmoji
+  16. https://github.com/huggingface/torchmoji
+  17. https://www.tensorflow.org/api_docs/python/tf/contrib/keras/backend/hard_sigmoid
+  18. https://devblogs.nvidia.com/parallelforall/optimizing-recurrent-neural-networks-cudnn-5/
+  19. http://docs.nvidia.com/deeplearning/sdk/cudnn-developer-guide/index.html#cudnnid56mode_t
+  20. https://medium.com/media/5a92520a29c0877015c2022048b830aa?postid=3ccb61d5a983
+  21. https://github.com/huggingface/torchmoji/blob/master/torchmoji/lstm.py
+  22. https://medium.com/media/d221231a918f17069b6b8e4cc359d8e8?postid=3ccb61d5a983
+  23. https://medium.com/media/f2bc9526a04d2f61861439fe2c33b23e?postid=3ccb61d5a983
+  24. http://pytorch.org/docs/master/nn.html#packedsequence
+  25. http://pytorch.org/docs/master/nn.html#pack-padded-sequence
+  26. https://medium.com/media/c1d647caa378911e9f222180f625661c?postid=3ccb61d5a983
+  27. http://pytorch.org/docs/master/nn.html#pack-padded-sequence
+  28. https://github.com/huggingface/torchmoji/blob/master/torchmoji/model_def.py#l226
+  29. https://keras.io/models/sequential/#sequential-model-methods
+  30. https://medium.com/media/3679f8e013ac480840b5d79cbd0675ea?postid=3ccb61d5a983
+  31. https://medium.com/media/b877c3bf87a2795b556f7f57bcc0f8ad?postid=3ccb61d5a983
+  32. https://medium.com/media/488c761dfad6f22a736ced56d8581660?postid=3ccb61d5a983
+  33. https://github.com/huggingface/torchmoji
+  34. https://github.com/bfelbo/deepmoji
+  35. https://medium.com/@clementdelangue?source=post_page
+  36. https://medium.com/tag/machine-learning?source=post
+  37. https://medium.com/tag/artificial-intelligence?source=post
+  38. https://medium.com/tag/pytorch?source=post
+  39. https://medium.com/tag/keras?source=post
+  40. https://medium.com/tag/nlp?source=post
+  41. https://medium.com/@thomwolf?source=footer_card
+  42. https://medium.com/@thomwolf
+  43. http://twitter.com/huggingface
+  44. https://medium.com/huggingface?source=footer_card
+  45. https://medium.com/huggingface?source=footer_card
+  46. https://medium.com/huggingface
+  47. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  49. https://medium.com/p/3ccb61d5a983/share/twitter
+  50. https://medium.com/p/3ccb61d5a983/share/facebook
+  51. https://medium.com/p/3ccb61d5a983/share/twitter
+  52. https://medium.com/p/3ccb61d5a983/share/facebook

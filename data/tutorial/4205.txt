@@ -1,0 +1,467 @@
+   #[1]minimaxir | max woolf's blog
+
+   (button) toggle navigation
+   [2]minimaxir minimaxir
+     * [3]about
+     * [4]code portfolio
+     * [5]data portfolio
+     * [6]patreon
+
+how to scrape data from facebook page posts for statistical analysis
+
+   july 20, 2015 [7]-
+
+   **update april 2018: due to changes facebook has made to the graph api,
+   the api will no longer return every post as noted in this article.
+
+   update june 2016: the script has been massively updated and now
+   includes the ability to scrape facebook reactions. most of the material
+   in this article is still valid, though.
+
+   one of the first data scrapers i wrote for the purpose of statistical
+   analysis was a facebook graph api scraper, in order to determine
+   [8]which words are the most important in a facebook page status update.
+   however, the v2.0 update to the facebook api unsurprisingly broke the
+   scraper.
+
+   now that [9]v2.4 of the graph api is released, i gave the facebook
+   graph api another look. turns out, it   s pretty easy to scrape and make
+   into a spreadsheet for easy analysis, although like with any other
+   scrapers, there are a large number of gotchas.
+
+feasibility
+
+   [nyt_sample.png]
+
+   in order to determine if i can sanely scrape a website, i have to do a
+   bit of research. how much data from a facebook status update can we
+   actually scrape?
+
+   fortunately, facebook   s [10]graph api documentation is pretty good. we
+   need data from the [11]/page node, and from there, we can access data
+   from the [12]/feed edge.
+
+   between the two nodes, we have access to id, which is a unique
+   identifer that can be used to create a link back to the update itself
+   (e.g. https://www.facebook.com/5281959998_10150628170209999) message,
+   the text of the update; link, the url which the update is linking;
+   name, the title of the webpage of the link, type, an identifier if the
+   update is text, a photo, or a video; and created_time, when the update
+   is published.
+
+   accessing the numerical counts of likes, comments, and shares is less
+   explicit in the documentation. fortunately, [13]stackoverflow has the
+   answer: you need to request likes.limit(1).summary(true) instead of
+   normal likes.
+
+   there   s no indication that there   s a rate limit, oddly. since we can
+   query 100 updates at a time, the scraper will be efficient enough that
+   it   s unlikely to hit any extreme api limits.
+
+   now that we know we can get all the relevant data from the sample
+   status update, we can build a facebook post scraper.
+
+data scrappy
+
+   [def_test.png]
+
+   i have created an [14]ipython notebook hosted on github with detailed
+   code, code comments, and sample output for each step of the scraper
+   development. i strongly recommend giving it a look.
+
+   first, we need to see how to actually access the api. it   s no longer a
+   public api, and it requires user authentication via [15]access tokens.
+   users can get short-term tokens, but as their name suggests, they
+   expire quickly, so they are not recommended. the graph api allows a
+   neat trick; by concatenating the app id from a user-created app and the
+   app secret, you create an access token which never expires. of course,
+   this is a major security risk, so create a separate app for the sole
+   purpose of scraping, and reset your api secret if it becomes known.
+
+   let   s say we want to scrape the new york times    facebook page. we would
+   send a request to
+   https://graph.facebook.com/v2.4/nytimes?access_token=xxxxx and we would
+   get:
+{
+        "id": "5281959998",
+        "name": "the new york times"
+}
+
+   i.e., the page metadata. sending a request to /nytimes/feed results in
+   what we want:
+{
+        "data": [
+            {
+                "created_time": "2015-07-20t01:25:01+0000",
+                "id": "5281959998_10150628157724999",
+                "message": "the planned megalopolis, a metropolitan area that wo
+uld be about 6 times the size of new york\u2019s, is meant to revamp northern ch
+ina\u2019s economy and become a laboratory for modern urban growth."
+            },
+            {
+                "created_time": "2015-07-19t22:55:01+0000",
+                "id": "5281959998_10150628161129999",
+                "message": "\"it\u2019s safe to say that federal agencies are no
+t where we want them to be across the board,\" said president barack obama's top
+ cybersecurity adviser. \"we clearly need to be moving faster.\""
+            }
+         ]
+
+
+}
+
+   now we get the post data. but not much of it. in graph api v2.4, the
+   default behavior is to return very, very little metadata for statuses
+   in order to reduce bandwidth, with the expectation that the user will
+   request the necessary fields.
+
+   so let   s request all the fields we want. this results in a very long
+   url not shown here which causes the posts feed to have all the data we
+   need:
+{
+    "comments": {},
+    "summary": {
+        "order": "ranked",
+        "total_count": 31
+    },
+    "created_time": "2015-07-20t01:25:01+0000",
+    "id": "5281959998_10150628157724999",
+    "likes": {
+        "data": {},
+        "summary": {
+            "total_count": 278
+        }
+    },
+    "link": "http://nyti.ms/1jr6lhu",
+    "message": "the planned megalopolis, a metropolitan area that would be about
+ 6 times the size of new york   s, is meant to revamp northern china   s economy and
+ become a laboratory for modern urban growth.",
+    "name": "china molds a supercity around beijing, promising to change lives",
+    "shares": {
+        "count": 50
+    },
+    "type": "link"
+}
+
+post processing
+
+   great! now we just have to process each post. which is easier said than
+   done.
+
+   if you   re an avid facebook user, you know that not all of these
+   attributes are not guaranteed to exist. status updates may not have
+   text or links. since we   re making a spreadsheet with an enforced
+   schema, we need to validate that a field exists before attempting to
+   process it.
+
+   the    \u2019"s in the message correspond to a [16]smart quote
+   apostrophe. since this a possibility, along with other unicode
+   characters, the message and link names must be encoded [17]in utf-8 to
+   prevent errors.
+
+   the time format is another issue. the date follows the [18]iso 8601
+   standard for utc times. however, most spreadsheet programs will not
+   able to parse it as a date value. also, since the nyt is based in the
+   usa (specifically, new york), it may be helpful for time-based
+   statistical analysis to convert the time to eastern standard time while
+   fixing the date format.
+
+   there   s also an unexpected precaution that must be taken whenever
+   scraping data sets. these apis do not expect users to be accessing
+   very, very old data. as a result, there   s a high id203 of the api
+   server actually hitting an error sometime during the scrape, such as a
+   [19]http status 500 or [20]http status 502. these server errors are
+   temporary, so a helper function must be used to attempt to retrieve
+   data until it is actually successful.
+
+putting it all together
+
+   now we have a full plan for scraping, we query each page of facebook
+   page statuses (100 statuses maximum per page), process all statuses on
+   that page and writing the output to a csv file, and navigate to the
+   next page, and repeat until no more statuses left.
+
+   this can be done with a for-loop within a while loop. in addition, i
+   also recommend counting the number of posts processed and taking a
+   timestamp every-so-often to ensure that the program has not stalled.
+
+   [id98woo.png]
+
+   and that   s it! you can access the complete scraper in this github
+   repository, along with all other scripts mentioned in this article.
+   once you have the csv file, you can import it into nearly every
+   statistical program and have fun with it. (you can download a .zip of
+   the nytimes data [21]here [4.6mb])
+
+   say, for example, what would happen if we compared the median likes of
+   the new york times with a certain other journalistic website that   s the
+   master of social media?
+
+   [nytimes_buzz_fb.png]
+
+   there may be more practical reasons for analyzing data on facebook
+   posts, such as quantifying the growth and success of your own page, or
+   that of your competitors. but the data is easy to get and is very
+   useful.
+
+   although, in fairness, the scraper is not perfect and still has room
+   for improvement. with id98   s facebook page post data, for example,
+   somehow the scraper skips all posts from 2013. although in that case, i
+   blame facebook.
+     __________________________________________________________________
+
+   you can access all resources used in this blog post at this [22]github
+   repository.
+
+   if you haven   t, i strongly recommend looking at the [23]ipython
+   notebook for more detailed coding methodology.
+
+   and, as an experiment, i   ve made an [24]ipython notebook with the r
+   kernel showing how i made the nyt-buzzfeed chart!
+
+   if you liked this blog post, i have set up a [25]patreon to fund my
+   machine learning/deep learning/software/hardware needs for my future
+   crazy yet cool projects, and any monetary contributions to the patreon
+   are appreciated and will be put to good creative use.
+   share this article! [26]-
+
+author
+
+   stop mousing over me! i'm not a xkcd comic!
+
+   max woolf (@minimaxir) is a data scientist at buzzfeed in san
+   francisco. he is also an ex-apple employee and carnegie mellon
+   university graduate.
+
+   in his spare time, max uses [27]python to gather data from public apis
+   and [28]ggplot2 to plot plenty of pretty charts from that data. on
+   special occasions, he uses [29]keras for fancy deep learning projects.
+
+   you can learn more about max [30]here, view his data analysis portfolio
+   [31]here, or view his coding portfolio [32]here.
+     *
+     *
+     *
+     *
+     *
+     *
+     *
+
+recent posts
+
+[33]run any scheduled task/cron super-cheap on google cloud platform
+
+   nov 19, 2018
+
+[34]things about real-world data science not discussed in moocs and thought
+pieces
+
+   oct 22, 2018
+
+[35]problems with predicting post performance on reddit and other link
+aggregators
+
+   sep 10, 2018
+
+[36]analyzing imdb data the intended way, with r and ggplot2
+
+   jul 16, 2018
+
+[37]how to quickly train a text-generating neural network for free
+
+   may 18, 2018
+
+[38]visualizing one million ncaa basketball shots
+
+   mar 19, 2018
+
+github code repositories
+
+[39]big list of naughty strings
+
+   21,523+
+
+[40]facebook page post scraper
+
+   1,436+
+
+[41]textgenid56
+
+   234+
+
+[42]reactionid56
+
+   201+
+
+[43]multiplatform system dashboard
+
+   100+
+
+[44]tritonize
+
+   9+
+
+[45]stylistic word clouds
+
+   30+
+
+[46]pretrained character embeddings for deep learning and automatic text
+generation
+
+   8+
+
+[47]get github profile data of all stargazers of a github repo
+
+   15+
+
+data analysis notebooks
+
+[48]the decline of imgur on reddit and the rise of reddit's native image
+hosting
+
+   r, ggplot2
+
+[49]benchmarking cntk on keras: is it better at deep learning than
+tensorflow?
+
+   r, ggplot2
+
+[50]pretrained character embeddings for deep learning and automatic text
+generation
+
+   r, ggplot2
+
+[51]predicting and mapping arrest types in san francisco
+
+   r, ggplot2, lightgbm
+
+[52]playing with 80 million amazon product review ratings
+
+   r, ggplot2, spark
+
+[53]how to create an interactive webgl network graph
+
+   r, ggplot2, plotly
+
+[54]what percent of the top-voted comments in reddit threads were also 1st
+comment?
+
+   r, ggplot2
+
+[55]processing clusters of clickbait headlines
+
+   python, spark, id97
+
+[56]visualizing clusters of clickbait headlines
+
+   r, plotly
+
+   stop mousing over me! i'm not a xkcd comic!
+
+   max woolf (@minimaxir) is a data scientist at buzzfeed in san
+   francisco. he is also an ex-apple employee and carnegie mellon
+   university graduate.
+
+   in his spare time, max uses [57]python to gather data from public apis
+   and [58]ggplot2 to plot plenty of pretty charts from that data. on
+   special occasions, he uses [59]keras for fancy deep learning projects.
+
+   you can learn more about max [60]here, view his data analysis portfolio
+   [61]here, or view his coding portfolio [62]here.
+     *
+     *
+     *
+     *
+     *
+     *
+     *
+
+   copyright    2018 max woolf. all rights reserved. minimaxir.com is
+   powered by jekyll and github pages.
+
+references
+
+   visible links
+   1. https://minimaxir.com/rss.xml
+   2. https://minimaxir.com/
+   3. https://minimaxir.com/about
+   4. https://minimaxir.com/portfolio
+   5. https://minimaxir.com/data-portfolio
+   6. https://www.patreon.com/minimaxir
+   7. https://www.linkedin.com/sharearticle?mini=true&title=&url=https://minimaxir.com/2015/07/facebook-scraper/
+   8. https://minimaxir.com/2013/06/big-social-data/
+   9. https://developers.facebook.com/blog/post/2015/07/08/graph-api-v2.4/
+  10. https://developers.facebook.com/docs/graph-api/reference
+  11. https://developers.facebook.com/docs/graph-api/reference/page
+  12. https://developers.facebook.com/docs/graph-api/reference/v2.4/page/feed
+  13. https://stackoverflow.com/questions/6984526/facebook-graph-api-get-like-count-on-page-group-photos
+  14. https://github.com/minimaxir/facebook-page-post-scraper/blob/master/examples/how_to_build_facebook_scraper.ipynb
+  15. https://developers.facebook.com/docs/facebook-login/access-tokens
+  16. http://smartquotesforsmartpeople.com/
+  17. https://en.wikipedia.org/wiki/utf-8
+  18. https://en.wikipedia.org/wiki/iso_8601
+  19. http://www.checkupdown.com/status/e500.html
+  20. http://www.checkupdown.com/status/e502.html
+  21. https://dl.dropboxusercontent.com/u/2017402/nytimes_facebook_statuses.zip
+  22. https://github.com/minimaxir/facebook-page-post-scraper
+  23. https://github.com/minimaxir/facebook-page-post-scraper/blob/master/how_to_build_facebook_scraper.ipynb
+  24. https://github.com/minimaxir/facebook-page-post-scraper/blob/master/fb_page_data_analysis.ipynb
+  25. https://www.patreon.com/minimaxir
+  26. https://www.linkedin.com/sharearticle?mini=true&title=&url=https://minimaxir.com/2015/07/facebook-scraper/
+  27. https://www.python.org/
+  28. http://ggplot2.org/
+  29. https://github.com/fchollet/keras
+  30. https://minimaxir.com/about
+  31. https://minimaxir.com/data-portfolio
+  32. https://minimaxir.com/portfolio
+  33. https://minimaxir.com/2018/11/cheap-cron/
+  34. https://minimaxir.com/2018/10/data-science-protips/
+  35. https://minimaxir.com/2018/09/modeling-link-aggregators/
+  36. https://minimaxir.com/2018/07/imdb-data-analysis/
+  37. https://minimaxir.com/2018/05/text-neural-networks/
+  38. https://minimaxir.com/2018/03/basketball-shots/
+  39. https://github.com/minimaxir/big-list-of-naughty-strings
+  40. https://github.com/minimaxir/facebook-page-post-scraper
+  41. https://github.com/minimaxir/textgenid56
+  42. https://github.com/minimaxir/reactionid56
+  43. https://github.com/minimaxir/system-dashboard
+  44. https://github.com/minimaxir/tritonize
+  45. https://github.com/minimaxir/stylistic-word-clouds
+  46. https://github.com/minimaxir/char-embeddings
+  47. https://github.com/minimaxir/get-profile-data-of-repo-stargazers
+  48. https://minimaxir.com/notebooks/imgur-decline/
+  49. https://minimaxir.com/notebooks/keras-cntk/
+  50. https://minimaxir.com/notebooks/char-tsne/
+  51. https://minimaxir.com/notebooks/predicting-arrests/
+  52. https://minimaxir.com/notebooks/amazon-spark/
+  53. https://minimaxir.com/notebooks/interactive-network/
+  54. https://minimaxir.com/notebooks/first-comment/
+  55. https://github.com/minimaxir/clickbait-cluster/blob/master/fb_news_53d_spark.ipynb
+  56. https://github.com/minimaxir/clickbait-cluster/blob/master/fb_news_53d_plotly.ipynb
+  57. https://www.python.org/
+  58. http://ggplot2.org/
+  59. https://github.com/fchollet/keras
+  60. https://minimaxir.com/about
+  61. https://minimaxir.com/data-portfolio
+  62. https://minimaxir.com/portfolio
+
+   hidden links:
+  64. https://www.facebook.com/share.php?u=https://minimaxir.com/2015/07/facebook-scraper/
+  65. https://twitter.com/home/?status=how%20to%20scrape%20data%20from%20facebook%20page%20posts%20for%20statistical%20analysis%20-%20https://minimaxir.com/2015/07/facebook-scraper/%20-%20via%20@minimaxir
+  66. https://www.facebook.com/share.php?u=https://minimaxir.com/2015/07/facebook-scraper/
+  67. https://twitter.com/home/?status=how%20to%20scrape%20data%20from%20facebook%20page%20posts%20for%20statistical%20analysis%20-%20https://minimaxir.com/2015/07/facebook-scraper/%20-%20via%20@minimaxir
+  68. https://facebook.com/max.woolf
+  69. https://twitter.com/minimaxir
+  70. https://linkedin.com/in/minimaxir
+  71. https://minimaxir.com/cdn-cgi/l/email-protection#6f020e172f02060106020e17061d410c0002
+  72. https://github.com/minimaxir
+  73. https://youtube.com/minimaxir
+  74. https://minimaxir.com/rss.xml
+  75. https://facebook.com/max.woolf
+  76. https://twitter.com/minimaxir
+  77. https://linkedin.com/in/minimaxir
+  78. https://minimaxir.com/cdn-cgi/l/email-protection#4c212d340c21252225212d34253e622f2321
+  79. https://github.com/minimaxir
+  80. https://youtube.com/minimaxir
+  81. https://minimaxir.com/rss.xml
+  82. javascript:void(0);

@@ -1,0 +1,1158 @@
+learning to translate in real-time with id4
+
+jiatao gu   , graham neubig   , kyunghyun cho    and victor o.k. li   
+
+   the university of hong kong
+
+carnegie mellon university    new york university
+
+   
+
+   {jiataogu, vli}@eee.hku.hk
+
+   
+
+gneubig@cs.cmu.edu
+
+   
+
+kyunghyun.cho@nyu.edu
+
+7
+1
+0
+2
+
+ 
+
+n
+a
+j
+ 
+
+0
+1
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+8
+8
+3
+0
+0
+
+.
+
+0
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+translating in real-time, a.k.a. simultane-
+ous translation, outputs translation words
+before the input sentence ends, which is a
+challenging problem for conventional ma-
+chine translation methods. we propose a
+id4 (id4) frame-
+work for simultaneous translation in which
+an agent learns to make decisions on when
+to translate from the interaction with a
+pre-trained id4 environment. to trade
+off quality and delay, we extensively ex-
+plore various targets for delay and design
+a method for beam-search applicable in
+the simultaneous mt setting. experiments
+against state-of-the-art baselines on two
+language pairs demonstrate the ef   cacy
+of the proposed framework both quantita-
+tively and qualitatively.1
+
+introduction
+
+1
+simultaneous translation, the task of translating
+content in real-time as it is produced, is an im-
+portant tool for real-time understanding of spoken
+lectures or conversations (f  ugen et al., 2007; ban-
+galore et al., 2012). different from the typical
+machine translation (mt) task, in which transla-
+tion quality is paramount, simultaneous translation
+requires balancing the trade-off between transla-
+tion quality and time delay to ensure that users
+receive translated content in an expeditious man-
+ner (mieno et al., 2015). a number of methods
+have been proposed to solve this problem, mostly
+in the context of phrase-based machine translation.
+these methods are based on a segmenter, which
+receives the input one word at a time, then decides
+when to send it to a mt system that translates each
+
+1code and data can be found at https://github.
+
+com/nyu-dl/dl4mt-simul-trans.
+
+figure 1:
+example output from the proposed
+framework in de     en simultaneous transla-
+tion. the heat-map represents the soft alignment
+between the incoming source sentence (left, up-
+to-down) and the emitted translation (top, left-
+to-right). the length of each column represents
+the number of source words being waited for be-
+fore emitting the translation. best viewed when
+zoomed digitally.
+
+segment independently (oda et al., 2014) or with a
+minimal amount of language model context (ban-
+galore et al., 2012).
+
+independently of simultaneous translation, ac-
+curacy of standard mt systems has greatly im-
+proved with the introduction of neural-network-
+based mt systems (id4) (sutskever et al., 2014;
+bahdanau et al., 2014). very recently, there have
+been a few efforts to apply id4 to simultane-
+ous translation either through heuristic modi   ca-
+tions to the decoding process (cho and esipova,
+2016), or through the training of an independent
+segmentation network that chooses when to per-
+form output using a standard id4 model (satija
+and pineau, 2016). however, the former model
+lacks a capability to learn the appropriate timing
+with which to perform translation, and the latter
+model uses a standard id4 model as-is, lack-
+ing a holistic design of the modeling and learning
+within the simultaneous mt context. in addition,
+neither model has demonstrated gains over previ-
+
+lastnightweservedmrxabeer,whodiedduringthenight.<eos><eos>.iststorbenge--nachtderlaufeimder,serviertbiereinxherrnwirhabenabendgesternreadwriteous segmentation-based baselines, leaving ques-
+tions of their relative merit unresolved.
+
+in this paper, we propose a uni   ed design for
+learning to perform neural simultaneous machine
+translation. the proposed framework is based on
+formulating translation as an interleaved sequence
+of two actions: read and write. based on this,
+we devise a model connecting the id4 system
+and these read/write decisions. an example
+of how translation is performed in this framework
+is shown in fig. 1, and detailed de   nitions of the
+problem and proposed framework are described in
+  2 and   3. to learn which actions to take when, we
+propose a reinforcement-learning-based strategy
+with a reward function that considers both qual-
+ity and delay (  4). we also develop a beam-search
+method that performs search within the translation
+segments (  5).
+
+we evaluate the proposed method on english-
+russian (en-ru) and english-german (en-de)
+translation in both directions (  6). the quantita-
+tive results show strong improvements compared
+to both the id4-based algorithm and a conven-
+tional segmentation methods. we also extensively
+analyze the effectiveness of the learning algorithm
+and the in   uence of the trade-off in the optimiza-
+tion criterion, by varying a target delay. finally,
+qualitative visualization is utilized to discuss the
+potential and limitations of the framework.
+
+2 problem de   nition
+suppose we have a buffer of input words x =
+{x1, ..., xts} to be translated in real-time. we de-
+   ne the simultaneous translation task as sequen-
+tially making two interleaved decisions: read or
+write. more precisely, the translator reads a
+source word x   from the input buffer in chrono-
+logical order as translation context, or writes a
+translated word y   onto the output buffer, resulting
+in output sentence y = {y1, ..., ytt}, and action
+sequence a = {a1, ..., at} consists of ts reads
+and tt writes, so t = ts + tt.
+
+similar to standard mt, we have a measure
+q(y ) to evaluate the translation quality, such as
+id7 score (papineni et al., 2002). for simulta-
+neous translation we are also concerned with the
+fact that each action incurs a time delay d(a).
+d(a) will mainly be in   uenced by delay caused
+by read, as this entails waiting for a human
+speaker to continue speaking (about 0.3s per word
+for an average speaker), while write consists of
+generating a few words from a machine transla-
+
+figure 2: illustration of the proposed framework:
+at each step, the id4 environment (left) com-
+putes a candidate translation. the recurrent agent
+(right) will the observation including the candi-
+dates and send back decisions   read or write.
+
+tion system, which is possible on the order of mil-
+liseconds. thus, our objective is    nding an opti-
+mal policy that generates decision sequences with
+a good trade-off between higher quality q(y ) and
+lower delay d(a). we elaborate on exactly how
+to de   ne this trade-off in   4.2.
+
+in the following sections, we    rst describe how
+to connect the read/write actions with the id4
+system (  3), and how to optimize the system to
+improve simultaneous mt results (  4).
+
+3 simultaneous translation
+with id4
+
+the proposed framework is shown in fig. 2, and
+can be naturally decomposed into two parts: envi-
+ronment (  3.1) and agent (  3.2).
+
+3.1 environment
+encoder: read the    rst element of the id4
+system is the encoder, which converts input words
+x = {x1, ..., xts} into context vectors h =
+{h1, ..., hts}. standard id4 uses bi-directional
+id56s as encoders (bahdanau et al., 2014), but this
+is not suitable for simultaneous processing as us-
+ing a reverse-order encoder requires knowing the
+   nal word of the sentence before beginning pro-
+cessing. thus, we utilize a simple left-to-right uni-
+directional id56 as our encoder:
+
+h   =   uni-enc (h     1, x  )
+
+(1)
+
+decoder: write similar with standard mt, we
+use an attention-based decoder.
+in contrast, we
+
+only reference the words that have been read from
+the input when generating each target word:
+
+   =   att (z     1, y     1, h   )
+c  
+z  
+   =   dec (z     1, y     1, c  
+   )
+p (y|y<   , h   )     exp [  out (z  
+
+   )] ,
+
+(2)
+
+where for   , z     1 and y     1 represent the previous
+decoder state and output word, respectively. h   
+is used to represent the incomplete input states,
+where h    is a pre   x of h. as the write action
+calculates the id203 of the next word on the
+   y, we need greedy decoding for each step:
+
+   = arg maxy p (y|y<   , h   )
+y  
+   , z  
+
+note that y  
+   corresponds to h    and is the can-
+didate for y   , z   . the agent described in the next
+section decides whether to take this candidate or
+wait for better predictions.
+
+(3)
+
+3.2 agent
+a trainable agent is designed to make decisions
+a = {a1, .., at}, at     a sequentially based on
+observations o = {o1, ..., ot}, ot     o, and then
+control the translation environment properly.
+observation as shown in fig 2, we concatenate
+the current context vector c  
+   , the current decoder
+state z  
+   and the embedding vector of the candidate
+word y  
+   as the continuous observation, o   +   =
+[c  
+
+   )] to represent the current state.
+
+   ; e(y  
+
+   ; z  
+
+action similarly to prior work (grissom ii et al.,
+2014), we de   ne the following set of actions:
+    read: the agent rejects the candidate and waits
+    write:
+
+to encode the next word from input buffer;
+
+the agent accepts the candidate and
+
+emits it as the prediction into output buffer;
+
+policy how the agent chooses the actions based
+on the observation de   nes the policy. in our set-
+ting, we utilize a stochastic policy      parameter-
+ized by a recurrent neural network, that is:
+
+st = f   (st   1, ot)
+    (at|a<t, o   t)     g   (st) ,
+
+(4)
+
+where st is the internal state of the agent, and is
+updated recurrently yielding the distribution of the
+action at. based on the policy of our agent, the
+overall algorithm of greedy decoding is shown in
+algorithm 1, the algorithm outputs the translation
+result and a sequence of observation-action pairs.
+
+buffer x, output buffer y , state buffer s.
+
+(cid:0)h 1(cid:1) , y0     (cid:104)s(cid:105)
+
+algorithm 1 simultaneous greedy decoding
+require: id4 system   , policy     ,   max, input
+1: init x1     x, h1       enc (x1) , h 1     {h1}
+z0       init
+2:
+       0,        1
+3:
+4: while    <   max do
+t        +   
+5:
+   , ot        (z     1, y     1, h   )
+y  
+   , z  
+6:
+at          (at; a<t, o<t) , s     (ot, at)
+7:
+if at = read and x   (cid:54)= (cid:104)/s(cid:105) then
+8:
+9:
+10:
+11:
+
+x  +1     x, h  +1       enc (h  , x  +1)
+h   +1     h        {h  +1},           + 1
+if |y | = 0 then z0       init (h   )
+else if at = write then
+z       z  
+   , y       y  
+y     y   ,           + 1
+if y   = (cid:104)/s(cid:105) then break
+
+12:
+13:
+14:
+15:
+
+  
+
+4 learning
+
+the proposed framework can be trained using re-
+inforcement learning. more precisely, we use pol-
+icy gradient algorithm together with variance re-
+duction and id173 techniques.
+
+4.1 pre-training
+we need an id4 environment for the agent to ex-
+plore and use to generate translations. here, we
+simply pre-train the id4 encoder-decoder on full
+sentence pairs with maximum likelihood, and as-
+sume the pre-trained model is still able to generate
+reasonable translations even on incomplete source
+sentences. although this is likely sub-optimal, our
+id4 environment based on uni-directional id56s
+can treat incomplete source sentences in a manner
+similar to shorter source sentences and has the po-
+tential to translate them more-or-less correctly.
+4.2 reward function
+the policy is learned in order to increase a reward
+for the translation. at each step the agent will re-
+ceive a reward signal rt based on (ot, at). to eval-
+uate a good simultaneous machine translation, a
+reward must consider both quality and delay.
+quality we evaluate the translation quality us-
+ing metrics such as id7 (papineni et al., 2002).
+the id7 score is de   ned as the weighted geo-
+metric average of the modi   ed id165 precision
+id70, multiplied by the brevity penalty bp to
+punish a short translation. in practice, the vanilla
+
+id7 score is not a good metric at sentence level
+because being a geometric average, the score will
+reduce to zero if one of the precisions is zero. to
+avoid this, we used a smoothed version of id7
+for our implementation (lin and och, 2004).
+id7(y, y    ) = bp    id70(y, y    ),
+
+(5)
+where y     is the reference and y is the output. we
+decompose id7 and use the difference of par-
+tial id7 scores as the reward, that is:
+
+(cid:26)    id70(y, y    , t)
+
+id7(y, y    )
+
+t < t
+t = t
+
+(6)
+
+rq
+t =
+
+where y t is the cumulative output at t (y 0 =    ),
+and    id70(y, y    , t) = id70(y t, y    )    
+id70(y t   1, y    ). obviously, if at = read, no
+new words are written into y , yielding rq
+t = 0.
+note that we do not multiply bp until the end of
+the sentence, as it would heavily penalize partial
+translation results.
+delay as another critical feature, delay judges
+how much time is wasted waiting for the transla-
+tion. ideally we would directly measure the actual
+time delay incurred by waiting for the next word.
+for simplicity, however, we suppose it consumes
+the same amount of time listening for one more
+word. we de   ne two measurements, global and
+local, respectively:
+    average proportion (ap): following the def-
+inition in (cho and esipova, 2016), x, y are
+the source and decoded sequences respectively,
+and we use s(   ) to denote the number of source
+words been waited when decoding word y   ,
+
+(cid:88)
+
+s(   )     1
+
+  
+
+(7)
+
+0 < d (x, y ) =
+
+(cid:26) 0
+
+dt =
+
+d(x, y )
+
+1
+
+|x||y |
+t < t
+t = t
+
+d is a global delay metric, which de   nes the av-
+erage waiting proportion of the source sentence
+when translating each word.
+
+    consecutive wait length (cw):
+
+in speech
+translation, listeners are also concerned with
+long silences during which no translation oc-
+curs. to capture this, we also consider on how
+many words were waited for (read) consecu-
+tively between translating two words. for each
+action, where we initially de   ne c0 = 0,
+
+(cid:26) ct   1 + 1 at = read
+
+ct =
+
+0
+
+at = write
+
+    target delay: we further de   ne    target delay   
+for both d and c as d    and c   , respectively, as
+different simultaneous translation applications
+may have different requirements on delay.
+in
+our implementation, the reward function for de-
+lay is written as:
+t =     [sgn(ct     c   ) + 1]+    (cid:98)dt   d   (cid:99)+ (9)
+rd
+where        0,        0.
+
+trade-off between quality and delay a good
+simultaneous translation system requires balanc-
+ing the trade-off of translation quality and time
+delay. obviously, achieving the best translation
+quality and the shortest translation delays are in
+a sense contradictory. in this paper, the trade-off
+is achieved by balancing the rewards rt = rq
+t +rd
+t
+provided to the system, that is, by adjusting the co-
+ef   cients   ,    and the target delay d   , c    in eq. 9.
+4.3 id23
+policy gradient we freeze the pre-trained pa-
+rameters of an id4 model, and train the agent
+using the policy gradient (williams, 1992). the
+policy gradient maximizes the following expected
+cumulative future rewards, j = e    
+,
+whose gradient is
+
+t=1 rt
+
+(cid:105)
+
+(cid:104)(cid:80)t
+(cid:35)
+
+      log     (at(cid:48)|  )rt
+
+(10)
+
+(cid:34) t(cid:88)
+
+t(cid:48)=1
+
+(cid:105)
+
+     j = e    
+(cid:104)
+
+rt = (cid:80)t
+
+k=t
+
+rq
+k + rd
+k
+
+is the cumulative future
+rewards for current observation and action.
+in
+practice, eq. 10 is estimated by sampling multi-
+ple action trajectories from the current policy     ,
+collecting the corresponding rewards.
+variance reduction
+directly using the policy
+gradient suffers from high variance, which makes
+learning unstable and inef   cient. we thus em-
+ploy the variance reduction techniques suggested
+by mnih and gregor (2014). we subtract from
+rt the output of a baseline network b   to obtain
+  rt = rt     b   (ot), and centered re-scale the re-
+ward as   rt =
+with a running average b
+and standard deviation   . the baseline network is
+trained to minimize the squared loss as follows:
+
+  rt   b   
+  2+ 
+
+l   = e    
+
+(cid:107)rt     b   (ot)(cid:107)2
+
+(11)
+
+(cid:35)
+
+(cid:34) t(cid:88)
+
+t=1
+
+(8)
+
+we also regularize the negative id178 of the
+
+policy to facilitate exploration.
+
+obtain a translation pairs: {(x, y    )};
+for (y, s)     simultaneous decoding do
+
+algorithm 2 learning with policy gradient
+require: id4 system   , agent   , baseline   
+1: pretrain the id4 system    using id113;
+2: initialize the agent   ;
+3: while stopping criterion fails do
+4:
+5:
+6:
+7:
+8:
+9:
+
+compute the quality: rq
+t ;
+t ;
+compute the delay: rd
+compute the baseline: b   (ot);
+collect the future rewards: {rt};
+perform variance reduction: {   rt};
+update:           +   1      [j       h(    )]
+update:                 2     l
+
+for (ot, at) in s do
+
+10:
+11:
+12:
+13:
+
+the overall learning algorithm is summarized
+in algorithm 2. for ef   ciency, instead of updating
+with stochastic id119 (sgd) on a single
+sentence, both the agent and the baseline are opti-
+mized using a minibatch of multiple sentences.
+5 simultaneous id125
+in previous sections we described a simultaneous
+greedy decoding algorithm. in standard id4 it
+has been shown that id125, where the de-
+coder keeps a beam of k translation trajectories,
+greatly improves translation quality (sutskever et
+al., 2014), as shown in fig. 3 (a).
+
+it is non-trivial to directly apply beam-search in
+simultaneous machine translation, as id125
+waits until the last word to write down translation.
+based on our assumption write does not cost de-
+lay, we can perform a simultaneous beam-search
+when the agent chooses to consecutively write:
+keep multiple beams of translation trajectories in
+temporary buffer and output the best path when
+the agent switches to read. as shown in fig. 3
+(b) & (c), it tries to search for a relatively better
+path while keeping the delay unchanged.
+
+note that we do not re-train the agent for simul-
+taneous beam-search. at each step we simply in-
+put the observation of the current best trajectory
+into the agent for making next decision.
+
+6 experiments
+6.1 settings
+dataset
+to extensively study the proposed si-
+multaneous translation model, we train and evalu-
+ate it on two different language pairs:    english-
+
+figure 3: illustrations of (a) beam-search, (b) si-
+multaneous greedy decoding and (c) simultaneous
+beam-search.
+
+german (en-de)    and    english-russian (en-
+ru)    in both directions per pair. we use the par-
+allel corpora available from wmt   152 for both
+pre-training the id4 environment and learning
+the policy. we utilize newstest-2013 as the valida-
+tion set to evaluate the proposed algorithm. both
+the training set and the validation set are tokenized
+and segmented into sub-word units with byte-pair
+encoding (bpe) (sennrich et al., 2015). we only
+use sentence pairs where both sides are less than
+50 bpe subword symbols long for training.
+environment & agent settings we pre-trained
+the id4 environments for both language pairs
+and both directions following the same setting
+from (cho and esipova, 2016). we further built
+our agents, using a recurrent policy with 512
+grus and a softmax function to produce the ac-
+tion distribution. all our agents are trained us-
+ing policy gradient using adam (kingma and ba,
+2014) optimizer, with a mini-batch size of 10. for
+each sentence pair in a batch, 5 trajectories are
+sampled. for testing, instead of sampling we pick
+the action with higher id203 each step.
+baselines we compare the proposed methods
+against previously proposed baselines. for fair
+comparison, we use the same id4 environment:
+    wait-until-end (wue): an agent that starts to
+write only when the last source word is seen.
+in general, we expect this to achieve the best
+quality of translation. we perform both greedy
+decoding and beam-search with this method.
+
+    wait-one-step (wos): an agent that writes
+after each reads. such a policy is problematic
+when the source and target language pairs have
+different word orders or lengths (e.g. en-de).
+
+2http://www.statmt.org/wmt15/
+
+(a) id7 (en     ru)
+
+(b) ap (en     ru)
+
+(c) cw (en     ru)
+
+figure 4: learning progress curves for variant delay targets on the validation dataset for en     ru.
+every time we only keep one target for one delay measure. for instance when using target ap, the
+coef   cient of    in eq. 9 will be set 0.
+
+(a) en   ru
+
+(b) ru   en
+
+(c) en   de
+
+figure 5: delay (ap) v.s. id7 for both language pair   
+directions. the shown point-pairs are the results of simul-
+taneous greedy decoding and beam-search (beam-size = 5)
+respectively with models trained for various delay targets:
+((cid:74) (cid:47): cw=8, (cid:78)(cid:52): cw=5, (cid:7)   : cw=2, (cid:73) (cid:46): ap=0.3, (cid:72)(cid:79):
+ap=0.5, (cid:4)(cid:3): ap=0.7). for each target, we select the model
+that maximizes the quality-to-delay ratio ( id7
+ap ) on the val-
+idation set. the baselines are also plotted ((cid:70): wos (cid:70)$:
+wue,   : wid, +: wiw).
+
+(d) de   en
+
+    wait-if-worse/wait-if-diff (wiw/wid): as
+proposed by cho and esipova (2016), the al-
+gorithm    rst pre-reads the next source word,
+and accepts this read when the id203 of
+the most likely target word decreases (wiw), or
+the most likely target word changes (wid).
+
+    segmentation-based (seg) (oda et al., 2014):
+a state-of-the-art segmentation-based algorithm
+based on optimizing segmentation to achieve
+the highest quality score.
+in this paper, we
+tried the simple greedy method (seg1) and the
+greedy method with pos constraint (seg2).
+
+6.2 quantitative analysis
+in order to evaluate the effectiveness of our rein-
+forcement learning algorithms with different re-
+ward functions, we vary the target delay d       
+{0.3, 0.5, 0.7} and c        {2, 5, 8} for eq. 9 sepa-
+rately, and trained agents with    and    adjusted to
+values that provided stable learning for each lan-
+guage pair according to the validation set.
+learning curves
+as shown in fig. 4, we plot
+learning progress for en-ru translation with dif-
+ferent target settings.
+it clearly shows that our
+algorithm effectively increases translation quality
+for all the models, while pushing the delay close,
+if not all of the way, to the target value.
+it can
+also be noted from fig. 4 (a) and (b) that there ex-
+
+01020304050mini-batches (x1000)0246810121416ap=0.3ap=0.5ap=0.7cw=2.0cw=5.0cw=8.0wait until end.wait one step01020304050mini-batches (x1000)0.00.20.40.60.81.0ap=0.3ap=0.5ap=0.7cw=2.0cw=5.0cw=8.0wait until endwait one step01020304050mini-batches (x1000)0510152025ap=0.3ap=0.5ap=0.7cw=2.0cw=5.0cw=8.0wait until endwait one step0.50.60.70.80.91.0average proportion1213141516id70.30.40.50.60.70.80.91.0average proportion68101214161820id70.60.70.80.91.0average proportion1213141516171819id70.50.60.70.80.91.0average proportion141618202224id7target delay, our proposed model is stable while
+maintaining good translation quality.
+
+we also compared against oda et al. (2014)   s
+state-of-the-art segmentation algorithm (seg). as
+shown in fig 6, it is clear that although seg can
+work with variant segmentation lengths (cw), the
+proposed model outputs high quality translations
+at a much smaller cw. we conjecture that this is
+due to the independence assumption in seg, while
+the id56s and attention mechanism in our model
+makes it possible to look at the whole history to
+decide each translated word.
+w/o beam-search we also plot the results of si-
+multaneous beam-search instead of using greedy
+decoding. it is clear from fig. 5 and 6 that most
+of the proposed models can achieve an visible in-
+crease in quality together with a slight increase in
+delay. this is because beam-search can help to
+avoid bad local minima. we also observe that the
+simultaneous beam-search cannot bring as much
+improvement as it did in the standard id4 set-
+ting. in most cases, the smaller delay the model
+achieves, the less id125 can help as it re-
+quires longer consecutive write segments for ex-
+tensive search to be necessary. one possible so-
+lution is to consider the beam uncertainty in the
+agent   s read/write decisions. we leave this to
+future work.
+
+6.3 qualitative analysis
+in this section, we perform a more in-depth analy-
+sis using examples from both en-ru and en-de
+pairs, in order to have a deeper understanding of
+the proposed algorithm and its remaining limita-
+tions. we only perform greedy decoding to sim-
+plify visualization.
+en   ru
+as shown in fig 8, since both en-
+glish and russian are subject-verb-object (svo)
+languages, the corresponding words may share the
+same order in both languages, which makes si-
+multaneous translation easier. it is clear that the
+larger the target delay (ap or cw) is set, the more
+words are read before translating the correspond-
+ing words, which in turn results in better transla-
+tion quality. we also note that very early write
+commonly causes bad translation. for example,
+for ap=0.3 & cw=2, both the models choose
+to write in the very beginning the word    the   ,
+which is unreasonable since russian has no arti-
+cles, and there is no word corresponding to it. one
+good feature of using id4 is that the more words
+
+figure 6: delay (cw) v.s. id7 score for en
+    ru, ((cid:74) (cid:47): cw=8, (cid:78)(cid:52): cw=5, (cid:7)   : cw=2, (cid:73)
+(cid:46): ap=0.3, (cid:72)(cid:79): ap=0.5, (cid:4)(cid:3): ap=0.7), against
+the baselines ((cid:70): wos (cid:70): wue, +: seg1,   :
+seg2).
+
+ists strong correlation between the two delay mea-
+sures, implying the agent can learn to decrease
+both ap and cw simultaneously.
+quality v.s. delay
+as shown in fig. 5, it is
+clear that the trade-off between translation quality
+and delay has very similar behaviors across both
+language pairs and directions. the smaller delay
+(ap or cw) the learning algorithm is targeting, the
+lower quality (id7 score) the output translation.
+it is also interesting to observe that, it is more dif   -
+cult for       en    translation to achieve a lower ap
+target while maintaining good quality, compared
+to    en      . in addition, the models that are op-
+timized on ap tend to perform better than those
+optimized on cw, especially in       en    transla-
+tion. german and russian sentences tend to be
+longer than english, hence require more consecu-
+tive waits before being able to emit the next en-
+glish symbol.
+v.s. baselines
+in fig. 5 and 6, the points closer
+to the upper left corner achieve better trade-off
+performance. compared to wue and wos which
+can ideally achieve the best quality (but the worst
+delay) and the best delay (but poor quality) re-
+spectively, all of our proposed models    nd a good
+balance between quality and delay. some of the
+proposed models can achieve good id7 scores
+close to wue, while have much smaller delay.
+
+compared to the method of cho and esipova
+(2016) based on two hand-crafted rules (wid,
+wiw), in most cases our proposed models    nd
+better trade-off points, while there are a few ex-
+ceptions. we also observe that the baseline models
+have trouble controlling the delay in a reasonable
+area. in contrast, by optimizing towards a given
+
+0510152025consecutive wait length24681012141618id71.01.52.02.53.03.512.012.513.013.514.014.515.015.516.0(a) simultaneous id4
+
+(b) id4
+
+figure 7: comparison of de   en examples using the proposed framework and usual id4 system
+respectively. both the heatmaps share the same setting with fig. 1. the verb    gedeckt    is incorrectly
+translated in simultaneous translation.
+
+figure 8: given the example input sentence (leftmost column), we show outputs by models trained for
+various delay targets. for these outputs, each row corresponds to one source word and represents the
+emitted words (maybe empty) after reading this word. the corresponding source and target words are in
+the same color for all model outputs.
+
+the decoder reads, the longer history is saved,
+rendering simultaneous translation easier.
+de   en as shown in fig 1 and 7 (a), where
+we visualize the attention weights as soft align-
+ment between the progressive input and output
+sentences, the highest weights are basically along
+the diagonal line. this indicates that our simul-
+taneous translator works by waiting for enough
+
+source words with high alignment weights and
+then switching to write them.
+
+de-en translation is likely more dif   cult as
+german usually uses subject-object-verb (sov)
+constructions a lot. as shown in fig 1, when a sen-
+tence (or a clause) starts the agent has learned such
+policy to read multiple steps to approach the verb
+(e.g. serviert and gestorben in fig 1). such a pol-
+
+thecostofthecampaignisbasicallybeingpaidbymysalaryasasen--ator.<eos><eos>.decktge--atorsen--alsaltgeh--meindurchgenommengrundeimwerdenkampagnedief  urkostendiereadwritethecostofthecampaignisbasicallycoveredbymysalaryasasen--ator.<eos><eos>.decktge--atorsen--alsaltgeh--meindurchgenommengrundeimwerdenkampagnedief  urkostendiereadwrite	source		ap=0.3		ap=0.7		cw=2	cw=8	the		the	the						the			people		p--	i--	ent	the	p--	ol--	s										,									,							p--	riv--		as				ers		i					as	i				heard		  	            	        									,	        		in		,		      	  	            			the			      			countryside							  									  			  	            		,												,	want	                	                  						                								  			      	  	a		                  			            		government			                			that							,									  				is			                  		                			not					made	        										,		up	                          			                  			of			        				thi--	,	,			eves		          			                          		.										,	<eos>	              	    	                        	    --	      	.	,	          	                          	,	              	    	  --	        --	            	  	    --	    	.	,	              	    	                	            --	      	            	    --	      	.	          	,	          	                          	,	              	    	  --	        --	            	  	    --	    	.	summary	id7=39/	ap=0.46	id7=64/ap=0.77	id7=54/cw=1.76	id7=64/cw=2.55	icy is still limited when the verb is very far from
+the subject. for instance in fig. 7, the simultane-
+ous translator achieves almost the same translation
+with standard id4 except for the verb    gedeckt   
+which corresponds to    covered    in id4 output.
+since there are too many words between the verb
+   gedeckt    and the subject    kosten f  ur die kam-
+pagne werden   , the agent gives up reading (oth-
+erwise it will cause a large delay and a penalty)
+and writes    being paid    based on the decoder   s
+hypothesis. this is one of the limitations of the
+proposed framework, as the id4 environment is
+trained on complete source sentences and it may
+be dif   cult to predict the verb that has not been
+seen in the source sentence. one possible way is
+to    ne-tune the id4 model on incomplete sen-
+tences to boost its prediction ability. we will leave
+this as future work.
+
+7 related work
+
+in this approach,
+
+researchers commonly consider the problem of
+simultaneous machine translation in the scenario
+of real-time speech interpretation (f  ugen et al.,
+2007; bangalore et al., 2012; fujita et al., 2013;
+rangarajan sridhar et al., 2013; yarmohammadi
+et al., 2013).
+the incoming
+speech stream required to be translated are    rst
+recognized and segmented based on an automatic
+id103 (asr) system. the translation
+model then works independently based on each of
+these segments, potentially limiting the quality of
+translation. to avoid using a    xed segmentation
+algorithm, oda et al. (2014) introduced a trainable
+segmentation component into their system, so that
+the segmentation leads to better translation quality.
+grissom ii et al. (2014) proposed a similar frame-
+work, however, based on id23.
+all these methods still rely on translating each seg-
+ment independently without previous context.
+
+recently, two research groups have tried to ap-
+ply the id4 framework to the simultaneous trans-
+lation task. cho and esipova (2016) proposed
+a similar waiting process. however, their wait-
+ing criterion is manually de   ned without learning.
+satija and pineau (2016) proposed a method sim-
+ilar to ours in overall concept, but it signi   cantly
+differs from our proposed method in many details.
+the biggest difference is that they proposed to use
+an agent that passively reads a new word at each
+step. because of this, it cannot consecutively de-
+code multiple steps, rendering id125 dif   -
+
+cult. in addition, they lack the comparison to any
+existing approaches. on the other hand, we per-
+form an extensive experimental evaluation against
+state-of-the-art baselines, demonstrating the rela-
+tive utility both quantitatively and qualitatively.
+
+the proposed framework is also related to some
+recent efforts about online sequence-to-sequence
+(id195) learning.
+jaitly et al. (2015) pro-
+posed a id195 asr model that takes    xed-
+sized segments of the input sequence and outputs
+tokens based on each segment in real-time. it is
+trained with alignment information using super-
+vised learning. a similar idea for online asr is
+proposed by luo et al. (2016). similar to satija
+and pineau (2016), they also used reinforcement
+learning to decide whether to emit a token while
+reading a new input at each step. although shar-
+ing some similarities, asr is very different from
+simultaneous mt with a more intuitive de   nition
+for segmentation.
+in addition, yu et al. (2016)
+recently proposed an online alignment model to
+help sentence compression and morphological in-
+   ection. they regarded the alignment between the
+input and output sequences as a hidden variable,
+and performed transitions over the input and out-
+put sequence. by contrast, the proposed read and
+write actions do not necessarily to be performed
+on aligned words (e.g. in fig. 1), and are learned
+to balance the trade-off of quality and delay.
+
+8 conclusion
+
+we propose a uni   ed framework to do neural si-
+multaneous machine translation. to trade off qual-
+ity and delay, we extensively explore various tar-
+gets for delay and design a method for beam-
+search applicable in the simultaneous mt setting.
+experiments against state-of-the-art baselines on
+two language pairs demonstrate the ef   cacy both
+quantitatively and qualitatively.
+
+acknowledgments
+
+kc acknowledges the support by facebook,
+google (google faculty award 2016) and nvidia
+(gpu center of excellence 2015-2016). gn ac-
+knowledges the support of the microsoft core
+program. this work was also partly supported
+by samsung electronics (project:    development
+and application of larger-context neural ma-
+chine translation   ).
+
+references
+[bahdanau et al.2014] dzmitry bahdanau, kyunghyun
+cho, and yoshua bengio. 2014. neural machine
+translation by jointly learning to align and translate.
+arxiv preprint arxiv:1409.0473.
+
+[bangalore et al.2012] srinivas bangalore, vivek ku-
+mar rangarajan sridhar, prakash kolan, ladan
+golipour, and aura jimenez. 2012. real-time in-
+cremental speech-to-speech translation of dialogs.
+in proceedings of the 2012 conference of the north
+american chapter of the association for computa-
+tional linguistics: human language technologies,
+pages 437   445. association for computational lin-
+guistics.
+
+[cho and esipova2016] kyunghyun cho and masha
+can neural machine transla-
+arxiv preprint
+
+esipova.
+tion do simultaneous translation?
+arxiv:1606.02012.
+
+2016.
+
+[f  ugen et al.2007] christian f  ugen, alex waibel, and
+muntsin kolss.
+2007. simultaneous translation
+of lectures and speeches. machine translation,
+21(4):209   252.
+
+[fujita et al.2013] tomoki fujita, graham neubig,
+sakriani sakti, tomoki toda, and satoshi naka-
+mura. 2013. simple, lexicalized choice of transla-
+tion timing for simultaneous speech translation. in
+interspeech.
+
+[grissom ii et al.2014] alvin grissom ii, he he, jor-
+dan boyd-graber, john morgan, and hal daum  e iii.
+2014. dont until the    nal verb wait: reinforce-
+ment learning for simultaneous machine transla-
+in proceedings of the 2014 conference on
+tion.
+empirical methods in natural language processing
+(emnlp), pages 1342   1352, doha, qatar, october.
+association for computational linguistics.
+
+[jaitly et al.2015] navdeep jaitly, quoc v le, oriol
+vinyals, ilya sutskeyver, and samy bengio. 2015.
+an online sequence-to-sequence model using partial
+conditioning. arxiv preprint arxiv:1511.04868.
+
+[kingma and ba2014] diederik kingma and jimmy
+ba. 2014. adam: a method for stochastic opti-
+mization. arxiv preprint arxiv:1412.6980.
+
+[lin and och2004] chin-yew lin and franz josef och.
+2004. automatic evaluation of machine transla-
+tion quality using longest common subsequence and
+in proceedings of the 42nd
+skip-bigram statistics.
+annual meeting on association for computational
+linguistics, page 605. association for computa-
+tional linguistics.
+
+[luo et al.2016] yuping luo, chung-cheng chiu,
+navdeep jaitly, and ilya sutskever. 2016. learning
+online alignments with continuous rewards policy
+gradient. arxiv preprint arxiv:1608.01281.
+
+[mieno et al.2015] takashi mieno, graham neubig,
+sakriani sakti, tomoki toda, and satoshi naka-
+mura. 2015. speed or accuracy? a study in evalua-
+tion of simultaneous speech translation. in inter-
+speech.
+
+[mnih and gregor2014] andriy mnih and karol gre-
+gor. 2014. neural variational id136 and learning
+in belief networks. arxiv preprint arxiv:1402.0030.
+
+[oda et al.2014] yusuke oda, graham neubig, sakriani
+sakti, tomoki toda, and satoshi nakamura. 2014.
+optimizing segmentation strategies for simultane-
+ous speech translation. in proceedings of the 52nd
+annual meeting of the association for computa-
+tional linguistics (volume 2: short papers), pages
+551   556, baltimore, maryland, june. association
+for computational linguistics.
+
+[papineni et al.2002] kishore papineni, salim roukos,
+2002. id7: a
+todd ward, and wei-jing zhu.
+method for automatic evaluation of machine trans-
+in proceedings of the 40th annual meeting
+lation.
+on association for computational linguistics, pages
+311   318. association for computational linguis-
+tics.
+
+[rangarajan sridhar et al.2013] vivek kumar rangara-
+jan sridhar, john chen, srinivas bangalore, an-
+drej ljolje, and rathinavelu chengalvarayan. 2013.
+segmentation strategies for streaming speech trans-
+in proceedings of the 2013 conference of
+lation.
+the north american chapter of the association for
+computational linguistics: human language tech-
+nologies, pages 230   238, atlanta, georgia, june.
+association for computational linguistics.
+
+[satija and pineau2016] harsh satija and joelle pineau.
+2016. simultaneous machine translation using deep
+id23. abstraction in reinforce-
+ment learning workshop, icml2016.
+
+[sennrich et al.2015] rico sennrich, barry haddow,
+and alexandra birch. 2015. neural machine trans-
+arxiv
+lation of rare words with subword units.
+preprint arxiv:1508.07909.
+
+[sutskever et al.2014] ilya sutskever, oriol vinyals,
+and quoc v le. 2014. sequence to sequence learn-
+ing with neural networks. in advances in neural in-
+formation processing systems, pages 3104   3112.
+
+[williams1992] ronald j williams.
+
+simple
+statistical gradient-following algorithms for connec-
+tionist id23. machine learning,
+8(3-4):229   256.
+
+1992.
+
+[yarmohammadi et al.2013] mahsa yarmohammadi,
+vivek kumar rangarajan sridhar, srinivas banga-
+lore, and baskaran sankaran. 2013.
+incremental
+segmentation and decoding strategies for simultane-
+ous translation. in ijcnlp, pages 1032   1036.
+
+[yu et al.2016] lei yu, jan buys, and phil blunsom.
+2016. online segment to segment neural transduc-
+tion. arxiv preprint arxiv:1609.08194.
+
+

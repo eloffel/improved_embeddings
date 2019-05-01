@@ -1,0 +1,432 @@
+   #[1]rss
+
+     * [2]about
+     * [3]software
+     * [4]demos
+     * [5]blog
+
+   [quora.jpg]    [6]kemal   anl  
+
+deep text-pair classification with quora   s 2017 question dataset
+
+   february 13, 2017    by matthew honnibal
+
+   [7]quora recently released the [8]first dataset from their platform: a
+   set of 400,000 question pairs, with annotations indicating whether the
+   questions request the same information. this data set is large, real,
+   and relevant     a rare combination. in this post, i'll explain how to
+   solve text-pair tasks with deep learning, using both new and
+   established tips and technologies.
+
+   the quora dataset is an example of an important type of natural
+   language processing problem: text-pair classification. this type of
+   problem is challenging because you usually can't solve it by looking at
+   individual words. no single word is going to tell you whether two
+   questions are duplicates, or whether some headline is a good match for
+   a story, or whether a valid link is probably pointing to the wrong
+   page. you have to look at both items together. that's hard     but it's
+   also rewarding. and models that do this are starting to get pretty
+   good.
+
+update (march 1, 2017)
+
+   updated experiments on this task can be found in [9]our follow-up post.
+
+[10]the quora dataset
+
+   recent approaches to text-pair classification have mostly been
+   developed on the [11]stanford natural language id136 (snli) corpus,
+   prepared by sam bowman as part of his graduate research. the corpus
+   provides over 500,000 pairs of short sentences, with human annotations
+   indicating whether an entailment, contradiction or neutral logical
+   relationship holds between the sentences. the snli dataset is over 100x
+   larger than previous similar resources, allowing current deep-learning
+   models to be applied to the problem. however, the data is also quite
+   artificial     the texts are quite unlike any you're likely to find in
+   your applications.
+   examples from the quora data examples from the snli corpus
+   which is the best digital marketing institution in banglore? which is
+   the best digital marketing institute in pune? 0 a person on horse jumps
+   over a broken down airplane. a person is training his horse for a
+   competition. 0
+   what's causing someone to be jealous? what can i do to avoid being
+   jealous of someone? 0 people listening to a choir in a catholic church.
+   choir singing in church. 1
+   what are some special cares for someone with a nose that gets stuffy
+   during the night? how can i keep my nose from getting stuffy at night?
+   1 a person on a bike is waiting while the light is green. bicyclists
+   waiting at an intersection. 0
+   how do you get deleted instagram chats? how can i view deleted
+   instagram dms? 1 bicyclists waiting at an intersection. the bicyclists
+   ride through the mall on their bikes. -1
+   snli methodologythe texts in the snli corpus were collected from
+   microtask workers on the [12]amazon mechanical turk platform. workers
+   were shown an image caption     itself produced by workers in a previous
+   annotation project     and asked to write three alternate captions: one
+   that's' false given the original caption, one that's true, and one that
+   could be either true or false.
+
+   when i first used the snli data, i was concerned that the limited
+   vocabulary and relatively literal sentences made the problem
+   unrealistically easy. the quora data gives us a fantastic chance to
+   check our progress: are the models developed on the snli data really
+   useful on the real world task, or did the artificial data lead us to
+   draw incorrect conclusions about how to build this type of
+   model?artificial isn't necessarily badwhy use artificial data? there's
+   certainly no shortage of text in the world     but then, it's not a
+   shortage of wind that makes a wind-tunnel useful. it's useful to
+   conduct experiments in slightly idealised conditions, to make it easier
+   to reason about results.
+
+   the question of how idealised nlp experiments should be is not new.
+   however, it's rare to have such a good opportunity to examine the
+   reliability of our methodologies. was the snli too artificial? if so,
+   it will have misled us on how we should solve a real task, such as the
+   one posed by the quora data. the quora data is about the same size, and
+   it comes at just the right time. it will be interesting to see how this
+   looks over the next few months. so far, it seems like the conclusions
+   from the snli corpus are holding up quite well.
+
+[13]a neural bag-of-words model for text-pair classification
+
+   when designing a neural network for a text-pair task, probably the most
+   important decision is whether you want to represent the meanings of the
+   texts independently, or jointly. an independent representation means
+   that the network can read a text in isolation, and produce a vector
+   representation for it. this is great if you know you'll need to make
+   lots of comparisons over the same texts, for instance if you want to
+   find their pairwise-similarities. however, reading the sentences
+   independently makes the text-pair task more difficult. models which
+   read the sentences together before reducing them to vectors have an
+   accuracy advantage.
+
+   i've [14]previously described a model that reads sentences jointly    
+   [15]parikh et al.'s decomposable attention model. in this post i'll
+   describe a very simple sentence encoding model, using a so-called
+   "neural bag-of-words". the model is implemented using [16]thinc, a
+   small library of nlp-optimized machine learning functions being
+   developed for use in [17]spacy. while thinc isn't yet fully stable, i'm
+   already finding it quite productive, especially for small models that
+   should run well on cpu.
+text-pair classification with thincwith model.define_operators({'>>': chain, '**
+': clone, '|': concatenate}):
+    sent2vec = (
+        flatten_add_lengths
+        >> with_getitem(0, staticembed(get_vectors, width))
+        >> (mean_pool | max_pool)
+    )
+    model = (
+        ((arg(0) >> sent2vec) | (arg(1) >> sent2vec))
+        >> maxout(width) ** depth
+        >> softmax(2)
+    )
+
+   operator overloadingto keep model definition concise, thinc allows you
+   to temporarily overload operators on the model class, to any binary
+   function you like. the definition is block-scoped, so you can always
+   read what the operators are being aliased to.
+
+   first, we fetch a pre-trained "id27" vector for each word in
+   the sentence. the static embeddings are quite long, and it's useful to
+   learn to reweight the dimensions     so we learn a projection matrix,
+   that maps the embedded vectors down to length width.
+
+   this gives us two 2d arrays     one per sentence. we want to learn a
+   single categorical label for the pair of questions, so we want to get a
+   single vector for the pair of sentences. there are a variety of pooling
+   operations that people use to do this. i find it works well to use
+   multiple pooling methods, and concatenate the results. in the code
+   above, i'm creating vectors for the elementwise averages and maximums
+   ("mean pooling" and "max pooling" respectively), and concatenating the
+   results.
+
+   we then create a vector for each sentence, and concatenate the results.
+   this is then fed forward into a deep maxout network, before a softmax
+   layer makes the prediction. the neural bag-of-words model produces the
+   following accuracies on the two data sets:
+
+[18]digression: thinc, spacy's machine learning library
+
+   thinc works a little differently from most neural network libraries.
+   there's no computational graph abstraction     we don't compile your
+   computations, we just execute them. to compute the backward pass,
+   layers just return a callback. to illustrate, imagine we have the
+   following implementation of an affine layer, as a closure:
+callbacks for backward pass in thincdef affine(n_out, n_in):
+    scale = 6. / np.sqrt(n_out + n_in)
+    w = np.random.uniform(0., scale, (n_out, n_in))
+    b = np.zeros((n_out,))
+    def forward(inputs):
+        outputs = w.dot(inputs) + b
+        def backward(d_outputs, optimizer):
+            d_inputs = np.outer(d_outputs, w.t)
+            d_w = np.dot(d_outputs, inputs)
+            d_b = d_outputs.sum()
+            optimizer(w, d_w)
+            optimizer(b, d_b)
+            return d_inputs
+        return outputs, backward
+    return forward
+
+   the weights of the layer, w and b, are private     they're internal
+   details of the layer, that sit in the function's outer scope. the layer
+   returns its forward function, which references the enclosed weights.
+   the forward function returns an output, and the callback backward. the
+   callback can then be used to complete the backward pass:
+affine = affine(10, 5)
+x2, bp_x2 = affine(x1)
+# later, once we have gradient of x2
+d_x1 = bp_x2(d_x2, adam_solver)
+
+   this design allows all layers to have the same simple signature, which
+   makes it easy to write helper functions to compose the layers in
+   various ways. this makes it easy to define custom data flows     you can
+   have whatever types you want flowing through the model, so long as you
+   define both the forward and backward pass.
+
+[19]results
+
+   the neural bag-of-words isn't the most satisfying model, but it's a
+   good baseline to compute     and as always, it's important to steel-man
+   the baseline, and compute the best version of the idea possible. i
+   recommend always trying the mean and max pooling trick     i've yet to
+   find a task where it doesn't perform at least as well as mean or max
+   pooling alone, and it usually does at least a little better.
+                           mean max  mean and max
+   accuracy quora          80.9 82.3 82.8
+   accuracy snli (2-class) 85.1 88.6 88.5
+
+   width was set to 128, and depth was set to 1 (i.e. only one maxout
+   layer was used before the softmax). i didn't use dropout because there
+   are so few parameters in the model     the model being trained is less
+   than 1mb, because we're not updating the vectors. batch size was set to
+   1 initially, and increased by 0.1% each iteration to a maximum of 256.
+   i'm planning to write this trick up in a subsequent post     it's been
+   working quite well.
+
+[20]negative result: maxout window encoding
+
+update (march 1, 2017)
+
+   the negative result here turned out to be due to a bug. in [21]updated
+   experiments the maxout window encoding helps as expected.
+
+   i also tried models which encoded a limited amount of positional
+   information, using a convolutional layer. there have been many
+   proposals for this sort of "poor man's" bilstm" lately. my new go-to
+   solution along these lines is a layer i call maxout window encoding
+   (mwe). it's very simple: for each word i in the sentence, we form a new
+   vector, by concatenating the vectors for (i-1, i, i+1). if our sentence
+   was n words long and our vectors were m wide, this step would take in
+   an (n, m) matrix and return an (n, m*3) matrix. we then use a maxout
+   layer to map the concatenated, 3*m-length vectors back down to m-length
+   vectors.related workpeople have been using context windows as features
+   since at least [22]collobert and weston (2011), and likely much before.
+   i think that might be why there seems to be no established terminology
+   for this operation. there have been several recent extensions to the
+   idea that are very interesting, especially the use of gapped windows
+   for long sequences by the bytenet / wavenet / etc family of models by
+   [23]deepmind. [24]metamind's qid56 is another example of a more
+   sophistiated model along these lines.
+
+   the mwe layer has the same aim as the bilstm: extract better word
+   features. most nlp neural networks start with an embedding layer. after
+   this layer, your word features are position-independent: the vector for
+   the word "duck" is always the same, no matter what words surround it.
+   we know this is bad     we know the meaning of the word "duck" does
+   change depending on its context. there's clearly an opportunity to
+   improve our features here     to feed better information about the input
+   upwards into the next layer.
+   hover over the vectors to see which words were used to compute them.
+   hover over the words to see the vectors they influenced.
+
+   the figure above shows how a single mwe block rewrites the vector for
+   each word given evidence for the two words immediately surrounding it.
+   you can think of the output as trigram vectors     they're built on the
+   information from a three-word window. by simply adding another layer,
+   we'll get vectors computed from 5-grams     the receptive field widens
+   with each layer we go deeper.
+
+   for the mwe unit to work, it needs to learn a non-linear mapping from a
+   trigram down to a shorter vector. you could use any non-linearity here,
+   but i've found maxout to work quite well. the logic is that adding
+   capacity to the layer by increasing the width m is quite expensive,
+   because our weights layers will be (m, 3*m). the maxout unit instead
+   lets us add capacity by adding another dimension instead. i usually use
+   two or three pieces.
+
+   the [25]id98 tagger example in the thinc repository provides a simple
+   proof of concept. the example is a straight-forward tagging model,
+   trained and evaluated on the ancora spanish corpus. the model receives
+   only word ids as input     no sub-word features     and words with
+   frequency below 10 are labelled unknown. no pre-trained vectors are
+   used.
+                       depth 0   depth 1  depth 2 depth 3 depth 4 depth 5
+   accuracy           83.8      93.2      93.9    94.1    93.9    93.9
+   train (seconds)    91        44        60      80      91      118
+   run (words/second) 1,800,000 1,300,000 900,000 720,000 650,000 330,000
+
+   at depth 0, the model can only learn one tag per word type     it has no
+   contextual information. each layer of depth makes the model sensitive
+   to a wider field of context, leading to small improvements in accuracy
+   that plateau at depth 3.
+
+   however, what worked for tagging and intent detection proved
+   surprisingly ineffective at text-pair classification. this matches
+   previous reports i've heard about bilstm being relatively ineffective
+   in various models developed for the snli task. i still don't have a
+   good intuition for why this might be so.
+                           depth 0 depth 1 depth 2 depth 3
+   accuracy quora          82.8    82.6    82.8    82.6
+   accuracy snli (2-class) 88.5    86.9    86.5    86.8
+
+[26]summary
+
+   a lot of interesting functionality can be implemented using text-pair
+   classification models. the technology is still quite young, so the
+   applications haven't been explored well yet. we've had good techniques
+   for classifying single texts for some time     but the ability to
+   accurately model the relationships between texts is fairly new. i'm
+   looking forward to seeing what people build with this.
+
+   in the meantime, we're working on an interactive demo to explore
+   different models trained on the quora data set and the snli corpus.
+
+resources
+
+     * [27]first quora dataset release: question pairs (quora)
+     * [28]semantic question matching with deep learning by nikhil
+       dandekar (quora)
+     * [29]duplicate question detection with deep learning on quora
+       dataset by eren g  lge
+     * [30]stanford natural language id136 (snli) corpus
+     * [31]thinc, spacy's machine learning library for deep learning with
+       text
+
+bibliography
+
+     * [32]a decomposable attention model for natural language id136
+       parikh, ankur p.; tackstr  m, oscar; das, dipanjan; uszkoreit, jakob
+       (2016)
+     * [33]a large annotated corpus for learning natural language
+       id136
+       bowman, samuel r.; angeli, gabor; potts, christopher; manning,
+       christopher d. (2015)
+     * [34]natural language processing (almost) from scratch
+       collobert, ronan; weston, jason; bottou, l  on; karlen, michael;
+       kavukcuoglu, koray; kuksa, pavel p. (2011)
+
+   matthew honnibal
+   about the author
+
+matthew honnibal
+
+   matthew is a leading expert in ai technology, known for his research,
+   software and writings. he completed his phd in 2009, and spent a
+   further 5 years publishing research on state-of-the-art natural
+   language understanding systems. anticipating the ai boom, he left
+   academia in 2014 to develop spacy, an open-source library for
+   industrial-strength nlp.
+
+read more
+
+[35]introducing spacy v2.1
+
+[36]explosion ai in 2017: our year in review
+
+[37]introducing custom pipelines and extensions for spacy v2.0
+
+[38]pseudo-rehearsal: a simple solution to catastrophic forgetting for nlp
+
+[39]prodigy: a new tool for radically efficient machine teaching
+
+[40]supervised learning is great     it   s data collection that   s broken
+
+    about us
+
+   explosion ai is a digital studio specialising in artificial
+   intelligence and natural language processing. we   re the makers of
+   spacy, the leading open-source nlp library.
+
+    navigation
+
+     * [41]home
+     * [42]about
+     * [43]software
+     * [44]demos
+     * [45]blog
+     * [46]legal / imprint
+
+    our software
+
+     * [47]spacy
+       industrial-strength nlp
+     * [48]prodigy
+       radically efficient machine teaching
+
+   [49]see more    
+
+references
+
+   visible links
+   1. https://explosion.ai/feed.xml
+   2. https://explosion.ai/about
+   3. https://explosion.ai/software
+   4. https://explosion.ai/demos
+   5. https://explosion.ai/blog
+   6. https://dribbble.com/kemal
+   7. https://quora.com/
+   8. https://data.quora.com/first-quora-dataset-release-question-pairs
+   9. https://explosion.ai/blog/supervised-similarity-siamese-id98
+  11. http://nlp.stanford.edu/projects/snli/
+  12. https://en.wikipedia.org/wiki/amazon_mechanical_turk
+  14. https://explosion.ai/blog/deep-learning-formula-nlp
+  15. https://www.semanticscholar.org/paper/a-decomposable-attention-model-for-natural-parikh-t  ckstr  m/07a9478e87a8304fc3267fa16e83e9f3bbd98b27
+  16. https://github.com/explosion/thinc
+  17. https://spacy.io/
+  21. https://explosion.ai/blog/supervised-similarity-siamese-id98.jade
+  22. https://www.semanticscholar.org/paper/natural-language-processing-almost-from-scratch-collobert-weston/34f24814c442254819d245407def4fce96766540
+  23. https://deepmind.com/
+  24. https://metamind.io/
+  25. https://github.com/explosion/thinc/blob/master/examples/id98_tagger.py
+  27. https://data.quora.com/first-quora-dataset-release-question-pairs
+  28. https://engineering.quora.com/semantic-question-matching-with-deep-learning
+  29. http://www.erogol.com/duplicate-question-detection-deep-learning/
+  30. http://nlp.stanford.edu/projects/snli/
+  31. https://github.com/explosion/thinc
+  32. https://www.semanticscholar.org/paper/a-decomposable-attention-model-for-natural-parikh-t  ckstr  m/07a9478e87a8304fc3267fa16e83e9f3bbd98b27
+  33. https://www.semanticscholar.org/paper/a-large-annotated-corpus-for-learning-natural-bowman-angeli/0dab72129b4458d9e3dbf1f109848c2d6d7af8a8
+  34. https://www.semanticscholar.org/paper/natural-language-processing-almost-from-scratch-collobert-weston/34f24814c442254819d245407def4fce96766540
+  35. https://explosion.ai/blog/spacy-v2-1
+  36. https://explosion.ai/blog/year-in-review-2017
+  37. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  38. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  39. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  40. https://explosion.ai/blog/supervised-learning-data-collection
+  41. https://explosion.ai/
+  42. https://explosion.ai/about
+  43. https://explosion.ai/software
+  44. https://explosion.ai/demos
+  45. https://explosion.ai/blog
+  46. https://explosion.ai/legal
+  47. https://spacy.io/
+  48. https://prodi.gy/
+  49. https://explosion.ai/software
+
+   hidden links:
+  51. https://explosion.ai/
+  52. mailto:matt@explosion.ai
+  53. https://twitter.com/honnibal
+  54. https://github.com/honnibal
+  55. https://www.semanticscholar.org/search?q=matthew%20honnibal
+  56. https://explosion.ai/blog/spacy-v2-1
+  57. https://explosion.ai/blog/year-in-review-2017
+  58. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  59. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  60. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  61. https://explosion.ai/blog/supervised-learning-data-collection
+  62. mailto:contact@explosion.ai
+  63. https://twitter.com/explosion_ai
+  64. https://github.com/explosion
+  65. https://youtube.com/c/explosionai
+  66. https://explosion.ai/feed

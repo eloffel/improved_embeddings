@@ -1,0 +1,1568 @@
+5
+1
+0
+2
+
+ 
+
+v
+o
+n
+4
+2
+
+ 
+
+ 
+ 
+]
+e
+n
+.
+s
+c
+[
+ 
+ 
+
+5
+v
+5
+9
+8
+8
+0
+
+.
+
+3
+0
+5
+1
+:
+v
+i
+x
+r
+a
+
+end-to-end memory networks
+
+sainbayar sukhbaatar
+dept. of computer science
+
+courant institute, new york university
+
+sainbar@cs.nyu.edu
+
+arthur szlam
+
+jason weston
+
+rob fergus
+
+facebook ai research
+
+{aszlam,jase,robfergus}@fb.com
+
+new york
+
+abstract
+
+we introduce a neural network with a recurrent attention model over a possibly
+large external memory. the architecture is a form of memory network [23]
+but unlike the model in that work, it is trained end-to-end, and hence requires
+signi   cantly less supervision during training, making it more generally applicable
+in realistic settings. it can also be seen as an extension of id56search [2] to the
+case where multiple computational steps (hops) are performed per output symbol.
+the    exibility of the model allows us to apply it to tasks as diverse as (synthetic)
+id53 [22] and to id38. for the former our approach
+is competitive with memory networks, but with less supervision. for the latter,
+on the id32 and text8 datasets our approach demonstrates comparable
+performance to id56s and lstms. in both cases we show that the key concept
+of multiple computational hops yields improved results.
+
+introduction
+
+1
+two grand challenges in arti   cial intelligence research have been to build models that can make
+multiple computational steps in the service of answering a question or completing a task, and
+models that can describe long term dependencies in sequential data.
+recently there has been a resurgence in models of computation using explicit storage and a notion
+of attention [23, 8, 2]; manipulating such a storage offers an approach to both of these challenges.
+in [23, 8, 2], the storage is endowed with a continuous representation; reads from and writes to the
+storage, as well as other processing steps, are modeled by the actions of neural networks.
+in this work, we present a novel recurrent neural network (id56) architecture where the recurrence
+reads from a possibly large external memory multiple times before outputting a symbol. our model
+can be considered a continuous form of the memory network implemented in [23]. the model in
+that work was not easy to train via id26, and required supervision at each layer of the
+network. the continuity of the model we present here means that it can be trained end-to-end from
+input-output pairs, and so is applicable to more tasks, i.e. tasks where such supervision is not avail-
+able, such as in id38 or realistically supervised id53 tasks. our model
+can also be seen as a version of id56search [2] with multiple computational steps (which we term
+   hops   ) per output symbol. we will show experimentally that the multiple hops over the long-term
+memory are crucial to good performance of our model on these tasks, and that training the memory
+representation can be integrated in a scalable manner into our end-to-end neural network model.
+2 approach
+our model takes a discrete set of inputs x1, ..., xn that are to be stored in the memory, a query q, and
+outputs an answer a. each of the xi, q, and a contains symbols coming from a dictionary with v
+words. the model writes all x to the memory up to a    xed buffer size, and then    nds a continuous
+representation for the x and q. the continuous representation is then processed via multiple hops to
+output a. this allows id26 of the error signal through multiple memory accesses back
+to the input during training.
+
+1
+
+2.1 single layer
+we start by describing our model in the single layer case, which implements a single memory hop
+operation. we then show it can be stacked to give multiple hops in memory.
+input memory representation: suppose we are given an input set x1, .., xi to be stored in memory.
+the entire set of {xi} are converted into memory vectors {mi} of dimension d computed by
+embedding each xi in a continuous space, in the simplest case, using an embedding matrix a (of
+size d  v ). the query q is also embedded (again, in the simplest case via another embedding matrix
+b with the same dimensions as a) to obtain an internal state u. in the embedding space, we compute
+the match between u and each memory mi by taking the inner product followed by a softmax:
+
+where softmax(zi) = ezi/(cid:80)
+
+pi = softmax(ut mi).
+
+(1)
+
+j ezj . de   ned in this way p is a id203 vector over the inputs.
+
+output memory representation: each xi has a corresponding output vector ci (given in the
+simplest case by another embedding matrix c). the response vector from the memory o is then a
+sum over the transformed inputs ci, weighted by the id203 vector from the input:
+
+o =
+
+pici.
+
+(2)
+
+(cid:88)
+
+i
+
+because the function from input to output is smooth, we can easily compute gradients and back-
+propagate through it. other recently proposed forms of memory or attention take this approach,
+notably bahdanau et al. [2] and graves et al. [8], see also [9].
+generating the    nal prediction: in the single layer case, the sum of the output vector o and the
+input embedding u is then passed through a    nal weight matrix w (of size v    d) and a softmax
+to produce the predicted label:
+
+  a = softmax(w (o + u))
+
+(3)
+
+the overall model is shown in fig. 1(a). during training, all three embedding matrices a, b and c,
+as well as w are jointly learned by minimizing a standard cross-id178 loss between   a and the true
+label a. training is performed using stochastic id119 (see section 4.2 for more details).
+
+figure 1: (a): a single layer version of our model. (b): a three layer version of our model. in
+practice, we can constrain several of the embedding matrices to be the same (see section 2.2).
+2.2 multiple layers
+we now extend our model to handle k hop operations. the memory layers are stacked in the
+following way:
+    the input to layers above the    rst is the sum of the output ok and the input uk from layer k
+
+(different ways to combine ok and uk are proposed later):
+
+uk+1 = uk + ok.
+
+(4)
+
+2
+
+question  qoutput input embedding bembedding cweights softmax weighted sum picimisentences  {xi}embedding ao wsoftmax predicted  answer  a^uuinner productout3 in3 bsentences w a^{xi} o1u1o2u2 o3u3a1c1a3c3a2c2question qout2 in2 out1 in1 predicted  answer (a)(b)    each layer has its own embedding matrices ak, c k, used to embed the inputs {xi}. however, as
+    at the top of the network, the input to w also combines the input and the output of the top
+
+discussed below, they are constrained to ease training and reduce the number of parameters.
+
+memory layer:   a = softmax(w uk+1) = softmax(w (ok + uk)).
+
+we explore two types of weight tying within the model:
+
+1. adjacent: the output embedding for one layer is the input embedding for the one above,
+i.e. ak+1 = c k. we also constrain (a) the answer prediction matrix to be the same as the
+   nal output embedding, i.e w t = c k, and (b) the question embedding to match the input
+embedding of the    rst layer, i.e. b = a1.
+
+2. layer-wise (id56-like): the input and output embeddings are the same across different
+layers, i.e. a1 = a2 = ... = ak and c 1 = c 2 = ... = c k. we have found it useful to
+add a linear mapping h to the update of u between hops; that is, uk+1 = huk + ok. this
+mapping is learnt along with the rest of the parameters and used throughout our experiments
+for layer-wise weight tying.
+
+a three-layer version of our memory model is shown in fig. 1(b). overall, it is similar to the
+memory network model in [23], except that the hard max operations within each layer have been
+replaced with a continuous weighting from the softmax.
+note that if we use the layer-wise weight tying scheme, our model can be cast as a traditional
+id56 where we divide the outputs of the id56 into internal and external outputs. emitting an
+internal output corresponds to considering a memory, and emitting an external output corresponds
+to predicting a label. from the id56 point of view, u in fig. 1(b) and eqn. 4 is a hidden state, and
+the model generates an internal output p (attention weights in fig. 1(a)) using a. the model then
+ingests p using c, updates the hidden state, and so on1. here, unlike a standard id56, we explicitly
+condition on the outputs stored in memory during the k hops, and we keep these outputs soft,
+rather than sampling them. thus our model makes several computational steps before producing an
+output meant to be seen by the    outside world   .
+3 related work
+a number of recent efforts have explored ways to capture long-term structure within sequences
+using id56s or lstm-based models [4, 7, 12, 15, 10, 1]. the memory in these models is the state
+of the network, which is latent and inherently unstable over long timescales. the lstm-based
+models address this through local memory cells which lock in the network state from the past. in
+practice, the performance gains over carefully trained id56s are modest (see mikolov et al. [15]).
+our model differs from these in that it uses a global memory, with shared read and write functions.
+however, with layer-wise weight tying our model can be viewed as a form of id56 which only
+produces an output after a    xed number of time steps (corresponding to the number of hops), with
+the intermediary steps involving memory input/output operations that update the internal state.
+some of the very early work on neural networks by steinbuch and piske[19] and taylor [21] con-
+sidered a memory that performed nearest-neighbor operations on stored input vectors and then    t
+parametric models to the retrieved sets. this has similarities to a single layer version of our model.
+subsequent work in the 1990   s explored other types of memory [18, 5, 16]. for example, das
+et al. [5] and mozer et al. [16] introduced an explicit stack with push and pop operations which has
+been revisited recently by [11] in the context of an id56 model.
+closely related to our model is the id63 of graves et al. [8], which also uses
+a continuous memory representation. the ntm memory uses both content and address-based
+access, unlike ours which only explicitly allows the former, although the temporal features that we
+will introduce in section 4.1 allow a kind of address-based access. however, in part because we
+always write each memory sequentially, our model is somewhat simpler, not requiring operations
+like sharpening. furthermore, we apply our memory model to textual reasoning tasks, which
+qualitatively differ from the more abstract operations of sorting and recall tackled by the ntm.
+
+1note that in this view, the terminology of input and output from fig. 1 is    ipped - when viewed as a
+traditional id56 with this special conditioning of outputs, a becomes part of the output embedding of the
+id56 and c becomes the input embedding.
+
+3
+
+our model is also related to bahdanau et al. [2]. in that work, a bidirectional id56 based encoder
+and gated id56 based decoder were used for machine translation. the decoder uses an attention
+model that    nds which hidden states from the encoding are most useful for outputting the next
+translated word; the attention model uses a small neural network that takes as input a concatenation
+of the current hidden state of the decoder and each of the encoders hidden states. a similar attention
+model is also used in xu et al. [24] for generating image captions. our    memory    is analogous to
+their attention mechanism, although [2] is only over a single sentence rather than many, as in our
+case. furthermore, our model makes several hops on the memory before making an output; we will
+see below that this is important for good performance. there are also differences in the architecture
+of the small network used to score the memories compared to our scoring approach; we use a simple
+linear layer, whereas they use a more sophisticated gated architecture.
+we will apply our model to id38, an extensively studied task. goodman [6] showed
+simple but effective approaches which combine id165s with a cache. bengio et al. [3] ignited
+interest in using neural network based models for the task, with id56s [14] and lstms [10, 20]
+showing clear performance gains over traditional methods. indeed, the current state-of-the-art is
+held by variants of these models, for example very large lstms with dropout [25] or id56s with
+diagonal constraints on the weight matrix [15]. with appropriate weight tying, our model can be
+regarded as a modi   ed form of id56, where the recurrence is indexed by memory lookups to the
+word sequence rather than indexed by the sequence itself.
+4 synthetic question and answering experiments
+we perform experiments on the synthetic qa tasks de   ned in [22] (using version 1.1 of the dataset).
+a given qa task consists of a set of statements, followed by a question whose answer is typically
+a single word (in a few tasks, answers are a set of words). the answer is available to the model at
+training time, but must be predicted at test time. there are a total of 20 different types of tasks that
+probe different forms of reasoning and deduction. here are samples of three of the tasks:
+sam walks into the kitchen.
+mary journeyed to the den.
+mary went back to the kitchen.
+sam picks up an apple.
+john journeyed to the bedroom.
+sam walks into the bedroom.
+mary discarded the milk.
+sam drops the apple.
+q: where was the milk before the den?
+q: where is the apple?
+a. bedroom
+a. hallway
+note that for each question, only some subset of the statements contain information needed for
+the answer, and the others are essentially irrelevant distractors (e.g.
+the    rst sentence in the    rst
+example). in the memory networks of weston et al. [22], this supporting subset was explicitly
+indicated to the model during training and the key difference between that work and this one is that
+this information is no longer provided. hence, the model must deduce for itself at training and test
+time which sentences are relevant and which are not.
+formally, for one of the 20 qa tasks, we are given example problems, each having a set of i
+sentences {xi} where i     320; a question sentence q and answer a. let the jth word of sentence
+i be xij, represented by a one-hot vector of length v (where the vocabulary is of size v = 177,
+re   ecting the simplistic nature of the qa language). the same representation is used for the
+question q and answer a. two versions of the data are used, one that has 1000 training problems
+per task and a second larger one with 10,000 per task.
+4.1 model details
+unless otherwise stated, all experiments used a k = 3 hops model with the adjacent weight sharing
+scheme. for all tasks that output lists (i.e. the answers are multiple words), we take each possible
+combination of possible outputs and record them as a separate answer vocabulary word.
+sentence representation:
+the sentences.
+the    rst
+
+in our experiments we explore two different representations for
+takes the sentence
+j axij and
+j cxij. the input vector u representing the question is also embedded as a bag of words:
+j bqj. this has the drawback that it cannot capture the order of the words in the sentence,
+
+xi = {xi1, xi2, ..., xin}, embeds each word and sums the resulting vectors: e.g mi =(cid:80)
+ci =(cid:80)
+u =(cid:80)
+sentence. this takes the form: mi =(cid:80)
+
+which is important for some tasks.
+we therefore propose a second representation that encodes the position of words within the
+j lj    axij, where    is an element-wise multiplication. lj is a
+
+brian is a lion.
+julius is a lion.
+julius is white.
+bernhard is green.
+q: what color is brian?
+a. white
+
+is the bag-of-words (bow) representation that
+
+4
+
+that mi = (cid:80)
+(e.g. ci =(cid:80)
+
+column vector with the structure lkj = (1     j/j)     (k/d)(1     2j/j) (assuming 1-based indexing),
+with j being the number of words in the sentence, and d is the dimension of the embedding. this
+sentence representation, which we call position encoding (pe), means that the order of the words
+now affects mi. the same representation is used for questions, memory inputs and memory outputs.
+temporal encoding: many of the qa tasks require some notion of temporal context, i.e.
+in
+the    rst example of section 2, the model needs to understand that sam is in the bedroom after
+he is in the kitchen. to enable our model to address them, we modify the memory vector so
+j axij + ta(i), where ta(i) is the ith row of a special matrix ta that encodes
+temporal information. the output embedding is augmented in the same way with a matrix tc
+j cxij + tc(i)). both ta and tc are learned during training. they are also subject to
+the same sharing constraints as a and c. note that sentences are indexed in reverse order, re   ecting
+their relative distance from the question so that x1 is the last sentence of the story.
+learning time invariance by injecting random noise: we have found it helpful to add    dummy   
+memories to regularize ta. that is, at training time we can randomly add 10% of empty memories
+to the stories. we refer to this approach as random noise (rn).
+4.2 training details
+10% of the babi training set was held-out to form a validation set, which was used to select the
+optimal model architecture and hyperparameters. our models were trained using a learning rate of
+   = 0.01, with anneals every 25 epochs by   /2 until 100 epochs were reached. no momentum or
+weight decay was used. the weights were initialized randomly from a gaussian distribution with
+zero mean and    = 0.1. when trained on all tasks simultaneously with 1k training samples (10k
+training samples), 60 epochs (20 epochs) were used with learning rate anneals of   /2 every 15
+epochs (5 epochs). all training uses a batch size of 32 (but cost is not averaged over a batch), and
+gradients with an (cid:96)2 norm larger than 40 are divided by a scalar to have norm 40. in some of our
+experiments, we explored commencing training with the softmax in each memory layer removed,
+making the model entirely linear except for the    nal softmax for answer prediction. when the
+validation loss stopped decreasing, the softmax layers were re-inserted and training recommenced.
+we refer to this as linear start (ls) training.
+in ls training, the initial learning rate is set to
+   = 0.005. the capacity of memory is restricted to the most recent 50 sentences. since the number
+of sentences and the number of words per sentence varied between problems, a null symbol was
+used to pad them all to a    xed size. the embedding of the null symbol was constrained to be zero.
+on some tasks, we observed a large variance in the performance of our model (i.e. sometimes failing
+badly, other times not, depending on the initialization). to remedy this, we repeated each training
+10 times with different random initializations, and picked the one with the lowest training error.
+4.3 baselines
+we compare our approach2 (abbreviated to memn2n) to a range of alternate models:
+    memnn: the strongly supervised am+ng+nl memory networks approach, proposed in [22].
+this is the best reported approach in that paper. it uses a max operation (rather than softmax) at
+each layer which is trained directly with supporting facts (strong supervision). it employs id165
+modeling, nonlinear layers and an adaptive number of hops per query.
+
+    memnn-wsh: a weakly supervised heuristic version of memnn where the supporting sen-
+tence labels are not used in training. since we are unable to backpropagate through the max
+operations in each layer, we enforce that the    rst memory hop should share at least one word with
+the question, and that the second memory hop should share at least one word with the    rst hop and
+at least one word with the answer. all those memories that conform are called valid memories,
+and the goal during training is to rank them higher than invalid memories using the same ranking
+criteria as during strongly supervised training.
+
+    lstm: a standard lstm model, trained using question / answer pairs only (i.e. also weakly
+
+supervised). for more detail, see [22].
+
+2 memn2n source code is available at https://github.com/facebook/memnn.
+
+5
+
+4.4 results
+we report a variety of design choices: (i) bow vs position encoding (pe) sentence representation;
+(ii) training on all 20 tasks independently vs jointly training (joint training used an embedding
+dimension of d = 50, while independent training used d = 20); (iii) two phase training: linear start
+(ls) where softmaxes are removed initially vs training with softmaxes from the start; (iv) varying
+memory hops from 1 to 3.
+the results across all 20 tasks are given in table 1 for the 1k training set, along with the mean
+performance for 10k training set3. they show a number of interesting points:
+    the best memn2n models are reasonably close to the supervised models (e.g. 1k: 6.7% for
+memnn vs 12.6% for memn2n with position encoding + linear start + random noise, jointly
+trained and 10k: 3.2% for memnn vs 4.2% for memn2n with position encoding + linear start +
+random noise + non-linearity4, although the supervised models are still superior.
+    all variants of our proposed model comfortably beat the weakly supervised baseline methods.
+    the position encoding (pe) representation improves over bag-of-words (bow), as demonstrated
+by clear improvements on tasks 4, 5, 15 and 18, where word ordering is particularly important.
+    the linear start (ls) to training seems to help avoid local minima. see task 16 in table 1, where
+pe alone gets 53.6% error, while using ls reduces it to 1.6%.
+    jittering the time index with random empty memories (rn) as described in section 4.1 gives a
+small but consistent boost in performance, especially for the smaller 1k training set.
+    joint training on all tasks helps.
+    importantly, more computational hops give improved performance. we give examples of
+the hops performed (via the values of eq. (1)) over some illustrative examples in fig. 2 and in
+appendix b.
+
+task
+1: 1 supporting fact
+2: 2 supporting facts
+3: 3 supporting facts
+4: 2 argument relations
+5: 3 argument relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9: simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agent   s motivation
+mean error (%)
+failed tasks (err. > 5%)
+on 10k training data
+mean error (%)
+failed tasks (err. > 5%)
+
+strongly
+supervised
+memnn [22]
+
+0.0
+0.0
+0.0
+0.0
+2.0
+0.0
+15.0
+9.0
+0.0
+2.0
+0.0
+0.0
+0.0
+1.0
+0.0
+0.0
+35.0
+5.0
+64.0
+0.0
+6.7
+4
+
+3.2
+2
+
+baseline
+
+lstm memnn
+[22]
+50.0
+80.0
+80.0
+39.0
+30.0
+52.0
+51.0
+55.0
+36.0
+56.0
+38.0
+26.0
+6.0
+73.0
+79.0
+77.0
+49.0
+48.0
+92.0
+9.0
+51.3
+20
+
+wsh
+0.1
+42.8
+76.4
+40.3
+16.3
+51.0
+36.1
+37.8
+35.9
+68.7
+30.0
+10.1
+19.7
+18.3
+64.8
+50.5
+50.9
+51.3
+100.0
+3.6
+40.2
+18
+
+36.4
+16
+
+39.2
+17
+
+bow
+0.6
+17.6
+71.0
+32.0
+18.3
+8.7
+23.5
+11.4
+21.1
+22.8
+4.1
+0.3
+10.5
+1.3
+24.3
+52.0
+45.4
+48.1
+89.7
+0.1
+25.1
+15
+
+15.4
+
+9
+
+pe
+0.1
+21.6
+64.2
+3.8
+14.1
+7.9
+21.6
+12.6
+23.3
+17.4
+4.3
+0.3
+9.9
+1.8
+0.0
+52.1
+50.1
+13.6
+87.4
+0.0
+20.3
+13
+
+9.4
+6
+
+pe
+ls
+rn
+0.0
+8.3
+40.3
+2.8
+13.1
+7.6
+17.3
+10.0
+13.2
+15.1
+0.9
+0.2
+0.4
+1.7
+0.0
+1.3
+51.0
+11.1
+82.8
+0.0
+13.9
+11
+
+6.6
+4
+
+pe
+ls
+0.2
+12.8
+58.8
+11.6
+15.7
+8.7
+20.3
+12.7
+17.0
+18.6
+0.0
+0.1
+0.3
+2.0
+0.0
+1.6
+49.0
+10.1
+85.6
+0.0
+16.3
+12
+
+7.2
+4
+
+memn2n
+1 hop
+pe ls
+joint
+0.8
+62.0
+76.9
+22.8
+11.0
+7.2
+15.9
+13.2
+5.1
+10.6
+8.4
+0.4
+6.3
+36.9
+46.4
+47.4
+44.4
+9.6
+90.7
+0.0
+25.8
+17
+
+2 hops
+pe ls
+joint
+0.0
+15.6
+31.6
+2.2
+13.4
+2.3
+25.4
+11.7
+2.0
+5.0
+1.2
+0.0
+0.2
+8.1
+0.5
+51.3
+41.2
+10.3
+89.9
+0.1
+15.6
+11
+
+3 hops
+pe ls
+joint
+0.1
+14.0
+33.1
+5.7
+14.8
+3.3
+17.9
+10.1
+3.1
+6.6
+0.9
+0.3
+1.4
+8.2
+0.0
+3.5
+44.5
+9.2
+90.2
+0.0
+13.3
+11
+
+pe
+
+ls rn
+joint
+0.0
+11.4
+21.9
+13.4
+14.4
+2.8
+18.3
+9.3
+1.9
+6.5
+0.3
+0.1
+0.2
+6.9
+0.0
+2.7
+40.4
+9.4
+88.0
+0.0
+12.4
+11
+
+24.5
+16
+
+10.9
+
+7
+
+7.9
+6
+
+7.5
+6
+
+pe ls
+lw
+joint
+0.1
+18.8
+31.7
+17.5
+12.9
+2.0
+10.1
+6.1
+1.5
+2.6
+3.3
+0.0
+0.5
+2.0
+1.8
+51.0
+42.6
+9.2
+90.6
+0.2
+15.2
+10
+
+11.0
+
+6
+
+table 1: test error rates (%) on the 20 qa tasks for models using 1k training examples (mean
+test errors for 10k training examples are shown at the bottom). key: bow = bag-of-words
+representation; pe = position encoding representation; ls = linear start training; rn = random
+injection of time index noise; lw = id56-style layer-wise weight tying (if not stated, adjacent
+weight tying is used); joint = joint training on all tasks (as opposed to per-task training).
+
+5 id38 experiments
+the goal in id38 is to predict the next word in a text sequence given the previous
+words x. we now explain how our model can easily be applied to this task.
+
+3more detailed results for the 10k training set can be found in appendix a.
+4following [17] we found adding more non-linearity solves tasks 17 and 19, see appendix a.
+
+6
+
+figure 2: example predictions on the qa tasks of [22]. we show the labeled supporting facts
+(support) from the dataset which memn2n does not use during training, and the probabilities p of
+each hop used by the model during id136. memn2n successfully learns to focus on the correct
+supporting sentences.
+
+model
+id56 [15]
+lstm [15]
+scrn [15]
+memn2n
+
+# of
+hidden
+
+300
+100
+100
+150
+150
+150
+150
+150
+150
+150
+150
+150
+150
+150
+150
+150
+
+id32
+
+size
+
+# of memory valid.
+hops
+perp.
+133
+120
+120
+128
+129
+127
+127
+122
+120
+125
+121
+122
+122
+120
+121
+118
+
+-
+-
+-
+100
+100
+100
+100
+100
+100
+25
+50
+75
+100
+125
+150
+200
+
+-
+-
+-
+2
+3
+4
+5
+6
+7
+6
+6
+6
+6
+6
+6
+7
+
+test
+perp.
+129
+115
+115
+121
+122
+120
+118
+115
+114
+118
+114
+114
+115
+112
+114
+111
+
+# of
+hidden
+
+500
+500
+500
+500
+500
+500
+500
+500
+500
+500
+500
+500
+500
+500
+500
+-
+
+text8
+
+# of memory valid.
+hops
+perp.
+
+size
+
+-
+-
+-
+2
+3
+4
+5
+6
+7
+6
+6
+6
+6
+6
+6
+-
+
+-
+-
+-
+100
+100
+100
+100
+100
+100
+25
+50
+75
+100
+125
+150
+-
+
+-
+122
+-
+152
+142
+129
+123
+124
+118
+131
+132
+126
+124
+125
+123
+-
+
+test
+perp.
+184
+154
+161
+187
+178
+162
+154
+155
+147
+163
+166
+158
+155
+157
+154
+-
+
+table 2: the perplexity on the test sets of id32 and text8 corpora. note that increasing
+the number of memory hops improves performance.
+
+figure 3: average activation weight of memory positions during 6 memory hops. white color
+indicates where the model is attending during the kth hop. for clarity, each row is normalized to
+have maximum value of 1. a model is trained on (left) id32 and (right) text8 dataset.
+
+we now operate on word level, as opposed to the sentence level. thus the previous n words in the
+sequence (including the current) are embedded into memory separately. each memory cell holds
+only a single word, so there is no need for the bow or linear mapping representations used in the
+qa tasks. we employ the temporal embedding approach of section 4.1.
+since there is no longer any question, q in fig. 1 is    xed to a constant vector 0.1 (without
+embedding). the output softmax predicts which word in the vocabulary (of size v ) is next in the
+sequence. a cross-id178 loss is used to train model by backpropagating the error through multiple
+memory layers, in the same manner as the qa tasks. to aid training, we apply relu operations to
+half of the units in each layer. we use layer-wise (id56-like) weight sharing, i.e. the query weights
+of each layer are the same; the output weights of each layer are the same. as noted in section 2.2,
+this makes our architecture closely related to an id56 which is traditionally used for language
+
+7
+
+story (1: 1 supporting fact)supporthop 1hop 2hop 3story (2: 2 supporting facts)supporthop 1hop 2hop 3daniel went to the bathroom.0.000.000.03john dropped the milk.0.060.000.00mary travelled to the hallway.0.000.000.00john took the milk there.yes0.881.000.00john went to the bedroom.0.370.020.00sandra went back to the bathroom.0.000.000.00john travelled to the bathroom.yes0.600.980.96john moved to the hallway.yes0.000.001.00mary went to the office.0.010.000.00mary went back to the bedroom.0.000.000.00story (16: basic induction)supporthop 1hop 2hop 3story (18: size reasoning)supporthop 1hop 2hop 3brian is a frog.yes0.000.980.00the suitcase is bigger than the chest.yes0.000.880.00lily is gray.0.070.000.00the box is bigger than the chocolate.0.040.050.10brian is yellow.yes0.070.001.00the chest is bigger than the chocolate.yes0.170.070.90julius is green.0.060.000.00the chest fits inside the container.0.000.000.00greg is a frog.yes0.760.020.00the chest fits inside the box.0.000.000.00where is john?   answer: bathroom    prediction: bathroomwhere is the milk?   answer: hallway    prediction: hallwaywhat color is greg?  answer: yellow    prediction: yellowdoes the suitcase fit in the chocolate?   answer: no    prediction: nomodeling tasks; however here the    sequence    over which the network is recurrent is not in the text,
+but in the memory hops. furthermore, the weight tying restricts the number of parameters in the
+model, helping generalization for the deeper models which we    nd to be effective for this task. we
+use two different datasets:
+penn tree bank [13]: this consists of 929k/73k/82k train/validation/test words, distributed over a
+vocabulary of 10k words. the same preprocessing as [25] was used.
+text8 [15]: this is a a pre-processed version of the    rst 100m million characters, dumped from
+wikipedia. this is split into 93.3m/5.7m/1m character train/validation/test sets. all word occurring
+less than 5 times are replaced with the <unk> token, resulting in a vocabulary size of    44k.
+5.1 training details
+the training procedure we use is the same as the qa tasks, except for the following. for each
+mini-batch update, the (cid:96)2 norm of the whole gradient of all parameters is measured5 and if larger
+than l = 50, then it is scaled down to have norm l. this was crucial for good performance. we
+use the learning rate annealing schedule from [15], namely, if the validation cost has not decreased
+after one epoch, then the learning rate is scaled down by a factor 1.5. training terminates when the
+learning rate drops below 10   5, i.e. after 50 epochs or so. weights are initialized using n (0, 0.05)
+and batch size is set to 128. on the penn tree dataset, we repeat each training 10 times with different
+random initializations and pick the one with smallest validation cost. however, we have done only
+a single training run on text8 dataset due to limited time constraints.
+5.2 results
+table 2 compares our model to id56, lstm and structurally constrained recurrent nets (scrn)
+[15] baselines on the two benchmark datasets. note that the baseline architectures were tuned in
+[15] to give optimal perplexity6. our memn2n approach achieves lower perplexity on both datasets
+(111 vs 115 for id56/scrn on penn and 147 vs 154 for lstm on text8). note that memn2n
+has    1.5x more parameters than id56s with the same number of hidden units, while lstm has
+   4x more parameters. we also vary the number of hops and memory size of our memn2n,
+showing the contribution of both to performance; note in particular that increasing the number of
+hops helps. in fig. 3, we show how memn2n operates on memory with multiple hops. it shows
+the average weight of the activation of each memory position over the test set. we can see that
+some hops concentrate only on recent words, while other hops have more broad attention over all
+memory locations, which is consistent with the idea that succesful language models consist of a
+smoothed id165 model and a cache [15]. interestingly, it seems that those two types of hops tend
+to alternate. also note that unlike a traditional id56, the cache does not decay exponentially: it
+has roughly the same average activation across the entire memory. this may be the source of the
+observed improvement in id38.
+6 conclusions and future work
+in this work we showed that a neural network with an explicit memory and a recurrent attention
+mechanism for reading the memory can be successfully trained via id26 on diverse tasks
+from id53 to id38. compared to the memory network implementation
+of [23] there is no supervision of supporting facts and so our model can be used in a wider range
+of settings. our model approaches the same performance of that model, and is signi   cantly better
+than other baselines with the same level of supervision. on id38 tasks, it slightly
+outperforms tuned id56s and lstms of comparable complexity. on both tasks we can see that
+increasing the number of memory hops improves performance.
+however, there is still much to do. our model is still unable to exactly match the performance of
+the memory networks trained with strong supervision, and both fail on several of the 1k qa tasks.
+furthermore, smooth lookups may not scale well to the case where a larger memory is required. for
+these settings, we plan to explore multiscale notions of attention or hashing, as proposed in [23].
+acknowledgments
+the authors would like to thank armand joulin, tomas mikolov, antoine bordes and sumit chopra
+for useful comments and valuable discussions, and also the fair infrastructure team for their help
+and support.
+
+5in the qa tasks, the gradient of each weight matrix is measured separately.
+6they tuned the hyper-parameters on id32 and used them on text8 without additional tuning,
+
+except for the number of hidden units. see [15] for more detail.
+
+8
+
+2013.
+
+2014.
+
+1780, 1997.
+
+nips, 2015.
+
+references
+[1] c. g. atkeson and s. schaal. memory-based neural networks for robot learning. neurocom-
+
+puting, 9:243   269, 1995.
+
+[2] d. bahdanau, k. cho, and y. bengio. id4 by jointly learning to align
+
+and translate. in international conference on learning representations (iclr), 2015.
+
+[3] y. bengio, r. ducharme, p. vincent, and c. janvin. a neural probabilistic language model. j.
+
+mach. learn. res., 3:1137   1155, mar. 2003.
+
+[4] j. chung, c   . g  ulc  ehre, k. cho, and y. bengio. empirical evaluation of gated recurrent neural
+
+networks on sequence modeling. arxiv preprint: 1412.3555, 2014.
+
+[5] s. das, c. l. giles, and g.-z. sun. learning context-free grammars: capabilities and
+limitations of a recurrent neural network with an external stack memory. in in proceedings of
+the fourteenth annual conference of cognitive science society, 1992.
+
+[6] j. goodman. a bit of progress in id38. corr, cs.cl/0108005, 2001.
+[7] a. graves. generating sequences with recurrent neural networks. arxiv preprint: 1308.0850,
+
+[8] a. graves, g. wayne, and i. danihelka. id63s. arxiv preprint: 1410.5401,
+
+[9] k. gregor, i. danihelka, a. graves, and d. wierstra. draw: a recurrent neural network for
+
+image generation. corr, abs/1502.04623, 2015.
+
+[10] s. hochreiter and j. schmidhuber. long short-term memory. neural computation, 9(8):1735   
+
+[11] a. joulin and t. mikolov. inferring algorithmic patterns with stack-augmented recurrent nets.
+
+[12] j. koutn    k, k. greff, f. j. gomez, and j. schmidhuber. a clockwork id56. in icml, 2014.
+[13] m. p. marcus, m. a. marcinkiewicz, and b. santorini. building a large annotated corpus of
+
+english: the id32. comput. linguist., 19(2):313   330, june 1993.
+
+[14] t. mikolov. statistical language models based on neural networks. ph. d. thesis, brno
+
+university of technology, 2012.
+
+[15] t. mikolov, a. joulin, s. chopra, m. mathieu, and m. ranzato. learning longer memory in
+
+recurrent neural networks. arxiv preprint: 1412.7753, 2014.
+
+[16] m. c. mozer and s. das. a connectionist symbol manipulator that discovers the structure of
+
+context-free languages. nips, pages 863   863, 1993.
+
+[17] b. peng, z. lu, h. li, and k. wong. towards neural network-based reasoning. arxiv
+
+preprint: 1508.05508, 2015.
+
+[18] j. pollack. the induction of dynamical recognizers. machine learning, 7(2-3):227   252, 1991.
+[19] k. steinbuch and u. piske. learning matrices and their applications. ieee transactions on
+
+[20] m. sundermeyer, r. schl  uter, and h. ney. lstm neural networks for id38. in
+
+electronic computers, 12:846   862, 1963.
+
+interspeech, pages 194   197, 2012.
+
+[21] w. k. taylor. pattern recognition by means of automatic analogue apparatus. proceedings of
+
+the institution of electrical engineers, 106:198   209, 1959.
+
+[22] j. weston, a. bordes, s. chopra, and t. mikolov. towards ai-complete id53:
+
+a set of prerequisite toy tasks. arxiv preprint: 1502.05698, 2015.
+
+[23] j. weston, s. chopra, and a. bordes. memory networks.
+
+in international conference on
+
+learning representations (iclr), 2015.
+
+[24] k. xu, j. ba, r. kiros, k. cho, a. courville, r. salakhutdinov, r. zemel, and y. bengio.
+show, attend and tell: neural image id134 with visual attention. arxiv
+preprint: 1502.03044, 2015.
+
+[25] w. zaremba, i. sutskever, and o. vinyals. recurrent neural network id173. arxiv
+
+preprint arxiv:1409.2329, 2014.
+
+9
+
+appendix a results on 10k qa dataset
+
+task
+1: 1 supporting fact
+2: 2 supporting facts
+3: 3 supporting facts
+4: 2 argument relations
+5: 3 argument relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9: simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agent   s motivation
+mean error (%)
+failed tasks (err. > 5%)
+
+strongly
+supervised
+memnn
+
+baseline
+
+lstm
+
+0.0
+0.0
+0.0
+0.0
+0.3
+0.0
+3.3
+1.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+24.6
+2.1
+31.9
+0.0
+3.2
+2
+
+0.0
+81.9
+83.1
+0.2
+1.2
+51.8
+24.9
+34.1
+20.2
+30.1
+10.3
+23.4
+6.1
+81.0
+78.7
+51.9
+50.1
+6.8
+90.3
+2.1
+36.4
+16
+
+memnn
+
+wsh
+0.1
+39.6
+79.5
+36.6
+21.1
+49.9
+35.1
+42.7
+36.4
+76.0
+25.3
+0.0
+12.3
+8.7
+68.8
+50.9
+51.1
+45.8
+100.0
+4.1
+39.2
+17
+
+bow pe
+0.0
+0.0
+0.4
+0.6
+12.6
+17.8
+0.0
+31.8
+0.8
+14.2
+0.2
+0.1
+5.7
+10.7
+1.4
+2.4
+1.3
+1.8
+1.7
+1.9
+0.0
+0.0
+0.0
+0.0
+0.1
+0.0
+0.2
+0.0
+12.5
+0.0
+48.6
+50.9
+40.3
+47.4
+7.4
+41.3
+66.6
+75.4
+0.0
+0.0
+9.4
+15.4
+6
+
+9
+
+pe
+ls
+rn
+0.0
+0.3
+9.3
+0.0
+0.8
+0.0
+3.7
+0.8
+0.8
+2.4
+0.0
+0.0
+0.0
+0.0
+0.0
+0.4
+40.7
+6.7
+66.5
+0.0
+6.6
+4
+
+pe
+ls
+0.0
+0.5
+15.0
+0.0
+0.6
+0.1
+3.2
+2.2
+2.0
+3.3
+0.0
+0.0
+0.0
+0.0
+0.0
+0.1
+41.1
+8.6
+66.7
+0.0
+7.2
+4
+
+memn2n
+1 hop
+pe ls
+joint
+0.0
+62.0
+80.0
+21.4
+8.7
+6.1
+14.8
+8.9
+3.7
+10.3
+8.3
+0.0
+5.6
+30.9
+42.6
+47.3
+40.0
+9.2
+91.0
+0.0
+24.5
+16
+
+pe ls
+lw
+rn   
+0.0
+0.3
+2.1
+0.0
+0.8
+0.1
+2.0
+0.9
+0.3
+0.0
+0.1
+0.0
+0.0
+0.1
+0.0
+51.8
+18,6
+5.3
+2.3
+0.0
+4.2
+3
+
+2 hops
+pe ls
+joint
+0.0
+1.3
+15.8
+0.0
+7.2
+0.7
+10.5
+4.7
+0.4
+0.6
+0.0
+0.0
+0.0
+0.2
+0.0
+46.4
+39.7
+10.1
+80.8
+0.0
+10.9
+
+7
+
+3 hops
+pe ls
+joint
+0.0
+2.3
+14.0
+0.0
+7.5
+0.2
+6.1
+4.0
+0.0
+0.4
+0.0
+0.0
+0.0
+0.2
+0.0
+0.4
+41.7
+8.6
+73.3
+0.0
+7.9
+6
+
+pe
+
+ls rn
+joint
+0.0
+1.0
+6.8
+0.0
+6.1
+0.1
+6.6
+2.7
+0.0
+0.5
+0.0
+0.1
+0.0
+0.0
+0.2
+0.2
+41.8
+8.0
+75.7
+0.0
+7.5
+6
+
+pe ls
+lw
+joint
+0.0
+0.8
+18.3
+0.0
+0.8
+0.1
+8.4
+1.4
+0.2
+0.0
+0.4
+0.0
+0.0
+1.7
+0.0
+49.2
+40.0
+8.4
+89.5
+0.0
+11.0
+
+6
+
+table 3: test error rates (%) on the 20 babi qa tasks for models using 10k training examples.
+key: bow = bag-of-words representation; pe = position encoding representation; ls = linear start
+training; rn = random injection of time index noise; lw = id56-style layer-wise weight tying (if
+not stated, adjacent weight tying is used); joint = joint training on all tasks (as opposed to per-task
+training);     = this is a larger model with non-linearity (embedding dimension is d = 100 and relu
+applied to the internal state after each hop. this was inspired by [17] and crucial for getting better
+performance on tasks 17 and 19).
+
+10
+
+appendix b visualization of attention weights in qa problems
+
+figure 4: examples of attention weights during different memory hops for the babi tasks. the
+model is pe+ls+rn with 3 memory hops that is trained separately on each task with 10k training
+data. the support column shows which sentences are necessary for answering questions. although
+this information is not used, the model succesfully learns to focus on the correct support sentences
+on most of the tasks. the hop columns show where the model put more weight (indicated by values
+and blue color) during its three hops. the mistakes made by the model are highlighted by red color.
+
+11
+
+story (1: 1 supporting fact)supporthop 1hop 2hop 3story (2: 2 supporting facts)supporthop 1hop 2hop 3daniel went to the bathroom.0.000.000.03john dropped the milk.0.060.000.00mary travelled to the hallway.0.000.000.00daniel travelled to the bedroom.0.000.000.00john went to the bedroom.0.370.020.00john took the milk there.yes0.881.000.00john travelled to the bathroom.yes0.600.980.96sandra went back to the bathroom.0.000.000.00mary went to the office.0.010.000.00john moved to the hallway.yes0.000.001.00sandra journeyed to the kitchen.0.010.000.00mary went back to the bedroom.0.000.000.00story (3: 3 supporting facts)supporthop 1hop 2hop 3story (4: 2 argument relations)supporthop 1hop 2hop 3john moved to the hallway.0.000.000.00the garden is north of the kitchen.yes0.841.000.92john grabbed the football.yes0.001.000.00the kitchen is north of the bedroom.0.160.000.08john journeyed to the garden.0.350.000.00sandra moved to the hallway.0.000.000.00john went back to the hallway.yes0.000.001.00john journeyed to the garden.yes0.620.000.00story (5: 3 argument relations)supporthop 1hop 2hop 3story (6: yes/no questions)supporthop 1hop 2hop 3jeff travelled to the bedroom.0.000.000.00sandra travelled to the bedroom.0.060.000.01jeff journeyed to the garden.0.000.000.00john took the football there.0.000.000.00fred handed the apple to jeff.yes1.001.000.98sandra travelled to the office.0.000.450.16mary went to the garden.0.000.000.00sandra went to the bedroom.yes0.890.390.04fred went back to the bathroom.0.000.000.00daniel went back to the kitchen.0.000.160.00fred got the milk there.0.000.000.00john took the apple there.0.000.000.00mary journeyed to the kitchen.0.000.000.00mary got the milk there.0.000.000.00story (7: counting)supporthop 1hop 2hop 3story (8: lists/sets)supporthop 1hop 2hop 3daniel moved to the office.0.000.000.00john moved to the hallway.0.000.000.00mary moved to the office.0.000.000.00john journeyed to the garden.0.000.000.00sandra picked up the apple there.yes0.140.000.92daniel moved to the garden.0.000.010.00sandra dropped the apple.yes0.120.000.00daniel grabbed the apple there.yes0.030.000.98sandra took the apple there.yes0.731.000.08daniel got the milk there.yes0.970.020.00john went to the bedroom.0.000.000.00john went back to the hallway.0.000.000.00story (9: simple negation)supporthop 1hop 2hop 3story (10: indefinite knowledge)supporthop 1hop 2hop 3sandra is in the garden.0.600.990.00julie is either in the school or the bedroom.0.000.000.00sandra is not in the garden.yes0.370.011.00julie is either in the cinema or the park.0.000.000.00john went to the office.0.000.000.00bill is in the park.0.000.000.00john is in the bedroom.0.000.000.00bill is either in the office or the office.yes1.001.001.00daniel moved to the garden.0.000.000.00story (11: basic coherence)supporthop 1hop 2hop 3story (12: conjunction)supporthop 1hop 2hop 3mary journeyed to the hallway.0.000.010.00john and sandra went back to the kitchen.0.080.000.00after that she journeyed to the bathroom.0.000.000.00sandra and mary travelled to the garden.0.050.000.00mary journeyed to the garden.0.000.000.00mary and daniel travelled to the office.0.000.000.00then she went to the office.0.010.060.00mary and john went to the bathroom.0.010.000.00sandra journeyed to the garden.yes0.970.420.00daniel and sandra went to the kitchen.yes0.741.001.00then she went to the hallway.yes0.000.501.00daniel and mary journeyed to the office.0.060.000.00story (13: compound coherence)supporthop 1hop 2hop 3story (14: time reasoning)supporthop 1hop 2hop 3sandra and daniel travelled to the bathroom.0.130.000.00this morning julie went to the cinema.0.000.030.00afterwards they went back to the office.0.010.000.00julie journeyed to the kitchen yesterday.0.000.040.01daniel and mary travelled to the hallway.0.010.000.00fred travelled to the cinema yesterday.0.000.050.01following that they went back to the office.0.060.040.00bill travelled to the office yesterday.0.000.070.01mary and sandra moved to the hallway.yes0.590.020.00this morning mary travelled to the bedroom.yes0.970.270.01then they went to the kitchen.yes0.020.941.00yesterday mary journeyed to the cinema.yes0.010.330.96story (15: basic deduction)supporthop 1hop 2hop 3story (16: basic induction)supporthop 1hop 2hop 3cats are afraid of wolves.yes0.000.990.62lily is a swan.0.000.000.00sheep are afraid of wolves.0.000.000.31brian is a frog.yes0.000.980.00winona is a sheep.0.000.000.00lily is gray.0.070.000.00emily is a sheep.0.000.000.00brian is yellow.yes0.070.001.00gertrude is a cat.yes0.990.000.00julius is a swan.0.000.000.00wolves are afraid of mice.0.000.000.00bernhard is yellow.0.040.000.00mice are afraid of wolves.0.000.000.07julius is green.0.060.000.00jessica is a mouse.0.000.000.00greg is a frog.yes0.760.020.00story (17: positional reasoning)supporthop 1hop 2hop 3story (18: size reasoning)supporthop 1hop 2hop 3the red square is below the red sphere.yes0.370.950.58the suitcase is bigger than the chest.yes0.000.880.00the red sphere is below the triangle.yes0.630.050.43the box is bigger than the chocolate.0.040.050.10the chest is bigger than the chocolate.yes0.170.070.90the chest fits inside the container.0.000.000.00the chest fits inside the box.0.000.000.00story (19: path finding)supporthop 1hop 2hop 3story (20: agent's motivation)supporthop 1hop 2hop 3the hallway is north of the kitchen.1.001.001.00yann journeyed to the kitchen.0.000.000.00the garden is south of the kitchen.yes0.000.000.00yann grabbed the apple there.0.000.000.00the garden is east of the bedroom.yes0.000.000.00antoine is thirsty.yes0.170.000.98the bathroom is south of the bedroom.0.000.000.00jason picked up the milk there.0.010.000.00the office is east of the garden.0.000.000.00antoine travelled to the kitchen.0.771.000.00where is john?   answer: bathroom    prediction: bathroomwhere is the milk?   answer: hallway    prediction: hallwaywhere was the football before the garden? a: hallway  p: hallwaywhat is north of the kitchen?   answer: garden   prediction: gardenwho gave the apple to jeff?  answer: fred   prediction: fredis sandra in the bedroom?    answer: yes       prediction: yeshow many objects is sandra carrying? answer: one prediction: onewhat is daniel carrying? answer: apple,milk  prediction: apple,milkis sandra in the garden?  answer: no   prediction: nois bill in the office?   answer: maybe   prediction: maybewhere is sandra?  answer: hallway    prediction: hallwaywhere is sandra?  answer: kitchen    prediction: kitchenwhere is sandra?  answer: kitchen   prediction: kitchenwhere was mary before the bedroom?   answer: cinema    prediction: cinemawhat is gertrude afraid of?   answer: wolf    prediction: wolfwhat color is greg?  answer: yellow    prediction: yellowis the triangle above the red square?   answer: yes   prediction: nodoes the suitcase fit in the chocolate?   answer: no    prediction: nohow do you go from the kitchen to the bedroom? answer: s,w prediction: n,nwhy did antoine go to the kitchen?   answer: thirsty    prediction: thirsty

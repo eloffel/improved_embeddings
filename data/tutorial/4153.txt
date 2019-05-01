@@ -1,0 +1,385 @@
+   #[1]fastml
+
+                                   [2]fastml
+
+machine learning made easy
+
+     * [3]rss
+
+   ____________________
+
+     * [4]home
+     * [5]contents
+     * [6]popular
+     * [7]links
+     * [8]backgrounds
+     * [9]about
+
+introduction to id193
+
+   2017-07-03
+
+   id193 are a variation of the sequence-to-sequence model with
+   attention. instead of translating one sequence into another, they yield
+   a succession of pointers to the elements of the input series. the most
+   basic use of this is ordering the elements of a variable-length
+   sequence or set.
+
+   basic id195 is an lstm encoder coupled with an lstm decoder. it   s
+   most often heard of in the context of machine translation: given a
+   sentence in one language, the encoder turns it into a fixed-size
+   representation. decoder transforms this into a sentence again, possibly
+   of different length than the source. for example,    como estas?    - two
+   words - would be translated to    how are you?    - three words.
+
+   the model gives better results when [10]augmented with attention.
+   practically it means that the decoder can look back and forth over
+   input. specifically, it has access to encoder states from each step,
+   not just the last one. consider how it may help with spanish, in which
+   adjectives go before nouns:    neural network    becomes    red neuronal   .
+
+   in technical terms, attention (at least this particular kind,
+   content-based attention) boils down to weighted averages. in short, a
+   weighted average of encoder states becomes the decoder state. attention
+   is just the distribution of weights.
+
+   here   s more on [11]id195 and attention in keras.
+
+   in id193, attention is even simpler: instead of weighing
+   input elements, it points at them probabilistically. in effect, you get
+   a permutation of inputs. refer to the [12]paper for details and
+   equations.
+
+   note that one doesn   t need to use all the pointers. for example, given
+   a piece of text, a network could [13]mark an excerpt by pointing at two
+   elements: where it starts, and where it ends.
+
+experiments
+
+   where do we start? well, how about ordering numbers. in other words, a
+   deep argsort:
+in [3]: np.argsort([ 10, 30, 20 ])
+out[3]: array([0, 2, 1], dtype=int64)
+
+in [4]: np.argsort([ 40, 10, 30, 20 ])
+out[4]: array([1, 3, 2, 0], dtype=int64)
+
+   surprisingly, the authors don   t pursue the task in the paper. instead,
+   they use two fancy problems: [14]traveling salesman and [15]convex hull
+   (see [16]readmes), admittedly with very good results. why not sort
+   numbers, though?
+
+   let us dive right in
+
+   it turns out that numbers are hard. they address it in the follow-up
+   paper, [17]order matters: sequence to sequence for sets. the main point
+   is, make no mistake, that order matters. specifically, we   re talking
+   about the order of the input elements. the authors found out that it
+   influences results very much, which is not what we want. that   s because
+   in essence we   re dealing with sets, not sequences, as input. sets don   t
+   have inherent order, so how elements are permuted ideally shouldn   t
+   affect the outcome.
+
+   hence the paper introduces an improved architecture, where they replace
+   the lstm encoder by a feed-forward network connected to another lstm.
+   that lstm is said to run repeateadly in order to produce an embedding
+   which is permutation invariant to the inputs. the decoder is the same,
+   a pointer network.
+
+   back to sorting numbers. the longer the sequence, the harder it is to
+   sort. for five numbers, they report an accuracy ranging from 81% to
+   94%, depending on the model (accuracy here refers to the percentage of
+   correctly sorted sequences). when dealing with 15 numbers, the scores
+   range from 0% to 10%.
+
+   in our experiments, we achieved nearly 100% accuracy with 5 numbers.
+   note that this is    categorical accuracy    as reported by keras, meaning
+   a percentage of elements in their right places. for example, this
+   example would be 50% accurate - the first two elements are in place,
+   but the last two are swapped:
+4 3 2 1 -> 3 2 0 1
+
+   for sequences with eight elements, the categorical accuracy drops to
+   around 33%. we also tried a more challenging task, sorting a set of
+   arrays by their sums:
+[1 2] [3 4] [2 3] -> 0 2 1
+
+   the network handles this just as (un)easily as scalar numbers.
+
+   one unexpected thing we   ve noticed is that the network tends to
+   duplicate pointers, especially early in training. this is
+   disappointing: apparently it cannot remember what it predicted just a
+   moment ago.    oh yes, this element is going to be the second, and this
+   next element is going to be the second. the next element, let   s see   
+   it   s going to be the second, and the next      
+y_test: [2 0 1 4 3]
+p:      [2 2 2 2 2]
+
+   men gathered to visualize outputs of a pointer network in the early
+   stage of training. no smiles at this point.
+
+   later:
+y_test: [2 0 1 4 3]
+p:      [2 0 2 4 3]
+
+   training sometimes gets stuck at some level of accuracy. and a network
+   trained on small numbers doesn   t generalize to bigger ones, like these:
+981,66,673
+856,10,438
+884,808,241
+
+   to help the network with numbers, we tried adding an id (1,2,3   ) to
+   each element of the sequence. the hypothesis was that since the
+   attention is content-based, maybe it could use positions explicitly
+   encoded in content. this id is either a number
+   (train_with_positions.py) or a one-hot vector
+   (train_with_positions_categorical.py). it seems to help a little, but
+   doesn   t remove the fundamental difficulty.
+
+   code for the experiments is available at [18]github. compared with the
+   [19]original repo, we added a data generation script and changed the
+   training script to load data from generated files. we also changed
+   optimization algorithm to rmsprop, as it seems to converge reasonably
+   well while handling the learning rate automatically.
+
+data structure
+
+   data is in 3d arrays. the first dimension (rows) is examples, as usual.
+   the second, columns, would normally be features (attributes), but with
+   sequences the features go into the third dimension. the second
+   dimension consists of elements of a given sequence. below are three
+   example sequences, each with three elements (steps), each with two
+   features:
+array([[[ 8,  2],
+        [ 3,  3],
+        [10,  3]],
+
+       [[ 1,  4],
+        [19, 12],
+        [ 4, 10]],
+
+       [[19,  0],
+        [15, 12],
+        [ 8,  6]],
+
+   the goal would be to sort the elements by the sum of the features, so
+   the corresponding targets would be
+array([[1, 0, 2],
+       [0, 2, 1],
+       [2, 0, 1],
+
+   these targets are encoded categorically:
+array([[[ 0.,  1.,  0.],
+        [ 1.,  0.,  0.],
+        [ 0.,  0.,  1.]],
+
+       [[ 1.,  0.,  0.],
+        [ 0.,  0.,  1.],
+        [ 0.,  1.,  0.]],
+
+       [[ 0.,  0.,  1.],
+        [ 1.,  0.,  0.],
+        [ 0.,  1.,  0.]],
+
+   one hairy thing here is that we   ve been talking all along how recurrent
+   networks can handle variable length sequences, but in practice data is
+   3d arrays, as seen above. in other words, the sequence length is fixed.
+
+      fixed?    wonders the cat.
+
+   the way to deal with it is to fix the dimensionality at the maximum
+   possible sequence length and pad the unused places with zeros.
+
+      great   , you say,    but won   t it mess up the cost function?    it might,
+   therefore we better mask those zeros so they are omitted when
+   calculating loss. in keras the official way to do this seems to be the
+   [20]embdedding layer. the relevant parameter is mask_zero:
+
+     mask_zero: whether or not the input value 0 is a special    padding   
+     value that should be masked out. this is useful when using recurrent
+     layers which may take variable length input. if this is true then
+     all subsequent layers in the model need to support masking or an
+     exception will be raised. if mask_zero is set to true, as a
+     consequence, index 0 cannot be used in the vocabulary (input_dim
+     should equal size of vocabulary + 1).
+
+   for more on masking, see [21]variable sequence lengths in tensorflow,
+   or this [22]notebook-style alternative.
+
+on implementations
+
+   we have used a [23]keras implementation of id193. there are
+   a few others on github, mostly in tensorflow. depending on how you look
+   at it, that   s slightly crazy, as people build everything from the
+   ground up, while one just needs a slight modification of a normal
+   id195 with attention. on the other hand, the model hasn   t yet found
+   its way into mainstream and keras the way some others did, so it   s
+   still about blazing trails.
+
+   one problem with all of that is you don   t know if an implementation
+   you   re using is correct. isn   t the network converging because of the
+   task, the optimization method, or a bug? to be sure, you   d need to read
+   and understand the source code line by line, which is just one step
+   removed from writing it yourself. as [24]openai blog puts it:
+
+     results are tricky to reproduce: performance is very noisy,
+     algorithms have many moving parts which allow for subtle bugs, and
+     many papers don   t report all the required tricks.
+
+     be wary of non-breaking bugs: when we looked through a sample of ten
+     popular id23 algorithm reimplementations we
+     noticed that six had subtle bugs found by a community member and
+     confirmed by the author.
+
+   they   re talking about id23, but the quote is widely
+   applicable. luckily, the official order matters implementation will be
+   made available upon the publication of the paper. they promised. in the
+   meantime, we salute you.
+
+   a picture of where we are in the grand scheme of things
+
+appendix a: implementations of id193
+
+     * [25]https://github.com/keon/pointer-networks [26]slides
+     * [27]https://github.com/devsisters/pointer-network-tensorflow
+     * [28]https://github.com/vshallc/ptrnets
+     * [29]https://github.com/ikostrikov/tensorflow-pointer-networks
+     * [30]https://github.com/chanlaw/pointer-networks
+     * [31]https://github.com/devnag/tensorflow-pointer-networks |
+       [32]article
+
+   but wait, there   s more:
+     * [33]https://github.com/udibr/pointer-generator
+     * [34]https://github.com/jerrikeph/sentenceordering_ptr
+     * [35]https://github.com/pradyu1993/seq2set-keras
+
+appendix b: some implementations of id195 with attention
+
+     * [36]https://github.com/philipperemy/keras-attention-mechanism
+     * [37]https://github.com/tensorflow/models/tree/master/textsum
+     * [38]https://github.com/tensorflow/tensor2tensor
+     * [39]translation with a sequence to sequence network and attention
+       (pytorch tutorial)
+     * [40]https://github.com/maximumid178/id195-pytorch
+     * [41]https://github.com/rowanz/pytorch-id195
+     * [42]https://github.com/chainer/chainer/tree/id195-europal/example
+       s/id195
+     __________________________________________________________________
+
+   p.s. maybe, just maybe, we need to go deeper?
+
+   [43][ezoic.png] report this ad
+
+   posted by zygmunt z. 2017-07-03 [44]code, [45]neural-networks,
+   [46]software
+
+   [47]tweet
+
+   [48]   project rhubarb: predicting mortality in england using air
+   quality data [49]it's embarassing, really   
+
+                                    comments
+
+   please enable javascript to view the [50]comments powered by disqus.
+
+   [51][ezoic.png] report this ad
+
+                                  recent posts
+
+     * [52]one weird regularity of the stock market
+     * [53]classifying time series using feature extraction
+     * [54]google's principles on ai weapons, mass surveillence, and
+       signing out
+     * [55]how to use the python debugger
+     * [56]preparing continuous features for neural networks with
+       gaussrank
+     * [57]two faces of overfitting
+     * [58]goodbooks-10k: a new dataset for book recommendations
+
+                                    twitter
+
+   follow [59]@fastml for notifications about new posts.
+     * status updating...
+
+   [60]follow @fastml
+   also check out [61]@fastml_extra for things related to machine learning
+   and data science in general.
+
+                                     github
+
+   most articles come with some [62]code. we push it to github.
+   [63]https://github.com/zygmuntz [64][ezoic.png] report this ad
+
+   copyright    2019 - zygmunt z. - powered by [65]octopress
+
+   [p?c1=2&c2=20015427&cv=2.0&cj=1]
+
+   quantcast
+
+references
+
+   1. http://fastml.com/atom.xml
+   2. http://fastml.com/
+   3. http://fastml.com/atom.xml
+   4. http://fastml.com/
+   5. http://fastml.com/contents/
+   6. http://fastml.com/popular/
+   7. http://fastml.com/links/
+   8. http://fastml.com/backgrounds/
+   9. http://fastml.com/about/
+  10. http://distill.pub/2016/augmented-id56s/#attentional-interfaces
+  11. https://medium.com/datalogue/attention-in-keras-1892773a4f22
+  12. https://arxiv.org/abs/1506.03134
+  13. https://medium.com/@devnag/pointer-networks-in-tensorflow-with-sample-code-14645063f264
+  14. https://en.wikipedia.org/wiki/travelling_salesman_problem
+  15. https://en.wikipedia.org/wiki/convex_hull
+  16. https://github.com/meirefortunato/pointer_networks
+  17. https://arxiv.org/abs/1511.06391
+  18. https://github.com/zygmuntz/pointer-networks-experiments
+  19. https://github.com/keon/pointer-networks
+  20. https://keras.io/layers/embeddings/
+  21. http://danijar.com/variable-sequence-lengths-in-tensorflow/
+  22. https://r2rt.com/recurrent-neural-networks-in-tensorflow-iii-variable-length-sequences.html
+  23. https://github.com/keon/pointer-networks
+  24. https://blog.openai.com/openai-baselines-id25/
+  25. https://github.com/keon/pointer-networks
+  26. https://www.slideshare.net/keonkim/attention-mechanisms-with-tensorflow
+  27. https://github.com/devsisters/pointer-network-tensorflow
+  28. https://github.com/vshallc/ptrnets
+  29. https://github.com/ikostrikov/tensorflow-pointer-networks
+  30. https://github.com/chanlaw/pointer-networks
+  31. https://github.com/devnag/tensorflow-pointer-networks
+  32. https://medium.com/@devnag/pointer-networks-in-tensorflow-with-sample-code-14645063f264
+  33. https://github.com/udibr/pointer-generator
+  34. https://github.com/jerrikeph/sentenceordering_ptr
+  35. https://github.com/pradyu1993/seq2set-keras
+  36. https://github.com/philipperemy/keras-attention-mechanism
+  37. https://github.com/tensorflow/models/tree/master/textsum
+  38. https://github.com/tensorflow/tensor2tensor
+  39. http://pytorch.org/tutorials/intermediate/id195_translation_tutorial.html
+  40. https://github.com/maximumid178/id195-pytorch
+  41. https://github.com/rowanz/pytorch-id195
+  42. https://github.com/chainer/chainer/tree/id195-europal/examples/id195
+  43. https://www.ezoic.com/what-is-ezoic/
+  44. http://fastml.com/blog/categories/code/
+  45. http://fastml.com/blog/categories/neural-networks/
+  46. http://fastml.com/blog/categories/software/
+  47. http://twitter.com/share
+  48. http://fastml.com/project-rhubarb-predicting-mortality-in-england-using-air-quality-data/
+  49. http://fastml.com/its-embarassing-really/
+  50. http://disqus.com/?ref_noscript
+  51. https://www.ezoic.com/what-is-ezoic/
+  52. http://fastml.com/one-weird-regularity-of-the-stock-market-intraday-vs-overnight-returns/
+  53. http://fastml.com/classifying-time-series-using-feature-extraction/
+  54. http://fastml.com/googles-principles-on-ai-weapons-mass-surveillence-and-signing-out/
+  55. http://fastml.com/how-to-use-the-python-debugger/
+  56. http://fastml.com/preparing-continuous-features-for-neural-networks-with-rankgauss/
+  57. http://fastml.com/two-faces-of-overfitting/
+  58. http://fastml.com/goodbooks-10k-a-new-dataset-for-book-recommendations/
+  59. http://twitter.com/fastml
+  60. http://twitter.com/fastml
+  61. https://twitter.com/fastml_extra
+  62. http://fastml.com/blog/categories/code/
+  63. https://github.com/zygmuntz
+  64. https://www.ezoic.com/what-is-ezoic/
+  65. http://octopress.org/

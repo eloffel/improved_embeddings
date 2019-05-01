@@ -1,0 +1,672 @@
+must know tips/tricks in deep neural networks (by [1]xiu-shen wei)
+
+   tricks
+
+   deep neural networks, especially convolutional neural networks (id98),
+   allows computational models that are composed of multiple processing
+   layers to learn representations of data with multiple levels of
+   abstraction. these methods have dramatically improved the
+   state-of-the-arts in visual object recognition, id164, text
+   recognition and many other domains such as drug discovery and genomics.
+
+   in addition, many solid papers have been published in this topic, and
+   some high quality open source id98 software packages have been made
+   available. there are also well-written id98 tutorials or id98 software
+   manuals. however, it might lack a recent and comprehensive summary
+   about the details of how to implement an excellent deep convolutional
+   neural networks from scratch. thus, we collected and concluded many
+   implementation details for did98s. here we will introduce these
+   extensive implementation details, i.e., tricks or tips, for building
+   and training your own deep networks.
+
+                                                                                                [2]            
+
+introduction
+
+   we assume you already know the basic knowledge of deep learning, and
+   here we will present the implementation details (tricks or tips) in
+   deep neural networks, especially id98 for image-related tasks, mainly in
+   eight aspects: 1) data augmentation; 2) pre-processing on images; 3)
+   initializations of networks; 4) some tips during training; 5)
+   selections of id180; 6) diverse id173s; 7) some
+   insights found from figures and finally 8) methods of ensemble multiple
+   deep networks.
+
+   additionally, the corresponding slides are available at [3][slide]. if
+   there are any problems/mistakes in these materials and slides, or there
+   are something important/interesting you consider that should be added,
+   just feel free to contact [4]me.
+
+sec. 1: data augmentation
+
+   since deep networks need to be trained on a huge number of training
+   images to achieve satisfactory performance, if the original image data
+   set contains limited training images, it is better to do data
+   augmentation to boost the performance. also, data augmentation becomes
+   the thing must to do when training a deep network.
+     * there are many ways to do data augmentation, such as the popular
+       horizontally flipping, random crops and color jittering. moreover,
+       you could try combinations of multiple different processing, e.g.,
+       doing the rotation and random scaling at the same time. in
+       addition, you can try to raise saturation and value (s and v
+       components of the hsv color space) of all pixels to a power between
+       0.25 and 4 (same for all pixels within a patch), multiply these
+       values by a factor between 0.7 and 1.4, and add to them a value
+       between -0.1 and 0.1. also, you could add a value between [-0.1,
+       0.1] to the hue (h component of hsv) of all pixels in the
+       image/patch.
+
+     * krizhevsky et al. [5][1] proposed fancy pca when training the
+       famous alex-net in 2012. fancy pca alters the intensities of the
+       rgb channels in training images. in practice, you can firstly
+       perform pca on the set of rgb pixel values throughout your training
+       images. and then, for each training image, just add the following
+       quantity to each rgb image pixel (i.e.,
+       i_{xy}=[i_{xy}^r,i_{xy}^g,i_{xy}^b]^t ):
+       [bf{p}_1,bf{p}_2,bf{p}_3][alpha_1 lambda_1,alpha_2 lambda_2,alpha_3
+       lambda_3]^t where, bf{p}_i and lambda_i are the i -th eigenvector
+       and eigenvalue of the 3times 3 covariance matrix of rgb pixel
+       values, respectively, and alpha_i is a random variable drawn from a
+       gaussian with mean zero and standard deviation 0.1. please note
+       that, each alpha_i is drawn only once for all the pixels of a
+       particular training image until that image is used for training
+       again. that is to say, when the model meets the same training image
+       again, it will randomly produce another alpha_i for data
+       augmentation. in [6][1], they claimed that    fancy pca could
+       approximately capture an important property of natural images,
+       namely, that object identity is invariant to changes in the
+       intensity and color of the illumination   . to the classification
+       performance, this scheme reduced the top-1 error rate by over 1% in
+       the competition of id163 2012.
+
+sec. 2: pre-processing
+
+   now we have obtained a large number of training samples (images/crops),
+   but please do not hurry! actually, it is necessary to do pre-processing
+   on these images/crops. in this section, we will introduce several
+   approaches for pre-processing.
+
+   the first and simple pre-processing approach is zero-center the data,
+   and then normalize them, which is presented as two lines python codes
+   as follows:
+>>> x -= np.mean(x, axis = 0) # zero-center
+>>> x /= np.std(x, axis = 0) # normalize
+
+   where, x is the input data (numins  numdim). another form of this
+   pre-processing normalizes each dimension so that the min and max along
+   the dimension is -1 and 1 respectively. it only makes sense to apply
+   this pre-processing if you have a reason to believe that different
+   input features have different scales (or units), but they should be of
+   approximately equal importance to the learning algorithm. in case of
+   images, the relative scales of pixels are already approximately equal
+   (and in range from 0 to 255), so it is not strictly necessary to
+   perform this additional pre-processing step.
+
+   another pre-processing approach similar to the first one is pca
+   whitening. in this process, the data is first centered as described
+   above. then, you can compute the covariance matrix that tells us about
+   the correlation structure in the data:
+>>> x -= np.mean(x, axis = 0) # zero-center
+>>> cov = np.dot(x.t, x) / x.shape[0] # compute the covariance matrix
+
+   after that, you decorrelate the data by projecting the original (but
+   zero-centered) data into the eigenbasis:
+>>> u,s,v = np.linalg.svd(cov) # compute the svd factorization of the data covar
+iance matrix
+>>> xrot = np.dot(x, u) # decorrelate the data
+
+   the last transformation is whitening, which takes the data in the
+   eigenbasis and divides every dimension by the eigenvalue to normalize
+   the scale:
+>>> xwhite = xrot / np.sqrt(s + 1e-5) # divide by the eigenvalues (which are squ
+are roots of the singular values)
+
+   note that here it adds 1e-5 (or a small constant) to prevent division
+   by zero. one weakness of this transformation is that it can greatly
+   exaggerate the noise in the data, since it stretches all dimensions
+   (including the irrelevant dimensions of tiny variance that are mostly
+   noise) to be of equal size in the input. this can in practice be
+   mitigated by stronger smoothing (i.e., increasing 1e-5 to be a larger
+   number).
+
+   please note that, we describe these pre-processing here just for
+   completeness. in practice, these transformations are not used with
+   convolutional neural networks. however, it is also very important to
+   zero-center the data, and it is common to see id172 of every
+   pixel as well.
+
+sec. 3: initializations
+
+   now the data is ready. however, before you are beginning to train the
+   network, you have to initialize its parameters.
+
+all zero initialization
+
+   in the ideal situation, with proper data id172 it is reasonable
+   to assume that approximately half of the weights will be positive and
+   half of them will be negative. a reasonable-sounding idea then might be
+   to set all the initial weights to zero, which you expect to be the
+      best guess    in expectation. but, this turns out to be a mistake,
+   because if every neuron in the network computes the same output, then
+   they will also all compute the same gradients during back-propagation
+   and undergo the exact same parameter updates. in other words, there is
+   no source of asymmetry between neurons if their weights are initialized
+   to be the same.
+
+initialization with small random numbers
+
+   thus, you still want the weights to be very close to zero, but not
+   identically zero. in this way, you can random these neurons to small
+   numbers which are very close to zero, and it is treated as symmetry
+   breaking. the idea is that the neurons are all random and unique in the
+   beginning, so they will compute distinct updates and integrate
+   themselves as diverse parts of the full network. the implementation for
+   weights might simply look like weightssim 0.001times n(0,1) , where
+   n(0,1) is a zero mean, unit standard deviation gaussian. it is also
+   possible to use small numbers drawn from a uniform distribution, but
+   this seems to have relatively little impact on the final performance in
+   practice.
+
+calibrating the variances
+
+   one problem with the above suggestion is that the distribution of the
+   outputs from a randomly initialized neuron has a variance that grows
+   with the number of inputs. it turns out that you can normalize the
+   variance of each neuron's output to 1 by scaling its weight vector by
+   the square root of its fan-in (i.e., its number of inputs), which is as
+   follows:
+>>> w = np.random.randn(n) / sqrt(n) # calibrating the variances with 1/sqrt(n)
+
+   where    randn    is the aforementioned gaussian and    n    is the number of
+   its inputs. this ensures that all neurons in the network initially have
+   approximately the same output distribution and empirically improves the
+   rate of convergence. the detailed derivations can be found from page.
+   18 to 23 of the slides. please note that, in the derivations, it does
+   not consider the influence of relu neurons.
+
+current recommendation
+
+   as aforementioned, the previous initialization by calibrating the
+   variances of neurons is without considering relus. a more recent paper
+   on this topic by he et al. [7][4] derives an initialization
+   specifically for relus, reaching the conclusion that the variance of
+   neurons in the network should be 2.0/n as:
+>>> w = np.random.randn(n) * sqrt(2.0/n) # current recommendation
+
+   which is the current recommendation for use in practice, as discussed
+   in [8][4].
+
+sec. 4: during training
+
+   now, everything is ready. let   s start to train deep networks!
+     * filters and pooling size. during training, the size of input images
+       prefers to be power-of-2, such as 32 (e.g., cifar-10), 64, 224
+       (e.g., common used id163), 384 or 512, etc. moreover, it is
+       important to employ a small filter (e.g., 3times 3 ) and small
+       strides (e.g., 1) with zeros-padding, which not only reduces the
+       number of parameters, but improves the accuracy rates of the whole
+       deep network. meanwhile, a special case mentioned above, i.e.,
+       3times 3 filters with stride 1, could preserve the spatial size of
+       images/feature maps. for the pooling layers, the common used
+       pooling size is of 2times 2 .
+
+     * learning rate. in addition, as described in a blog by ilya
+       sutskever [9][2], he recommended to divide the gradients by mini
+       batch size. thus, you should not always change the learning rates
+       (lr), if you change the mini batch size. for obtaining an
+       appropriate lr, utilizing the validation set is an effective way.
+       usually, a typical value of lr in the beginning of your training is
+       0.1. in practice, if you see that you stopped making progress on
+       the validation set, divide the lr by 2 (or by 5), and keep going,
+       which might give you a surprise.
+
+     * fine-tune on pre-trained models. nowadays, many state-of-the-arts
+       deep networks are released by famous research groups, i.e.,
+       [10]caffe model zoo and [11]vgg group. thanks to the wonderful
+       generalization abilities of pre-trained deep models, you could
+       employ these pre-trained models for your own applications directly.
+       for further improving the classification performance on your data
+       set, a very simple yet effective approach is to fine-tune the
+       pre-trained models on your own data. as shown in following table,
+       the two most important factors are the size of the new data set
+       (small or big), and its similarity to the original data set.
+       different strategies of fine-tuning can be utilized in different
+       situations. for instance, a good case is that your new data set is
+       very similar to the data used for training pre-trained models. in
+       that case, if you have very little data, you can just train a
+       linear classifier on the features extracted from the top layers of
+       pre-trained models. if your have quite a lot of data at hand,
+       please fine-tune a few top layers of pre-trained models with a
+       small learning rate. however, if your own data set is quite
+       different from the data used in pre-trained models but with enough
+       training images, a large number of layers should be fine-tuned on
+       your data also with a small learning rate for improving
+       performance. however, if your data set not only contains little
+       data, but is very different from the data used in pre-trained
+       models, you will be in trouble. since the data is limited, it seems
+       better to only train a linear classifier. since the data set is
+       very different, it might not be best to train the classifier from
+       the top of the network, which contains more dataset-specific
+       features. instead, it might work better to train the id166 classifier
+       on activations/features from somewhere earlier in the network.
+
+   table
+
+   fine-tune your data on pre-trained models. different strategies of
+   fine-tuning are utilized in different situations. for data sets,
+   caltech-101 is similar to id163, where both two are object-centric
+   image data sets; while place database is different from id163, where
+   one is scene-centric and the other is object-centric.
+
+sec. 5: id180
+
+   one of the crucial factors in deep networks is activation function,
+   which brings the non-linearity into networks. here we will introduce
+   the details and characters of some popular id180 and
+   give advices later in this section.
+   neuron
+
+   figures courtesy of [12]stanford cs231n.
+
+sigmoid
+
+   sigmod
+
+   the sigmoid non-linearity has the mathematical form
+   sigma(x)=1/(1+e^{-x}) . it takes a real-valued number and    squashes    it
+   into range between 0 and 1. in particular, large negative numbers
+   become 0 and large positive numbers become 1. the sigmoid function has
+   seen frequent use historically since it has a nice interpretation as
+   the firing rate of a neuron: from not firing at all (0) to
+   fully-saturated firing at an assumed maximum frequency (1).
+
+   in practice, the sigmoid non-linearity has recently fallen out of favor
+   and it is rarely ever used. it has two major drawbacks:
+    1. sigmoids saturate and kill gradients. a very undesirable property
+       of the sigmoid neuron is that when the neuron's activation
+       saturates at either tail of 0 or 1, the gradient at these regions
+       is almost zero. recall that during back-propagation, this (local)
+       gradient will be multiplied to the gradient of this gate's output
+       for the whole objective. therefore, if the local gradient is very
+       small, it will effectively    kill    the gradient and almost no signal
+       will flow through the neuron to its weights and recursively to its
+       data. additionally, one must pay extra caution when initializing
+       the weights of sigmoid neurons to prevent saturation. for example,
+       if the initial weights are too large then most neurons would become
+       saturated and the network will barely learn.
+    2. sigmoid outputs are not zero-centered. this is undesirable since
+       neurons in later layers of processing in a neural network (more on
+       this soon) would be receiving data that is not zero-centered. this
+       has implications on the dynamics during id119, because
+       if the data coming into a neuron is always positive (e.g., x>0
+       element wise in f=w^tx+b ), then the gradient on the weights w will
+       during back-propagation become either all be positive, or all
+       negative (depending on the gradient of the whole expression f ).
+       this could introduce undesirable zig-zagging dynamics in the
+       gradient updates for the weights. however, notice that once these
+       gradients are added up across a batch of data the final update for
+       the weights can have variable signs, somewhat mitigating this
+       issue. therefore, this is an inconvenience but it has less severe
+       consequences compared to the saturated activation problem above.
+
+tanh(x)
+
+   tanh
+
+   the tanh non-linearity squashes a real-valued number to the range [-1,
+   1]. like the sigmoid neuron, its activations saturate, but unlike the
+   sigmoid neuron its output is zero-centered. therefore, in practice the
+   tanh non-linearity is always preferred to the sigmoid nonlinearity.
+
+rectified linear unit
+
+   relu
+
+   the rectified linear unit (relu) has become very popular in the last
+   few years. it computes the function f(x)=max(0,x) , which is simply
+   thresholded at zero.
+
+   there are several pros and cons to using the relus:
+    1. (pros) compared to sigmoid/tanh neurons that involve expensive
+       operations (exponentials, etc.), the relu can be implemented by
+       simply thresholding a matrix of activations at zero. meanwhile,
+       relus does not suffer from saturating.
+    2. (pros) it was found to greatly accelerate (e.g., a factor of 6 in
+       [13][1]) the convergence of stochastic id119 compared to
+       the sigmoid/tanh functions. it is argued that this is due to its
+       linear, non-saturating form.
+    3. (cons) unfortunately, relu units can be fragile during training and
+       can    die   . for example, a large gradient flowing through a relu
+       neuron could cause the weights to update in such a way that the
+       neuron will never activate on any datapoint again. if this happens,
+       then the gradient flowing through the unit will forever be zero
+       from that point on. that is, the relu units can irreversibly die
+       during training since they can get knocked off the data manifold.
+       for example, you may find that as much as 40% of your network can
+       be    dead    (i.e., neurons that never activate across the entire
+       training dataset) if the learning rate is set too high. with a
+       proper setting of the learning rate this is less frequently an
+       issue.
+
+leaky relu
+
+   lrelu
+
+   leaky relus are one attempt to fix the    dying relu    problem. instead of
+   the function being zero when x<0 , a leaky relu will instead have a
+   small negative slope (of 0.01, or so). that is, the function computes
+   f(x)=alpha x if x<0 and f(x)=x if xgeq 0 , where alpha is a small
+   constant. some people report success with this form of activation
+   function, but the results are not always consistent.
+
+parametric relu
+
+   nowadays, a broader class of id180, namely the rectified
+   unit family, were proposed. in the following, we will talk about the
+   variants of relu.
+   relufamily
+
+   relu, leaky relu, prelu and rrelu. in these figures, for prelu, alpha_i
+   is learned and for leaky relu alpha_i is fixed. for rrelu, alpha_{ji}
+   is a random variable keeps sampling in a given range, and remains fixed
+   in testing.
+
+   the first variant is called parametric rectified linear unit (prelu)
+   [14][4]. in prelu, the slopes of negative part are learned from data
+   rather than pre-defined. he et al. [15][4] claimed that prelu is the
+   key factor of surpassing human-level performance on [16]id163
+   classification task. the back-propagation and updating process of prelu
+   is very straightforward and similar to traditional relu, which is shown
+   in page. 43 of the slides.
+
+randomized relu
+
+   the second variant is called randomized rectified linear unit (rrelu).
+   in rrelu, the slopes of negative parts are randomized in a given range
+   in the training, and then fixed in the testing. as mentioned in
+   [17][5], in a recent kaggle [18]national data science bowl (ndsb)
+   competition, it is reported that rrelu could reduce overfitting due to
+   its randomized nature. moreover, suggested by the ndsb competition
+   winner, the random alpha_i in training is sampled from 1/u(3,8) and in
+   test time it is fixed as its expectation, i.e., 2/(l+u)=2/11 .
+
+   in [19][5], the authors evaluated classification performance of two
+   state-of-the-art id98 architectures with different id180
+   on the cifar-10, cifar-100 and ndsb data sets, which are shown in the
+   following tables. please note that, for these two networks, activation
+   function is followed by each convolutional layer. and the a in these
+   tables actually indicates 1/alpha , where alpha is the aforementioned
+   slopes.
+   relures
+
+   from these tables, we can find the performance of relu is not the best
+   for all the three data sets. for leaky relu, a larger slope alpha will
+   achieve better accuracy rates. prelu is easy to overfit on small data
+   sets (its training error is the smallest, while testing error is not
+   satisfactory), but still outperforms relu. in addition, rrelu is
+   significantly better than other id180 on ndsb, which
+   shows rrelu can overcome overfitting, because this data set has less
+   training data than that of cifar-10/cifar-100. in conclusion, three
+   types of relu variants all consistently outperform the original relu in
+   these three data sets. and prelu and rrelu seem better choices.
+   moreover, he et al. also reported similar conclusions in [20][4].
+
+sec. 6: id173s
+
+   there are several ways of controlling the capacity of neural networks
+   to prevent overfitting:
+     * l2 id173 is perhaps the most common form of
+       id173. it can be implemented by penalizing the squared
+       magnitude of all parameters directly in the objective. that is, for
+       every weight w in the network, we add the term frac{1}{2}lambda w^2
+       to the objective, where lambda is the id173 strength. it
+       is common to see the factor of frac{1}{2} in front because then the
+       gradient of this term with respect to the parameter w is simply
+       lambda w instead of 2lambda w . the l2 id173 has the
+       intuitive interpretation of heavily penalizing peaky weight vectors
+       and preferring diffuse weight vectors.
+     * l1 id173 is another relatively common form of
+       id173, where for each weight w we add the term lambda |w|
+       to the objective. it is possible to combine the l1 id173
+       with the l2 id173: lambda_1 |w|+lambda_2 w^2 (this is
+       called [21]elastic net id173). the l1 id173 has
+       the intriguing property that it leads the weight vectors to become
+       sparse during optimization (i.e. very close to exactly zero). in
+       other words, neurons with l1 id173 end up using only a
+       sparse subset of their most important inputs and become nearly
+       invariant to the    noisy    inputs. in comparison, final weight
+       vectors from l2 id173 are usually diffuse, small numbers.
+       in practice, if you are not concerned with explicit feature
+       selection, l2 id173 can be expected to give superior
+       performance over l1.
+     * max norm constraints. another form of id173 is to enforce
+       an absolute upper bound on the magnitude of the weight vector for
+       every neuron and use projected id119 to enforce the
+       constraint. in practice, this corresponds to performing the
+       parameter update as normal, and then enforcing the constraint by
+       clamping the weight vector vec{w} of every neuron to satisfy
+       parallel vec{w} parallel_2 <c . typical values of c are on orders
+       of 3 or 4. some people report improvements when using this form of
+       id173. one of its appealing properties is that network
+       cannot    explode    even when the learning rates are set too high
+       because the updates are always bounded.
+     * dropout is an extremely effective, simple and recently introduced
+       id173 technique by srivastava et al. in [22][6] that
+       complements the other methods (l1, l2, maxnorm). during training,
+       dropout can be interpreted as sampling a neural network within the
+       full neural network, and only updating the parameters of the
+       sampled network based on the input data. (however, the exponential
+       number of possible sampled networks are not independent because
+       they share the parameters.) during testing there is no dropout
+       applied, with the interpretation of evaluating an averaged
+       prediction across the exponentially-sized ensemble of all
+       sub-networks (more about ensembles in the next section). in
+       practice, the value of dropout ratio p=0.5 is a reasonable default,
+       but this can be tuned on validation data.
+
+   dropout
+
+   the most popular used id173 technique dropout [23][6]. while
+   training, dropout is implemented by only keeping a neuron active with
+   some id203 p (a hyper-parameter), or setting it to zero
+   otherwise. in addition, google applied for a [24]us patent for dropout
+   in 2014.
+
+sec. 7: insights from figures
+
+   finally, from the tips above, you can get the satisfactory settings
+   (e.g., data processing, architectures choices and details, etc.) for
+   your own deep networks. during training time, you can draw some figures
+   to indicate your networks    training effectiveness.
+     * as we have known, the learning rate is very sensitive. from fig. 1
+       in the following, a very high learning rate will cause a quite
+       strange loss curve. a low learning rate will make your training
+       loss decrease very slowly even after a large number of epochs. in
+       contrast, a high learning rate will make training loss decrease
+       fast at the beginning, but it will also drop into a local minimum.
+       thus, your networks might not achieve a satisfactory results in
+       that case. for a good learning rate, as the red line shown in fig.
+       1, its loss curve performs smoothly and finally it achieves the
+       best performance.
+     * now let   s zoom in the loss curve. the epochs present the number of
+       times for training once on the training data, so there are multiple
+       mini batches in each epoch. if we draw the classification loss
+       every training batch, the curve performs like fig. 2. similar to
+       fig. 1, if the trend of the loss curve looks too linear, that
+       indicates your learning rate is low; if it does not decrease much,
+       it tells you that the learning rate might be too high. moreover,
+       the    width    of the curve is related to the batch size. if the
+          width    looks too wide, that is to say the variance between every
+       batch is too large, which points out you should increase the batch
+       size.
+     * another tip comes from the accuracy curve. as shown in fig. 3, the
+       red line is the training accuracy, and the green line is the
+       validation one. when the validation accuracy converges, the gap
+       between the red line and the green one will show the effectiveness
+       of your deep networks. if the gap is big, it indicates your network
+       could get good accuracy on the training data, while it only achieve
+       a low accuracy on the validation set. it is obvious that your deep
+       model overfits on the training set. thus, you should increase the
+       id173 strength of deep networks. however, no gap meanwhile
+       at a low accuracy level is not a good thing, which shows your deep
+       model has low learnability. in that case, it is better to increase
+       the model capacity for better results.
+
+   trainfigs
+
+sec. 8: ensemble
+
+   in machine learning, ensemble methods [25][8] that train multiple
+   learners and then combine them for use are a kind of state-of-the-art
+   learning approach. it is well known that an ensemble is usually
+   significantly more accurate than a single learner, and ensemble methods
+   have already achieved great success in many real-world tasks. in
+   practical applications, especially challenges or competitions, almost
+   all the first-place and second-place winners used ensemble methods.
+
+   here we introduce several skills for ensemble in the deep learning
+   scenario.
+     * same model, different initialization. use cross-validation to
+       determine the best hyperparameters, then train multiple models with
+       the best set of hyperparameters but with different random
+       initialization. the danger with this approach is that the variety
+       is only due to initialization.
+     * top models discovered during cross-validation. use cross-validation
+       to determine the best hyperparameters, then pick the top few (e.g.,
+       10) models to form the ensemble. this improves the variety of the
+       ensemble but has the danger of including suboptimal models. in
+       practice, this can be easier to perform since it does not require
+       additional retraining of models after cross-validation. actually,
+       you could directly select several state-of-the-art deep models from
+       [26]caffe model zoo to perform ensemble.
+     * different checkpoints of a single model. if training is very
+       expensive, some people have had limited success in taking different
+       checkpoints of a single network over time (for example after every
+       epoch) and using those to form an ensemble. clearly, this suffers
+       from some lack of variety, but can still work reasonably well in
+       practice. the advantage of this approach is that is very cheap.
+     * some practical examples. if your vision tasks are related to
+       high-level image semantic, e.g., event recognition from still
+       images, a better ensemble method is to employ multiple deep models
+       trained on different data sources to extract different and
+       complementary deep representations. for example in the [27]cultural
+       event recognition challenge in associated with [28]iccv   15, we
+       utilized five different deep models trained on images of
+       [29]id163, [30]place database and the cultural images supplied
+       by the [31]competition organizers. after that, we extracted five
+       complementary deep features and treat them as multi-view data.
+       combining    early fusion    and    late fusion    strategies described in
+       [32][7], we achieved one of the best performance and ranked the 2nd
+       place in that challenge. similar to our work, [33][9] presented the
+       stacked nn framework to fuse more deep networks at the same time.
+
+miscellaneous
+
+   in real world applications, the data is usually class-imbalanced: some
+   classes have a large number of images/training instances, while some
+   have very limited number of images. as discussed in a recent technique
+   report [34][10], when deep id98s are trained on these imbalanced
+   training sets, the results show that imbalanced training data can
+   potentially have a severely negative impact on overall performance in
+   deep networks. for this issue, the simplest method is to balance the
+   training data by directly up-sampling and down-sampling the imbalanced
+   data, which is shown in [35][10]. another interesting solution is one
+   kind of special crops processing in our challenge solution [36][7].
+   because the original cultural event images are imbalanced, we merely
+   extract crops from the classes which have a small number of training
+   images, which on one hand can supply diverse data sources, and on the
+   other hand can solve the class-imbalanced problem. in addition, you can
+   adjust the fine-tuning strategy for overcoming class-imbalance. for
+   example, you can divide your own data set into two parts: one contains
+   the classes which have a large number of training samples
+   (images/crops); the other contains the classes of limited number of
+   samples. in each part, the class-imbalanced problem will be not very
+   serious. at the beginning of fine-tuning on your data set, you firstly
+   fine-tune on the classes which have a large number of training samples
+   (images/crops), and secondly, continue to fine-tune but on the classes
+   with limited number samples.
+
+references & source links
+
+    1. a. krizhevsky, i. sutskever, and g. e. hinton. [37]id163
+       classification with deep convolutional neural networks. in nips,
+       2012
+    2. [38]a brief overview of deep learning, which is a guest post by
+       [39]ilya sutskever.
+    3. [40]cs231n: convolutional neural networks for visual recognition of
+       stanford university, held by [41]prof. fei-fei li and [42]andrej
+       karpathy.
+    4. k. he, x. zhang, s. ren, and j. sun. [43]delving deep into
+       rectifiers: surpassing human-level performance on id163
+       classification. in iccv, 2015.
+    5. b. xu, n. wang, t. chen, and m. li. [44]empirical evaluation of
+       rectified activations in convolution network. in icml deep learning
+       workshop, 2015.
+    6. n. srivastava, g. e. hinton, a. krizhevsky, i. sutskever, and r.
+       salakhutdinov. [45]dropout: a simple way to prevent neural networks
+       from overfitting. jmlr, 15(jun):1929   1958, 2014.
+    7. x.-s. wei, b.-b. gao, and j. wu. [46]deep spatial pyramid ensemble
+       for cultural event recognition. in iccv chalearn looking at people
+       workshop, 2015.
+    8. z.-h. zhou. [47]ensemble methods: foundations and algorithms. boca
+       raton, fl: chapman & hallcrc/, 2012. (isbn 978-1-439-830031)
+    9. m. mohammadi, and s. das. [48]s-nn: stacked neural networks.
+       project in [49]stanford cs231n winter quarter, 2015.
+   10. p. hensman, and d. masko. [50]the impact of imbalanced training
+       data for convolutional neural networks. degree project in computer
+       science, dd143x, 2015.
+
+   copyright@2015, xiu-shen wei. (page generated 2015-10-19 23:28:37 cst.)
+
+references
+
+   1. http://lamda.nju.edu.cn/weixs/
+   2. http://lamda.nju.edu.cn/weixs/
+   3. http://lamda.nju.edu.cn/weixs/slide/id98tricks_slide.pdf
+   4. http://lamda.nju.edu.cn/weixs/
+   5. http://papers.nips.cc/paper/4824-id163-classification-with-deep-convolutional-neural-networks.pdf
+   6. http://papers.nips.cc/paper/4824-id163-classification-with-deep-convolutional-neural-networks.pdf
+   7. http://arxiv.org/abs/1502.01852
+   8. http://arxiv.org/abs/1502.01852
+   9. http://yyue.blogspot.sg/2015/01/a-brief-overview-of-deep-learning.html/
+  10. https://github.com/bvlc/caffe/wiki/model-zoo
+  11. http://www.vlfeat.org/matconvnet/pretrained/
+  12. http://cs231n.stanford.edu/index.html
+  13. http://papers.nips.cc/paper/4824-id163-classification-with-deep-convolutional-neural-networks.pdf
+  14. http://arxiv.org/abs/1502.01852
+  15. http://arxiv.org/abs/1502.01852
+  16. http://www.image-net.org/
+  17. http://arxiv.org/abs/1505.00853
+  18. https://www.kaggle.com/c/datasciencebowl
+  19. http://arxiv.org/abs/1505.00853
+  20. http://arxiv.org/abs/1502.01852
+  21. http://web.stanford.edu/~hastie/papers/b67.2 (2005) 301-320 zou & hastie.pdf
+  22. http://jmlr.org/papers/v15/srivastava14a.html
+  23. http://jmlr.org/papers/v15/srivastava14a.html
+  24. https://www.google.com/patents/wo2014105866a1
+  25. https://www.crcpress.com/ensemble-methods-foundations-and-algorithms/zhou/9781439830031
+  26. https://github.com/bvlc/caffe/wiki/model-zoo
+  27. https://www.codalab.org/competitions/4081#learn_the_details
+  28. http://pamitc.org/iccv15/
+  29. http://www.image-net.org/
+  30. http://places.csail.mit.edu/
+  31. http://gesture.chalearn.org/
+  32. http://lamda.nju.edu.cn/weixs/publication/iccvw15_cer.pdf
+  33. http://cs231n.stanford.edu/reports/milad_final_report.pdf
+  34. http://www.diva-portal.org/smash/get/diva2:811111/fulltext01.pdf
+  35. http://www.diva-portal.org/smash/get/diva2:811111/fulltext01.pdf
+  36. http://lamda.nju.edu.cn/weixs/publication/iccvw15_cer.pdf
+  37. http://papers.nips.cc/paper/4824-id163-classification-with-deep-convolutional-neural-networks.pdf
+  38. http://yyue.blogspot.com/2015/01/a-brief-overview-of-deep-learning.html/
+  39. http://www.cs.toronto.edu/~ilya/
+  40. http://cs231n.stanford.edu/index.html/
+  41. http://vision.stanford.edu/index.html
+  42. http://cs.stanford.edu/people/karpathy/
+  43. http://arxiv.org/abs/1502.01852
+  44. http://arxiv.org/abs/1505.00853
+  45. http://jmlr.org/papers/v15/srivastava14a.html
+  46. http://lamda.nju.edu.cn/weixs/publication/iccvw15_cer.pdf
+  47. https://www.crcpress.com/ensemble-methods-foundations-and-algorithms/zhou/9781439830031
+  48. http://cs231n.stanford.edu/reports/milad_final_report.pdf
+  49. http://cs231n.stanford.edu/reports.html
+  50. http://www.diva-portal.org/smash/get/diva2:811111/fulltext01.pdf

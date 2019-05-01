@@ -1,0 +1,1213 @@
+introduction to information retrieval
+
+http://informationretrieval.org
+
+iir 4: index construction
+
+hinrich sch  utze
+
+center for information and language processing, university of munich
+
+2014-04-16
+
+1 / 54
+
+overview
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+2 / 54
+
+outline
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+3 / 54
+
+dictionary as array of    xed-width entries
+
+term
+
+a
+aachen
+. . .
+zulu
+20 bytes
+
+document
+frequency
+656,265
+65
+. . .
+221
+4 bytes
+
+pointer
+to
+postings list
+      
+      
+. . .
+      
+4 bytes
+
+space needed:
+
+4 / 54
+
+b-tree for looking up entries in array
+
+5 / 54
+
+wildcard queries using a permuterm index
+
+queries:
+
+for x, look up x$
+
+for x*, look up x*$
+
+for *x, look up x$*
+
+for *x*, look up x*
+
+for x*y, look up
+y$x*
+
+6 / 54
+
+k-gram indexes for id147: bordroom
+
+bo
+
+or
+
+rd
+
+   
+
+aboard
+
+   
+
+about
+
+   
+
+boardroom
+
+   
+
+border
+
+   
+
+border
+
+   
+
+lord
+
+   
+
+morbid
+
+   
+
+sordid
+
+   
+
+aboard
+
+   
+
+ardent
+
+   
+
+boardroom
+
+   
+
+border
+
+7 / 54
+
+levenshtein distance for id147
+
+levenshteindistance(s1, s2)
+
+1 for i     0 to |s1|
+2 do m[i , 0] = i
+3 for j     0 to |s2|
+4 do m[0, j] = j
+5 for i     1 to |s1|
+6 do for j     1 to |s2|
+do if s1[i ] = s2[j]
+7
+8
+9
+10 return m[|s1|, |s2|]
+operations: insert, delete, replace, copy
+
+then m[i , j] = min{m[i     1, j] + 1, m[i , j     1] + 1, m[i     1, j     1]}
+else m[i , j] = min{m[i     1, j] + 1, m[i , j     1] + 1, m[i     1, j     1] + 1}
+
+8 / 54
+
+exercise: understand peter norvig   s spelling corrector
+
+= [(word[:i], word[i:]) for i in range(len(word) + 1)]
+= [a + b[1:] for a, b in splits if b]
+
+import re, collections
+def words(text): return re.findall(   [a-z]+   , text.lower())
+def train(features):
+model = collections.defaultdict(lambda: 1)
+for f in features:
+model[f] += 1
+return model
+nwords = train(words(file(   big.txt   ).read()))
+alphabet =    abcdefghijklmnopqrstuvwxyz   
+def edits1(word):
+splits
+deletes
+transposes = [a + b[1] + b[0] + b[2:] for a, b in splits if len(b) gt 1]
+replaces
+inserts
+return set(deletes + transposes + replaces + inserts)
+def known_edits2(word):
+return set(e2 for e1 in edits1(word) for e2 in
+edits1(e1) if e2 in nwords)
+def known(words): return set(w for w in words if w in nwords)
+def correct(word):
+candidates = known([word]) or known(edits1(word)) or
+known_edits2(word) or [word]
+return max(candidates, key=nwords.get)
+
+= [a + c + b[1:] for a, b in splits for c in alphabet if b]
+= [a + c + b
+
+for a, b in splits for c in alphabet]
+
+9 / 54
+
+take-away
+
+two index construction algorithms: bsbi (simple) and spimi
+(more realistic)
+
+distributed index construction: mapreduce
+
+dynamic index construction: how to keep the index
+up-to-date as the collection changes
+
+10 / 54
+
+outline
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+11 / 54
+
+hardware basics
+
+many design decisions in information retrieval are based on
+hardware constraints.
+
+we begin by reviewing hardware basics that we   ll need in this
+course.
+
+12 / 54
+
+hardware basics
+
+access to data is much faster in memory than on disk.
+(roughly a factor of 10)
+
+disk seeks are    idle    time: no data is transferred from disk
+while the disk head is being positioned.
+
+to optimize transfer time from disk to memory: one large
+chunk is faster than many small chunks.
+
+disk i/o is block-based: reading and writing of entire blocks
+(as opposed to smaller chunks). block sizes: 8kb to 256 kb
+
+servers used in ir systems typically have many gbs of main
+memory and tbs of disk space.
+
+fault tolerance is expensive: it   s cheaper to use many regular
+machines than one fault tolerant machine.
+
+13 / 54
+
+some stats (ca. 2008)
+
+symbol
+s
+b
+
+p
+
+statistic
+average seek time
+transfer time per byte
+processor   s clock rate
+lowlevel operation (e.g., compare & swap a word)
+size of main memory
+size of disk space
+
+value
+5 ms = 5    10   3 s
+0.02   s = 2    10   8 s
+109 s   1
+0.01   s = 10   8 s
+several gb
+1 tb or more
+
+14 / 54
+
+rcv1 collection
+
+shakespeare   s collected works are not large enough for
+demonstrating many of the points in this course.
+
+as an example for applying scalable index construction
+algorithms, we will use the reuters rcv1 collection.
+
+english newswire articles sent over the wire in 1995 and 1996
+(one year).
+
+15 / 54
+
+a reuters rcv1 document
+
+16 / 54
+
+reuters rcv1 statistics
+
+n documents
+l
+tokens per document
+m terms (= word types)
+
+bytes per token (incl. spaces/punct.)
+bytes per token (without spaces/punct.)
+bytes per term (= word type)
+non-positional postings
+
+t
+
+800,000
+200
+400,000
+6
+4.5
+7.5
+100,000,000
+
+exercise: average frequency of a term (how many tokens)? 4.5
+
+bytes per word token vs. 7.5 bytes per word type: why the
+di   erence? how many positional postings?
+
+17 / 54
+
+exercise
+
+why does this algorithm not scale to very large collections?
+
+18 / 54
+
+outline
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+19 / 54
+
+goal: construct the inverted index
+
+brutus
+
+       1
+
+caesar
+
+       1
+
+2
+
+2
+
+4
+
+4
+
+11
+
+31
+
+45
+
+173
+
+174
+
+5
+
+6
+
+16
+
+57
+
+132
+
+. . .
+
+calpurnia        2
+
+31
+
+54
+
+101
+
+...
+
+{z
+
+}
+|
+dictionary
+
+|
+
+{z
+
+postings
+
+}
+
+20 / 54
+
+index construction in iir 1: sort postings in memory
+
+term docid
+1
+i
+1
+did
+1
+enact
+1
+julius
+caesar
+1
+1
+i
+1
+was
+1
+killed
+1
+i   
+1
+the
+1
+capitol
+1
+brutus
+1
+killed
+me
+1
+2
+so
+2
+let
+2
+it
+2
+be
+2
+with
+2
+caesar
+2
+the
+noble
+2
+2
+brutus
+2
+hath
+2
+told
+2
+you
+2
+caesar
+2
+was
+ambitious
+2
+
+=   
+
+term docid
+2
+ambitious
+2
+be
+1
+brutus
+2
+brutus
+capitol
+1
+1
+caesar
+2
+caesar
+2
+caesar
+1
+did
+1
+enact
+1
+hath
+1
+i
+1
+i
+i   
+1
+2
+it
+1
+julius
+1
+killed
+1
+killed
+2
+let
+1
+me
+2
+noble
+so
+2
+1
+the
+2
+the
+2
+told
+2
+you
+1
+was
+2
+was
+with
+2
+
+21 / 54
+
+sort-based index construction
+
+as we build index, we parse docs one at a time.
+
+the    nal postings for any term are incomplete until the end.
+
+can we keep all postings in memory and then do the sort
+in-memory at the end?
+
+no, not for large collections
+
+thus: we need to store intermediate results on disk.
+
+22 / 54
+
+same algorithm for disk?
+
+can we use the same index construction algorithm for larger
+collections, but by using disk instead of memory?
+
+no: sorting very large sets of records on disk is too slow     too
+many disk seeks.
+
+we need an external sorting algorithm.
+
+23 / 54
+
+   external    sorting algorithm (using few disk seeks)
+
+we must sort t = 100,000,000 non-positional postings.
+
+each posting has size 12 bytes (4+4+4: termid, docid, term
+frequency).
+
+de   ne a block to consist of 10,000,000 such postings
+
+we can easily    t that many postings into memory.
+we will have 10 such blocks for rcv1.
+
+basic idea of algorithm:
+
+for each block: (i) accumulate postings, (ii) sort in memory,
+(iii) write to disk
+then merge the blocks into one long sorted order.
+
+24 / 54
+
+merging two blocks
+
+postings
+
+to be merged
+
+block 1
+
+block 2
+
+brutus
+caesar
+noble
+with
+
+d3
+d4
+d3
+d4
+
+brutus
+caesar
+julius
+killed
+
+d2
+d1
+d1
+d2
+
+brutus
+brutus
+caesar
+caesar
+julius
+killed
+noble
+with
+
+d2
+d3
+d1
+d4
+d1
+d2
+d3
+d4
+
+merged
+postings
+
+disk
+
+25 / 54
+
+blocked sort-based indexing
+
+bsbindexconstruction()
+1 n     0
+2 while (all documents have not been processed)
+3 do n     n + 1
+4
+5
+6
+7 mergeblocks(f1, . . . , fn; f merged)
+
+block     parsenextblock()
+bsbi-invert(block)
+writeblocktodisk(block, fn)
+
+26 / 54
+
+outline
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+27 / 54
+
+problem with sort-based algorithm
+
+our assumption was: we can keep the dictionary in memory.
+
+we need the dictionary (which grows dynamically) in order to
+implement a term to termid mapping.
+
+actually, we could work with term,docid postings instead of
+termid,docid postings . . .
+
+. . . but then intermediate    les become very large. (we would
+end up with a scalable, but very slow index construction
+method.)
+
+28 / 54
+
+single-pass in-memory indexing
+
+abbreviation: spimi
+
+key idea 1: generate separate dictionaries for each block     no
+need to maintain term-termid mapping across blocks.
+
+key idea 2: don   t sort. accumulate postings in postings lists
+as they occur.
+
+with these two ideas we can generate a complete inverted
+index for each block.
+
+these separate indexes can then be merged into one big index.
+
+29 / 54
+
+spimi-invert
+
+if term(token) /    dictionary
+
+spimi-invert(token stream)
+1 output    le     newfile()
+2 dictionary     newhash()
+3 while (free memory available)
+4 do token     next(token stream)
+5
+6
+7
+8
+9
+10
+11 sorted terms     sortterms(dictionary )
+12 writeblocktodisk(sorted terms,dictionary ,output    le)
+13 return output    le
+merging of blocks is analogous to bsbi.
+
+addtopostingslist(postings list,docid(token))
+
+if full (postings list)
+
+then postings list     addtodictionary(dictionary ,term(token))
+else postings list     getpostingslist(dictionary ,term(token))
+
+then postings list     doublepostingslist(dictionary ,term(token))
+
+30 / 54
+
+spimi: compression
+
+compression makes spimi even more e   cient.
+
+compression of terms
+compression of postings
+see next lecture
+
+31 / 54
+
+outline
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+32 / 54
+
+distributed indexing
+
+for web-scale indexing (don   t try this at home!): must use a
+distributed computer cluster
+individual machines are fault-prone.
+
+can unpredictably slow down or fail.
+
+how do we exploit such a pool of machines?
+
+33 / 54
+
+google data centers (2007 estimates; gartner)
+
+google data centers mainly contain commodity machines.
+
+data centers are distributed all over the world.
+
+1 million servers, 3 million processors/cores
+
+google installs 100,000 servers each quarter.
+
+based on expenditures of 200   250 million dollars per year
+
+this would be 10% of the computing capacity of the world!
+
+if in a non-fault-tolerant system with 1000 nodes, each node
+has 99.9% uptime, what is the uptime of the system
+(assuming it does not tolerate failures)?
+
+answer: 37%
+
+suppose a server will fail after 3 years. for an installation of 1
+million servers, what is the interval between machine failures?
+
+answer: less than two minutes
+
+34 / 54
+
+distributed indexing
+
+maintain a master machine directing the indexing job    
+considered    safe   
+
+break up indexing into sets of parallel tasks
+
+master machine assigns each task to an idle machine from a
+pool.
+
+35 / 54
+
+parallel tasks
+
+we will de   ne two sets of parallel tasks and deploy two types
+of machines to solve them:
+
+parsers
+inverters
+
+break the input document collection into splits (corresponding
+to blocks in bsbi/spimi)
+
+each split is a subset of documents.
+
+36 / 54
+
+parsers
+
+master assigns a split to an idle parser machine.
+
+parser reads a document at a time and emits
+(term,docid)-pairs.
+
+parser writes pairs into j term-partitions.
+each for a range of terms       rst letters
+
+e.g., a-f, g-p, q-z (here: j = 3)
+
+37 / 54
+
+inverters
+
+an inverter collects all (term,docid) pairs (= postings) for
+one term-partition (e.g., for a-f).
+
+sorts and writes to postings lists
+
+38 / 54
+
+data    ow
+
+splits
+
+assign
+
+master
+
+assign
+
+postings
+
+parser
+
+a-f g-p q-z
+
+inve rter
+
+a-f
+
+parser
+
+a-f g-p q-z
+
+inve rter
+
+g-p
+
+parser
+
+a-f
+
+g-p q-z
+
+inve rter
+
+q-z
+
+map
+phase
+
+segment
+files
+
+reduce
+phase
+
+39 / 54
+
+mapreduce
+
+the index construction algorithm we just described is an
+instance of mapreduce.
+
+mapreduce is a robust and conceptually simple framework for
+distributed computing . . .
+
+. . . without having to write code for the distribution part.
+
+the google indexing system (ca. 2002) consisted of a number
+of phases, each implemented in mapreduce.
+
+index construction was just one phase.
+
+another phase: transform term-partitioned into
+document-partitioned index.
+
+why might a document-partitioned index be preferable?
+
+40 / 54
+
+index construction in mapreduce
+
+schema of map and reduce functions
+map:
+reduce:
+
+input
+(k,list(v ))
+
+    list(k, v )
+    output
+
+instantiation of the schema for index construction
+map:
+reduce:
+
+web collection
+(htermid1, list(docid)i, hterm , list(docid)i, . . . )
+
+    list(termid, docid)
+    (postings list1, postings list2, . . . )
+
+example for index construction
+map:
+reduce:
+
+    (hc, d2i, hdied,d2i, hc,d1i, hcame,d1i, hc,d1i, hc   ed,d1i)
+d2 : c died. d1 : c came, c c   ed.
+(hc,(d2,d1,d1)i,hdied,(d2)i,hcame,(d1)i,hc   ed,(d1)i)     (hc,(d1:2,d2:1)i,hdied,(d2:1)i,hcame,(d1:1)i,hc   ed,(d1:1)i)
+
+41 / 54
+
+exercise
+
+what information does the task description contain that the
+master gives to a parser?
+
+what information does the parser report back to the master
+upon completion of the task?
+
+what information does the task description contain that the
+master gives to an inverter?
+
+what information does the inverter report back to the master
+upon completion of the task?
+
+42 / 54
+
+outline
+
+1 recap
+
+2
+
+introduction
+
+3 bsbi algorithm
+
+4 spimi algorithm
+
+5 distributed indexing
+
+6 dynamic indexing
+
+43 / 54
+
+dynamic indexing
+
+up to now, we have assumed that collections are static.
+
+they rarely are: documents are inserted, deleted and
+modi   ed.
+
+this means that the dictionary and postings lists have to be
+dynamically modi   ed.
+
+44 / 54
+
+dynamic indexing: simplest approach
+
+maintain big main index on disk
+
+new docs go into small auxiliary index in memory.
+
+search across both, merge results
+
+periodically, merge auxiliary index into big index
+deletions:
+
+invalidation bit-vector for deleted docs
+filter docs returned by index using this bit-vector
+
+45 / 54
+
+issue with auxiliary and main index
+
+frequent merges
+
+poor search performance during index merge
+
+46 / 54
+
+logarithmic merge
+
+logarithmic merging amortizes the cost of merging indexes
+over time.
+
+    users see smaller e   ect on response times.
+
+maintain a series of indexes, each twice as large as the
+previous one.
+keep smallest (z0) in memory
+larger ones (i0, i1, . . . ) on disk
+if z0 gets too big (> n), write to disk as i0
+. . . or merge with i0 (if i0 already exists) and write merger to
+i1 etc.
+
+47 / 54
+
+lmergeaddtoken(indexes, z0, token)
+
+do if ii     indexes
+
+then for i     0 to    
+
+1 z0     merge(z0, {token})
+2 if |z0| = n
+3
+4
+5
+6
+7
+8
+9
+10
+11
+
+else ii     zi
+
+z0        
+
+then zi +1     merge(ii , zi )
+
+(zi +1 is a temporary index on disk.)
+indexes     indexes     {ii }
+
+(zi becomes the permanent index ii .)
+
+indexes     indexes     {ii }
+break
+
+(z0 is the in-memory index.)
+
+logarithmicmerge()
+1 z0        
+2 indexes        
+3 while true
+4 do lmergeaddtoken(indexes, z0, getnexttoken())
+
+48 / 54
+
+binary numbers: i3i2i1i0 = 23222120
+
+0001
+
+0010
+
+0011
+
+0100
+
+0101
+
+0110
+
+0111
+
+1000
+
+1001
+
+1010
+
+1011
+
+1100
+
+49 / 54
+
+logarithmic merge
+
+number of indexes bounded by o(log t ) (t is total number
+of postings read so far)
+
+so query processing requires the merging of o(log t ) indexes
+time complexity of index construction is o(t log t ).
+
+. . . because each of t postings is merged o(log t ) times.
+auxiliary index: index construction time is o(t 2) as each
+posting is touched in each merge.
+
+suppose auxiliary index has size a
+a + 2a + 3a + 4a + . . . + na = a n(n+1)
+
+2 = o(n2)
+
+so logarithmic merging is an order of magnitude more
+e   cient.
+
+50 / 54
+
+dynamic indexing at large search engines
+
+often a combination
+
+frequent incremental changes
+rotation of large parts of the index that can then be swapped
+in
+occasional complete rebuild (becomes harder with increasing
+size     not clear if google can do a complete rebuild)
+
+51 / 54
+
+building positional indexes
+
+basically the same problem except that the intermediate data
+structures are large.
+
+52 / 54
+
+take-away
+
+two index construction algorithms: bsbi (simple) and spimi
+(more realistic)
+
+distributed index construction: mapreduce
+
+dynamic index construction: how to keep the index
+up-to-date as the collection changes
+
+53 / 54
+
+resources
+
+chapter 4 of iir
+resources at http://cislmu.org
+
+original publication on mapreduce by dean and ghemawat
+(2004)
+original publication on spimi by heinz and zobel (2003)
+youtube video: google data centers
+
+54 / 54
+
+

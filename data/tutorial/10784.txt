@@ -1,0 +1,895 @@
+theanolm     an extensible toolkit for neural network id38
+
+seppo enarvi, mikko kurimo
+
+aalto university, finland
+firstname.lastname@aalto.fi
+
+abstract
+
+p (w1|w0)
+
+p (w2|w1, w0)
+
+p (w3|w2, w1, w0)
+
+6
+1
+0
+2
+
+ 
+
+g
+u
+a
+8
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+2
+4
+9
+0
+0
+
+.
+
+5
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+we present a new tool for training neural network language mod-
+els (nnlms), scoring sentences, and generating text. the tool
+has been written using python library theano, which allows re-
+searcher to easily extend it and tune any aspect of the training
+process. regardless of the    exibility, theano is able to gener-
+ate extremely fast native code that can utilize a gpu or multi-
+ple cpu cores in order to parallelize the heavy numerical com-
+putations. the tool has been evaluated in dif   cult finnish and
+english conversational id103 tasks, and signi   cant
+improvement was obtained over our best back-off id165 mod-
+els. the results that we obtained in the finnish task were com-
+pared to those from existing id56lm and rwthlm toolkits,
+and found to be as good or better, while training times were an
+order of magnitude shorter.
+index terms:
+automatic id103, conversational language
+
+id38, arti   cial neural networks,
+
+1. introduction
+
+neural network language models (nnlm) are known to outper-
+form traditional id165 language models in id103
+accuracy [1, 2]. for modeling word sequences with temporal de-
+pendencies, the recurrent neural network (id56) is an attractive
+model as it is not limited to a    xed window size. perhaps the
+simplest variation of id56 that has been used for language mod-
+eling contains just one hidden layer [3]. the ability of an id56
+to model temporal dependencies is limited by the vanishing gra-
+dient problem. various modi   cations have been proposed to
+the standard id56 structure that reduce this problem, such as
+the popular long short-term memory (lstm) [4].
+
+figure 1 shows a typical lstm network. following the ar-
+chitecture by bengio et al [5], the    rst layer projects the words
+wt into a continuous lower-dimensional vector space, which
+is followed by a hidden layer.
+in recurrent networks the hid-
+den layer state ht is passed to the next time step. lstm is a
+special case of a recurrent layer that also passes cell state ct.
+sigmoid gates control what information will be added to or re-
+moved from the cell state, making it easy to maintain important
+information in the cell state over extended periods of time. the
+   nal neural network layer normalizes the output probabilities
+using sof tmax.
+
+another in   uential design choice concerns performance
+when the vocabulary is large. the computational cost of train-
+ing and evaluating a network with softmax output layer is highly
+dependent on the number of output neurons, i.e. the size of the
+vocabulary. feedforward networks are basically id165 models,
+so it is straightforward to use the neural network to predict only
+words in a short-list and use a back-off model for the infrequent
+words [6]. replacing a single softmax layer with a hierarchy
+of softmax layers [7] improves performance, although the num-
+ber of model parameters is not reduced. using word classes in
+
+sof tmax
+
+sof tmax
+
+sof tmax
+
+tanh
+
+tanh
+
+tanh
+
+h0
+
+h1
+
+h2
+
+lstm
+
+c0
+
+lstm
+
+c1
+
+lstm
+
+c2
+
+projection
+
+projection
+
+projection
+
+w0
+
+w1
+
+w2
+
+figure 1: recurrent nnlm with lstm and tanh hidden layers.
+1-of-n encoded words wt are projected into lower-dimensional
+vectors. an lstm layer passes the hidden state ht to the next
+time step, like a standard recurrent layer, but also the cell state
+ct, which is designed to convey information over extended time
+intervals.
+
+the input and output of the network [8] has the bene   t that the
+model becomes smaller, which may be necessary for using a
+gpu.
+
+while several toolkits have been made available for lan-
+guage modeling with neural networks [6, 8, 9], they do not
+support research and prototyping work well. the most impor-
+tant limitation is the dif   culty in extending the toolkits with
+recently proposed methods and different network architectures.
+also, training large networks is very slow without gpu support.
+theanolm is a new nnlm tool that we have developed, mo-
+tivated by our ongoing research on improving conversational
+finnish automatic id103 (asr). our goal is to
+make it versatile and fast, easy to use, and write code that is
+easily extensible.
+
+in the next section we will give an introduction on how
+theanolm works. then we will evaluate it on two conversa-
+tional asr tasks with large data sets. in order to verify that
+it works correctly, the results will be compared to those from
+other toolkits.
+
+input type=class name=class_input
+layer type=projection name=projection_layer input=class_input size=500
+layer type=dropout name=dropout_layer_1 input=projection_layer dropout_rate=0.25
+layer type=lstm name=hidden_layer_1 input=dropout_layer_1 size=1500
+layer type=dropout name=dropout_layer_2 input=hidden_layer_1 dropout_rate=0.25
+layer type=tanh name=hidden_layer_2 input=dropout_layer_2 size=1500
+layer type=dropout name=dropout_layer_3 input=hidden_layer_2 dropout_rate=0.25
+layer type=softmax name=output_layer input=dropout_layer_3
+
+figure 2: an example of a network architecture description.
+
+2. theanolm
+
+theano is a python library for high-performance mathematical
+computation [10].
+it provides a versatile interface for build-
+ing neural network applications, and has been used in many
+neural network tasks. for id38, toolkits such as
+id56lm are more popular, because they are easier to approach.
+we have developed theanolm as a complete package for train-
+ing and applying recurrent neural network language models in
+id103 and machine translation, as well as generat-
+ing text by sampling from an nnlm. it is freely available on
+github1.
+
+the neural network is represented in python objects as a
+symbolic graph of mathematical expressions. theano performs
+symbolic differentiation, making it easy to implement gradient-
+based optimization methods. we have already implemented
+nesterov   s accelerated gradient [11], adagrad [12], adadelta
+[13], adam [14], and rmsprop optimizers, in addition to plain
+stochastic id119 (sgd).
+
+evaluation of the expressions is performed using native
+cpu and gpu code transparently. the compilation does intro-
+duce a short delay before the program can start to train or use a
+model, but in a typical application the delay is negligible com-
+pared to the actual execution. on the other hand, the execution
+can be highly parallelized using a gpu, speeding up training of
+large networks to a fraction of cpu training times.
+
+standard sgd training is very sensitive to the learning rate
+hyperparameter. the initial value should be as high as possi-
+ble, given that the optimization still converges. gradually de-
+creasing (annealing) the learning rate enables    ner adjustments
+later in the optimization process. theanolm can perform cross-
+validation on development data at regular intervals, in order to
+decide how quickly annealing should occur. however, adap-
+tive learning rate methods such as adagrad and adadelta do not
+require manual tuning of the learning rate   cross-validation is
+needed only for determining when to stop training.
+
+especially in finnish and other highly agglutinative lan-
+guages the vocabulary is too large for the    nal layer to predict
+words directly. in this work we use class-based models, where
+each word wt belongs to exactly one word class c(wt):
+
+p (wt|wt   1 . . .) = p (c(wt)|c(wt   1) . . .)p (wt|c(wt))
+
+(1)
+
+when the classes are chosen carefully, this model will not
+necessarily perform worse than a word-based model in finnish
+data, because there are not enough examples of the rarer words
+to give robust estimates of word probabilities. the advantage
+
+1https://github.com/senarvi/theanolm
+
+of this solution is that the model size depends on the number of
+classes instead of the number of words.
+
+an arbitrary network architecture can be provided in a text
+   le as a list of layer descriptions. the layers have to speci   ed
+in the order that the network is constructed, meaning that the
+network has to be acyclic. the network may contain word and
+class inputs, which have to be followed by a projection layer.
+a projection layer may be followed by any number of lstm
+and gru [15] layers, as well as non-recurrent layers. the    -
+nal layer has to be a softmax or a hierarchical softmax layer.
+multiple layers may have the same element in their input, and a
+layer may have multiple inputs, in which case the inputs will be
+concatenated.
+
+the example in figure 2 would create an lstm network
+with a projection layer of 500 neurons and two hidden layers
+of 1500 neurons. after each of those layers is a dropout [16]
+layer, which contains no neurons, but only sets some activations
+randomly to zero at train time to prevent over   tting. this is the
+con   guration that we have used in this paper to train the larger
+theanolm models.
+
+lstm and gru architectures help avoid the vanishing gra-
+dient problem. in order to prevent gradients from exploding, we
+limit the norm of the gradients, as suggested by mikolov in his
+thesis [2].
+
+3. conversational finnish asr experiment
+3.1. data
+
+in order to develop models for conversational finnish asr,
+we have recorded and transcribed conversations held by stu-
+dents in pairs, in the basic course in digital signal processing
+at aalto university. the collected corpus, called aalto univer-
+sity dsp course conversation corpus (dspcon) is available
+for research use in the language bank of finland2. the cor-
+pus is updated annually; currently it includes recordings from
+years 2013   2015.
+in addition we have used the spontaneous
+sentences of speecon corpus, findialogue subcorpus of fin-
+intas3, and some transcribed radio conversations, totaling 34
+hours of acoustic training data. this is practically all the con-
+versational finnish data that is available for research.
+
+we have collected id38 data from the inter-
+net, and    ltered it to match transcribed conversations [18]. simi-
+lar data is available in the language bank of finland4. this was
+augmented with 43,000 words of transcribed spoken conversa-
+tions from dspcon, totaling 76 million words. a 8,900-word
+development set was used in id38.
+
+2http://urn.fi/urn:nbn:fi:lb-2015101901
+3http://urn.fi/urn:nbn:fi:lb-20140730194
+4http://urn.fi/urn:nbn:fi:lb-201412171
+
+table 1: language model training times and word error rates
+(%) given by the model alone and interpolated with the best
+kneser-ney model. finnish results are from the evaluation
+set, but the same set was used for optimizing language model
+weights.
+
+training
+
+dev
+
+eval
+
+time alone int. alone int.
+
+model
+finnish
+7 min
+52.1
+kn word 4-gram
+19 min 51.0
+kn word 4-gram weighted
+55 min 51.2 50.5
+kn class 4-gram weighted
+361 h
+50.4 49.8
+id56lm 300
+480 h     49.4 48.6
+rwthlm 100+300+300
+49.1 49.0
+theanolm 100+300+300
+20 h
+theanolm 500+1500+1500 139 h
+48.7 48.4
+
+english
+42.1
+8 min
+kn word 4-gram
+15 min 41.0
+kn word 4-gram weighted
+theanolm 100+300+300
+62 h
+theanolm 500+1500+1500 290 h
+
+41.9
+41.2
+
+40.1 39.6 41.2 40.5
+39.6 39.5 40.5 40.0
+
+   using 12 cpus.
+
+a set of 541 sentences from unseen speakers, totaling 44
+minutes and representing the more natural spontaneous speech
+of various topics, was used for evaluation. because of the nu-
+merous ways in which conversational finnish can be written
+down, asr output should be evaluated on transcripts that con-
+tain such alternative word forms. as we did not have another
+suitable evaluation set, the same data was used for optimizing
+language model weights. the lattices were generated using
+aalto asr [17] and a triphone id48 acoustic model.
+
+table 2: development and evaluation set perplexities from the
+full-vocabulary models.
+
+model
+finnish
+kn class 4-gram weighted
+rwthlm 100+300+300
+id56lm 300
+theanolm 100+300+300
+theanolm 500+1500+1500
+
+english
+kn class 4-gram weighted
+theanolm 100+300+300
+theanolm 500+1500+1500
+
+perplexity
+dev
+eval
+
+755
+687
+881
+677
+609
+
+98
+102
+90
+
+763
+743
+872
+701
+642
+
+91
+99
+88
+
+with theanolm we have used adagrad optimizer without
+annealing. while we could not evaluate different optimizers
+extensively, adagrad seemed to be among the best in terms of
+both speed of convergence and performance of the    nal model.
+nesterov   s accelerated gradient with manual annealing gave
+a slightly better model with considerably longer training time.
+the other toolkits use standard sgd.
+
+kneser-ney smoothed 4-grams were used in the back-off
+models. the data sets collected from different sources varied
+in size and quality. instead of pooling all the data together, the
+baseline back-off models were weighted mixtures of models es-
+timated from each subset. the weights were optimized using
+development data. the back-off model vocabulary was limited
+to 200,000 of the 2,400,000 different word forms that occurred
+in the training data, selected with the em algorithm to maximize
+the likelihood of the development data [21]. out-of-vocabulary
+rate in the evaluation data was 5.06 %.
+
+3.2. models
+
+3.3. results
+
+in this task we have obtained results also from other freely avail-
+able nnlm toolkits, rwthlm [8] and id56lm [9], for com-
+parison. with rwthlm and theanolm we have used one
+lstm layer and one tanh layer on top of the projection layer
+(100+300+300 neurons), as in figure 1. id56lm supports only
+a simple recurrent network with one hidden layer. because of
+the faster training time with theanolm, we were also able to
+try a larger model with    ve times the number of neurons in each
+layer. this model includes dropout after each layer. the archi-
+tecture description is given in figure 2. we trained also models
+with third existing toolkit, cslm [6], but were unable to get
+meaningful sentence scores. cslm supports only feedforward
+networks, but is very fast because of gpu support.
+
+the toolkits also differ in how they handle the vocabulary.
+with rwthlm and theanolm we used word classes. 2000
+word classes were created using the exchange algorithm [19],
+which tries to optimize the log id203 of a bigram model on
+the training data, by moving words between classes. id56lm
+creates classes by frequency binning, but uses words in the input
+and output of the neural network. classes are used for decom-
+position of the output layer, which speeds up training and eval-
+uation [20], but with millions of words in the vocabulary, the
+number of parameters in the id56lm model with 300 neurons
+is larger than in the rwthlm and theanolm models with
+100+300+300 neurons.
+
+evaluation of neural network probabilities is too slow to be us-
+able in the    rst decoding pass of a large-vocabulary continuous
+speech recognizer. another pass is performed by decoding and
+rescoring word lattices created using a traditional id165 model.
+rwthlm is able to rescore word lattices directly, the other
+toolkits can only rescore n-best lists created from word lattices.
+word error rates (wer) after rescoring are shown in ta-
+ble 1. the table also includes word error rates given by inter-
+polation of nnlm scores with the kn word 4-gram weighted
+model. we interpolated the sentence scores (log probabilities)
+as
+
+log p = (1       )sbo log pbo(w1 . . . wn)
+
++   snn log pnn(w1 . . . wn).
+
+(2)
+
+sbo is the lm scale factor that was optimal for the back-off
+model. the same value was used for generating the n-best lists.
+snn and   , the nnlm scale factor and interpolation weight,
+were optimized from a range of values.
+
+vocabulary size affects perplexity computation, so we have
+omitted the limited-vocabulary models from the perplexity re-
+sults in table 2. finnish vocabulary was    ve times larger, so
+the perplexities are considerably higher than in the english lan-
+guage experiment, as expected. the values are as reported by
+
+each tool; there might be differences in e.g. how unknown
+words and sentence starts and ends are handled. perplexi-
+ties of the kneser-ney models were computed using srilm,
+which excludes unknown words from the computation. with
+theanolm we used the same behaviour (--unk-penalty 0).
+
+we have also recorded the training times in table 1, al-
+though it has to be noted that the jobs were run in a compute
+cluster that assigns them to different hardware, so the reported
+durations are only indicative. rwthlm supports paralleliza-
+tion through various math libraries. id56lm is able to use only
+one cpu core, which means that the computation is inevitably
+slow. theanolm was used with an nvidia tesla gpu.
+
+when rescoring asr output, all neural network models out-
+performed the back-off models, even without interpolation with
+back-off scores. since we get the back-off model scores from
+the    rst decoding pass without additional cost, it is reasonable to
+look at the performance when both models are combined with
+interpolation. this further improves the results. the back-off
+model is clearly improved by weighting individual corpora, be-
+cause the different corpora are not homogeneous. at the time
+of writing we have implemented training set weighting schemes
+in theanolm as well, but so far the improvements have been
+smaller than with the well-established back-off model weight-
+ing.
+
+rwthlm and id56lm were stopped after 8 training
+epochs. id56lm did not improve the baseline as much as ex-
+pected, but training further iterations could have improved its
+performance.
+
+4. english meeting recognition experiment
+for the english task we used more advanced acoustic mod-
+els trained using kaldi [22] with discriminative training using
+the maximum mutual information (mmi) criterion. the lat-
+tices were generated using maximum likelihood linear regres-
+sion (mllr) speaker adaptation. the acoustic training data
+was 73 hours from icsi meeting corpus5. for language model
+training we used also part 2 of the fisher corpus6 and match-
+ing data from the internet. in total the text data contained 159
+million words, of which 11 million words were transcribed con-
+versations. the development and evaluation data were from
+the nist rich transcription 2004 spring meeting recognition
+evaluation. the development set contained 18,000 words and
+the evaluation set was 104 minutes and consisted of 2450 utter-
+ances.
+
+in the back-off models, vocabulary was limited to 50,000
+of the 470,000 different words that occurred in training data.
+only 0.30 % of the evaluation set tokens were left outside the
+vocabulary. theanolm was used to train models of the same ar-
+chitecture using the same parameters as in the finnish task. in
+this task we had roughly twice the amount of data. training was
+more than two times slower, but still manageable. the results
+in table 1 show that the bene   t from the larger network is pro-
+nounced in this task. the smaller network is clearly incapable
+of modeling the larger data set as well.
+
+5. conclusions
+
+several different nnlm toolkits, implemented in c++, are
+freely available. however, the    eld is rapidly changing, and
+a toolkit should be easily extensible with the latest algorithms.
+
+5https://catalog.ldc.upenn.edu/ldc2004s02
+6https://catalog.ldc.upenn.edu/ldc2005t19
+
+also, different languages and data sets work best with differ-
+ent algorithms and architectures, so a good solution needs to
+be versatile. we offer a new toolkit that has been implemented
+using python and theano, provides implementations of the lat-
+est training methods for arti   cial neural networks, and is easily
+extensible. another important advantage is speed   theano pro-
+vides highly optimized c++ implementations of the expensive
+matrix operations, and can automatically utilize a gpu.
+
+while back-off id165 models are still two orders of mag-
+nitude faster to train, training a model using theanolm was an
+order of magnitude faster than training a similar model with the
+other toolkits. the speed advantage of theanolm was mainly
+due to gpu support, but the adagrad optimizer that we used
+with theanolm was also faster to converge. 4 epochs were
+required for convergence using adagrad, while the other toolk-
+its continued to improve perplexity for at least 8 epochs. the
+faster training time makes it practical to train larger networks
+with theanolm. when more data is available, the bene   t of a
+larger network becomes pronounced, and training without gpu
+support becomes impractical.
+
+in a conversational finnish id103 task we have
+used practically all the data that is available for research. a
+4-gram kneser-ney model, trained simply by concatenating
+the training data, gave us 52.1 % wer. as a baseline we
+took a mixture model that was combined from smaller mod-
+els with optimized interpolation weights. the baseline model
+gave 51.0 % wer. 48.4 % wer was reached when interpolat-
+ing theanolm and baseline lm scores, a relative improvement
+of 5.1 %. rwthlm gives similar results with a similar neu-
+ral network architecture, which increases our con   dence in the
+correctness of the implementation.
+
+evaluating the progress we have made in the conversational
+finnish task, 48.4 % wer is 10.5 % better than our previous
+record, 54.1 % [18]. however, we have collected new acoustic
+data, which explains the 51.0 % baseline in this paper. the
+acoustic models used in these experiments are still not state of
+the art. in order to    nd out the absolute performance of these
+models, we will also need to obtain a proper development set
+for optimizing language model scale and interpolation weight.
+it appears that some types of nnlms work better with one
+language than another. id56lm did not perform as well as we
+expected in the finnish task, probably because the network ar-
+chitecture was not optimal. id56lm offers only a simple net-
+work architecture that takes words as input and contains one
+hidden layer. the number of input connections is huge with the
+finnish vocabulary, and the size of the hidden layer is limited if
+we want training time to be reasonable. previously interpolating
+id56lm with a kneser-ney model has been shown to give 3 to
+8 % relative improvement in conversational english asr [23].
+in the english meeting recognition task more data was avail-
+able, and the smaller neural network was not better than the
+weighted mixture back-off model. still the neural network
+brings new information so much that interpolation of the smaller
+nnlm scores with back-off scores improves from the baseline
+of 41.2 % wer to 40.5 %. the larger network brings 2.9 %
+improvement to 40.0 % wer. when more data is available,
+a larger network is needed, which makes training speed even
+more important.
+
+so far our research focus has been on conversational
+finnish and other highly agglutinative languages. considering
+that as much effort has not gone into the english task, the re-
+sults are satisfactory, and show that theanolm works also in a
+relatively standard conversational english task.
+
+6. acknowledgements
+
+this work was    nancially supported by the academy of finland
+under the grant number 251170 and made possible by the com-
+putational resources provided by the aalto science-it project.
+
+7. references
+
+[1] h. schwenk and j. l. gauvain,    connectionist language
+modeling for large vocabulary continuous speech recog-
+nition,    in proceedings of the 2002 ieee international
+conference on acoustics, speech, and signal processing
+(icassp), vol. 1, may 2002, pp. i   765   i   768.
+
+[11] y. nesterov,    a method of solving a convex programming
+problem with convergence rate o(1/k2),    soviet mathe-
+matics doklady, vol. 27, no. 2, pp. 372   376, 1983.
+
+[12] j. duchi, e. hazan, and y. singer,    adaptive subgradient
+methods for online learning and stochastic optimization,   
+the journal of machine learning research, vol. 12, pp.
+2121   2159, jul. 2011.
+
+[13] m. d. zeiler,
+
+   adadelta:
+
+learn-
+rate method,    computing research reposi-
+[online]. available:
+
+ing
+tory, vol. abs/1212.5701, 2012.
+http://arxiv.org/abs/1212.5701
+
+an adaptive
+
+[2] t. mikolov,    statistical
+
+[3] t. mikolov, m. kara     t, l. burget,
+
+2012.
+
+ph.d.
+
+networks,   
+
+language models based on
+neural
+dissertation, brno uni-
+versity of technology,
+[online]. available:
+http://www.   t.vutbr.cz/research/view_pub.php?id=10158
+j. cernock  ,
+network
+and
+based
+of
+the
+11th
+international
+speech communication association (interspeech),
+sep.
+[online]. available:
+http://www.isca-speech.org/archive/interspeech_2010/i10_1045.html
+
+language model,   
+annual
+
+neural
+in proceedings
+
+s. khudanpur,
+
+1045   1048.
+
+conference
+
+   recurrent
+
+2010,
+
+pp.
+
+the
+
+of
+
+[14] d. p. kingma and j. ba,    adam: a method for stochastic
+optimization,   
+the international
+conference on learning representations (iclr) 2015,
+2015. [online]. available: http://arxiv.org/abs/1412.6980
+
+in proceedings of
+
+[15] k. cho, b. van merrienboer,   . g  l  ehre, f. bougares,
+h. schwenk, and y. bengio,    learning phrase rep-
+resentations using id56 encoder-decoder for statistical
+machine translation,   
+the 2014
+conference on empiricial methods in natural lan-
+guage processing (emnlp), 2014. [online]. available:
+http://arxiv.org/abs/1406.1078
+
+in proceedings of
+
+[4] s. hochreiter
+
+and j. schmidhuber,
+
+   long short-
+term memory,    neural computation, vol. 9, no. 8,
+pp.
+[online]. available:
+http://dx.doi.org/10.1162/neco.1997.9.8.1735
+
+1735   1780, nov.
+
+1997.
+
+[5] y. bengio, r. ducharme, p. vincent, and c. jan-
+vin,    a neural probabilistic language model,    the
+journal of machine learning research,
+vol. 3,
+pp.
+[online]. available:
+http://dl.acm.org/citation.cfm?id=944919.944966
+
+1137   1155, mar.
+
+2003.
+
+[6] h. schwenk,    cslm - a modular open-source continuous
+in proceedings
+space id38 toolkit,   
+of
+the international
+the 14th annual conference of
+speech communication association (interspeech),
+aug.
+[online]. available:
+http://www.isca-speech.org/archive/interspeech_2013/i13_1198.html
+
+1198   1202.
+
+2013,
+
+pp.
+
+[16] n. srivastava, g. hinton, a. krizhevsky, i. sutskever,
+a simple way
+and r. salakhutdinov,
+from over   tting,    the
+to prevent neural networks
+journal of machine learning research,
+vol. 15,
+no. 1, pp. 1929   1958, jan. 2014. [online]. available:
+http://dl.acm.org/citation.cfm?id=2627435.2670313
+
+   dropout:
+
+[17] t. hirsim  ki, j. pylkk  nen, and m. kurimo,    impor-
+tance of high-order id165 models in morph-based speech
+recognition,    ieee transactions on audio, speech, and
+language processing, vol. 17, no. 4, pp. 724   732, 2009.
+
+[18] m. kurimo, s. enarvi, o. tilk, m. varjokallio, a. man-
+sikkaniemi, and t. alum  e,    modeling under-resourced
+languages for id103,    language resources
+and evaluation (lre), 2016.
+
+[7] f. morin and y. bengio,    hierarchical probabilistic
+neural network language model,    in proceedings of the
+10th international workshop on arti   cial intelligence and
+statistics (aistats). society for arti   cial intelligence
+and statistics, 2005, pp. 246   252. [online]. available:
+http://www.iro.umontreal.ca/~lisa/pointeurs/hierarchical-nnlm-aistats05.pdf
+
+[19] r. kneser
+
+and h. ney,
+
+   forming word classes
+language mod-
+by statistical id91 for statistical
+elling,   
+to quantitative linguis-
+tics, r. k  hler
+springer
+netherlands, 1993, pp. 221   226. [online]. available:
+http://dx.doi.org/10.1007/978-94-011-1769-2_15
+
+and b. rieger, eds.
+
+in contributions
+
+[8] m. sundermeyer, r. schl  ter, and h. ney,    rwthlm     the
+rwth aachen university neural network language mod-
+eling toolkit,    in proceedings of the 15th annual confer-
+ence of the international speech communication associa-
+tion (interspeech), sep. 2014, pp. 2093   2097.
+
+[9] t. mikolov, s. kombrink, a. deoras, l. burget, and j.   cer-
+nock  ,    id56lm - recurrent neural network language
+modeling toolkit,    in proceedings of the 2011 ieee work-
+shop on automatic id103 and understand-
+ing (asru).
+ieee signal processing society, dec. 2011,
+ieee catalog no.: cfp11srw-usb. [online]. available:
+http://www.   t.vutbr.cz/research/view_pub.php?id=10087
+[10] f. bastien, p. lamblin, r. pascanu, j. bergstra, i. j.
+goodfellow, a. bergeron, n. bouchard, and y. bengio,
+   theano: new features and speed improvements,    nips
+2012 workshop on deep learning and unsupervised fea-
+ture learning, 2012.
+
+[20] t. mikolov, s. kombrink, l. burget, j.   cernock  , and
+s. khudanpur,    extensions of recurrent neural network
+language model,    in proceedings of the 2011 ieee inter-
+national conference on acoustics, speech and signal pro-
+cessing (icassp), may 2011, pp. 5528   5531.
+
+[21] a. venkataraman and w. wang,    techniques for effective
+vocabulary selection,    in proceedings of the 8th european
+conference on speech communication and technol-
+ogy (eurospeech), sep. 2003. [online]. available:
+http://www.isca-speech.org/archive/eurospeech_2003/e03_0245.html
+
+[22] d. povey, a. ghoshal, g. boulianne, l. burget, o. glem-
+bek, n. goel, m. hannemann, p. motlicek, y. qian,
+p. schwarz, j. silovsky, g. stemmer, and k. vesely,    the
+kaldi id103 toolkit,    in proceedings of the
+2011 ieee workshop on automatic id103
+and understanding (asru).
+ieee signal processing so-
+ciety, dec. 2011, ieee catalog no.: cfp11srw-usb.
+
+neural
+
+   recurrent
+
+[23] s. kombrink, t. mikolov, m. kara     t, and l. bur-
+based
+language
+get,
+network
+in proceedings
+modeling in meeting recognition,   
+of
+the international
+the 12th annual conference of
+speech communication association (interspeech),
+aug.
+[online]. available:
+http://www.isca-speech.org/archive/interspeech_2011/i11_2877.html
+
+2877   2880.
+
+2011,
+
+pp.
+
+

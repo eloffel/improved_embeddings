@@ -1,0 +1,812 @@
+   #[1]wildml    feed [2]wildml    comments feed [3]wildml    id56s in
+   tensorflow, a practical guide and undocumented features comments feed
+   [4]deep learning for chatbots, part 2     implementing a retrieval-based
+   model in tensorflow [5]learning id23 (with code,
+   exercises and solutions) [6]alternate [7]alternate
+
+   [8]skip to content
+
+   [9]wildml
+
+   artificial intelligence, deep learning, and nlp
+
+   (button) menu
+     * [10]home
+     * [11]ai newsletter
+     * [12]deep learning glossary
+     * [13]contact
+     * [14]about
+
+   posted on [15]august 21, 2016august 29, 2016 by [16]denny britz
+
+id56s in tensorflow, a practical guide and undocumented features
+
+   in a [17]previous tutorial series i went over some of the theory behind
+   recurrent neural networks (id56s) and the implementation of a simple id56
+   from scratch. that   s a useful exercise, but in practice we use
+   libraries like tensorflow with high-level primitives for dealing with
+   id56s.
+
+   with that using an id56 should be as easy as calling a function, right?
+   unfortunately that   s not quite the case. in this post i want to go over
+   some of the best practices for working with id56s in tensorflow,
+   especially the functionality that isn   t well documented on the official
+   site.
+
+   the post comes with a github repository that contains jupyter notebooks
+   with minimal examples for:
+     * [18]using tf.sequenceexample
+     * [19]batching and padding
+     * [20]dynamic id56
+     * [21]bidirectional dynamic id56
+     * [22]id56 cells and cell wrappers
+     * [23]masking the loss
+
+preprocessing data: use tf.sequenceexample
+
+   [24]check out the tf.sequenceexample jupyter notebook here!
+
+   id56s are used for sequential data that has inputs and/or outputs at
+   multiple time steps. tensorflow comes with a [25]protocol buffer
+   definition to deal with such data: [26]tf.sequenceexample.
+
+   you can load data directly from your python/numpy arrays, but it   s
+   probably in your best interest to use tf.sequenceexample instead. this
+   data structure consists of a    context    for non-sequential features and
+      feature_lists    for sequential features. it   s somewhat verbose (it blew
+   up my latest dataset by 10x), but it comes with a few benefits that are
+   worth it:
+     * easy [27]distributed training. split up data into multiple tfrecord
+       files, each containing many sequenceexamples, and use tensorflow   s
+       built-in support for distributed training.
+     * reusability. other people can re-use your model by bringing their
+       own data into tf.sequenceexample format. no model code changes
+       required.
+     * use of tensorflow data loading pipelines functions like
+       tf.parse_single_sequence_example. libraries like tf.learn also come
+       with convenience function that expect you to feed data in protocol
+       buffer format.
+     * separation of id174 and model code. using
+       tf.sequenceexample forces you to separate your id174
+       and tensorflow model code. this is good practice, as your model
+       shouldn   t make any assumptions about the input data it gets.
+
+   in practice, you write a little script that converts your data into
+   tf.sequenceexample format and then writes one or more tfrecord files.
+   these tfrecord files are parsed by tensorflow to become the input to
+   your model:
+    1. convert your data into tf.sequenceexample format
+    2. write one or more tfrecord files with the serialized data
+    3. use [28]tf.tfrecordreader to read examples from the file
+    4. parse each example using [29]tf.parse_single_sequence_example (not
+       in the official docs yet)
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   sequences = [[1, 2, 3], [4, 5, 1], [1, 2]]
+   label_sequences = [[0, 1, 0], [1, 0, 0], [1, 1]]
+
+   def make_example(sequence, labels):
+       # the object we return
+       ex = tf.train.sequenceexample()
+       # a non-sequential feature of our example
+       sequence_length = len(sequence)
+       ex.context.feature[&quot;length&quot;].int64_list.value.append(sequ
+   ence_length)
+       # feature lists for the two sequential features of our example
+       fl_tokens = ex.feature_lists.feature_list[&quot;tokens&quot;]
+       fl_labels = ex.feature_lists.feature_list[&quot;labels&quot;]
+       for token, label in zip(sequence, labels):
+           fl_tokens.feature.add().int64_list.value.append(token)
+           fl_labels.feature.add().int64_list.value.append(label)
+       return ex
+
+   # write all examples into a tfrecords file
+   with tempfile.namedtemporaryfile() as fp:
+       writer = tf.python_io.tfrecordwriter(fp.name)
+       for sequence, label_sequence in zip(sequences, label_sequences):
+           ex = make_example(sequence, label_sequence)
+           writer.write(ex.serializetostring())
+       writer.close()
+
+   and, to parse an example:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   # a single serialized example
+   # (you can read this from a file using tfrecordreader)
+   ex = make_example([1, 2, 3], [0, 1, 0]).serializetostring()
+
+   # define how to parse the example
+   context_features = {
+       &quot;length&quot;: tf.fixedlenfeature([], dtype=tf.int64)
+   }
+   sequence_features = {
+       &quot;tokens&quot;: tf.fixedlensequencefeature([], dtype=tf.int64),
+       &quot;labels&quot;: tf.fixedlensequencefeature([], dtype=tf.int64)
+   }
+
+   # parse the example
+   context_parsed, sequence_parsed = tf.parse_single_sequence_example(
+       serialized=ex,
+       context_features=context_features,
+       sequence_features=sequence_features
+   )
+
+batching and padding data
+
+   [30]check out the jupyer notebook on batching and padding here!
+
+   tensorflow   s id56 functions expect a tensor of shape [b, t, ...] as
+   input, where b is the batch size and t is the length in time of each
+   input (e.g. the number of words in a sentence). the last dimensions
+   depend on your data. do you see a problem with this? typically, not all
+   sequences in a single batch are of the same length t, but in order to
+   feed them into the id56 they must be. usually that   s done by padding
+   them: appending 0   s to examples to make them equal in length.
+
+   now imagine that one of your sequences is of length 1000, but the
+   average length is 20. if you pad all your examples to length 1000 that
+   would be a huge waste of space (and computation time)! that   s where
+   batch padding comes in. if you create batches of size 32, you only need
+   to pad examples within the batch to the same length (the maximum length
+   of examples in that batch). that way, a really long example will only
+   affect a single batch, not all of your data.
+
+   that all sounds pretty messy to deal with. luckily, tensorflow has
+   built-in support for batch padding. if you set dynamic_pad=true when
+   calling [31]tf.train.batch the returned batch will be automatically
+   padded with 0s. handy! a lower-level option is to use
+   [32]tf.paddingfifoqueue.
+
+side note: be careful with 0   s in your vocabulary/classes
+
+   if you have a classification problem and your input tensors contain
+   class ids (0, 1, 2,    ) then you need to be careful with padding.
+   because you are padding tensos with 0   s you may not be able to tell the
+   difference between 0-padding and    class 0   . whether or not this can be
+   a problem depends on what your model does, but if you want to be safe
+   it   s a good idea to not use    class 0    and instead start with    class 1   .
+   (an example of where this may become a problem is in masking the loss
+   function. more on that later).
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   25
+   # [0, 1, 2, 3, 4 ,...]
+   x = tf.range(1, 10, name=&quot;x&quot;)
+
+   # a queue that outputs 0,1,2,3,...
+   range_q = tf.train.range_input_producer(limit=5, shuffle=false)
+   slice_end = range_q.dequeue()
+
+   # slice x to variable length, i.e. [0], [0, 1], [0, 1, 2], ....
+   y = tf.slice(x, [0], [slice_end], name=&quot;y&quot;)
+
+   # batch the variable length tensor with dynamic padding
+   batched_data = tf.train.batch(
+       tensors=[y],
+       batch_size=5,
+       dynamic_pad=true,
+       name=&quot;y_batch&quot;
+   )
+
+   # run the graph
+   # tf.contrib.learn takes care of starting the queues for us
+   res = tf.contrib.learn.run_n({&quot;y&quot;: batched_data}, n=1,
+   feed_dict=none)
+
+   # print the result
+   print(&quot;batch shape: {}&quot;.format(res[0][&quot;y&quot;].shape))
+   print(res[0][&quot;y&quot;])
+
+   this gives:
+
+   [text]
+   batch shape: (5, 4)
+   [[0 0 0 0]
+   [1 0 0 0]
+   [1 2 0 0]
+   [1 2 3 0]
+   [1 2 3 4]]
+   [/text]
+
+   and, the same with paddingfifoqueue:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   # ... same as above
+
+   # creating a new queue
+   padding_q = tf.paddingfifoqueue(
+       capacity=10,
+       dtypes=tf.int32,
+       shapes=[[none]])
+
+   # enqueue the examples
+   enqueue_op = padding_q.enqueue([y])
+
+   # add the queue runner to the graph
+   qr = tf.train.queuerunner(padding_q, [enqueue_op])
+   tf.train.add_queue_runner(qr)
+
+   # dequeue padded data
+   batched_data = padding_q.dequeue_many(5)
+
+   # ... same as above
+
+id56 vs. dynamic_id56
+
+   [33]check out the dynamic_id56 jupyter notebook here!
+
+   you may have noticed that tensorflow contains two different functions
+   for id56s: [34]tf.nn.id56 and [35]tf.nn.dynamic_id56. which one to use?
+
+   internally, tf.nn.id56 creates an unrolled graph for a fixed id56 length.
+   that means, if you call tf.nn.id56 with inputs having 200 time steps you
+   are creating a static graph with 200 id56 steps. first, graph creation
+   is slow. second, you   re unable to pass in longer sequences (> 200) than
+   you   ve originally specified.
+
+   tf.nn.dynamic_id56 solves this. it uses a tf.while loop to dynamically
+   construct the graph when it is executed. that means graph creation is
+   faster and you can feed batches of variable size. what about
+   performance? you may think the static id56 is faster than its dynamic
+   counterpart because it pre-builds the graph. in my experience that   s
+   not the case.
+
+   in short, just use tf.nn.dynamic_id56. there is no benefit to tf.nn.id56
+   and i wouldn   t be surprised if it was deprecated in the future.
+
+passing sequence_length to your id56
+
+   [36]check out the jupyter notebook on bidirectional id56s here!
+
+   when using any of tensorflow   s id56 functions with padded inputs it is
+   important to pass the sequence_length parameter. in my opinion this
+   parameter should be required, not optional. sequence_length serves two
+   purposes: 1. save computational time and 2. ensure correctness.
+
+   let   s say you have a batch of two examples, one is of length 13, and
+   the other of length 20. each one is a vector of 128 numbers. the length
+   13 example is 0-padded to length 20. then your id56 input tensor is of
+   shape [2, 20, 128]. the dynamic_id56 function returns a tuple of
+   (outputs, state), where outputs is a tensor of size [2, 20, ...] with
+   the last dimension being the id56 output at each time step. state is the
+   last state for each example, and it   s a tensor of size [2, ...] where
+   the last dimension also depends on what kind of id56 cell you   re using.
+
+   so, here   s the problem: once your reach time step 13, your first
+   example in the batch is already    done    and you don   t want to perform
+   any additional calculation on it. the second example isn   t and must go
+   through the id56 until step 20. by passing sequence_length=[13,20] you
+   tell tensorflow to stop calculations for example 1 at step 13 and
+   simply copy the state from time step 13 to the end. the output will be
+   set to 0 for all time steps past 13. you   ve just saved some
+   computational cost. but more importantly, if you didn   t pass
+   sequence_length you would get incorrect results! without passing
+   sequence_length, tensorflow will continue calculating the state until
+   t=20 instead of simply copying the state from t=13. this means you
+   would calculate the state using the padded elements, which is not what
+   you want.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   # create input data
+   x = np.random.randn(2, 10, 8)
+
+   # the second example is of length 6
+   x[1,6:] = 0
+   x_lengths = [10, 6]
+
+   cell = tf.nn.id56_cell.lstmcell(num_units=64, state_is_tuple=true)
+
+   outputs, last_states = tf.nn.dynamic_id56(
+       cell=cell,
+       dtype=tf.float64,
+       sequence_length=x_lengths,
+       inputs=x)
+
+   result = tf.contrib.learn.run_n(
+       {&quot;outputs&quot;: outputs, &quot;last_states&quot;:
+   last_states},
+       n=1,
+       feed_dict=none)
+
+   assert result[0][&quot;outputs&quot;].shape == (2, 10, 64)
+
+   # outputs for the second example past past length 6 should be 0
+   assert (result[0][&quot;outputs&quot;][1,7,:] ==
+   np.zeros(cell.output_size)).all()
+
+bidirectional id56s
+
+   when using a standard id56 to make predictions we are only taking the
+      past    into account. for certain tasks this makes sense (e.g.
+   predicting the next word), but for some tasks it would be useful to
+   take both the past and the future into account. think of a tagging
+   task, like part-of-speech tagging, where we want to assign a tag to
+   each word in a sentence. here we already know the full sequence of
+   words, and for each word we want to take not only the words to the left
+   (past) but also the words to the right (future) into account when
+   making a prediction. bidirectional id56s do exactly that. a
+   bidirectional id56 is a combination of two id56s     one runs forward from
+      left to right    and one runs backward from    right to left   . these are
+   commonly used for tagging tasks, or when we want to embed a sequence
+   into a fixed-length vector (beyond the scope of this post).
+
+   just like for standard id56s, tensorflow has static and dynamic versions
+   of the bidirectional id56. as of the time of this writing, the
+   [37]bidirectional_dynamic_id56 is still undocumented, but it   s preferred
+   over the static bidirectional_id56.
+
+   the key differences of the bidirectional id56 functions are that they
+   take a separate cell argument for both the forward and backward id56,
+   and that they return separate outputs and states for both the forward
+   and backward id56:
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   x = np.random.randn(2, 10, 8)
+
+   x[1,6,:] = 0
+   x_lengths = [10, 6]
+
+   cell = tf.nn.id56_cell.lstmcell(num_units=64, state_is_tuple=true)
+
+   outputs, states  = tf.nn.bidirectional_dynamic_id56(
+       cell_fw=cell,
+       cell_bw=cell,
+       dtype=tf.float64,
+       sequence_length=x_lengths,
+       inputs=x)
+
+   output_fw, output_bw = outputs
+   states_fw, states_bw = states
+
+id56 cells, wrappers and multi-layer id56s
+
+   [38]check out the jupyter notebook on id56 cells here!
+
+   all tensorflow id56 functions take a cell argument. lstms and grus are
+   the most commonly used cells, but there are many others, and not all of
+   them are documented. currently, the best way to get a sense of what
+   cells are available is to look at at [39]id56_cell.py and
+   [40]contrib/id56_cell.
+
+   as of the time of this writing, the basic id56 cells and wrappers are:
+     * basicid56cell     a vanilla id56 cell.
+     * grucell     a [41]gated recurrent unit cell.
+     * basiclstmcell     an lstm cell based on [42]recurrent neural network
+       id173. no peephole connection or cell clipping.
+     * lstmcell     a more complex lstm cell that allows for optional
+       peephole connections and cell clipping.
+     * multiid56cell     a wrapper to combine multiple cells into a
+       multi-layer cell.
+     * dropoutwrapper     a wrapper to add dropout to input and/or output
+       connections of a cell.
+
+   and the contributed id56 cells and wrappers:
+     * coupledinputforgetgatelstmcell     an extended lstmcell that has
+       coupled input and forget gates based on [43]lstm: a search space
+       odyssey.
+     * timefreqlstmcell     time-frequency lstm cell based on [44]modeling
+       time-frequency patterns with lstm vs. convolutional architectures
+       for lvcsr tasks
+     * gridlstmcell     the cell from [45]grid long short-term memory.
+     * attentioncellwrapper     adds attention to an existing id56 cell,
+       based on [46]long short-term memory-networks for machine reading.
+     * lstmblockcell     a faster version of the basic lstm cell (note: this
+       one is in [47]lstm_ops.py)
+
+   using these wrappers and cells is simple, e.g.
+
+   1
+   2
+   3
+   cell = tf.nn.id56_cell.lstmcell(num_units=64, state_is_tuple=true)
+   cell = tf.nn.id56_cell.dropoutwrapper(cell=cell, output_keep_prob=0.5)
+   cell = tf.nn.id56_cell.multiid56cell(cells=[cell] * 4,
+   state_is_tuple=true)
+
+calculating sequence loss on padded examples
+
+   [48]check out the jupyter notebook on calculating loss here!
+
+   for sequence prediction tasks we often want to make a prediction at
+   each time step. for example, in id38 we try to predict the
+   next word for each word in a sentence. if all of your sequences are of
+   the same length you can use tensorflow   s [49]sequence_loss and
+   sequence_loss_by_example functions (undocumented) to calculate the
+   standard cross-id178 loss.
+
+   however, as of the time of this writing sequence_loss does not support
+   variable-length sequences (like the ones you get from a dynamic_id56).
+   naively calculating the loss at each time step doesn   t work because
+   that would take into account the padded positions. the solution is to
+   create a weight matrix that    masks out    the losses at padded positions.
+
+   here you can see why 0-padding can be a problem when you also have a
+      0-class   . if that   s the case you cannotuse tf.sign(tf.to_float(y)) to
+   create a mask because that would mask out the    0-class    as well. you
+   can still create a mask using the sequence length information, it just
+   becomes more complicated.
+
+   1
+   2
+   3
+   4
+   5
+   6
+   7
+   8
+   9
+   10
+   11
+   12
+   13
+   14
+   15
+   16
+   17
+   18
+   19
+   20
+   21
+   22
+   23
+   24
+   25
+   26
+   27
+   28
+   29
+   30
+   31
+   32
+   33
+   34
+   35
+   36
+   37
+   38
+   39
+   40
+   41
+   42
+   43
+   44
+   # batch size
+   b = 4
+   # (maximum) number of time steps in this batch
+   t = 8
+   id56_dim = 128
+   num_classes = 10
+
+   # the *acutal* length of the examples
+   example_len = [1, 2, 3, 8]
+
+   # the classes of the examples at each step (between 1 and 9, 0 means
+   padding)
+   y = np.random.randint(1, 10, [b, t])
+   for i, length in enumerate(example_len):
+       y[i, length:] = 0
+
+   # the id56 outputs
+   id56_outputs = tf.convert_to_tensor(np.random.randn(b, t, id56_dim),
+   dtype=tf.float32)
+
+   # output layer weights
+   w = tf.get_variable(
+       name=&quot;w&quot;,
+       initializer=tf.random_normal_initializer(),
+       shape=[id56_dim, num_classes])
+
+   # calculate logits and probs
+   # reshape so we can calculate them all at once
+   id56_outputs_flat = tf.reshape(id56_outputs, [-1, id56_dim])
+   logits_flat = tf.batch_matmul(id56_outputs_flat, w)
+   probs_flat = tf.nn.softmax(logits_flat)
+
+   # calculate the losses
+   y_flat =  tf.reshape(y, [-1])
+   losses = tf.nn.sparse_softmax_cross_id178_with_logits(logits_flat,
+   y_flat)
+
+   # mask the losses
+   mask = tf.sign(tf.to_float(y_flat))
+   masked_losses = mask * losses
+
+   # bring back to [b, t] shape
+   masked_losses = tf.reshape(masked_losses,  tf.shape(y))
+
+   # calculate mean loss
+   mean_loss_by_example = tf.reduce_sum(masked_losses,
+   reduction_indices=1) / example_len
+   mean_loss = tf.reduce_mean(mean_loss_by_example)
+
+   categories[50]id38, [51]neural networks, [52]recurrent
+   neural networks, [53]tensorflow
+
+post navigation
+
+   [54]previous postprevious deep learning for chatbots, part 2    
+   implementing a retrieval-based model in tensorflow
+   [55]next postnext learning id23 (with code, exercises
+   and solutions)
+
+subscribe to blog via email
+
+   enter your email address to subscribe to this blog and receive
+   notifications of new posts by email.
+
+   email address ____________________
+
+   (button) subscribe
+
+recent posts
+
+     * [56]introduction to learning to trade with id23
+     * [57]ai and deep learning in 2017     a year in review
+     * [58]hype or not? some perspective on openai   s dota 2 bot
+     * [59]learning id23 (with code, exercises and
+       solutions)
+     * [60]id56s in tensorflow, a practical guide and undocumented features
+     * [61]deep learning for chatbots, part 2     implementing a
+       retrieval-based model in tensorflow
+     * [62]deep learning for chatbots, part 1     introduction
+     * [63]attention and memory in deep learning and nlp
+
+archives
+
+     * [64]february 2018
+     * [65]december 2017
+     * [66]august 2017
+     * [67]october 2016
+     * [68]august 2016
+     * [69]july 2016
+     * [70]april 2016
+     * [71]january 2016
+     * [72]december 2015
+     * [73]november 2015
+     * [74]october 2015
+     * [75]september 2015
+
+categories
+
+     * [76]conversational agents
+     * [77]convolutional neural networks
+     * [78]deep learning
+     * [79]gpu
+     * [80]id38
+     * [81]memory
+     * [82]neural networks
+     * [83]news
+     * [84]nlp
+     * [85]recurrent neural networks
+     * [86]id23
+     * [87]id56s
+     * [88]tensorflow
+     * [89]trading
+     * [90]uncategorized
+
+meta
+
+     * [91]log in
+     * [92]entries rss
+     * [93]comments rss
+     * [94]wordpress.org
+
+   [95]proudly powered by wordpress
+
+references
+
+   1. http://www.wildml.com/feed/
+   2. http://www.wildml.com/comments/feed/
+   3. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/feed/
+   4. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+   5. http://www.wildml.com/2016/10/learning-reinforcement-learning/
+   6. http://www.wildml.com/wp-json/oembed/1.0/embed?url=http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+   7. http://www.wildml.com/wp-json/oembed/1.0/embed?url=http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/&format=xml
+   8. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/#content
+   9. http://www.wildml.com/
+  10. http://www.wildml.com/
+  11. https://www.getrevue.co/profile/wildml
+  12. http://www.wildml.com/deep-learning-glossary/
+  13. mailto:dennybritz@gmail.com
+  14. http://www.wildml.com/about/
+  15. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+  16. http://www.wildml.com/author/dennybritz/
+  17. http://www.wildml.com/2015/09/recurrent-neural-networks-tutorial-part-1-introduction-to-id56s/
+  18. https://github.com/dennybritz/tf-id56/blob/master/sequence_example.ipynb
+  19. https://github.com/dennybritz/tf-id56/blob/master/batching_padding.ipynb
+  20. https://github.com/dennybritz/tf-id56/blob/master/dynamic_id56.ipynb
+  21. https://github.com/dennybritz/tf-id56/blob/master/bidirectional_id56.ipynb
+  22. https://github.com/dennybritz/tf-id56/blob/master/id56_cell_wrappers.py.ipynb
+  23. https://github.com/dennybritz/tf-id56/blob/master/loss_masking.py.ipynb
+  24. https://github.com/dennybritz/tf-id56/blob/master/sequence_example.ipynb
+  25. https://developers.google.com/protocol-buffers/
+  26. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/example/example.proto
+  27. https://www.tensorflow.org/versions/r0.10/how_tos/distributed/index.html#distributed-tensorflow
+  28. https://www.tensorflow.org/versions/r0.10/api_docs/python/io_ops.html#tfrecordreader
+  29. https://github.com/tensorflow/tensorflow/blob/r0.10/tensorflow/python/ops/parsing_ops.py
+  30. https://github.com/dennybritz/tf-id56/blob/master/batching_padding.ipynb
+  31. https://www.tensorflow.org/versions/r0.10/api_docs/python/io_ops.html#batch
+  32. https://www.tensorflow.org/versions/r0.10/api_docs/python/io_ops.html#paddingfifoqueue
+  33. https://github.com/dennybritz/tf-id56/blob/master/dynamic_id56.ipynb
+  34. https://www.tensorflow.org/versions/r0.10/api_docs/python/nn.html#id56
+  35. https://www.tensorflow.org/versions/r0.10/api_docs/python/nn.html#dynamic_id56
+  36. https://github.com/dennybritz/tf-id56/blob/master/bidirectional_id56.ipynb
+  37. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56.py
+  38. https://github.com/dennybritz/tf-id56/blob/master/id56_cell_wrappers.py.ipynb
+  39. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id56_cell.py
+  40. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id56/python/ops/id56_cell.py
+  41. http://arxiv.org/abs/1406.1078
+  42. http://arxiv.org/abs/1409.2329
+  43. http://arxiv.org/abs/1503.04069
+  44. http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/45401.pdf
+  45. http://arxiv.org/abs/1507.01526
+  46. https://arxiv.org/abs/1601.06733
+  47. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/id56/python/ops/lstm_ops.py
+  48. https://github.com/dennybritz/tf-id56/blob/master/loss_masking.py.ipynb
+  49. https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/id195.py
+  50. http://www.wildml.com/category/language-modeling/
+  51. http://www.wildml.com/category/neural-networks/
+  52. http://www.wildml.com/category/neural-networks/recurrent-neural-networks/
+  53. http://www.wildml.com/category/tensorflow/
+  54. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+  55. http://www.wildml.com/2016/10/learning-reinforcement-learning/
+  56. http://www.wildml.com/2018/02/introduction-to-learning-to-trade-with-reinforcement-learning/
+  57. http://www.wildml.com/2017/12/ai-and-deep-learning-in-2017-a-year-in-review/
+  58. http://www.wildml.com/2017/08/hype-or-not-some-perspective-on-openais-dota-2-bot/
+  59. http://www.wildml.com/2016/10/learning-reinforcement-learning/
+  60. http://www.wildml.com/2016/08/id56s-in-tensorflow-a-practical-guide-and-undocumented-features/
+  61. http://www.wildml.com/2016/07/deep-learning-for-chatbots-2-retrieval-based-model-tensorflow/
+  62. http://www.wildml.com/2016/04/deep-learning-for-chatbots-part-1-introduction/
+  63. http://www.wildml.com/2016/01/attention-and-memory-in-deep-learning-and-nlp/
+  64. http://www.wildml.com/2018/02/
+  65. http://www.wildml.com/2017/12/
+  66. http://www.wildml.com/2017/08/
+  67. http://www.wildml.com/2016/10/
+  68. http://www.wildml.com/2016/08/
+  69. http://www.wildml.com/2016/07/
+  70. http://www.wildml.com/2016/04/
+  71. http://www.wildml.com/2016/01/
+  72. http://www.wildml.com/2015/12/
+  73. http://www.wildml.com/2015/11/
+  74. http://www.wildml.com/2015/10/
+  75. http://www.wildml.com/2015/09/
+  76. http://www.wildml.com/category/conversational-agents/
+  77. http://www.wildml.com/category/neural-networks/convolutional-neural-networks/
+  78. http://www.wildml.com/category/deep-learning/
+  79. http://www.wildml.com/category/gpu/
+  80. http://www.wildml.com/category/language-modeling/
+  81. http://www.wildml.com/category/memory/
+  82. http://www.wildml.com/category/neural-networks/
+  83. http://www.wildml.com/category/news/
+  84. http://www.wildml.com/category/nlp/
+  85. http://www.wildml.com/category/neural-networks/recurrent-neural-networks/
+  86. http://www.wildml.com/category/reinforcement-learning/
+  87. http://www.wildml.com/category/id56s/
+  88. http://www.wildml.com/category/tensorflow/
+  89. http://www.wildml.com/category/trading/
+  90. http://www.wildml.com/category/uncategorized/
+  91. http://www.wildml.com/wp-login.php
+  92. http://www.wildml.com/feed/
+  93. http://www.wildml.com/comments/feed/
+  94. https://wordpress.org/
+  95. https://wordpress.org/

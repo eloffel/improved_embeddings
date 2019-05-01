@@ -1,0 +1,1043 @@
+id38 with gated convolutional networks
+
+yann n. dauphin 1 angela fan 1 michael auli 1 david grangier 1
+
+7
+1
+0
+2
+
+ 
+
+p
+e
+s
+8
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+3
+8
+0
+8
+0
+
+.
+
+2
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+the pre-dominant approach to language mod-
+eling to date is based on recurrent neural net-
+works. their success on this task is often linked
+to their ability to capture unbounded context.
+in this paper we develop a    nite context ap-
+proach through stacked convolutions, which can
+be more ef   cient since they allow paralleliza-
+tion over sequential tokens. we propose a novel
+simpli   ed gating mechanism that outperforms
+oord et al. (2016b) and investigate the impact
+of key architectural decisions. the proposed ap-
+proach achieves state-of-the-art on the wikitext-
+103 benchmark, even though it features long-
+term dependencies, as well as competitive re-
+sults on the google billion words benchmark.
+our model reduces the latency to score a sen-
+tence by an order of magnitude compared to a
+recurrent baseline. to our knowledge, this is the
+   rst time a non-recurrent approach is competitive
+with strong recurrent models on these large scale
+language tasks.
+
+n(cid:89)
+
+1. introduction
+statistical language models estimate the id203 distri-
+bution of a sequence of words by modeling the id203
+of the next word given preceding words, i.e.
+
+p (w0, . . . , wn ) = p (w0)
+
+p (wi|w0, . . . , wi   1),
+
+i=1
+
+where wi are discrete word indices in a vocabulary. lan-
+guage models are a critical part of systems for speech
+recognition (yu & deng, 2014) and machine translation
+(koehn, 2010).
+recently, neural networks (bengio et al., 2003; mikolov
+et al., 2010; jozefowicz et al., 2016) have been shown to
+
+1facebook ai research. correspondence to: yann n. dauphin
+
+<ynd@fb.com>.
+
+proceedings of the 34 th international conference on machine
+learning, sydney, australia, pmlr 70, 2017. copyright 2017
+by the author(s).
+
+outperform classical id165 language models (kneser &
+ney, 1995; chen & goodman, 1996). these classical mod-
+els suffer from data sparsity, which makes it dif   cult to rep-
+resent large contexts and thus, long-range dependencies.
+neural language models tackle this issue by embedding
+words in continuous space over which a neural network is
+applied. the current state of the art for language model-
+ing is based on long short term memory networks (lstm;
+hochreiter et al., 1997) which can theoretically model ar-
+bitrarily long dependencies.
+in this paper, we introduce new gated convolutional net-
+works and apply them to id38. convolu-
+tional networks can be stacked to represent large context
+sizes and extract hierarchical features over larger and larger
+contexts with more abstractive features (lecun & bengio,
+1995). this allows them to model long-term dependen-
+cies by applying o( n
+k ) operations over a context of size n
+and kernel width k. in contrast, recurrent networks view
+the input as a chain structure and therefore require a linear
+number o(n ) of operations.
+analyzing the input hierarchically bears resemblance to
+classical grammar formalisms which build syntactic tree
+structures of increasing granuality, e.g., sentences consist
+of noun phrases and verb phrases each comprising further
+internal structure (manning & sch  utze, 1999; steedman,
+2002). hierarchical structure also eases learning since the
+number of non-linearities for a given context size is reduced
+compared to a chain structure, thereby mitigating the van-
+ishing gradient problem (glorot & bengio, 2010).
+modern hardware is well suited to models that are highly
+parallelizable. in recurrent networks, the next output de-
+pends on the previous hidden state which does not enable
+parallelization over the elements of a sequence. convolu-
+tional networks, however, are very amenable to this com-
+puting paradigm since the computation of all input words
+can be performed simultaneously (  2).
+gating has been shown to be essential for recurrent neural
+networks to reach state-of-the-art performance (jozefow-
+icz et al., 2016). our gated linear units reduce the vanish-
+ing gradient problem for deep architectures by providing a
+linear path for the gradients while retaining non-linear ca-
+pabilities (  5.2).
+
+id38 with gated convolutional networks
+
+we show that gated convolutional networks outperform
+other recently published language models such as lstms
+trained in a similar setting on the google billion word
+benchmark (chelba et al., 2013). we also evaluate the abil-
+ity of our models to deal with long-range dependencies on
+the wikitext-103 benchmark for which the model is con-
+ditioned on an entire paragraph rather than a single sen-
+tence and we achieve a new state-of-the-art on this dataset
+(merity et al., 2016). finally, we show that gated linear
+units achieve higher accuracy and converge faster than the
+lstm-style gating of oord et al. (2016;   4,   5).
+
+2. approach
+in this paper we introduce a new neural language model
+that replaces the recurrent connections typically used in re-
+current networks with gated temporal convolutions. neu-
+ral language models (bengio et al., 2003) produce a repre-
+sentation h = [h0, . . . , hn ] of the context for each word
+w0, . . . , wn to predict the next word p (wi|hi). recurrent
+neural networks f compute h through a recurrent function
+hi = f (hi   1, wi   1) which is an inherently sequential pro-
+cess that cannot be parallelized over i.1
+our proposed approach convolves the inputs with a func-
+tion f to obtain h = f     w and therefore has no tempo-
+ral dependencies, so it is easier to parallelize over the in-
+dividual words of a sentence. this process will compute
+each context as a function of a number of preceding words.
+compared to recurrent networks, the context size is    nite
+but we will demonstrate both that in   nite contexts are not
+necessary and our models can represent large enough con-
+texts to perform well in practice (  5).
+figure 1 illustrates the model architecture. words are rep-
+resented by a vector embedding stored in a lookup table
+d|v|  e where |v| is the number of words in the vocabulary
+and e is the embedding size. the input to our model is a
+sequence of words w0, . . . , wn which are represented by
+id27s e = [dw0, . . . , dwn ]. we compute the
+hidden layers h0, . . . , hl as
+
+hl(x) = (x     w + b)       (x     v + c)
+
+(1)
+
+where m, n are respectively the number of input and output
+feature maps and k is the patch size, x     rn  m is the
+input of layer hl (either id27s or the outputs of
+previous layers), w     rk  m  n, b     rn, v     rk  m  n,
+c     rn are learned parameters,    is the sigmoid function
+and     is the element-wise product between matrices.
+when convolving inputs, we take care that hi does not
+contain information from future words. we address this
+by shifting the convolutional inputs to prevent the kernels
+
+1parallelization is usually done over multiple sequences in-
+
+stead.
+
+figure 1. architecture of the gated convolutional network for lan-
+guage modeling.
+
+from seeing future context (oord et al., 2016a). speci   -
+cally, we zero-pad the beginning of the sequence with k    1
+elements, assuming the    rst input element is the beginning
+of sequence marker which we do not predict and k is the
+width of the kernel.
+the output of each layer is a linear projection x     w + b
+modulated by the gates   (x     v + c). similar to lstms,
+these gates multiply each element of the matrix x    w + b
+and control the information passed on in the hierarchy.
+we dub this gating mechanism gated linear units (glu).
+stacking multiple layers on top of the input e gives a repre-
+sentation of the context for each word h = hl   . . .   h0(e).
+we wrap the convolution and the gated linear unit in a pre-
+activation residual block that adds the input of the block to
+
+input sentencetextthe    cat    sat    on    the    mat    .w0     w1     w2     w3     w4     w5     w6lookup tablee = dwiconvolutiona = e   w + bgatingh0 = a     (b)   softmaxy = softmax(whl)b = e   v + cstack l - 1 convolution+gating blocksid38 with gated convolutional networks
+
+the output (he et al., 2015a). the blocks have a bottleneck
+structure for computational ef   ciency and each block has
+up to 5 layers.
+the simplest choice to obtain model predictions is to use
+a softmax layer, but this choice is often computationally
+inef   cient for large vocabularies and approximations such
+as noise contrastive estimation (gutmann & hyv  arinen)
+or hierarchical softmax (morin & bengio, 2005) are pre-
+ferred. we choose an improvement of the latter known as
+adaptive softmax which assigns higher capacity to very fre-
+quent words and lower capacity to rare words (grave et al.,
+2016a). this results in lower memory requirements as well
+as faster computation at both training and test time.
+
+3. gating mechanisms
+gating mechanisms control the path through which infor-
+mation    ows in the network and have proven to be use-
+ful for recurrent neural networks (hochreiter & schmidhu-
+ber, 1997). lstms enable long-term memory via a sep-
+arate cell controlled by input and forget gates. this al-
+lows information to    ow unimpeded through potentially
+many timesteps. without these gates, information could
+easily vanish through the transformations of each timestep.
+in contrast, convolutional networks do not suffer from the
+same kind of vanishing gradient and we    nd experimentally
+that they do not require forget gates.
+therefore, we consider models possessing solely output
+gates, which allow the network to control what informa-
+tion should be propagated through the hierarchy of lay-
+ers. we show this mechanism to be useful for language
+modeling as it allows the model to select which words or
+features are relevant for predicting the next word. par-
+allel to our work, oord et al. (2016b) have shown the
+effectiveness of an lstm-style mechanism of the form
+tanh(x   w+b)     (x   v+c) for the convolutional mod-
+eling of images. later, kalchbrenner et al. (2016) extended
+this mechanism with additional gates for use in translation
+and character-level id38.
+gated linear units are a simpli   ed gating mechanism based
+on the work of dauphin & grangier (2015) for non-
+deterministic gates that reduce the vanishing gradient prob-
+lem by having linear units coupled to the gates. this retains
+the non-linear capabilities of the layer while allowing the
+gradient to propagate through the linear unit without scal-
+ing. the gradient of the lstm-style gating of which we
+dub gated tanh unit (gtu) is
+
+   [tanh(x)       (x)] = tanh(cid:48)(x)   x       (x)
++  (cid:48)(x)   x     tanh(x).
+
+(2)
+
+notice that it gradually vanishes as we stack layers because
+of the downscaling factors tanh(cid:48)(x) and   (cid:48)(x). in con-
+
+trast, the gradient of the gated linear unit
+
+   [x       (x)] =    x       (x) + x       (cid:48)(x)   x (3)
+has a path    x       (x) without downscaling for the ac-
+tivated gating units in   (x). this can be thought of
+as a multiplicative skip connection which helps gradients
+   ow through the layers. we compare the different gating
+schemes experimentally in section   5.2 and we    nd gated
+linear units allow for faster convergence to better perplexi-
+ties.
+
+4. experimental setup
+4.1. datasets
+
+we report results on two public large-scale language mod-
+eling datasets. first, the google billion word dataset
+(chelba et al., 2013) is considered one of the largest lan-
+guage modeling datasets with almost one billion tokens and
+a vocabulary of over 800k words. in this dataset, words
+appearing less than 3 times are replaced with a special un-
+known symbol. the data is based on an english corpus
+of 30, 301, 028 sentences whose order has been shuf   ed.
+second, wikitext-103 is a smaller dataset of over 100m
+tokens with a vocabulary of about 200k words (merity
+et al., 2016). different from gbw, the sentences are con-
+secutive which allows models to condition on larger con-
+texts rather than single sentences. for both datasets, we
+add a beginning of sequence marker <s > at the start of
+each line and an end of sequence marker </s> at the end
+of each line. on the google billion word corpus each
+sequence is a single sentence, while on wikitext-103 a
+sequence is an entire paragraph. the model sees <s>
+and </s > as input but only predicts the end of sequence
+(cid:80)n
+marker </s>. we evaluate models by computing the per-
+i     log p(wi|...,wi   1) on the standard held out
+plexity e 1
+test portion of each dataset.
+
+n
+
+4.2. training
+
+we implement our models in torch (collobert et al., 2011)
+and train on tesla m40 gpus. the majority of our models
+are trained on single gpu, as we focused on identifying
+compact architectures with good generalization and ef   -
+cient computation at test time. we trained larger models
+with an 8-gpu setup by copying the model onto each gpu
+and dividing the batch such that each worker computes
+1/8th of the gradients. the gradients are then summed us-
+ing nvidia nccl. the multi-gpu setup allowed us to train
+models with larger hidden units.
+we train using nesterov   s momentum (sutskever et al.,
+2013). while the cost in terms of memory is storing an-
+other vector of the size of the parameters, it increases the
+speed of convergence signi   cantly with minimal additional
+
+id38 with gated convolutional networks
+
+gid98-13
+
+gid98-14b
+
+gid98-9
+
+gid98-8b
+
+gid98-8
+
+gid98-14
+
+[4, 1268]    1
+
+[5, 512]    1
+
+[4, 807]    1
+
+[1, 512]    1
+
+(cid:35)
+
+4, 1268
+4, 1268
+
+   12
+
+google billion word
+
+128
+
+(cid:34)
+
+(cid:35)
+
+4, 807
+4, 807
+
+   4
+
+wikitext-103
+
+[4, 900]    1
+
+280
+
+[6, 850]    3
+
+[4, 900]    7
+
+[1, 850]    1
+
+5, 128
+1, 512
+
+          1, 128
+          1, 512
+          1, 1024
+          1, 1024
+
+5, 512
+1, 1024
+
+5, 1024
+1, 2048
+
+5, 1024
+1, 4096
+
+             3
+             3
+             6
+             1
+
+5, 128
+1, 512
+
+          1, 128
+          1, 256
+          1, 1024
+
+5, 256
+1, 512
+
+1, 1024
+1, 2048
+
+             3
+             3
+             1
+
+[5, 850]    4
+
+[1, 850]    1
+
+[4, 850]    3
+
+[4, 1024]    1
+[4, 2048]    1
+10k,20k,200k
+
+(cid:34)
+
+name
+dataset
+lookup
+conv1
+
+conv2.x
+
+conv3.x
+
+conv4.x
+
+conv5.x
+
+conv6.x
+conv7.x
+adasoftmax
+
+10k,40k,200k
+
+4k,40k,200k
+
+2k,10k,50k
+
+table 1. architectures for the models. the residual building blocks are shown in brackets with the format [k, n].    b    denotes bottleneck
+architectures.
+
+computation compared to standard stochastic gradient de-
+scent. the speed of convergence was further increased with
+gradient clipping (pascanu et al., 2013) and weight normal-
+ization (salimans & kingma, 2016).
+pascanu et al. (2013) argue for gradient clipping because it
+prevents the gradient explosion problem that characterizes
+id56s. however, gradient clipping is not tied to id56s, as
+it can be derived from the general concept of trust region
+methods. gradient clipping is found using a spherical trust
+region
+
+         = argmin
+s. t. (cid:107)     (cid:107)    
+
+f (  ) +    f t      
+
+=     max((cid:107)   f(cid:107),  )
+
+   f
+(cid:107)   f(cid:107) .
+
+(4)
+
+empirically, our experiments converge signi   cantly faster
+with the use of gradient clipping even though we do not use
+a recurrent architecture.
+in combination, these methods led to stable and fast con-
+vergence with comparatively large learning rates such as 1.
+
+4.3. hyper-parameters
+
+we found good hyper-parameter con   gurations by cross-
+validating with random search on a validation set. for
+model architecture, we select
+the number of residual
+blocks between {1, . . . , 10},
+the size of the embed-
+dings with {128, . . . , 256}, the number of units between
+{128, . . . , 2048}, and the kernel width between {3, . . . , 5}.
+
+in general,    nding a good architecture was simple and the
+rule of thumb is that the larger the model, the better the per-
+formance. in terms of optimization, we initialize the lay-
+ers of the model with the kaiming initialization (he et al.,
+2015b), with the learning rate sampled uniformly in the
+interval [1., 2.], the momentum set to 0.99, and clipping
+set to 0.1. good hyper-parameters for the optimizer are
+quite straightforward to    nd and the optimal values do not
+change much between datasets.
+
+5. results
+lstms and recurrent networks are able to capture long
+term dependencies and are fast becoming cornerstones in
+natural language processing. in this section, we compare
+strong lstm and id56 models from the literature to our
+gated convolutional approach on two datasets.
+we    nd the gid98 outperforms the comparable lstm re-
+sults on google billion words. to accurately compare these
+approaches, we control for the same number of gpus and
+the adaptive softmax output model (grave et al., 2016a), as
+these variables have a signi   cant in   uence on performance.
+in this setting, the gid98 reaches 38.1 test perplexity while
+the comparable lstm has 39.8 perplexity (table 2).
+further, the gid98 obtains strong performance with much
+greater computational ef   ciency. figure 2 shows that our
+approach closes the previously signi   cant gap between
+models that use the full softmax and models with the usu-
+ally less accurate hierarchical softmax. thanks to the adap-
+
+id38 with gated convolutional networks
+
+model
+sigmoid-id56-2048 (ji et al., 2015)
+interpolated kn 5-gram (chelba et al., 2013)
+sparse non-negative matrix lm (shazeer et al., 2014)
+id56-1024 + maxent 9 gram features (chelba et al., 2013)
+lstm-2048-512 (jozefowicz et al., 2016)
+2-layer lstm-8192-1024 (jozefowicz et al., 2016)
+big glstm-g4 (kuchaiev & ginsburg, 2017)
+lstm-2048 (grave et al., 2016a)
+2-layer lstm-2048 (grave et al., 2016a)
+gid98-13
+gid98-14 bottleneck
+
+test ppl hardware
+1 cpu
+100 cpus
+-
+24 gpus
+32 gpus
+32 gpus
+8 gpus
+1 gpu
+1 gpu
+1 gpu
+8 gpus
+
+68.3
+67.6
+52.9
+51.3
+43.7
+30.6
+23.3   
+43.9
+39.8
+38.1
+31.9
+
+table 2. results on the google billion word test set. the gid98 outperforms the lstms with the same output approximation.
+
+model
+lstm-1024 (grave et al., 2016b)
+gid98-8
+gid98-14
+
+test ppl hardware
+1 gpu
+1 gpu
+4 gpus
+
+48.7
+44.9
+37.2
+
+table 3. results for single models on the wikitext-103 dataset.
+
+lion word, the average sentence length is quite short    
+only 20 words. we evaluate on wikitext-103 to determine
+if the model can perform well on a dataset where much
+larger contexts are available. on wikitext-103, an input se-
+quence is an entire wikipedia article instead of an individ-
+ual sentence - increasing the average length to 4000 words.
+however, the gid98 outperforms lstms on this problem
+as well (table 3). the gid98-8 model has 8 layers with
+800 units each and the lstm has 1024 units. these results
+show that gid98s can model enough context to achieve
+strong results.
+we evaluated on the gigaword dataset following chen et al.
+(2016) to compare with fully connected models. we found
+that the fully connected and convolutional network reach
+respectively 55.6 and 29.4 perplexity. we also ran pre-
+liminary experiments on the much smaller penn tree bank
+dataset. when we score the sentences independently, the
+gid98 and lstm have comparable test perplexity with
+108.7 and 109.3 respectively. however, it is possible to
+achieve better results by conditioning on previous sen-
+tences. unlike the lstm, we found that the gid98 over-
+   ts on this quite small dataset and so we note the model is
+better suited to larger scale problems.
+
+5.1. computational ef   ciency
+
+computational cost is an important consideration for lan-
+guage models. depending on the application, there are a
+number of metrics to consider. we measure the throughput
+
+figure 2. in comparison to the state-of-the-art (jozefowicz et al.,
+2016) which uses the full softmax, the adaptive softmax approxi-
+mation greatly reduces the number of operations required to reach
+a given perplexity.
+
+tive softmax, the gid98 only requires a fraction of the op-
+erations to reach the same perplexity values. the gid98
+outperforms other single model state-of-the-art approaches
+except the much larger lstm of jozefowicz et al. (2016),
+a model which requires more gpus and the much more
+computationally expensive full softmax.
+in comparison,
+the largest model we have trained reaches 31.9 test per-
+plexity compared to the 30.6 of that approach, but only re-
+quires training for 2 weeks on 8 gpus compared to 3 weeks
+of training on 32 gpus for the lstm. note that these re-
+sults can be improved by either using mixtures of experts
+(shazeer et al., 2017) or ensembles of these models.
+another relevant concern is if the gid98   s    xed context
+size can thoroughly model long sequences. on google bil-
+
+   appeared after submission
+
+02004006008001000mflops303540455055test perplexitylstm+softmaxgid98+adasoftmaxid38 with gated convolutional networks
+
+figure 3. learning curves on wikitext-103 (left) and google billion word (right) for models with different activation mechanisms.
+models with gated linear units (glu) converge faster and to a lower perplexity.
+
+lstm-2048
+gid98-9
+gid98-8 bottleneck
+
+throughput
+
+responsiveness
+
+(cpu)
+169
+121
+179
+
+(gpu)
+45,622
+29,116
+45,878
+
+(gpu)
+2,282
+29,116
+45,878
+
+table 4. processing speed in tokens/s at test time for an lstm
+with 2048 units and gid98s achieving 43.9 perplexity on google
+billion word. the gid98 with bottlenecks improves the respon-
+siveness by 20 times while maintaining high throughput.
+
+of a model as the number of tokens that can be processed
+per second. throughput can be maximized by processing
+many sentences in parallel to amortize sequential opera-
+tions. in contrast, responsiveness is the speed of process-
+ing the input sequentially, one token at a time. through-
+put is important because it indicates the time required to
+process a corpus of text and responsiveness is an indicator
+of the time to    nish processing a sentence. a model can
+have low responsiveness but high throughput by evaluating
+many sentences simultaneously through batching. in this
+case, such a model is slow in    nishing processing individ-
+ual sentences, but can process many sentences at a good
+rate.
+we evaluate the throughput and responsiveness for mod-
+els that reach approximately 43.9 perplexity on the google
+billion word benchmark. we consider the lstm with
+2048 units in table 2, a gid98-8bottleneck with 7 resnet
+blocks that have a bottleneck structure as described by (he
+et al., 2015a) and a gid98-8 without bottlenecks. a bot-
+tleneck block wedges a k > 1 convolution between two
+k = 1 layers. this designs reduces computational cost by
+reducing and increasing dimensionality with the k = 1 lay-
+ers so that the convolution operates in a lower dimensional
+space. our results show that the use of bottleneck blocks is
+important to maintaining computational ef   ciency.
+
+the throughput of the lstm is measured by using a large
+batch of 750 sequences of length 20, resulting in 15, 000 to-
+kens per batch. the responsiveness is the average speed to
+process a sequence of 15, 000 contiguous tokens. table 4
+shows that the throughput for the lstm and the gid98
+are similar. the lstm performs very well on gpu be-
+cause the large batch size of 750 enables high paralleliza-
+tion over different sentences. this is because the lstm
+implementation has been thoroughly optimized and uses
+cudnn, whereas the cudnn implementation of convolu-
+tions is not been optimized for the 1-d convolutions we use
+in our model. we believe much better performance can be
+achieved by a more ef   cient 1-d cudnn convolution. un-
+like the lstm, the gid98 can be parallelized both over
+sequences as well as across the tokens of each sequence,
+allowing the gid98 to have 20x higher responsiveness.
+
+5.2. gating mechanisms
+
+in this section, we compare the gated linear unit with
+other mechanisms as well as to models without gating.
+we consider the lstm-style gating mechanism (gtu)
+tanh(x     w + b)       (x     v + c) of (oord et al., 2016b)
+and networks that use regular relu or tanh activations.
+gating units add parameters, so for fair comparison, we
+carefully cross-validate models with a comparable number
+of parameters. figure 3 (left) shows that glu networks
+converge to a lower perplexity than the other approaches
+on wikitext-103. similar to gated linear units, the relu
+has a linear path that lets the gradients easily pass through
+the active units. this translates to much faster convergence
+for both the relu and the glu. on the other hand, neither
+tanh nor gtu have this linear path, and thus suffer from
+the vanishing gradient problem. in the gtu, both the in-
+puts as well as the gating units can cut the gradient when
+the units saturate.
+comparing the gtu and tanh models allows us to measure
+
+05101520253035epochs4550556065707580test perplexitytanhrelugtuglu050100hours40455055606570test perplexityrelugtugluid38 with gated convolutional networks
+
+figure 4. test perplexity as a function of context for google billion word (left) and wiki-103 (right). we observe that models with
+bigger context achieve better results but the results start diminishing quickly after a context of 20.
+
+the effect of gating since the tanh model can be thought of
+as a gtu network with the sigmoid gating units removed.
+the results (figure 3, left) show that the gating units make
+a vast difference and provide useful modeling capabilities,
+as there is a large difference in the performance between
+gtu and tanh units. similarly, while relu unit is not
+an exact ablation of the gating units in the glu, it can be
+seen as a simpli   cation relu(x) = x     (x > 0) where
+the gates become active depending on the sign of the input.
+also in this case, glu units lead to lower perplexity.
+in figure 3 (right) we repeat the same experiment on the
+larger google billion words dataset. we consider a    xed
+time budget of 100 hours because of the considerable train-
+ing time required for this task. similar to wikitext-103,
+the gated linear units achieve the best results on this prob-
+lem. there is a gap of about 5 perplexity points between
+the glu and relu which is similar to the difference be-
+tween the lstm and id56 models measured by (jozefow-
+icz et al., 2016) on the same dataset.
+
+5.3. non-linear modeling
+
+the experiments so far have shown that the gated linear
+unit bene   ts from the linear path the unit provides com-
+pared to other non-linearities. next, we compare networks
+with glus to purely linear networks and networks with
+bilinear layers in order to measure the impact of the non-
+linear path provided by the gates of the glu. one mo-
+tivation for this experiment is the success of linear mod-
+els on many natural language processing tasks (manning
+& sch  utze, 1999). we consider deep linear convolutional
+networks where the layers lack the gating units of the glu
+and take the form hl(x) = x     w + b. stacking sev-
+eral layers on top of each other is simply a factorization of
+the model which remains linear up to the softmax, at which
+point it becomes log-linear. another variation of glus are
+bilinear layers (mnih & hinton, 2007) which take the form
+
+hl(x) = (x     w + b)     (x     v + c).
+
+figure 5. learning curves on google billion word for models
+with varying degrees of non-linearity.
+
+figure 5 shows that glus perform best, followed by bilin-
+ear layers and then linear layers. bilinear layers improve
+over linear ones by more than 40 perplexity points, and the
+glu improves another 20 perplexity points over the bilin-
+ear model. the linear model performs very poorly at per-
+plexity 115 even compared to 67.6 of a kneser-ney 5-gram
+model, even though the former has access to more context.
+surprisingly, the introduction of the bilinear units is enough
+to reach 61 perplexity on google billion word, which sur-
+passes both kneser-ney 5-gram models and the non-linear
+neural model of (ji et al., 2015).
+
+5.4. context size
+
+figure 4 shows the impact of context size for the gated
+id98. we tried different combinations of network depth
+and kernel widths for each context size and chose the best
+performing one for each size. generally, larger contexts
+
+10203040506070context3032343638404244test perplexity510152025context405060708090test perplexity050100hours406080100120140test perplexitylinearbilineargluid38 with gated convolutional networks
+
+improve accuracy but returns drastically diminish with win-
+dows larger than 40 words, even for wikitext-103 where
+we may condition on an entire wikipedia article. this
+means that the unlimited context offered by recurrent mod-
+els is not strictly necessary for id38. fur-
+thermore, this    nding is also congruent with the fact that
+good performance with recurrent networks can be obtained
+by truncating gradients after only 40 timesteps using trun-
+cated back propagation through time. figure 4 also shows
+that wikitext-103 bene   ts much more from larger context
+size than google billion word as the performance degrades
+more sharply with smaller contexts. wikitext-103 pro-
+vides much more context than google billion word where
+the average sentence size is 20. however, while the average
+size of the documents is close to 4000 tokens, we    nd that
+strong performance can be achieved with a context size as
+low as 30 tokens.
+
+5.5. training
+
+in this section, we perform an ablation study of the impact
+of weight id172 and gradient clipping. we sepa-
+rately cross-validate the hyper-parameters of each con   gu-
+ration to make the comparison fair. due to the high cost of
+each of these experiments, we only consider a single itera-
+tion over the training data. figure 6 shows that both meth-
+ods signi   cantly speed up convergence. weight normal-
+ization in particular improves the speed by over two times.
+this speedup is partly due to the ability to use much larger
+learning rates (1 instead of 0.01) than would otherwise be
+possible. both clipping and weight id172 add com-
+putational overhead, but it is minor compared to the large
+gains in convergence speed.
+
+figure 6. effect of weight id172 and gradient clipping on
+google billion word.
+
+6. conclusion
+we introduce a convolutional neural network for language
+modeling with a novel gating mechanism. compared to
+recurrent neural networks, our approach builds a hierarchi-
+cal representation of the input words that makes it easier
+to capture long-range dependencies, similar in spirit to the
+tree-structured analysis of linguistic grammar formalisms.
+the same property eases learning since features are passed
+through a    xed number of layers and non-linearities, un-
+like for recurrent networks where the number of processing
+steps differs depending on the position of the word in the
+input. the results show that our gated convolutional net-
+work achieves a new state of the art on wikitext-103. on
+the google billion word benchmark, we show competitive
+results can be achieved with signi   cantly fewer resources.
+
+acknowledgments
+we would like to thank ben graham, jonas gehring,
+edouard grave, armand joulin and ronan collobert for
+helpful discussions.
+
+references
+bengio, yoshua, ducharme, r  ejean, vincent, pascal, and jauvin,
+journal of
+
+christian. a neural probabilistic language model.
+machine learning research, 3(feb):1137   1155, 2003.
+
+chelba, ciprian, mikolov, tomas, schuster, mike, ge, qi, brants,
+thorsten, koehn, phillipp, and robinson, tony. one billion
+word benchmark for measuring progress in statistical language
+modeling. arxiv preprint arxiv:1312.3005, 2013.
+
+chen, stanley f and goodman, joshua. an empirical study of
+smoothing techniques for id38. in proceedings
+of the 34th annual meeting on association for computational
+linguistics, pp. 310   318. association for computational lin-
+guistics, 1996.
+
+chen, wenlin, grangier, david, and auli, michael. strategies
+for training large vocabulary neural language models. corr,
+abs/1512.04906, 2016.
+
+collobert, ronan, kavukcuoglu, koray, and farabet, clement.
+torch7: a matlab-like environment for machine learning. in
+biglearn, nips workshop, 2011. url http://torch.ch.
+
+dauphin, yann n and grangier, david.
+
+butions with linearizing belief networks.
+arxiv:1511.05622, 2015.
+
+predicting distri-
+arxiv preprint
+
+glorot, xavier and bengio, yoshua. understanding the dif   culty
+of training deep feedforward neural networks. the handbook
+of brain theory and neural networks, 2010.
+
+grave, e., joulin, a., ciss  e, m., grangier, d., and j  egou, h.
+ef   cient softmax approximation for gpus. arxiv e-prints,
+september 2016a.
+
+grave, e., joulin, a., and usunier, n.
+
+improving neural lan-
+guage models with a continuous cache. arxiv e-prints, de-
+cember 2016b.
+
+4000080000120000160000updates5060708090100110120130140test perplexitywithout clippingwithout weightnormwith bothid38 with gated convolutional networks
+
+oord, aaron van den, kalchbrenner, nal, and kavukcuoglu,
+arxiv preprint
+
+pixel recurrent neural networks.
+
+koray.
+arxiv:1601.06759, 2016a.
+
+oord, aaron van den, kalchbrenner, nal, vinyals, oriol, espe-
+holt, lasse, graves, alex, and kavukcuoglu, koray. condi-
+tional image generation with pixelid98 decoders. arxiv preprint
+arxiv:1606.05328, 2016b.
+
+pascanu, razvan, mikolov, tomas, and bengio, yoshua. on the
+dif   culty of training recurrent neural networks. in proceedings
+of the 30th international conference on machine learning,
+pp. 1310   1318, 2013.
+
+salimans, tim and kingma, diederik p. weight id172: a
+simple reparameterization to accelerate training of deep neural
+networks. arxiv preprint arxiv:1602.07868, 2016.
+
+shazeer, noam, pelemans, joris, and chelba, ciprian. skip-gram
+id38 using sparse non-negative matrix probabil-
+ity estimation. arxiv preprint arxiv:1412.1454, 2014.
+
+shazeer, noam, mirhoseini, azalia, maziarz, krzysztof, davis,
+andy, le, quoc v., hinton, geoffrey e., and dean, jeff. out-
+rageously large neural networks: the sparsely-gated mixture-
+of-experts layer. corr, abs/1701.06538, 2017. url http:
+//arxiv.org/abs/1701.06538.
+
+steedman, mark. the syntactic process. 2002.
+
+sutskever, ilya, martens, james, dahl, george e, and hinton, ge-
+offrey e. on the importance of initialization and momentum in
+deep learning. 2013.
+
+wang, mingxuan, lu, zhengdong, li, hang, jiang, wenbin, and
+genid98: a convolutional architecture for word
+liu, qun.
+sequence prediction. corr, abs/1503.05034, 2015. url
+http://arxiv.org/abs/1503.05034.
+
+yu, dong and deng, li. automatic id103: a deep
+learning approach. springer publishing company, incorpo-
+rated, 2014. isbn 1447157788, 9781447157786.
+
+gutmann, michael and hyv  arinen, aapo. noise-contrastive esti-
+mation: a new estimation principle for unnormalized statisti-
+cal models.
+
+he, kaiming, zhang, xiangyu, ren, shaoqing, and sun, jian.
+deep residual learning for image recognition. arxiv preprint
+arxiv:1512.03385, 2015a.
+
+he, kaiming, zhang, xiangyu, ren, shaoqing, and sun, jian.
+delving deep into recti   ers: surpassing human-level perfor-
+mance on id163 classi   cation. in proceedings of the ieee
+international conference on id161, pp. 1026   1034,
+2015b.
+
+hochreiter, sepp and schmidhuber, j  urgen. long short-term
+
+memory. neural computation, 9(8):1735   1780, 1997.
+
+ji, shihao, vishwanathan, svn, satish, nadathur, anderson,
+michael j, and dubey, pradeep. blackout: speeding up recur-
+rent neural network language models with very large vocabu-
+laries. arxiv preprint arxiv:1511.06909, 2015.
+
+jozefowicz, rafal, vinyals, oriol, schuster, mike, shazeer,
+noam, and wu, yonghui. exploring the limits of language
+modeling. arxiv preprint arxiv:1602.02410, 2016.
+
+kalchbrenner, nal, espeholt, lasse, simonyan, karen, van den
+oord, aaron, graves, alex, and kavukcuoglu, koray. neural
+machine translation in linear time. arxiv, 2016.
+
+kneser, reinhard and ney, hermann. improved backing-off for
+m-gram id38. in acoustics, speech, and signal
+processing, 1995. icassp-95., 1995 international conference
+on, volume 1, pp. 181   184. ieee, 1995.
+
+koehn, philipp. id151. cambridge uni-
+versity press, new york, ny, usa, 1st edition, 2010. isbn
+0521874157, 9780521874151.
+
+kuchaiev, oleksii and ginsburg, boris. factorization tricks for
+id137. corr, abs/1703.10722, 2017. url http:
+//arxiv.org/abs/1703.10722.
+
+lecun, yann and bengio, yoshua. convolutional networks for
+images, speech, and time series. the handbook of brain theory
+and neural networks, 3361(10):1995, 1995.
+
+manning, christopher d and sch  utze, hinrich. foundations of
+
+statistical natural language processing, 1999.
+
+merity, s., xiong, c., bradbury, j., and socher, r. pointer sen-
+
+tinel mixture models. arxiv e-prints, september 2016.
+
+mikolov, tom  a  s, martin, kara     at, burget, luk  a  s, cernock  y, jan,
+and khudanpur, sanjeev. recurrent neural network based
+language model. in proc. of interspeech, pp. 1045   1048,
+2010.
+
+mnih, andriy and hinton, geoffrey. three new id114
+for statistical language modelling. in proceedings of the 24th
+international conference on machine learning, pp. 641   648.
+acm, 2007.
+
+morin, frederic and bengio, yoshua. hierarchical probabilistic
+neural network language model. in aistats, volume 5, pp. 246   
+252. citeseer, 2005.
+
+

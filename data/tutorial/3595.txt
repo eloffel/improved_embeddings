@@ -1,0 +1,373 @@
+   #[1]openai
+
+     * [2]about
+     * [3]progress
+     * [4]resources
+     * [5]blog
+
+   (button)
+
+   (button)
+
+     * [6]about
+         ______________________________________________________________
+
+     * [7]progress
+         ______________________________________________________________
+
+     * [8]resources
+         ______________________________________________________________
+
+     * [9]blog
+         ______________________________________________________________
+
+     * [10]jobs
+     __________________________________________________________________
+
+infrastructure for deep learning
+
+   deep learning is an empirical science, and the quality of a group's
+   infrastructure is a multiplier on progress. fortunately, today's
+   open-source ecosystem makes it possible for anyone to build great deep
+   learning infrastructure.
+   august 29, 2016
+   7 minute read
+   infrastructure for deep learning
+     __________________________________________________________________
+
+   in this post, we'll share how deep learning research usually proceeds,
+   describe the infrastructure choices we've made to support it, and
+   open-source [11]kubernetes-ec2-autoscaler, a batch-optimized scaling
+   manager for kubernetes. we hope you find this post useful in building
+   your own deep learning infrastructure.
+     __________________________________________________________________
+
+the use case
+
+   a typical deep learning advance starts out as an idea, which you test
+   on a small problem. at this stage, you want to run many ad-hoc
+   experiments quickly. ideally, you can just ssh into a machine, run a
+   script in screen, and get a result in less than an hour.
+
+   making the model really work usually requires seeing it fail in every
+   conceivable way and finding ways to fix those limitations. (this is
+   similar to building any new software system, where you'll run your code
+   many times to build an intuition for how it behaves.)
+
+   you need to inspect your models from many angles to gain intuition for
+   what they're actually learning. this [12]id23 agent
+   (controlling the right paddle) from [13]dario amodei achieves a high
+   pong score, but when you watch it play you'll notice it just sits in
+   one place.
+
+   so deep learning infrastructure must allow users to flexibly introspect
+   models, and it's not enough to just expose summary statistics.
+
+   once the model shows sufficient promise, you'll scale it up to larger
+   datasets and more gpus. this requires long jobs that consume many
+   cycles and last for multiple days. you'll need careful experiment
+   management, and to be extremely thoughtful about your chosen range of
+   hyperparameters.
+
+   the early research process is unstructured and rapid; the latter is
+   methodical and somewhat painful, but it's all absolutely necessary to
+   get a great result.
+     __________________________________________________________________
+
+an example
+
+   the paper [14]improved techniques for training gans began with [15]tim
+   salimans devising several ideas for improving [16]generative
+   adversarial network training. we'll describe the simplest of these
+   ideas (which happened to produce the best-looking samples, though not
+   the best semi-supervised learning).
+
+   gans consist of a generator and a discriminator network. the generator
+   tries to fool the discriminator, and the discriminator tries to
+   distinguish between generated data and real data. intuitively, a
+   generator which can fool every discriminator is quite good. but there
+   is a hard-to-fix failure mode: the generator can    collapse    by always
+   outputting exactly the same (likely realistic-looking!) sample.
+
+   tim had the idea to give discriminator an entire [17]minibatch of
+   samples as input, rather than just one sample. thus the discriminator
+   can tell whether the generator just constantly produces a single image.
+   with the collapse discovered, gradients will be sent to the generator
+   to correct the problem.
+
+   the next step was to prototype the idea on [18]mnist and [19]cifar-10.
+   this required prototyping a small model as quickly as possible, running
+   it on real data, and inspecting the result. after some rapid iteration,
+   tim got very encouraging [20]cifar-10 samples     pretty much the best
+   samples we'd seen on this dataset.
+
+   however, deep learning (and ai algorithms in general) must be scaled to
+   be truly impressive     a small neural network is a proof of concept, but
+   a big neural network actually solves the problem and is useful. so
+   [21]ian goodfellow dug into scaling the model up to work on
+   [22]id163.
+   [infra_img_1.png] [23]our model learning to generate id163 images
+
+   with a larger model and dataset, ian needed to parallelize the model
+   across multiple gpus. each job would push multiple machines to 90% cpu
+   and gpu utilization, but even then the model took many days to train.
+   in this regime, every experiment became precious, and he would
+   meticulously log the results of each experiment.
+
+   ultimately, while the results were good, they were not as good as we
+   hoped. we've tested many hypotheses as to why, but still haven't
+   cracked it. such is the nature of science.
+     __________________________________________________________________
+
+infrastructure
+
+software
+
+   [infra_img_2.png] a [24]sample of our tensorflow code
+
+   the vast majority of our research code is written in python, as
+   reflected in [25]our [26]open-[27]source [28]projects. we mostly use
+   [29]tensorflow (or [30]theano in special cases) for gpu computing; for
+   cpu we use those or [31]numpy. researchers also sometimes use
+   higher-level frameworks like [32]keras on top of tensorflow.
+
+   like much of the deep learning community, we use python 2.7. we
+   generally use [33]anaconda, which has convenient packaging for
+   otherwise difficult packages such as [34]opencv and [35]performance
+   optimizations for some scientific libraries.
+     __________________________________________________________________
+
+hardware
+
+   for an ideal batch job, doubling the number of nodes in your cluster
+   will halve the job's runtime. unfortunately, in deep learning, people
+   usually see very [36]sublinear speedups from many gpus. top performance
+   thus requires top-of-the-line gpus. we also use quite a lot of cpu for
+   [37]simulators, [38]id23 environments, or small-scale
+   models (which run no faster on a gpu).
+   [infra_img_3.png] [39]nvidia-smi showing fully-loaded titan xs
+
+   [40]aws generously agreed to donate a large amount of compute to us.
+   we're using them for cpu instances and for horizontally scaling up gpu
+   jobs. we also run our own physical servers, primarily running [41]titan
+   x gpus. we expect to have a hybrid cloud for the long haul: it's
+   valuable to experiment with different gpus, interconnects, and other
+   techniques which may become important for the future of deep learning.
+   [infra_img_4.png] [42]htop on the same physical box showing plenty of
+   spare cpu. we generally run our cpu-intensive workloads separately from
+   our gpu-intensive ones.
+     __________________________________________________________________
+
+provisioning
+
+   we approach infrastructure like many companies treat product: it must
+   present a simple interface, and usability is as important as
+   functionality. we use a consistent set of tools to manage all of our
+   servers and configure them as identically as possible.
+   [infra_img_5.png] snippet of our terraform config for managing auto
+   scaling groups. terraform creates, modifies, or destroys your running
+   cloud resources to match your configuration files.
+
+   we use [43]terraform to set up our aws cloud resources (instances,
+   network routes, dns records, etc). our cloud and physical nodes run
+   [44]ubuntu and are configured with [45]chef. for faster spinup times,
+   we pre-bake our cluster amis using [46]packer. all our clusters use
+   non-overlapping ip ranges and are interconnected over the public
+   internet with [47]openvpn on user laptops, and [48]strongswan on
+   physical nodes (which act as aws [49]customer gateways).
+
+   we store people's home directories, data sets, and results on [50]nfs
+   (on physical hardware) and [51]efs/[52]s3 (on aws).
+     __________________________________________________________________
+
+orchestration
+
+   scalable infrastructure often ends up making the simple cases harder.
+   we put equal effort into our infrastructure for small- and large-scale
+   jobs, and we're actively solidifying our toolkit for making distributed
+   use-cases as accessible as local ones.
+
+   we provide a cluster of ssh nodes (both with and without gpus) for
+   ad-hoc experimentation, and run [53]kubernetes as our cluster scheduler
+   for physical and aws nodes. our cluster spans 3 aws regions     our jobs
+   are bursty enough that we'll sometimes hit capacity on individual
+   regions.
+
+   kubernetes requires each job to be a docker container, which gives us
+   dependency isolation and code snapshotting. however, building a new
+   docker container can add precious extra seconds to a researcher's
+   iteration cycle, so we also provide tooling to transparently ship code
+   from a researcher's laptop into a standard image.
+   [infra_img_6.png] model [54]learning curves in tensorboard
+
+   we expose kubernetes's [55]flannel network directly to researchers'
+   laptops, allowing users seaid113ss network access to their running jobs.
+   this is especially useful for accessing monitoring services such as
+   [56]tensorboard. (our initial approach     which is cleaner from a strict
+   isolation perspective     required people to create a kubernetes
+   [57]service for each port they wanted to expose, but we found that it
+   added too much friction.)
+     __________________________________________________________________
+
+kubernetes-ec2-autoscaler
+
+   our workload is bursty and unpredictable: a line of research can go
+   quickly from single-machine experimentation to needing 1,000 cores. for
+   example, over a few weeks, one experiment went from an interactive
+   phase on a single titan x, to an experimental phase on 60 titan xs, to
+   needing nearly 1600 aws gpus. our cloud infrastructure thus needs to
+   dynamically provision kubernetes nodes.
+
+   it's easy to run kubernetes nodes in [58]auto scaling groups, but it's
+   harder to correctly manage the size of those groups. after a batch job
+   is submitted, the cluster knows exactly what resources it needs, and
+   should allocate those directly. (in contrast, aws's [59]scaling
+   policies will spin up new nodes piecemeal until resources are no longer
+   exhausted, which can take multiple iterations.) also, the cluster needs
+   to [60]drain nodes before terminating them to avoid losing in-flight
+   jobs.
+
+   it's tempting to just use raw ec2 for big batch jobs, and indeed that's
+   where we started. however, the kubernetes ecosystem adds quite a lot of
+   value: low-friction tooling, logging, monitoring, ability to manage
+   physical nodes separately from the running instances, and the like.
+   making kubernetes autoscale correctly was easier than rebuilding this
+   ecosystem on raw ec2.
+
+   we're releasing [61]kubernetes-ec2-autoscaler, a batch-optimized
+   scaling manager for kubernetes. it runs as a normal [62]pod on
+   kubernetes and requires only that your worker nodes are in auto scaling
+   groups.
+   [infra_img_7.png] the launch configurations for our kubernetes cluster
+
+   the autoscaler works by polling the kubernetes master's state, which
+   contains everything needed to calculate the cluster resource ask and
+   capacity. if there's excess capacity, it drains the relevant nodes and
+   ultimately terminates them. if more resources are needed, it calculates
+   what servers should be created and increases your auto scaling group
+   sizes appropriately (or simply [63]uncordons drained nodes, which
+   avoids new node spinup time).
+
+   kubernetes-ec2-autoscaler handles multiple auto scaling groups,
+   resources beyond cpu (memory and gpus), and fine-grained constraints on
+   your jobs such as aws region and instance size. additionally, bursty
+   workloads can lead to auto scaling groups timeouts and errors, since
+   (surprisingly!) even aws does not have infinite capacity. in these
+   cases, kubernetes-ec2-autoscaler detects the error and overflows to a
+   secondary aws region.
+     __________________________________________________________________
+
+   our infrastructure aims to maximize the productivity of deep learning
+   researchers, allowing them to focus on the science. we're building
+   tools to further improve our infrastructure and workflow, and will
+   share these in upcoming weeks and months. we [64]welcome help to make
+   this go even faster!
+
+   [65]join openai [66]chat with others
+     __________________________________________________________________
+
+   authors
+   [67]vicki cheung[68]jonas schneider[69]ilya sutskever[70]greg brockman
+     __________________________________________________________________
+
+     * [71]about
+     * [72]progress
+     * [73]resources
+     * [74]blog
+     * [75]charter
+     * [76]jobs
+     * [77]press
+
+     *
+     *
+
+   sign up for our newsletter
+   ____________________ (button)
+   right
+
+references
+
+   visible links
+   1. https://openai.com/blog/rss/
+   2. https://openai.com/about/
+   3. https://openai.com/progress/
+   4. https://openai.com/resources/
+   5. https://openai.com/blog/
+   6. https://openai.com/about/
+   7. https://openai.com/progress/
+   8. https://openai.com/resources/
+   9. https://openai.com/blog/
+  10. https://openai.com/jobs/
+  11. https://github.com/openai/kubernetes-ec2-autoscaler
+  12. http://karpathy.github.io/2016/05/31/rl/
+  13. https://www.linkedin.com/in/dario-amodei-3934934
+  14. https://arxiv.org/abs/1606.03498
+  15. http://timsalimans.com/
+  16. https://openai.com/blog/generative-models/#gan
+  17. https://www.coursera.org/learn/machine-learning/lecture/9zjus/mini-batch-gradient-descent
+  18. http://yann.lecun.com/exdb/mnist/
+  19. https://www.cs.toronto.edu/~kriz/cifar.html
+  20. https://d4mucfpksywv.cloudfront.net/infrastructure-for-deep-learning/cifar10samples-2.jpg
+  21. https://www.linkedin.com/in/ian-goodfellow-b7187213
+  22. http://image-net.org/
+  23. https://openai.com/blog/generative-models#improving-gans
+  24. https://github.com/openai/iaf/blob/master/tf_train.py#l51-l93
+  25. https://github.com/openai/improved-gan
+  26. https://github.com/openai/vime
+  27. https://github.com/openai/iaf
+  28. https://github.com/openai/imitation
+  29. https://www.tensorflow.org/
+  30. http://deeplearning.net/software/theano/
+  31. http://www.numpy.org/
+  32. https://keras.io/
+  33. https://www.continuum.io/anaconda-overview
+  34. http://opencv.org/
+  35. https://docs.continuum.io/anaconda/#high-performance
+  36. https://research.googleblog.com/2016/04/announcing-tensorflow-08-now-with.html
+  37. https://gym.openai.com/envs#box2d
+  38. https://gym.openai.com/envs#atari
+  39. https://developer.nvidia.com/nvidia-system-management-interface
+  40. https://aws.amazon.com/
+  41. http://www.geforce.com/hardware/10series/titan-x-pascal
+  42. http://hisham.hm/htop/
+  43. https://www.terraform.io/
+  44. http://www.ubuntu.com/
+  45. https://www.chef.io/chef/
+  46. https://www.packer.io/
+  47. https://openvpn.net/
+  48. https://www.strongswan.org/
+  49. http://docs.aws.amazon.com/amazonvpc/latest/networkadminguide/introduction.html
+  50. https://en.wikipedia.org/wiki/network_file_system
+  51. https://aws.amazon.com/efs/
+  52. https://aws.amazon.com/s3/
+  53. http://kubernetes.io/
+  54. https://en.wikipedia.org/wiki/learning_curve
+  55. https://coreos.com/flannel/docs/latest/
+  56. https://www.tensorflow.org/versions/r0.10/how_tos/summaries_and_tensorboard/index.html
+  57. http://kubernetes.io/docs/user-guide/services/
+  58. https://aws.amazon.com/autoscaling/
+  59. http://docs.aws.amazon.com/autoscaling/latest/userguide/policy_creating.html
+  60. http://kubernetes.io/docs/user-guide/kubectl/kubectl_drain/
+  61. https://github.com/openai/kubernetes-ec2-autoscaler
+  62. http://kubernetes.io/docs/user-guide/pods/
+  63. http://kubernetes.io/docs/user-guide/kubectl/kubectl_uncordon/
+  64. https://jobs.lever.co/openai/f7801a92-1e2f-4656-a572-962b53ec34f6
+  65. https://openai.com/jobs
+  66. https://gitter.im/openai/infra
+  67. https://openai.com/blog/authors/vicki-cheung/
+  68. https://openai.com/blog/authors/jonas-schneider/
+  69. https://openai.com/blog/authors/ilya/
+  70. https://openai.com/blog/authors/greg/
+  71. https://openai.com/about/
+  72. https://openai.com/progress/
+  73. https://openai.com/resources/
+  74. https://openai.com/blog/
+  75. https://openai.com/charter/
+  76. https://openai.com/jobs/
+  77. https://openai.com/press/
+
+   hidden links:
+  79. https://openai.com/
+  80. https://openai.com/
+  81. https://twitter.com/openai
+  82. https://www.facebook.com/openai.research

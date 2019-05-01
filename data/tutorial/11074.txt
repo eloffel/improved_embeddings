@@ -1,0 +1,1192 @@
+yara parser: a fast and accurate dependency parser
+
+mohammad sadegh rasooli   1 and joel tetreault2
+
+1 department of computer science, columbia university, new york, ny,
+
+rasooli@cs.columbia.edu
+
+2 yahoo labs, new york, ny, tetreaul@yahoo-inc.com
+
+5
+1
+0
+2
+
+ 
+r
+a
+
+ 
+
+m
+4
+2
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+3
+3
+7
+6
+0
+
+.
+
+3
+0
+5
+1
+:
+v
+i
+x
+r
+a
+
+march 2015
+
+abstract
+
+dependency parsers are among the most crucial tools in natural language processing as they have
+many important applications in downstream tasks such as information retrieval, machine translation
+and knowledge acquisition. we introduce the yara parser, a fast and accurate open-source dependency
+parser based on the arc-eager algorithm and id125. it achieves an unlabeled accuracy of 93.32 on
+the standard wsj test set which ranks it among the top dependency parsers. at its fastest, yara can
+parse about 4000 sentences per second when in greedy mode (1 beam). when optimizing for accuracy
+(using 64 beams and brown cluster features), yara can parse 45 sentences per second. the parser
+can be trained on any syntactic dependency treebank and di   erent options are provided in order to
+make it more    exible and tunable for speci   c tasks. it is released with the apache version 2.0 license
+and can be used for both commercial and academic purposes. the parser can be found at https:
+//github.com/yahoo/yaraparser.
+
+contents
+1 introduction
+
+2 using yara in practice
+
+2.2.1 punctuation files
+2.2.2
+
+2.1 data format . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.2 training and model selection . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+some examples . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.3 test and evaluation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.4 parsing a partial tree . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.5 yara pipeline . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6 pipeline api usage . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6.1
+importing libraries . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6.2 parsing raw text file . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6.3 parsing raw text
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6.4 parsing a sentence . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6.5 parsing a tokenized sentence . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.6.6 parsing a tagged sentence
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+3 yara technical details
+
+3.1 arc-eager algorithm . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3.2 online learning . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3.3 id125 and update methods . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3.4 dynamic and static oracles . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3.5 other properties . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+   implementation of the core structure of the parser was done during a summer internship at yahoo labs nyc.
+
+1
+
+2
+
+2
+2
+2
+3
+3
+4
+4
+5
+5
+5
+5
+6
+6
+6
+6
+
+7
+7
+7
+8
+8
+8
+
+4 experiments
+
+4.1 parsing wsj data . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+4.2 parsing non-projective languages: persian . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+5 conclusion and future work
+
+9
+9
+10
+
+11
+
+introduction
+
+1
+dependency trees are one of the main representations used in the syntactic analysis of sentences. they
+show explicit syntactic dependencies among words in the sentence [k  bler et al., 2009]. many depen-
+dency parsers have been released in the past decade. among them, graph-based and transition-based
+parsing are two main approaches towards id33. in graph-based models, the parser aims
+to    nd the most likely tree from all possible trees by using maximum spanning tree algorithms often
+in conjunction with id145. on the other hand, in transition-based models, a tree is
+converted to a set of incremental actions and the parser decides to commit an action depending on the
+current con   guration of the partial tree. graph-based parsers can achieve state-of-the-art performance
+with the guarantee of recovering the best possible parse, but usually at the expense of speed. on the
+other hand, transition-based parsers are fast because the parser can greedily choose an action in each
+con   guration and thus it can use arbitrary non-local features to compensate the lack of optimality. also,
+it is easy to augment the set of actions to extend the functionality of the parser on such tasks as dis   u-
+ency detection [rasooli and tetreault, 2013, rasooli and tetreault, 2014, honnibal and johnson, 2014]
+and punctuation prediction [zhang et al., 2013a]. they are mostly used in supervised tasks but in rare
+cases they are also used in unsupervised tasks either with little manual linguistic knowledge or with no
+prior knowledge [daum   iii, 2009, rasooli and faili, 2012].
+
+in this report, we provide a brief introduction to our newly released dependency parser. we show
+that it can achieve a very high accuracy on the standard english wsj test set and show that it is very
+fast even in its slowest mode while getting results very close to state-of-the-art. the structure of this
+report is as follows: in   2 we provide some details about using yara both in command line and as an api.
+we provide technical details about it in   3 and experiments are conducted in   4. finally we conclude in
+  5.
+
+2 using yara in practice
+in this section, we give a brief overview of training the parser, using it from the command-line and also
+as an api. finally we introduce a simple nlp pipeline that can parse text    les. all technical details for
+the parser are provided in   3. the default settings for yara are expected to be the best in practice for
+accuracy (except the number of training iterations which is dependent on the data and feature settings).
+
+2.1 data format
+yara uses the conll 2006 dependency format1 for training as well as testing. the conll format is
+a tabular one in which each word (and its information) in a sentence occupies one line and sentences
+are separated by a blank line. each line is organized into the following tab-delimited columns: 1) word
+number (starting at one), 2) word form, 3) word lemma, 4) coarse-grained pos tag, 5)    ne-grained
+pos (part-of-speech) tag, 6) unordered set of syntactic and/or morphological features, separated by
+a vertical bar (|), or an underscore if not available, 7) head of current token (an integer showing the
+head number where 0 indicates root token), 8) dependency label, 9) projective head (underscore if not
+available) and 10) projective dependency labels (underscore if not available). blank    elds are represented
+by an underscore. yara only uses the    rst, second, fourth, seventh and eights columns.
+
+2.2 training and model selection
+the jar    le in the package can be directly used to train a model with the following command line (run
+from the root directory of the project):
+
+   java -jar jar/yaraparser.jar train -train-file [train-file] -dev [dev-file] -model [model-file]
+
+1http://ilk.uvt.nl/conll/#dataformat
+
+2
+
+-punc [punc-file]
+
+where [train-file] and [dev-file] are conll    les for training and development data and [model-file]
+
+is the output path for the trained model    le. [punc-file] contains a list of pos tags for punc-
+tuations in the treebank (see   2.2.1). the model for each iteration will be saved with the pattern
+[model-file]_iter[iter#]; e.g. model_iter2.
+in this way, the user can track the best performing
+model and delete all others. for cases where there is no development data, the user can remove the -dev
+option from the command line and use any of the saved model    les as the    nal model based on his/her
+prior knowledge (15 is a reasonable number).
+
+the other options are as follows:
+    -cluster [cluster-   le] brown cluster    le: at most 4096 clusters are supported by yara (default:
+empty). the format should be the same as https://github.com/percyliang/brown-cluster/
+blob/master/output.txt
+
+    beam:[beam-width]; e.g. beam:16 (default is 64).
+    iter:[training-iterations]; e.g. iter:10 (default is 20).
+    unlabeled (default: labeled parsing, unless explicitly put    unlabeled   )
+    lowercase (default: case-sensitive words, unless explicitly put    lowercase   )
+    basic (default: use extended feature set, unless explicitly put    basic   )
+    static (default: use dynamic oracles, unless explicitly put    static    for static oracles)
+    early (default: use max violation update, unless explicitly put    early    for early update)
+    random (default: choose maximum scoring oracle, unless explicitly put    random    for randomly
+
+choosing an oracle)
+
+    nt:#threads; e.g. nt:4 (default is 8).
+    root_   rst (default: put root in the last position, unless explicitly put    root_   rst   )
+
+2.2.1 punctuation files
+in most dependency evaluations, punctuation symbols and their incoming arcs are ignored. most parser
+do this by using hard-coded rules for punctuation attachment. yara instead allows the user to specify
+which punctuation pos tags are important to their task by providing a path for a punctuation    le
+([punc-file]) with the -punc option (e.g. -punc punc_files/wsj.puncs).
+if no    le is provided,
+yara uses wsj punctuations. the punctuation    le contains a list of punctuation pos tags, one per
+line. the yara git repository provides punctuation    les for wsj data and google universal pos tags
+[petrov et al., 2011].
+
+2.2.2 some examples
+here we provide examples for training yara with di   erent settings. essentially we pick those examples
+where, we think, would be useful in practice.
+
+training with brown clusters this can be done via the -cluster option.
+
+   java -jar jar/yaraparser.jar train -train-file [train-file] -dev [dev-file] -model [model-file]
+-punc [punc-file] -cluster [cluster-file]
+
+training with the fastest mode this can be done via the basic and beam:1 options.
+
+   java -jar jar/yaraparser.jar train -train-file [train-file] -dev [dev-file] -model [model-file]
+-punc [punc-file] beam:1 basic
+
+3
+
+changing the number of iterations this can be done via the iter option. in the following
+example, we selected 10 iterations.
+
+   java -jar jar/yaraparser.jar train -train-file [train-file] -dev [dev-file] -model [model-file]
+-punc [punc-file] iter:10
+
+extending memory consumption it is possible that java default setting for memory is less than
+what is really needed in some particular data sets. in those cases, we can extend the memory size by the
+jvm -xmx option. in the following example, memory is extended to ten gigabytes.
+
+   java -xmx10g -jar jar/yaraparser.jar train -train-file [train-file] -dev [dev-file] -model
+[model-file] -punc [punc-file]
+
+using very speci   c options the following example shows a speci   c case where yara trains a
+model on the training data (data/train.conll), develops it on the development data (data/dev.conll),
+saves each model in the model    le (model/train.model) for each iteration (model/train.model_iter1,
+model/train.model_iter2, model/train.model_iter3, etc), uses its speci   c punctuation list (punc_files/my_lang.puncs),
+uses its speci   c brown cluster data (data/cluster.path), trains the model in 10 iterations, with 16
+beams and 4 threads and uses static oracle and early update. this is all done after all words are
+lowercased (with the lowercase option).
+
+   java -xmx10g -jar jar/yaraparser.jar train -train-file data/train.conll -dev data/dev.conll
+-model model/train.model -punc punc_files/my_lang.puncs -cluster data/cluster.path beam:16
+iter:10 unlabeled lowercase static early nt:4 root_first
+
+2.3 test and evaluation
+the test    le can be either a conll    le or a pos tagged    le. the output will be a    le in conll format.
+
+parsing a conll    le
+   java -jar jar/yaraparser.jar parse_conll -input [test-file] -out [output-file] -model [model-file]
+
+parsing a tagged    le the tagged    le is a simple    le where words and tags are separated by a
+delimiter (default is underscore). the user can use the option -delim [delimiter] (e.g. -delim /) to
+change the delimiter. the output will be in conll format.
+
+   java -jar jar/yaraparser.jar parse_tagged -input [test-file] -out [output-file] -model
+[model-file]
+
+evaluation both [gold-file] and [parsed-file] should be in conll format.
+
+   java -jar yaraparser.jar eval -gold [gold-file] -parse [parsed-file] -punc [punc-file]
+
+a more descriptive end-to-end example by using a small amount of german training data2 is shown in
+
+yara   s github repository. this example is shown at https://github.com/yahoo/yaraparser#example-usage.
+
+2.4 parsing a partial tree
+yara can parse partial trees where some gold dependencies are provided and it is expected to return a
+dependency tree consistent with the partial dependencies. unknown dependencies are represented with
+   -1    as the head in the conll format. figure 1 shows an example of partial parse tree before and after
+doing constrained parsing.
+
+2https://github.com/yahoo/yaraparser/tree/master/sample_data
+
+4
+
+punct
+
+dobj
+
+aux
+
+root
+
+punct
+
+dobj
+
+det
+
+nsubj
+
+xcomp
+aux
+
+i want to parse a sentence . root
+
+i want to parse a sentence . root
+
+figure 1: a sample partial dependency tree on the left side and its    lled tree on the right. as shown in this
+   gure, the added arcs are completely consistent with the partial tree arcs.
+
+   java -jar yaraparser.jar parse_partial -input [test-file] -out [output-file] -model [model-file]
+
+2.5 yara pipeline
+we also provide an easy pipeline to use yara in real applications. the pipeline bene   ts from the
+opennlp3 tokenizer and sentence delimiter and our own pos tagger4. thus the user has to down-
+load a speci   c sentence boundary detection and word tokenizer model from opennlp website depending
+on the speci   c target language. it is also possible to train a new sentence boundary detection and word
+tokenizer model with opennlp5.
+
+the number of threads can be changed via the option nt:[#nt] (e.g. nt:10). the pipeline can be
+
+downloaded from https://github.com/rasoolims/yarapipeline.
+
+   java -jar jar/yarapipeline.jar -input [input file] -output [output file] -parse_model [parse
+model file] -pos_model [pos model] -tokenizer_model [tokenizer model] -sentence_model [sentence
+detector model]
+
+2.6 pipeline api usage
+it is possible to use the yara api directly6, but the pipeline gives an easier way to do it with di   erent
+levels of information. the user can set the number of threads for parsing: numberofthreads.
+
+importing libraries
+
+2.6.1
+the user should    rst import libraries into the code as in listing 1. class yarapipeline.java contains
+static methods for parsing a sentence, and parseresult contains information about words, pos tags,
+dependency labels and heads, and normalized tagging score and parsing score. info contains all infor-
+mation about parsing setting and models for the parser, pos tagger, tokenizer and sentence boundary
+detector.
+
+1 import edu . columbia . cs . r a s o o l i . yarapipeline . s t r u c t s . i n f o ;
+2 import edu . columbia . cs . r a s o o l i . yarapipeline . s t r u c t s . parseresult ;
+3 import edu . columbia . cs . r a s o o l i . yarapipeline . yarapipeline ;
+
+listing 1: code for importing necessary libraries.
+
+2.6.2 parsing raw text file
+in this case, we need to have all models for parsing, tagging, id121 and sentence boundary
+detection. listing 2 shows such a case where the parser puts the results in conll format into the
+[output_file].
+
+3http://opennlp.apache.org/index.html
+4https://github.com/rasoolims/semisupervisedpostagger
+5for more information please visit opennlp manual at https://opennlp.apache.org/documentation/1.5.3/
+
+manual/opennlp.html.
+
+6https://github.com/yahoo/yaraparser/blob/master/src/yaraparser/parser/api_usageexample.java
+
+5
+
+1 // should put
+2 i n f o i n f o 1=new i n f o ( " [ parse_model ] " , " [ pos_model ] " , " [ tokenizer_model ] " , " [
+
+f i l e path in the brackets
+
+[ parse_model ] )
+
+( e . g .
+
+r e a l
+
+sentence_model ] " , numberofthreads ) ;
+
+3 yarapipeline . p a r s e f i l e ( " [ i n p u t _ f i l e ] " , " [ o u tp u t _f i l e ] " , i n f o 1 ) ;
+
+listing 2: code for parsing raw text    le
+
+2.6.3 parsing raw text
+similar to parsing a    le, we can parse raw texts. it is shown in listing 3.
+
+1 // should put
+2 i n f o i n f o 2=new i n f o ( " [ parse_model ] " , " [ pos_model ] " , " [ tokenizer_model ] " , " [
+
+f i l e path in the brackets
+
+[ parse_model ] )
+
+( e . g .
+
+r e a l
+
+sentence_model ] " , numberofthreads ) ;
+
+3 st r in g sometext=" some text . . . . " ;
+4 st r in g conlloutputtext2= yarapipeline . parsetext ( sometext , i n f o 1 ) ;
+
+listing 3: code for parsing raw text
+
+2.6.4 parsing a sentence
+for the cases where the user uses his own sentence delimiter, it is possible to parse sentences as shown
+in listing 4.
+
+1 // should put
+2 i n f o i n f o 3=new i n f o ( " [ parse_model ] " , " [ pos_model ] " , " [ tokenizer_model ] " ,
+
+f i l e path in the brackets
+
+[ parse_model ] )
+
+( e . g .
+
+r e a l
+
+numberofthreads ) ;
+
+3 st r in g somesentence=" some sentence . " ;
+4 parseresult parseresult3= yarapipeline . parsesentence ( somesentence ,
+5 st r in g conlloutputtext3=parseresult3 . getconlloutput ( ) ;
+
+i n f o 1 ) ;
+
+listing 4: code for parsing a sentence
+
+2.6.5 parsing a tokenized sentence
+listing 5 shows an example for the cases where the user only wants to use the parser and pos tagger to
+parse a pre-tokenized sentence.
+
+r e a l
+
+f i l e path in the brackets
+
+1 // should put
+2 i n f o i n f o 4=new i n f o ( " [ parse_model ] " , " [ pos_model ] " , numberofthreads ) ;
+3 st r in g [ ]
+4 parseresult parseresult4= yarapipeline . parsetokenizedsentence ( somewords4 ,
+5 st r in g conlloutputtext4=parseresult4 . getconlloutput ( ) ;
+
+somewords4={" some " ,
+
+" words " , " . . . " } ;
+
+[ parse_model ] )
+
+( e . g .
+
+i n f o 1 ) ;
+
+listing 5: code for parsing a tokenized sentence
+
+2.6.6 parsing a tagged sentence
+listing 6 shows an example for the cases where the user only wants to use yara to parse pre-tagged
+sentence.
+
+r e a l
+
+f i l e path in the brackets
+
+1 // should put
+2 i n f o i n f o 5=new i n f o ( " [ parse_model ] " , numberofthreads ) ;
+3 st r in g [ ]
+4 st r in g [ ]
+5 parseresult parseresult5= yarapipeline . parsetaggedsentence ( somewords5 , sometags5 ,
+
+somewords5={" some " ,
+sometags5={" tag1 " ,
+
+" words " , " . . . " } ;
+" tag2 " , " tag3 " } ;
+
+[ parse_model ] )
+
+( e . g .
+
+i n f o 1 ) ;
+
+6 st r in g conlloutputtext5=parseresult5 . getconlloutput ( ) ;
+
+listing 6: code for parsing a tagged sentence
+
+6
+
+act.
+shift
+left-arc(nsubj)
+shift
+shift
+left-arc(aux)
+right-arc(xcomp)
+shift
+left-arc(det)
+right-arc(dobj)
+reduce
+reduce
+right-arc(punct)
+reduce
+left-arc(root)
+done!
+
+stack
+[]
+[i1]
+[]
+[want2]
+[want2, to3]
+[want2]
+[want2, parse4]
+[want2, parse4, a5]
+[want2, parse4]
+[want2, parse4, sentence6]
+[want2, parse4]
+[want2]
+[want2, .7]
+[want2]
+
+bu   er
+[i1, want2, to3, parse4, a5, sentence6, .7, root 8]
+[want2, to3, parse4, a5, sentence6, .7, root 8]
+[want2, to3, parse4, a5, sentence6, .7, root 8]
+[to3, parse4, a5, sentence6, .7, root 8]
+[parse4, a5, sentence6, .7, root 8]
+[parse4, a5, sentence6, .7, root 8]
+[a5, sentence6, .7, root 8]
+[sentence6, .7, root 8]
+[sentence6, .7, root 8]
+[.7, root 8]
+[.7, root 8]
+[.7, root 8]
+[root 8]
+[root 8]
+[root 8]
+
+arc(h,d)
+
+nsubj(2,1)
+
+aux(4,3)
+xcomp(2,4)
+
+det(6,5)
+dobj(4,6)
+
+punct(2,7)
+
+root(8,2)
+
+figure 2: a sample action sequence with arc-eager actions for the dependency tree in figure 1.
+
+3 yara technical details
+yara is a transition-based dependency parser based on the arc-eager algorithm [nivre, 2004].
+it uses
+id125 training and decoding [zhang and clark, 2008] in order to avoid local errors in parser
+decisions. the features of the parser are roughly the same as [zhang and nivre, 2011] with additional
+brown id91 [brown et al., 1992] features.7 yara also includes several    exible parameters and options
+to allow users to easily tune it depending on the language and task. generally speaking, there are 128
+possible combinations of the settings in addition to tuning the number of iterations, brown id91
+features and beam width.8
+
+3.1 arc-eager algorithm
+as in the arc-eager algorithm, yara has the following actions:
+
+    left-arc (la): the    rst word in the bu   er becomes the head of the top word in the stack. the
+
+top word is popped after this action.
+
+    right-arc (ra): the top word in the stack becomes the head of the    rst word in the bu   er.
+    reduce (r): the top word in the stack is popped.
+    shift (sh): the    rst word in the bu   er is pushed to the stack.
+
+depending on position of the root, the constraints for initialization and actions di   er. figure 2 shows
+the transitions used to parse the sentence "i want to parse a sentence .".
+
+unshift action the original algorithm is not guaranteed to output a tree and thus in some occasions
+when the root is positioned in the beginning of the sentence, the parser decides to connect all remaining
+words in the stack to the root token. in [nivre and fern  ndez-gonz  lez, 2014], a new action and empty
+   ag is introduced to compensate for this problem and preserve the tree constraint. the action is called
+unshift which pops the    rst word in the stack and returns it to the start position of the bu   er. we also
+added the    unshift    action for the cases where the root token is in the initial position of the sentence.
+this makes the parser more robust and gives a slight boost in performance.9
+
+3.2 online learning
+most current supervised parsers use online learning algorithms. online learners are fast, e   cient and
+very accurate. we use averaged structured id88 [collins, 2002] which is also used in previous sim-
+ilar parsers [zhang and clark, 2008, zhang and nivre, 2011, choi and palmer, 2011]. we use di   erent
+
+7the idea of using brown id91 features is inspired from [koo et al., 2008, honnibal and johnson, 2014].
+8we put the best performing setting as the default setting for yara.
+9this problem happens less in the case of id125 and it is more often in greedy parsing.
+
+7
+
+engineering methods to speed up the parser, such as the averaging trick introduced by [daum   iii, 2006,
+figure 2.3]. furthermore, all the features except label set-lexical pair features are converted to long
+integer values to prevent frequent hash collisions and decrease memory consumption. semi-sparse weight
+vectors are used for additional speed up, though it comes with an increase in memory consumption. the
+details of this implementation are out of the scope of this report.
+
+3.3 id125 and update methods
+early transition-based parsers such as the malt parser [nivre et al., 2006] were greedy and trained in
+batch mode. this was done by converting each tree to a set of independent actions. this has been
+shown to be less e   ective than a global search. given our feature setting, it is impossible to use dynamic
+programming to get the exact result. we instead use id125 as an approximation.10 therefore,
+unlike batch learning, the same procedure is used for training and decoding the parser. yara supports
+id125 and its default beam size is 64.
+
+there are several ways to update the classi   er weights with beam learning. a very trivial way is to
+get the best scoring result from id125 as the prediction and update the weights compared to the
+gold. this is known as    late update    but it does not lead to a good performance [huang et al., 2012].
+a more appealing way is to keep searching until the gold prediction goes out of the beam or the search
+reaches the end state. this is known as "early update" [collins and roark, 2004] and studies have shown
+a boost in performance relative to late update [collins and roark, 2004, zhang and clark, 2008]. the
+main problem with early update is that it does not update the weights according to the maximally violated
+prediction. a "max-violation" is a state in the beam where the gold standard is out of the beam and
+the gap in the score of the gold prediction and best scoring beam item is maximum. with max-violation
+update [huang et al., 2012], the learner updates the weights according to the max-violation state. in
+other words, max-violation is the worst mistake that the classi   er makes in the beam compared to the
+gold action. yara supports both early and max-violation update while zpar [zhang and nivre, 2011]
+only supports early update and redshift [honnibal and johnson, 2014] only supports max-violation. its
+default value for the update model is max-violation.
+
+3.4 dynamic and static oracles
+with the standard transition-based parsing algorithms, it is possible to have a parse tree with di   erent
+action sequences. in other words, di   erent search paths may lead to the same parse tree. most of the
+o   -the-shelf parsers such as zpar [zhang and nivre, 2011] de   ne some manual rules for recovering a gold
+oracle to give it to the learner. this is known as a static oracle. the other way is to allow the oracle to
+be dynamic and let the learner choose from the oracles [goldberg and nivre, 2013]. yara supports both
+static and dynamic oracles. in the case of dynamic oracles, only zero-cost explorations are allowed. in
+[goldberg and nivre, 2013], the gold oracle can be chosen randomly but we also provided another option
+to choose the best scoring oracle as the selected oracle. the latter way is known as latent structured
+id88 [sun et al., 2013] by supposing the gold tree as the structure and each oracle as a latent path
+for reaching the    nal structure. our experiments show that using the highest scoring oracle gives slightly
+better results and thus we let it be the default option in the parser training.
+
+3.5 other properties
+root position in [ballesteros and nivre, 2013], it is shown that the position of the root token has a
+signi   cant e   ect on the parser performance. we allow the root to be either in the initial or    nal position
+in the sentence. the    nal position is the default option for yara parser.
+
+features we use roughly the same feature set as [zhang and nivre, 2011]. the extended feature set
+is the default but the user can use the basic option to set it to basic set of local features to improve
+speed with a loss in accuracy. we also add extra features from brown word clusters [brown et al., 1992],
+as used in [koo et al., 2008], by using the brown clusters for the    rst word in the bu   er and stack, the
+pre   xes of length 4 and 6 from the cluster bit string in the place of part of speech tags and the full bit
+string of the cluster in the place of words. when using all the features, we get a boost in performance
+but at the expense of speed.
+
+10greedy search can be viewed as id125 with a beam size of one.
+
+8
+
+unlabeled parsing although the parser is designed for labeled parsing, unlabeled parsing is also
+available through command line options. this is useful for the cases where the user simply needs a very
+fast parser and does not care about the loss in performance or the lack of label information.
+
+partial parsing there are some occasions especially in semi-supervised parsing, where we have
+partial information about the tree, for example, we know that the third word is the subject of the    rst
+word. with partial parsing, we let the user bene   t from dynamic oracles to parse partial trees such that
+known arcs are preserved unless the tree constraints cannot be satis   ed.
+
+multithreading given the fact that current systems have multiple processing unit cores and many
+of those cores, support hyper-threading, we added the support for multithreading. when dealing with
+a    le, the parser does multithreaded parsing on the sentence level (i.e. parsing sentences in parallel
+but outputting them in the same order given in the input). when using the api, it is possible to use
+multithreading at the beam-level. beam level multithreading is slower than sentence-level multithreading.
+we also use beam-level multi-threading for training the parser and this signi   cantly speeds up the training
+phase. yara   s default is set to 8 threads but the user can easily change it.
+
+model selection unlike most current parsers, yara saves the model    le for all training iterations
+and lets the user choose the best performing model based on the performance on the development data.
+it also reports the performance on the development data to make it easier for the users to select the best
+model.
+
+tree scoring yara also has the option to output the parse score to a text    le. the score is the
+id88 score divided by the sentence length.
+
+lowercasing in cases, such as spoken lanuage parsing, no casing is provided and it is better to train
+on lowercased text. yara has this option with the argument lowercase in training.
+
+4 experiments
+in this section we show how yara performs on two di   erent data sets and compare its performance to
+other leading parsers. we also graphically depict the tradeo    between beam width and accuracy and
+number of iterations. for all experiments we use version 0.2 of yara. we use a multi-core 2.00ghz
+intell xeon machine. the machine has twenty cores but we only use 8 threads (parser   s default) in all
+experiments.
+
+4.1 parsing wsj data
+we use the the traditional wsj train-dev-test split for our experiment. as in [zhang and nivre, 2011],
+we    rst converted the wsj data [marcus et al., 1993] with penn2malt11. next, automatic pos tags
+are generated for the whole dataset with version 0.2 of our pos tagger12 by doing 10-way jack-kni   ng
+on the training data. the tagger is a 20-beam third-order tagger trained with the maximum violation
+strategy with the same settings as in [collins, 2002], along with additional brown id91 features
+[liang, 2005].13 it achieved a id52 accuracy of 97.14, 97.18 and 97.37 on the train, development
+and test    les respectively.
+
+table 1 shows the results on wsj data by varying beam size and the use of brown clusters. a
+comparison with prior art is made in table 2. all unlabeled accuracy scores (uas) and labeled accuracy
+scores (las) are calculated with punctuations ignored. as seen in table 1, yara   s accuracy is very close
+to the state-of-the-art [bohnet and nivre, 2012].
+
+11stp.lingfil.uu.se/~nivre/research/penn2malt.html
+12https://github.com/rasoolims/semisupervisedpostagger.
+13we use the pre-built brown cluster features in http://metaoptimize.com/projects/wordreprs/ with 1000 word
+
+classes.
+
+9
+
+parser
+yara
+yara
+yara
+yara
+yara
+
+beam features
+
+iter# dev uas test uas test las
+
+1
+1
+1
+64
+64
+
+zn (basic+unlabeled)
+zn (basic)
+zn + bc
+zn
+zn + bc
+
+5
+6
+13
+13
+13
+
+89.29
+89.54
+89.98
+93.31
+93.42
+
+88.73
+89.34
+89.74
+92.97
+93.32
+
+   
+
+88.02
+88.52
+91.93
+92.32
+
+sent/sec
+
+3929
+3921
+1300
+133
+45
+
+table 1: parsing accuracies of yara parser on wsj data. bc stands for brown cluster features, uas for
+unlabeled attachment score, las for labeled attachment score and zn for [zhang and nivre, 2011]. sent/sec
+refers to the speed in sentences per second.
+
+parser
+[mcdonald et al., 2005]
+[mcdonald and pereira, 2006]
+[sagae and lavie, 2006]
+[koo and collins, 2010]
+[zhang and mcdonald, 2012]
+[martins et al., 2013]
+[qian and liu, 2013]
+[ma and zhao, 2012]
+[zhang et al., 2013b]
+[zhang and mcdonald, 2014]
+
+[zhang and clark, 2008]
+[huang and sagae, 2010]
+[zhang and nivre, 2011]
+[bohnet and nivre, 2012]
+[choi and mccallum, 2013]
+yara
+
+uas
+90.9
+91.5
+92.7
+93.04
+93.06
+93.07
+93.17
+93.4
+93.50
+93.82
+88.1
+92.1
+92.1
+92.9
+93.38
+92.96
+93.32
+
+las
+
+   
+   
+   
+   
+   
+   
+   
+   
+
+92.41
+92.74
+86.3
+   
+   
+91.8
+92.44
+91.93
+92.32
+
+d
+e
+s
+a
+b
+-
+h
+p
+a
+r
+g
+
+e
+s
+a
+b
+-
+n
+o
+i
+t
+i
+s
+n
+a
+r
+t
+
+d [nivre et al., 2006]
+
+table 2: parsing accuracies on wsj data. we only report results which use the standard train-dev-test
+splits and do not make use of additional training data (as in self-training). the    rst block of rows are the
+graph-based parsers and the second block are the transition-based parsers (including yara).
+
+e   ect of beam size choosing a reasonable beam size is essential in certain nlp applications as
+there is always a trade-o    between speed and performance. as shown in figure 3, after a beam size of
+eight, the performance results do not change as much as the performance gap in for example beam of
+size one compared to beam of size two. this is useful because when changing the beam size from 64
+to 8, one may speed up parsing by a factor of three (as shown in table 3) with a small relative loss in
+performance.
+
+beam size
+dev uas
+speed (sen/sec)
+
+1 (ub)
+89.29
+3929
+
+1 (b)
+89.54
+3921
+
+1
+
+89.98
+1300
+
+2
+
+91.95
+370
+
+4
+
+92.80
+280
+
+8
+
+93.03
+167
+
+16
+93.27
+110
+
+32
+93.22
+105
+
+64
+93.42
+45
+
+table 3: speed vs. performance trade-o    when using brown id91 features and parsing conll    les
+with eight threads (except 1 (ub) and and 1(b) which are unlabeled and labeled parsing with basic features).
+the numbers are averaged over 20 training iterations and parsing development set after each iteration.
+
+4.2 parsing non-projective languages: persian
+as mentioned before, yara can only be trained on projective trees and thus there will be some loss in
+accuracy for non-projective languages. we use version 1.1 of the persian dependency treebank (perdt)
+
+10
+
+figure 3: the in   uence of beam size on each training iterations for yara parser. yara is trained with brown
+clusters in all of the experiments in this    gure.
+
+model
+mate v3.6.1
+yara (without brown clusters)
+yara (with brown clusters)
+
+91.32
+89.52
+89.97
+
+unlabeled accuracy labeled accuracy
+
+87.68
+85.77
+86.32
+
+table 4: parsing results on the persian treebank excluding punctuations
+
+[rasooli et al., 2013]14 and tagged it with the same setting as wsj data. we tokenized mizan corpus15
+and add it to our training data to create 1000 brown clusters.16 the training data contains 22% non-
+projective trees. we use mate parser (v3.6.1) [bohnet, 2010] as a highly accurate non-projective parsing
+tool to compare with yara. table 4 shows the performance for the two parsers. there is a 1.35% gap in
+unlabeled accuracy but given that 22% of the trees (   2.5% of the arcs) are non-projective, this gap is
+reasonable.
+
+5 conclusion and future work
+we presented an introduction to our open-source dependency parser. we showed that the parser is very
+fast and accurate. this parser can also be used for non-projective languages with a very slight loss in
+performance. we believe that our parser can be useful in di   erent downstream tasks given its performance
+and    exible license. our future plans include extending this parser to handle non-projectivity and also
+use continuous value representation features such as id27s to improve the accuracy of the
+parser.
+
+14http://www.dadegan.ir/catalog/perdt
+15http://www.dadegan.ir/catalog/mizan
+16the de   nition of brown cluster in this data is loose because there are multi-word verbs in the treebank while brown
+clusters are acquired from training on single words. therefore multi-word verbs in the treebank will not get any brown cluster
+assignment and thus we will have a slight loss in performance.
+
+11
+
+acknowledgements
+we would like to thank yahoo labs open-sourcing team to allow us to release the parser with a very
+   exible license, especially dev glass for setting up the initial release of the code. we thank amanda
+stent, kapil thadani, idan szpektor and yuval pinter and other colleagues in yahoo labs for their
+support and fruitful ideas. finally we thank michael collins and matthew honnibal for their feedback.
+
+references
+[ballesteros and nivre, 2013] ballesteros, m. and nivre, j. (2013). going to the roots of dependency
+
+parsing. computational linguistics, 39(1):5   13.
+
+[bohnet, 2010] bohnet, b. (2010). very high accuracy and fast id33 is not a contradiction.
+in proceedings of the 23rd international conference on computational linguistics, coling    10, pages
+89   97, stroudsburg, pa, usa. association for computational linguistics.
+
+[bohnet and nivre, 2012] bohnet, b. and nivre, j. (2012). a transition-based system for joint part-
+of-speech tagging and labeled non-projective id33. in proceedings of the 2012 joint
+conference on empirical methods in natural language processing and computational natural lan-
+guage learning, pages 1455   1465, jeju island, korea. association for computational linguistics.
+
+[brown et al., 1992] brown, p. f., desouza, p. v., mercer, r. l., pietra, v. j. d., and lai, j. c. (1992).
+
+class-based id165 models of natural language. computational linguistics, 18(4):467   479.
+
+[choi and mccallum, 2013] choi, j. d. and mccallum, a. (2013). transition-based id33
+with selectional branching. in proceedings of the 51st annual meeting of the association for com-
+putational linguistics (volume 1: long papers), pages 1052   1062, so   a, bulgaria. association for
+computational linguistics.
+
+[choi and palmer, 2011] choi, j. d. and palmer, m. (2011). getting the most out of transition-based
+id33. in proceedings of the 49th annual meeting of the association for computational
+linguistics: human language technologies, pages 687   692, portland, oregon, usa. association for
+computational linguistics.
+
+[collins, 2002] collins, m. (2002). discriminative training methods for id48: theory
+in proceedings of the 2002 conference on empirical
+
+and experiments with id88 algorithms.
+methods in natural language processing, pages 1   8. association for computational linguistics.
+
+[collins and roark, 2004] collins, m. and roark, b. (2004). incremental parsing with the id88
+in proceedings of the 42nd meeting of the association for computational linguistics
+
+algorithm.
+(acl   04), main volume, pages 111   118, barcelona, spain.
+
+[daum   iii, 2006] daum   iii, h. (2006). practical structured learning techniques for natural language
+
+processing. phd thesis, university of southern california, los angeles, ca.
+
+[daum   iii, 2009] daum   iii, h. (2009). unsupervised search-based id170. in proceed-
+
+ings of the 26th annual international conference on machine learning, pages 209   216. acm.
+
+[goldberg and nivre, 2013] goldberg, y. and nivre, j. (2013). training deterministic parsers with non-
+
+deterministic oracles. tacl, 1:403   414.
+
+[honnibal and johnson, 2014] honnibal, m. and johnson, m. (2014). joint incremental dis   uency detec-
+tion and id33. transactions of the association for computational linguistics, 2:131   
+142.
+
+[huang et al., 2012] huang, l., fayong, s., and guo, y. (2012). structured id88 with inexact
+search.
+in proceedings of the 2012 conference of the north american chapter of the association
+for computational linguistics: human language technologies, pages 142   151, montr  al, canada.
+association for computational linguistics.
+
+[huang and sagae, 2010] huang, l. and sagae, k. (2010). id145 for linear-time in-
+cremental parsing. in proceedings of the 48th annual meeting of the association for computational
+linguistics, pages 1077   1086, uppsala, sweden. association for computational linguistics.
+
+[koo et al., 2008] koo, t., carreras, x., and collins, m. (2008). simple semi-supervised dependency
+parsing. in proceedings of acl-08: hlt, pages 595   603, columbus, ohio. association for computa-
+tional linguistics.
+
+12
+
+[koo and collins, 2010] koo, t. and collins, m. (2010). e   cient third-order dependency parsers. in
+proceedings of the 48th annual meeting of the association for computational linguistics, pages 1   11,
+uppsala, sweden. association for computational linguistics.
+
+[k  bler et al., 2009] k  bler, s., mcdonald, r., and nivre, j. (2009). id33. synthesis
+
+lectures on human language technologies, 1(1):1   127.
+
+[liang, 2005] liang, p. (2005). semi-supervised learning for natural language. phd thesis, massachusetts
+
+institute of technology.
+
+[ma and zhao, 2012] ma, x. and zhao, h. (2012). fourth-order id33. in proceedings of
+coling 2012: posters, pages 785   796, mumbai, india. the coling 2012 organizing committee.
+[marcus et al., 1993] marcus, m. p., marcinkiewicz, m. a., and santorini, b. (1993). building a large
+
+annotated corpus of english: the id32. computational linguistics, 19(2):313   330.
+
+[martins et al., 2013] martins, a., almeida, m., and smith, n. a. (2013). turning on the turbo: fast
+third-order non-projective turbo parsers. in proceedings of the 51st annual meeting of the association
+for computational linguistics (volume 2: short papers), pages 617   622, so   a, bulgaria. association
+for computational linguistics.
+
+[mcdonald et al., 2005] mcdonald, r., pereira, f., ribarov, k., and haji  , j. (2005). non-projective
+id33 using spanning tree algorithms.
+in proceedings of the conference on human
+language technology and empirical methods in natural language processing, hlt    05, pages 523   
+530, stroudsburg, pa, usa. association for computational linguistics.
+
+[mcdonald and pereira, 2006] mcdonald, r. t. and pereira, f. c. (2006). online learning of approxi-
+mate id33 algorithms. in proceedings of the 11th conference of the european chapter
+of the association for computational linguistics. association for computational linguistics.
+
+[nivre, 2004] nivre, j. (2004). incrementality in deterministic id33. in keller, f., clark,
+s., crocker, m., and steedman, m., editors, proceedings of the acl workshop incremental pars-
+ing: bringing engineering and cognition together, pages 50   57, barcelona, spain. association for
+computational linguistics.
+
+[nivre and fern  ndez-gonz  lez, 2014] nivre, j. and fern  ndez-gonz  lez, d. (2014). arc-eager parsing
+
+with the tree constraint. computational linguistics, 40(2):259   267.
+
+[nivre et al., 2006] nivre, j., hall, j., and nilsson, j. (2006). maltparser: a data-driven parser-generator
+
+for id33. in proceedings of lrec, volume 6, pages 2216   2219.
+
+[petrov et al., 2011] petrov, s., das, d., and mcdonald, r. (2011). a universal part-of-speech tagset.
+
+arxiv preprint arxiv:1104.2086.
+
+[qian and liu, 2013] qian, x. and liu, y. (2013). branch and bound algorithm for id33
+
+with non-local features. transactions of the association for computational linguistics, 1:37   48.
+
+[rasooli and faili, 2012] rasooli, m. s. and faili, h. (2012). fast unsupervised id33 with
+arc-standard transitions. in proceedings of the joint workshop on unsupervised and semi-supervised
+learning in nlp, pages 1   9, avignon, france. association for computational linguistics.
+
+[rasooli et al., 2013] rasooli, m. s., kouhestani, m., and moloodi, a. (2013). development of a persian
+syntactic dependency treebank. in proceedings of the 2013 conference of the north american chap-
+ter of the association for computational linguistics: human language technologies, pages 306   314,
+atlanta, georgia. association for computational linguistics.
+
+[rasooli and tetreault, 2013] rasooli, m. s. and tetreault, j. (2013). joint parsing and dis   uency detec-
+tion in linear time. in proceedings of the 2013 conference on empirical methods in natural language
+processing, pages 124   129, seattle, washington, usa. association for computational linguistics.
+
+[rasooli and tetreault, 2014] rasooli, m. s. and tetreault, j. (2014). non-monotonic parsing of    uent
+umm i mean dis   uent sentences. in proceedings of the 14th conference of the european chapter of
+the association for computational linguistics, volume 2: short papers, pages 48   53, gothenburg,
+sweden. association for computational linguistics.
+
+[sagae and lavie, 2006] sagae, k. and lavie, a. (2006). parser combination by reparsing. in proceedings
+of the human language technology conference of the naacl, companion volume: short papers,
+naacl-short    06, pages 129   132, stroudsburg, pa, usa. association for computational linguistics.
+[sun et al., 2013] sun, x., matsuzaki, t., and li, w. (2013). latent structured id88s for large-
+ieee transactions on knowledge and data engineering,
+
+scale learning with hidden information.
+25(9):2063   2075.
+
+13
+
+[zhang et al., 2013a] zhang, d., wu, s., yang, n., and li, m. (2013a). punctuation prediction with
+transition-based parsing. in proceedings of the 51st annual meeting of the association for computa-
+tional linguistics (volume 1: long papers), pages 752   760, so   a, bulgaria. association for compu-
+tational linguistics.
+
+[zhang et al., 2013b] zhang, h., huang, l., zhao, k., and mcdonald, r. (2013b). online learning for
+in proceedings of the 2013 conference on empirical methods in natu-
+inexact hypergraph search.
+ral language processing, pages 908   913, seattle, washington, usa. association for computational
+linguistics.
+
+[zhang and mcdonald, 2012] zhang, h. and mcdonald, r. (2012). generalized higher-order dependency
+parsing with cube pruning.
+in proceedings of the 2012 joint conference on empirical methods in
+natural language processing and computational natural language learning, pages 320   331, jeju
+island, korea. association for computational linguistics.
+
+[zhang and mcdonald, 2014] zhang, h. and mcdonald, r. (2014). enforcing structural diversity in
+cube-pruned id33. in proceedings of the 52nd annual meeting of the association for
+computational linguistics (volume 2: short papers), pages 656   661, baltimore, maryland. associa-
+tion for computational linguistics.
+
+[zhang and clark, 2008] zhang, y. and clark, s. (2008). a tale of two parsers: investigating and com-
+bining graph-based and transition-based id33. in proceedings of the 2008 conference
+on empirical methods in natural language processing, pages 562   571, honolulu, hawaii. association
+for computational linguistics.
+
+[zhang and nivre, 2011] zhang, y. and nivre, j. (2011). transition-based id33 with rich
+non-local features. in proceedings of the 49th annual meeting of the association for computational
+linguistics: human language technologies, pages 188   193, portland, oregon, usa. association for
+computational linguistics.
+
+14
+
+

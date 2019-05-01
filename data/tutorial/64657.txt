@@ -1,0 +1,1401 @@
+   #[1]harvardnlp
+
+   [seas.png] [2]harvardnlp
+
+   [3]members [4]pi [5]code [6]publications
+
+the annotated transformer
+
+   apr 3, 2018
+from ipython.display import image
+image(filename='images/aiayn.png')
+
+   png
+
+   the transformer from [7]   attention is all you need    has been on a lot
+   of people   s minds over the last year. besides producing major
+   improvements in translation quality, it provides a new architecture for
+   many other nlp tasks. the paper itself is very clearly written, but the
+   conventional wisdom has been that it is quite difficult to implement
+   correctly.
+
+   in this post i present an    annotated    version of the paper in the form
+   of a line-by-line implementation. i have reordered and deleted some
+   sections from the original paper and added comments throughout. this
+   document itself is a working notebook, and should be a completely
+   usable implementation. in total there are 400 lines of library code
+   which can process 27,000 tokens per second on 4 gpus.
+
+   to follow along you will first need to install [8]pytorch. the complete
+   notebook is also available on [9]github or on google [10]colab with
+   free gpus.
+
+   note this is merely a starting point for researchers and interested
+   developers. the code here is based heavily on our [11]openid4 packages.
+   (if helpful feel free to [12]cite.) for other full-sevice
+   implementations of the model check-out [13]tensor2tensor (tensorflow)
+   and [14]sockeye (mxnet).
+     * alexander rush ([15]@harvardnlp or srush@seas.harvard.edu), with
+       help from vincent nguyen and guillaume klein
+
+prelims
+
+# !pip install http://download.pytorch.org/whl/cu80/torch-0.3.0.post4-cp36-cp36m
+-linux_x86_64.whl numpy matplotlib spacy torchtext seaborn
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as f
+import math, copy, time
+from torch.autograd import variable
+import matplotlib.pyplot as plt
+import seaborn
+seaborn.set_context(context="talk")
+%matplotlib inline
+
+   table of contents
+     * [16]prelims
+     * [17]background
+     * [18]model architecture
+          + [19]encoder and decoder stacks
+               o [20]encoder
+               o [21]decoder
+               o [22]attention
+               o [23]applications of attention in our model
+          + [24]position-wise feed-forward networks
+          + [25]embeddings and softmax
+          + [26]positional encoding
+          + [27]full model
+     * [28]training
+          + [29]batches and masking
+          + [30]training loop
+          + [31]training data and batching
+          + [32]hardware and schedule
+          + [33]optimizer
+          + [34]id173
+               o [35]label smoothing
+     * [36]a first example
+          + [37]synthetic data
+          + [38]loss computation
+          + [39]greedy decoding
+     * [40]a real world example
+          + [41]data loading
+          + [42]iterators
+          + [43]multi-gpu training
+          + [44]training the system
+     * [45]additional components: bpe, search, averaging
+     * [46]results
+          + [47]attention visualization
+     * [48]conclusion
+
+     my comments are blockquoted. the main text is all from the paper
+     itself.
+
+background
+
+   the goal of reducing sequential computation also forms the foundation
+   of the extended neural gpu, bytenet and convs2s, all of which use
+   convolutional neural networks as basic building block, computing hidden
+   representations in parallel for all input and output positions. in
+   these models, the number of operations required to relate signals from
+   two arbitrary input or output positions grows in the distance between
+   positions, linearly for convs2s and logarithmically for bytenet. this
+   makes it more difficult to learn dependencies between distant
+   positions. in the transformer this is reduced to a constant number of
+   operations, albeit at the cost of reduced effective resolution due to
+   averaging attention-weighted positions, an effect we counteract with
+   multi-head attention.
+
+   self-attention, sometimes called intra-attention is an attention
+   mechanism relating different positions of a single sequence in order to
+   compute a representation of the sequence. self-attention has been used
+   successfully in a variety of tasks including reading comprehension,
+   abstractive summarization, id123 and learning
+   task-independent sentence representations. end- to-end memory networks
+   are based on a recurrent attention mechanism instead of sequencealigned
+   recurrence and have been shown to perform well on simple- language
+   id53 and id38 tasks.
+
+   to the best of our knowledge, however, the transformer is the first
+   transduction model relying entirely on self-attention to compute
+   representations of its input and output without using sequence aligned
+   id56s or convolution.
+
+model architecture
+
+   most competitive neural sequence transduction models have an
+   encoder-decoder structure [49](cite). here, the encoder maps an input
+   sequence of symbol representations $(x_1,    , x_n)$ to a sequence of
+   continuous representations $\mathbf{z} = (z_1,    , z_n)$. given
+   $\mathbf{z}$, the decoder then generates an output sequence
+   $(y_1,   ,y_m)$ of symbols one element at a time. at each step the model
+   is auto-regressive [50](cite), consuming the previously generated
+   symbols as additional input when generating the next.
+class encoderdecoder(nn.module):
+    """
+    a standard encoder-decoder architecture. base for this and many
+    other models.
+    """
+    def __init__(self, encoder, decoder, src_embed, tgt_embed, generator):
+        super(encoderdecoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.src_embed = src_embed
+        self.tgt_embed = tgt_embed
+        self.generator = generator
+
+    def forward(self, src, tgt, src_mask, tgt_mask):
+        "take in and process masked src and target sequences."
+        return self.decode(self.encode(src, src_mask), src_mask,
+                            tgt, tgt_mask)
+
+    def encode(self, src, src_mask):
+        return self.encoder(self.src_embed(src), src_mask)
+
+    def decode(self, memory, src_mask, tgt, tgt_mask):
+        return self.decoder(self.tgt_embed(tgt), memory, src_mask, tgt_mask)
+class generator(nn.module):
+    "define standard linear + softmax generation step."
+    def __init__(self, d_model, vocab):
+        super(generator, self).__init__()
+        self.proj = nn.linear(d_model, vocab)
+
+    def forward(self, x):
+        return f.log_softmax(self.proj(x), dim=-1)
+
+   the transformer follows this overall architecture using stacked
+   self-attention and point-wise, fully connected layers for both the
+   encoder and decoder, shown in the left and right halves of figure 1,
+   respectively.
+image(filename='images/modalnet-21.png')
+
+   png
+
+encoder and decoder stacks
+
+encoder
+
+   the encoder is composed of a stack of $n=6$ identical layers.
+def clones(module, n):
+    "produce n identical layers."
+    return nn.modulelist([copy.deepcopy(module) for _ in range(n)])
+class encoder(nn.module):
+    "core encoder is a stack of n layers"
+    def __init__(self, layer, n):
+        super(encoder, self).__init__()
+        self.layers = clones(layer, n)
+        self.norm = layernorm(layer.size)
+
+    def forward(self, x, mask):
+        "pass the input (and mask) through each layer in turn."
+        for layer in self.layers:
+            x = layer(x, mask)
+        return self.norm(x)
+
+   we employ a residual connection [51](cite) around each of the two
+   sub-layers, followed by layer id172 [52](cite).
+class layernorm(nn.module):
+    "construct a layernorm module (see citation for details)."
+    def __init__(self, features, eps=1e-6):
+        super(layernorm, self).__init__()
+        self.a_2 = nn.parameter(torch.ones(features))
+        self.b_2 = nn.parameter(torch.zeros(features))
+        self.eps = eps
+
+    def forward(self, x):
+        mean = x.mean(-1, keepdim=true)
+        std = x.std(-1, keepdim=true)
+        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
+
+   that is, the output of each sub-layer is $\mathrm{layernorm}(x +
+   \mathrm{sublayer}(x))$, where $\mathrm{sublayer}(x)$ is the function
+   implemented by the sub-layer itself. we apply dropout [53](cite) to the
+   output of each sub-layer, before it is added to the sub-layer input and
+   normalized.
+
+   to facilitate these residual connections, all sub-layers in the model,
+   as well as the embedding layers, produce outputs of dimension
+   $d_{\text{model}}=512$.
+class sublayerconnection(nn.module):
+    """
+    a residual connection followed by a layer norm.
+    note for code simplicity the norm is first as opposed to last.
+    """
+    def __init__(self, size, dropout):
+        super(sublayerconnection, self).__init__()
+        self.norm = layernorm(size)
+        self.dropout = nn.dropout(dropout)
+
+    def forward(self, x, sublayer):
+        "apply residual connection to any sublayer with the same size."
+        return x + self.dropout(sublayer(self.norm(x)))
+
+   each layer has two sub-layers. the first is a multi-head self-attention
+   mechanism, and the second is a simple, position-wise fully connected
+   feed- forward network.
+class encoderlayer(nn.module):
+    "encoder is made up of self-attn and feed forward (defined below)"
+    def __init__(self, size, self_attn, feed_forward, dropout):
+        super(encoderlayer, self).__init__()
+        self.self_attn = self_attn
+        self.feed_forward = feed_forward
+        self.sublayer = clones(sublayerconnection(size, dropout), 2)
+        self.size = size
+
+    def forward(self, x, mask):
+        "follow figure 1 (left) for connections."
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
+        return self.sublayer[1](x, self.feed_forward)
+
+decoder
+
+   the decoder is also composed of a stack of $n=6$ identical layers.
+class decoder(nn.module):
+    "generic n layer decoder with masking."
+    def __init__(self, layer, n):
+        super(decoder, self).__init__()
+        self.layers = clones(layer, n)
+        self.norm = layernorm(layer.size)
+
+    def forward(self, x, memory, src_mask, tgt_mask):
+        for layer in self.layers:
+            x = layer(x, memory, src_mask, tgt_mask)
+        return self.norm(x)
+
+   in addition to the two sub-layers in each encoder layer, the decoder
+   inserts a third sub-layer, which performs multi-head attention over the
+   output of the encoder stack. similar to the encoder, we employ residual
+   connections around each of the sub-layers, followed by layer
+   id172.
+class decoderlayer(nn.module):
+    "decoder is made of self-attn, src-attn, and feed forward (defined below)"
+    def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
+        super(decoderlayer, self).__init__()
+        self.size = size
+        self.self_attn = self_attn
+        self.src_attn = src_attn
+        self.feed_forward = feed_forward
+        self.sublayer = clones(sublayerconnection(size, dropout), 3)
+
+    def forward(self, x, memory, src_mask, tgt_mask):
+        "follow figure 1 (right) for connections."
+        m = memory
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
+        x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
+        return self.sublayer[2](x, self.feed_forward)
+
+   we also modify the self-attention sub-layer in the decoder stack to
+   prevent positions from attending to subsequent positions. this masking,
+   combined with fact that the output embeddings are offset by one
+   position, ensures that the predictions for position $i$ can depend only
+   on the known outputs at positions less than $i$.
+def subsequent_mask(size):
+    "mask out subsequent positions."
+    attn_shape = (1, size, size)
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
+    return torch.from_numpy(subsequent_mask) == 0
+
+     below the attention mask shows the position each tgt word (row) is
+     allowed to look at (column). words are blocked for attending to
+     future words during training.
+
+plt.figure(figsize=(5,5))
+plt.imshow(subsequent_mask(20)[0])
+none
+
+   png
+
+attention
+
+   an attention function can be described as mapping a query and a set of
+   key-value pairs to an output, where the query, keys, values, and output
+   are all vectors. the output is computed as a weighted sum of the
+   values, where the weight assigned to each value is computed by a
+   compatibility function of the query with the corresponding key.
+
+   we call our particular attention    scaled dot-product attention   . the
+   input consists of queries and keys of dimension $d_k$, and values of
+   dimension $d_v$. we compute the dot products of the query with all
+   keys, divide each by $\sqrt{d_k}$, and apply a softmax function to
+   obtain the weights on the values.
+image(filename='images/modalnet-19.png')
+
+   png
+
+   in practice, we compute the attention function on a set of queries
+   simultaneously, packed together into a matrix $q$. the keys and values
+   are also packed together into matrices $k$ and $v$. we compute the
+   matrix of outputs as:
+def attention(query, key, value, mask=none, dropout=none):
+    "compute 'scaled dot product attention'"
+    d_k = query.size(-1)
+    scores = torch.matmul(query, key.transpose(-2, -1)) \
+             / math.sqrt(d_k)
+    if mask is not none:
+        scores = scores.masked_fill(mask == 0, -1e9)
+    p_attn = f.softmax(scores, dim = -1)
+    if dropout is not none:
+        p_attn = dropout(p_attn)
+    return torch.matmul(p_attn, value), p_attn
+
+   the two most commonly used attention functions are additive attention
+   [54](cite), and dot-product (multiplicative) attention. dot-product
+   attention is identical to our algorithm, except for the scaling factor
+   of $\frac{1}{\sqrt{d_k}}$. additive attention computes the
+   compatibility function using a feed-forward network with a single
+   hidden layer. while the two are similar in theoretical complexity,
+   dot-product attention is much faster and more space-efficient in
+   practice, since it can be implemented using highly optimized matrix
+   multiplication code.
+
+   while for small values of $d_k$ the two mechanisms perform similarly,
+   additive attention outperforms dot product attention without scaling
+   for larger values of $d_k$ [55](cite). we suspect that for large values
+   of $d_k$, the dot products grow large in magnitude, pushing the softmax
+   function into regions where it has extremely small gradients (to
+   illustrate why the dot products get large, assume that the components
+   of $q$ and $k$ are independent random variables with mean $0$ and
+   variance $1$. then their dot product, $q \cdot k = \sum_{i=1}^{d_k}
+   q_ik_i$, has mean $0$ and variance $d_k$.). to counteract this effect,
+   we scale the dot products by $\frac{1}{\sqrt{d_k}}$.
+image(filename='images/modalnet-20.png')
+
+   png
+
+   multi-head attention allows the model to jointly attend to information
+   from different representation subspaces at different positions. with a
+   single attention head, averaging inhibits this.
+
+   where the projections are parameter matrices $w^q_i \in
+   \mathbb{r}^{d_{\text{model}} \times d_k}$, $w^k_i \in
+   \mathbb{r}^{d_{\text{model}} \times d_k}$, $w^v_i \in
+   \mathbb{r}^{d_{\text{model}} \times d_v}$ and $w^o \in \mathbb{r}^{hd_v
+   \times d_{\text{model}}}$. in this work we employ $h=8$ parallel
+   attention layers, or heads. for each of these we use
+   $d_k=d_v=d_{\text{model}}/h=64$. due to the reduced dimension of each
+   head, the total computational cost is similar to that of single-head
+   attention with full dimensionality.
+class multiheadedattention(nn.module):
+    def __init__(self, h, d_model, dropout=0.1):
+        "take in model size and number of heads."
+        super(multiheadedattention, self).__init__()
+        assert d_model % h == 0
+        # we assume d_v always equals d_k
+        self.d_k = d_model // h
+        self.h = h
+        self.linears = clones(nn.linear(d_model, d_model), 4)
+        self.attn = none
+        self.dropout = nn.dropout(p=dropout)
+
+    def forward(self, query, key, value, mask=none):
+        "implements figure 2"
+        if mask is not none:
+            # same mask applied to all h heads.
+            mask = mask.unsqueeze(1)
+        nbatches = query.size(0)
+
+        # 1) do all the linear projections in batch from d_model => h x d_k
+        query, key, value = \
+            [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+             for l, x in zip(self.linears, (query, key, value))]
+
+        # 2) apply attention on all the projected vectors in batch.
+        x, self.attn = attention(query, key, value, mask=mask,
+                                 dropout=self.dropout)
+
+        # 3) "concat" using a view and apply a final linear.
+        x = x.transpose(1, 2).contiguous() \
+             .view(nbatches, -1, self.h * self.d_k)
+        return self.linears[-1](x)
+
+applications of attention in our model
+
+   the transformer uses multi-head attention in three different ways: 1)
+   in    encoder-decoder attention    layers, the queries come from the
+   previous decoder layer, and the memory keys and values come from the
+   output of the encoder. this allows every position in the decoder to
+   attend over all positions in the input sequence. this mimics the
+   typical encoder-decoder attention mechanisms in sequence-to-sequence
+   models such as [56](cite).
+
+   2) the encoder contains self-attention layers. in a self-attention
+   layer all of the keys, values and queries come from the same place, in
+   this case, the output of the previous layer in the encoder. each
+   position in the encoder can attend to all positions in the previous
+   layer of the encoder.
+
+   3) similarly, self-attention layers in the decoder allow each position
+   in the decoder to attend to all positions in the decoder up to and
+   including that position. we need to prevent leftward information flow
+   in the decoder to preserve the auto-regressive property. we implement
+   this inside of scaled dot- product attention by masking out (setting to
+   $-\infty$) all values in the input of the softmax which correspond to
+   illegal connections.
+
+position-wise feed-forward networks
+
+   in addition to attention sub-layers, each of the layers in our encoder
+   and decoder contains a fully connected feed-forward network, which is
+   applied to each position separately and identically. this consists of
+   two linear transformations with a relu activation in between.
+
+   while the linear transformations are the same across different
+   positions, they use different parameters from layer to layer. another
+   way of describing this is as two convolutions with kernel size 1. the
+   dimensionality of input and output is $d_{\text{model}}=512$, and the
+   inner-layer has dimensionality $d_{ff}=2048$.
+class positionwisefeedforward(nn.module):
+    "implements ffn equation."
+    def __init__(self, d_model, d_ff, dropout=0.1):
+        super(positionwisefeedforward, self).__init__()
+        self.w_1 = nn.linear(d_model, d_ff)
+        self.w_2 = nn.linear(d_ff, d_model)
+        self.dropout = nn.dropout(dropout)
+
+    def forward(self, x):
+        return self.w_2(self.dropout(f.relu(self.w_1(x))))
+
+embeddings and softmax
+
+   similarly to other sequence transduction models, we use learned
+   embeddings to convert the input tokens and output tokens to vectors of
+   dimension $d_{\text{model}}$. we also use the usual learned linear
+   transformation and softmax function to convert the decoder output to
+   predicted next-token probabilities. in our model, we share the same
+   weight matrix between the two embedding layers and the pre-softmax
+   linear transformation, similar to [57](cite). in the embedding layers,
+   we multiply those weights by $\sqrt{d_{\text{model}}}$.
+class embeddings(nn.module):
+    def __init__(self, d_model, vocab):
+        super(embeddings, self).__init__()
+        self.lut = nn.embedding(vocab, d_model)
+        self.d_model = d_model
+
+    def forward(self, x):
+        return self.lut(x) * math.sqrt(self.d_model)
+
+positional encoding
+
+   since our model contains no recurrence and no convolution, in order for
+   the model to make use of the order of the sequence, we must inject some
+   information about the relative or absolute position of the tokens in
+   the sequence. to this end, we add    positional encodings    to the input
+   embeddings at the bottoms of the encoder and decoder stacks. the
+   positional encodings have the same dimension $d_{\text{model}}$ as the
+   embeddings, so that the two can be summed. there are many choices of
+   positional encodings, learned and fixed [58](cite).
+
+   in this work, we use sine and cosine functions of different
+   frequencies:
+
+   where $pos$ is the position and $i$ is the dimension. that is, each
+   dimension of the positional encoding corresponds to a sinusoid. the
+   wavelengths form a geometric progression from $2\pi$ to $10000 \cdot
+   2\pi$. we chose this function because we hypothesized it would allow
+   the model to easily learn to attend by relative positions, since for
+   any fixed offset $k$, $pe_{pos+k}$ can be represented as a linear
+   function of $pe_{pos}$.
+
+   in addition, we apply dropout to the sums of the embeddings and the
+   positional encodings in both the encoder and decoder stacks. for the
+   base model, we use a rate of $p_{drop}=0.1$.
+class positionalencoding(nn.module):
+    "implement the pe function."
+    def __init__(self, d_model, dropout, max_len=5000):
+        super(positionalencoding, self).__init__()
+        self.dropout = nn.dropout(p=dropout)
+
+        # compute the positional encodings once in log space.
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) *
+                             -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + variable(self.pe[:, :x.size(1)],
+                         requires_grad=false)
+        return self.dropout(x)
+
+     below the positional encoding will add in a sine wave based on
+     position. the frequency and offset of the wave is different for each
+     dimension.
+
+plt.figure(figsize=(15, 5))
+pe = positionalencoding(20, 0)
+y = pe.forward(variable(torch.zeros(1, 100, 20)))
+plt.plot(np.arange(100), y[0, :, 4:8].data.numpy())
+plt.legend(["dim %d"%p for p in [4,5,6,7]])
+none
+
+   png
+
+   we also experimented with using learned positional embeddings
+   [59](cite) instead, and found that the two versions produced nearly
+   identical results. we chose the sinusoidal version because it may allow
+   the model to extrapolate to sequence lengths longer than the ones
+   encountered during training.
+
+full model
+
+     here we define a function that takes in hyperparameters and produces
+     a full model.
+
+def make_model(src_vocab, tgt_vocab, n=6,
+               d_model=512, d_ff=2048, h=8, dropout=0.1):
+    "helper: construct a model from hyperparameters."
+    c = copy.deepcopy
+    attn = multiheadedattention(h, d_model)
+    ff = positionwisefeedforward(d_model, d_ff, dropout)
+    position = positionalencoding(d_model, dropout)
+    model = encoderdecoder(
+        encoder(encoderlayer(d_model, c(attn), c(ff), dropout), n),
+        decoder(decoderlayer(d_model, c(attn), c(attn),
+                             c(ff), dropout), n),
+        nn.sequential(embeddings(d_model, src_vocab), c(position)),
+        nn.sequential(embeddings(d_model, tgt_vocab), c(position)),
+        generator(d_model, tgt_vocab))
+
+    # this was important from their code.
+    # initialize parameters with glorot / fan_avg.
+    for p in model.parameters():
+        if p.dim() > 1:
+            nn.init.xavier_uniform(p)
+    return model
+# small example model.
+tmp_model = make_model(10, 10, 2)
+none
+
+training
+
+   this section describes the training regime for our models.
+
+     we stop for a quick interlude to introduce some of the tools needed
+     to train a standard encoder decoder model. first we define a batch
+     object that holds the src and target sentences for training, as well
+     as constructing the masks.
+
+batches and masking
+
+class batch:
+    "object for holding a batch of data with mask during training."
+    def __init__(self, src, trg=none, pad=0):
+        self.src = src
+        self.src_mask = (src != pad).unsqueeze(-2)
+        if trg is not none:
+            self.trg = trg[:, :-1]
+            self.trg_y = trg[:, 1:]
+            self.trg_mask = \
+                self.make_std_mask(self.trg, pad)
+            self.ntokens = (self.trg_y != pad).data.sum()
+
+    @staticmethod
+    def make_std_mask(tgt, pad):
+        "create a mask to hide padding and future words."
+        tgt_mask = (tgt != pad).unsqueeze(-2)
+        tgt_mask = tgt_mask & variable(
+            subsequent_mask(tgt.size(-1)).type_as(tgt_mask.data))
+        return tgt_mask
+
+     next we create a generic training and scoring function to keep track
+     of loss. we pass in a generic loss compute function that also
+     handles parameter updates.
+
+training loop
+
+def run_epoch(data_iter, model, loss_compute):
+    "standard training and logging function"
+    start = time.time()
+    total_tokens = 0
+    total_loss = 0
+    tokens = 0
+    for i, batch in enumerate(data_iter):
+        out = model.forward(batch.src, batch.trg,
+                            batch.src_mask, batch.trg_mask)
+        loss = loss_compute(out, batch.trg_y, batch.ntokens)
+        total_loss += loss
+        total_tokens += batch.ntokens
+        tokens += batch.ntokens
+        if i % 50 == 1:
+            elapsed = time.time() - start
+            print("epoch step: %d loss: %f tokens per sec: %f" %
+                    (i, loss / batch.ntokens, tokens / elapsed))
+            start = time.time()
+            tokens = 0
+    return total_loss / total_tokens
+
+training data and batching
+
+   we trained on the standard wmt 2014 english-german dataset consisting
+   of about 4.5 million sentence pairs. sentences were encoded using
+   byte-pair encoding, which has a shared source-target vocabulary of
+   about 37000 tokens. for english- french, we used the significantly
+   larger wmt 2014 english-french dataset consisting of 36m sentences and
+   split tokens into a 32000 word-piece vocabulary.
+
+   sentence pairs were batched together by approximate sequence length.
+   each training batch contained a set of sentence pairs containing
+   approximately 25000 source tokens and 25000 target tokens.
+
+     we will use torch text for batching. this is discussed in more
+     detail below. here we create batches in a torchtext function that
+     ensures our batch size padded to the maximum batchsize does not
+     surpass a threshold (25000 if we have 8 gpus).
+
+global max_src_in_batch, max_tgt_in_batch
+def batch_size_fn(new, count, sofar):
+    "keep augmenting batch and calculate total number of tokens + padding."
+    global max_src_in_batch, max_tgt_in_batch
+    if count == 1:
+        max_src_in_batch = 0
+        max_tgt_in_batch = 0
+    max_src_in_batch = max(max_src_in_batch,  len(new.src))
+    max_tgt_in_batch = max(max_tgt_in_batch,  len(new.trg) + 2)
+    src_elements = count * max_src_in_batch
+    tgt_elements = count * max_tgt_in_batch
+    return max(src_elements, tgt_elements)
+
+hardware and schedule
+
+   we trained our models on one machine with 8 nvidia p100 gpus. for our
+   base models using the hyperparameters described throughout the paper,
+   each training step took about 0.4 seconds. we trained the base models
+   for a total of 100,000 steps or 12 hours. for our big models, step time
+   was 1.0 seconds. the big models were trained for 300,000 steps (3.5
+   days).
+
+optimizer
+
+   we used the adam optimizer [60](cite) with $\beta_1=0.9$,
+   $\beta_2=0.98$ and $\epsilon=10^{-9}$. we varied the learning rate over
+   the course of training, according to the formula: this corresponds to
+   increasing the learning rate linearly for the first $warmup_steps$
+   training steps, and decreasing it thereafter proportionally to the
+   inverse square root of the step number. we used $warmup_steps=4000$.
+
+     note: this part is very important. need to train with this setup of
+     the model.
+
+class noamopt:
+    "optim wrapper that implements rate."
+    def __init__(self, model_size, factor, warmup, optimizer):
+        self.optimizer = optimizer
+        self._step = 0
+        self.warmup = warmup
+        self.factor = factor
+        self.model_size = model_size
+        self._rate = 0
+
+    def step(self):
+        "update parameters and rate"
+        self._step += 1
+        rate = self.rate()
+        for p in self.optimizer.param_groups:
+            p['lr'] = rate
+        self._rate = rate
+        self.optimizer.step()
+
+    def rate(self, step = none):
+        "implement `lrate` above"
+        if step is none:
+            step = self._step
+        return self.factor * \
+            (self.model_size ** (-0.5) *
+            min(step ** (-0.5), step * self.warmup ** (-1.5)))
+
+def get_std_opt(model):
+    return noamopt(model.src_embed[0].d_model, 2, 4000,
+            torch.optim.adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e
+-9))
+
+     example of the curves of this model for different model sizes and
+     for optimization hyperparameters.
+
+# three settings of the lrate hyperparameters.
+opts = [noamopt(512, 1, 4000, none),
+        noamopt(512, 1, 8000, none),
+        noamopt(256, 1, 4000, none)]
+plt.plot(np.arange(1, 20000), [[opt.rate(i) for opt in opts] for i in range(1, 2
+0000)])
+plt.legend(["512:4000", "512:8000", "256:4000"])
+none
+
+   png
+
+id173
+
+label smoothing
+
+   during training, we employed label smoothing of value
+   $\epsilon_{ls}=0.1$ [61](cite). this hurts perplexity, as the model
+   learns to be more unsure, but improves accuracy and id7 score.
+
+     we implement label smoothing using the kl div loss. instead of using
+     a one-hot target distribution, we create a distribution that has
+     confidence of the correct word and the rest of the smoothing mass
+     distributed throughout the vocabulary.
+
+class labelsmoothing(nn.module):
+    "implement label smoothing."
+    def __init__(self, size, padding_idx, smoothing=0.0):
+        super(labelsmoothing, self).__init__()
+        self.criterion = nn.kldivloss(size_average=false)
+        self.padding_idx = padding_idx
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+        self.size = size
+        self.true_dist = none
+
+    def forward(self, x, target):
+        assert x.size(1) == self.size
+        true_dist = x.data.clone()
+        true_dist.fill_(self.smoothing / (self.size - 2))
+        true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
+        true_dist[:, self.padding_idx] = 0
+        mask = torch.nonzero(target.data == self.padding_idx)
+        if mask.dim() > 0:
+            true_dist.index_fill_(0, mask.squeeze(), 0.0)
+        self.true_dist = true_dist
+        return self.criterion(x, variable(true_dist, requires_grad=false))
+
+     here we can see an example of how the mass is distributed to the
+     words based on confidence.
+
+# example of label smoothing.
+crit = labelsmoothing(5, 0, 0.4)
+predict = torch.floattensor([[0, 0.2, 0.7, 0.1, 0],
+                             [0, 0.2, 0.7, 0.1, 0],
+                             [0, 0.2, 0.7, 0.1, 0]])
+v = crit(variable(predict.log()),
+         variable(torch.longtensor([2, 1, 0])))
+
+# show the target distributions expected by the system.
+plt.imshow(crit.true_dist)
+none
+
+   png
+
+     label smoothing actually starts to penalize the model if it gets
+     very confident about a given choice.
+
+crit = labelsmoothing(5, 0, 0.1)
+def loss(x):
+    d = x + 3 * 1
+    predict = torch.floattensor([[0, x / d, 1 / d, 1 / d, 1 / d],
+                                 ])
+    #print(predict)
+    return crit(variable(predict.log()),
+                 variable(torch.longtensor([1]))).data[0]
+plt.plot(np.arange(1, 100), [loss(x) for x in range(1, 100)])
+none
+
+   png
+
+a first example
+
+     we can begin by trying out a simple copy-task. given a random set of
+     input symbols from a small vocabulary, the goal is to generate back
+     those same symbols.
+
+synthetic data
+
+def data_gen(v, batch, nbatches):
+    "generate random data for a src-tgt copy task."
+    for i in range(nbatches):
+        data = torch.from_numpy(np.random.randint(1, v, size=(batch, 10)))
+        data[:, 0] = 1
+        src = variable(data, requires_grad=false)
+        tgt = variable(data, requires_grad=false)
+        yield batch(src, tgt, 0)
+
+loss computation
+
+class simplelosscompute:
+    "a simple loss compute and train function."
+    def __init__(self, generator, criterion, opt=none):
+        self.generator = generator
+        self.criterion = criterion
+        self.opt = opt
+
+    def __call__(self, x, y, norm):
+        x = self.generator(x)
+        loss = self.criterion(x.contiguous().view(-1, x.size(-1)),
+                              y.contiguous().view(-1)) / norm
+        loss.backward()
+        if self.opt is not none:
+            self.opt.step()
+            self.opt.optimizer.zero_grad()
+        return loss.data[0] * norm
+
+greedy decoding
+
+# train the simple copy task.
+v = 11
+criterion = labelsmoothing(size=v, padding_idx=0, smoothing=0.0)
+model = make_model(v, v, n=2)
+model_opt = noamopt(model.src_embed[0].d_model, 1, 400,
+        torch.optim.adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+
+for epoch in range(10):
+    model.train()
+    run_epoch(data_gen(v, 30, 20), model,
+              simplelosscompute(model.generator, criterion, model_opt))
+    model.eval()
+    print(run_epoch(data_gen(v, 30, 5), model,
+                    simplelosscompute(model.generator, criterion, none)))
+
+epoch step: 1 loss: 3.023465 tokens per sec: 403.074173
+epoch step: 1 loss: 1.920030 tokens per sec: 641.689380
+1.9274832487106324
+epoch step: 1 loss: 1.940011 tokens per sec: 432.003378
+epoch step: 1 loss: 1.699767 tokens per sec: 641.979665
+1.657595729827881
+epoch step: 1 loss: 1.860276 tokens per sec: 433.320240
+epoch step: 1 loss: 1.546011 tokens per sec: 640.537198
+1.4888023376464843
+epoch step: 1 loss: 1.682198 tokens per sec: 432.092305
+epoch step: 1 loss: 1.313169 tokens per sec: 639.441857
+1.3485562801361084
+epoch step: 1 loss: 1.278768 tokens per sec: 433.568756
+epoch step: 1 loss: 1.062384 tokens per sec: 642.542067
+0.9853351473808288
+epoch step: 1 loss: 1.269471 tokens per sec: 433.388727
+epoch step: 1 loss: 0.590709 tokens per sec: 642.862135
+0.5686767101287842
+epoch step: 1 loss: 0.997076 tokens per sec: 433.009746
+epoch step: 1 loss: 0.343118 tokens per sec: 642.288427
+0.34273059368133546
+epoch step: 1 loss: 0.459483 tokens per sec: 434.594030
+epoch step: 1 loss: 0.290385 tokens per sec: 642.519464
+0.2612409472465515
+epoch step: 1 loss: 1.031042 tokens per sec: 434.557008
+epoch step: 1 loss: 0.437069 tokens per sec: 643.630322
+0.4323212027549744
+epoch step: 1 loss: 0.617165 tokens per sec: 436.652626
+epoch step: 1 loss: 0.258793 tokens per sec: 644.372296
+0.27331129014492034
+
+     this code predicts a translation using greedy decoding for
+     simplicity.
+
+def greedy_decode(model, src, src_mask, max_len, start_symbol):
+    memory = model.encode(src, src_mask)
+    ys = torch.ones(1, 1).fill_(start_symbol).type_as(src.data)
+    for i in range(max_len-1):
+        out = model.decode(memory, src_mask,
+                           variable(ys),
+                           variable(subsequent_mask(ys.size(1))
+                                    .type_as(src.data)))
+        prob = model.generator(out[:, -1])
+        _, next_word = torch.max(prob, dim = 1)
+        next_word = next_word.data[0]
+        ys = torch.cat([ys,
+                        torch.ones(1, 1).type_as(src.data).fill_(next_word)], di
+m=1)
+    return ys
+
+model.eval()
+src = variable(torch.longtensor([[1,2,3,4,5,6,7,8,9,10]]) )
+src_mask = variable(torch.ones(1, 1, 10) )
+print(greedy_decode(model, src, src_mask, max_len=10, start_symbol=1))
+
+    1     2     3     4     5     6     7     8     9    10
+[torch.longtensor of size 1x10]
+
+a real world example
+
+     now we consider a real-world example using the iwslt german-english
+     translation task. this task is much smaller than the wmt task
+     considered in the paper, but it illustrates the whole system. we
+     also show how to use multi-gpu processing to make it really fast.
+
+#!pip install torchtext spacy
+#!python -m spacy download en
+#!python -m spacy download de
+
+data loading
+
+     we will load the dataset using torchtext and spacy for id121.
+
+# for data loading.
+from torchtext import data, datasets
+
+if true:
+    import spacy
+    spacy_de = spacy.load('de')
+    spacy_en = spacy.load('en')
+
+    def tokenize_de(text):
+        return [tok.text for tok in spacy_de.tokenizer(text)]
+
+    def tokenize_en(text):
+        return [tok.text for tok in spacy_en.tokenizer(text)]
+
+    bos_word = '<s>'
+    eos_word = '</s>'
+    blank_word = "<blank>"
+    src = data.field(tokenize=tokenize_de, pad_token=blank_word)
+    tgt = data.field(tokenize=tokenize_en, init_token = bos_word,
+                     eos_token = eos_word, pad_token=blank_word)
+
+    max_len = 100
+    train, val, test = datasets.iwslt.splits(
+        exts=('.de', '.en'), fields=(src, tgt),
+        filter_pred=lambda x: len(vars(x)['src']) <= max_len and
+            len(vars(x)['trg']) <= max_len)
+    min_freq = 2
+    src.build_vocab(train.src, min_freq=min_freq)
+    tgt.build_vocab(train.trg, min_freq=min_freq)
+
+     batching matters a ton for speed. we want to have very evenly
+     divided batches, with absolutely minimal padding. to do this we have
+     to hack a bit around the default torchtext batching. this code
+     patches their default batching to make sure we search over enough
+     sentences to find tight batches.
+
+iterators
+
+class myiterator(data.iterator):
+    def create_batches(self):
+        if self.train:
+            def pool(d, random_shuffler):
+                for p in data.batch(d, self.batch_size * 100):
+                    p_batch = data.batch(
+                        sorted(p, key=self.sort_key),
+                        self.batch_size, self.batch_size_fn)
+                    for b in random_shuffler(list(p_batch)):
+                        yield b
+            self.batches = pool(self.data(), self.random_shuffler)
+
+        else:
+            self.batches = []
+            for b in data.batch(self.data(), self.batch_size,
+                                          self.batch_size_fn):
+                self.batches.append(sorted(b, key=self.sort_key))
+
+def rebatch(pad_idx, batch):
+    "fix order in torchtext to match ours"
+    src, trg = batch.src.transpose(0, 1), batch.trg.transpose(0, 1)
+    return batch(src, trg, pad_idx)
+
+multi-gpu training
+
+     finally to really target fast training, we will use multi-gpu. this
+     code implements multi-gpu word generation. it is not specific to
+     transformer so i won   t go into too much detail. the idea is to split
+     up word generation at training time into chunks to be processed in
+     parallel across many different gpus. we do this using pytorch
+     parallel primitives:
+
+     * replicate - split modules onto different gpus.
+     * scatter - split batches onto different gpus
+     * parallel_apply - apply module to batches on different gpus
+     * gather - pull scattered data back onto one gpu.
+     * nn.dataparallel - a special module wrapper that calls these all
+       before evaluating.
+
+# skip if not interested in multigpu.
+class multigpulosscompute:
+    "a multi-gpu loss compute and train function."
+    def __init__(self, generator, criterion, devices, opt=none, chunk_size=5):
+        # send out to different gpus.
+        self.generator = generator
+        self.criterion = nn.parallel.replicate(criterion,
+                                               devices=devices)
+        self.opt = opt
+        self.devices = devices
+        self.chunk_size = chunk_size
+
+    def __call__(self, out, targets, normalize):
+        total = 0.0
+        generator = nn.parallel.replicate(self.generator,
+                                                devices=self.devices)
+        out_scatter = nn.parallel.scatter(out,
+                                          target_gpus=self.devices)
+        out_grad = [[] for _ in out_scatter]
+        targets = nn.parallel.scatter(targets,
+                                      target_gpus=self.devices)
+
+        # divide generating into chunks.
+        chunk_size = self.chunk_size
+        for i in range(0, out_scatter[0].size(1), chunk_size):
+            # predict distributions
+            out_column = [[variable(o[:, i:i+chunk_size].data,
+                                    requires_grad=self.opt is not none)]
+                           for o in out_scatter]
+            gen = nn.parallel.parallel_apply(generator, out_column)
+
+            # compute loss.
+            y = [(g.contiguous().view(-1, g.size(-1)),
+                  t[:, i:i+chunk_size].contiguous().view(-1))
+                 for g, t in zip(gen, targets)]
+            loss = nn.parallel.parallel_apply(self.criterion, y)
+
+            # sum and normalize loss
+            l = nn.parallel.gather(loss,
+                                   target_device=self.devices[0])
+            l = l.sum()[0] / normalize
+            total += l.data[0]
+
+            # backprop loss to output of transformer
+            if self.opt is not none:
+                l.backward()
+                for j, l in enumerate(loss):
+                    out_grad[j].append(out_column[j][0].grad.data.clone())
+
+        # backprop all loss through transformer.
+        if self.opt is not none:
+            out_grad = [variable(torch.cat(og, dim=1)) for og in out_grad]
+            o1 = out
+            o2 = nn.parallel.gather(out_grad,
+                                    target_device=self.devices[0])
+            o1.backward(gradient=o2)
+            self.opt.step()
+            self.opt.optimizer.zero_grad()
+        return total * normalize
+
+     now we create our model, criterion, optimizer, data iterators, and
+     paralelization
+
+# gpus to use
+devices = [0, 1, 2, 3]
+if true:
+    pad_idx = tgt.vocab.stoi["<blank>"]
+    model = make_model(len(src.vocab), len(tgt.vocab), n=6)
+    model.cuda()
+    criterion = labelsmoothing(size=len(tgt.vocab), padding_idx=pad_idx, smoothi
+ng=0.1)
+    criterion.cuda()
+    batch_size = 12000
+    train_iter = myiterator(train, batch_size=batch_size, device=0,
+                            repeat=false, sort_key=lambda x: (len(x.src), len(x.
+trg)),
+                            batch_size_fn=batch_size_fn, train=true)
+    valid_iter = myiterator(val, batch_size=batch_size, device=0,
+                            repeat=false, sort_key=lambda x: (len(x.src), len(x.
+trg)),
+                            batch_size_fn=batch_size_fn, train=false)
+    model_par = nn.dataparallel(model, device_ids=devices)
+none
+
+     now we train the model. i will play with the warmup steps a bit, but
+     everything else uses the default parameters. on an aws p3.8xlarge
+     with 4 tesla v100s, this runs at ~27,000 tokens per second with a
+     batch size of 12,000
+
+training the system
+
+#!wget https://s3.amazonaws.com/openid4-models/iwslt.pt
+if false:
+    model_opt = noamopt(model.src_embed[0].d_model, 1, 2000,
+            torch.optim.adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e
+-9))
+    for epoch in range(10):
+        model_par.train()
+        run_epoch((rebatch(pad_idx, b) for b in train_iter),
+                  model_par,
+                  multigpulosscompute(model.generator, criterion,
+                                      devices=devices, opt=model_opt))
+        model_par.eval()
+        loss = run_epoch((rebatch(pad_idx, b) for b in valid_iter),
+                          model_par,
+                          multigpulosscompute(model.generator, criterion,
+                          devices=devices, opt=none))
+        print(loss)
+else:
+    model = torch.load("iwslt.pt")
+
+     once trained we can decode the model to produce a set of
+     translations. here we simply translate the first sentence in the
+     validation set. this dataset is pretty small so the translations
+     with greedy search are reasonably accurate.
+
+for i, batch in enumerate(valid_iter):
+    src = batch.src.transpose(0, 1)[:1]
+    src_mask = (src != src.vocab.stoi["<blank>"]).unsqueeze(-2)
+    out = greedy_decode(model, src, src_mask,
+                        max_len=60, start_symbol=tgt.vocab.stoi["<s>"])
+    print("translation:", end="\t")
+    for i in range(1, out.size(1)):
+        sym = tgt.vocab.itos[out[0, i]]
+        if sym == "</s>": break
+        print(sym, end =" ")
+    print()
+    print("target:", end="\t")
+    for i in range(1, batch.trg.size(0)):
+        sym = tgt.vocab.itos[batch.trg.data[i, 0]]
+        if sym == "</s>": break
+        print(sym, end =" ")
+    print()
+    break
+
+translation:    <unk> <unk> . in my language , that means , thank you very much
+.
+gold:   <unk> <unk> . it means in my language , thank you very much .
+
+additional components: bpe, search, averaging
+
+     so this mostly covers the transformer model itself. there are four
+     aspects that we didn   t cover explicitly. we also have all these
+     additional features implemented in [62]openid4-py.
+
+     1) bpe/ word-piece: we can use a library to first preprocess the
+     data into subword units. see rico sennrich   s [63]subword- id4
+     implementation. these models will transform the training data to
+     look like this:
+
+      die    protokoll datei    kann     heimlich    per    e - mail    oder    ftp    an
+      einen    bestimmte n    empf  nger    gesendet    werden .
+
+     2) shared embeddings: when using bpe with shared vocabulary we can
+     share the same weight vectors between the source / target /
+     generator. see the [64](cite) for details. to add this to the model
+     simply do this:
+
+if false:
+    model.src_embed[0].lut.weight = model.tgt_embeddings[0].lut.weight
+    model.generator.lut.weight = model.tgt_embed[0].lut.weight
+
+     3) id125: this is a bit too complicated to cover here. see the
+     [65]openid4- py for a pytorch implementation.
+
+     4) model averaging: the paper averages the last k checkpoints to
+     create an ensembling effect. we can do this after the fact if we
+     have a bunch of models:
+
+def average(model, models):
+    "average models into model"
+    for ps in zip(*[m.params() for m in [model] + models]):
+        p[0].copy_(torch.sum(*ps[1:]) / len(ps[1:]))
+
+results
+
+   on the wmt 2014 english-to-german translation task, the big transformer
+   model (transformer (big) in table 2) outperforms the best previously
+   reported models (including ensembles) by more than 2.0 id7,
+   establishing a new state-of-the-art id7 score of 28.4. the
+   configuration of this model is listed in the bottom line of table 3.
+   training took 3.5 days on 8 p100 gpus. even our base model surpasses
+   all previously published models and ensembles, at a fraction of the
+   training cost of any of the competitive models.
+
+   on the wmt 2014 english-to-french translation task, our big model
+   achieves a id7 score of 41.0, outperforming all of the previously
+   published single models, at less than 1/4 the training cost of the
+   previous state-of-the-art model. the transformer (big) model trained
+   for english-to-french used dropout rate pdrop = 0.1, instead of 0.3.
+image(filename="images/results.png")
+
+   png
+
+     the code we have written here is a version of the base model. there
+     are fully trained version of this system available here [66](example
+     models).
+
+     with the addtional extensions in the last section, the openid4-py
+     replication gets to 26.9 on en-de wmt. here i have loaded in those
+     parameters to our reimplemenation.
+
+!wget https://s3.amazonaws.com/openid4-models/en-de-model.pt
+model, src, tgt = torch.load("en-de-model.pt")
+model.eval()
+sent = "   the    log    file    can    be    sent    secret ly    with    email    or    ftp    to    a
+   specified    receiver".split()
+src = torch.longtensor([[src.stoi[w] for w in sent]])
+src = variable(src)
+src_mask = (src != src.stoi["<blank>"]).unsqueeze(-2)
+out = greedy_decode(model, src, src_mask,
+                    max_len=60, start_symbol=tgt.stoi["<s>"])
+print("translation:", end="\t")
+trans = "<s> "
+for i in range(1, out.size(1)):
+    sym = tgt.itos[out[0, i]]
+    if sym == "</s>": break
+    trans += sym + " "
+print(trans)
+
+translation:    <s>    die    protokoll datei    kann     heimlich    per    e - mail    oder
+   ftp    an    einen    bestimmte n    empf  nger    gesendet    werden .
+
+attention visualization
+
+     even with a greedy decoder the translation looks pretty good. we can
+     further visualize it to see what is happening at each layer of the
+     attention
+
+tgt_sent = trans.split()
+def draw(data, x, y, ax):
+    seaborn.heatmap(data,
+                    xticklabels=x, square=true, yticklabels=y, vmin=0.0, vmax=1.
+0,
+                    cbar=false, ax=ax)
+
+for layer in range(1, 6, 2):
+    fig, axs = plt.subplots(1,4, figsize=(20, 10))
+    print("encoder layer", layer+1)
+    for h in range(4):
+        draw(model.encoder.layers[layer].self_attn.attn[0, h].data,
+            sent, sent if h ==0 else [], ax=axs[h])
+    plt.show()
+
+for layer in range(1, 6, 2):
+    fig, axs = plt.subplots(1,4, figsize=(20, 10))
+    print("decoder self layer", layer+1)
+    for h in range(4):
+        draw(model.decoder.layers[layer].self_attn.attn[0, h].data[:len(tgt_sent
+), :len(tgt_sent)],
+            tgt_sent, tgt_sent if h ==0 else [], ax=axs[h])
+    plt.show()
+    print("decoder src layer", layer+1)
+    fig, axs = plt.subplots(1,4, figsize=(20, 10))
+    for h in range(4):
+        draw(model.decoder.layers[layer].self_attn.attn[0, h].data[:len(tgt_sent
+), :len(sent)],
+            sent, tgt_sent if h ==0 else [], ax=axs[h])
+    plt.show()
+
+encoder layer 2
+
+   png
+encoder layer 4
+
+   png
+encoder layer 6
+
+   png
+decoder self layer 2
+
+   png
+decoder src layer 2
+
+   png
+decoder self layer 4
+
+   png
+decoder src layer 4
+
+   png
+decoder self layer 6
+
+   png
+decoder src layer 6
+
+   png
+
+conclusion
+
+     hopefully this code is useful for future research. please reach out
+     if you have any issues. if you find this code helpful, also check
+     out our other openid4 tools.
+
+@inproceedings{openid4,
+  author    = {guillaume klein and
+               yoon kim and
+               yuntian deng and
+               jean senellart and
+               alexander m. rush},
+  title     = {openid4: open-source toolkit for id4},
+  booktitle = {proc. acl},
+  year      = {2017},
+  url       = {https://doi.org/10.18653/v1/p17-4012},
+  doi       = {10.18653/v1/p17-4012}
+}
+
+     cheers, srush
+
+   please enable javascript to view the [67]comments powered by
+   disqus.</noscript>
+
+   please enable javascript to view the [68]comments powered by
+   disqus.</noscript>
+
+harvardnlp
+
+     * harvardnlp
+     * [69]srush@seas.harvard.edu
+
+     * [70]harvardnlp
+     * [71]harvardnlp
+
+   home of the harvard seas natural-language processing group.
+
+references
+
+   visible links
+   1. http://nlp.seas.harvard.edu//feed.xml
+   2. http://nlp.seas.harvard.edu/
+   3. http://nlp.seas.harvard.edu/members/
+   4. http://nlp.seas.harvard.edu/rush.html
+   5. http://nlp.seas.harvard.edu/code/
+   6. http://nlp.seas.harvard.edu/papers/
+   7. https://arxiv.org/abs/1706.03762
+   8. http://pytorch.org/
+   9. https://github.com/harvardnlp/annotated-transformer
+  10. https://drive.google.com/file/d/1xqxsv6mtaolxxemi8rvaw8tw-7bvybdf/view?usp=sharing
+  11. http://openid4.net/
+  12. http://nlp.seas.harvard.edu/2018/04/03/attention.html#conclusion
+  13. https://github.com/tensorflow/tensor2tensor
+  14. https://github.com/awslabs/sockeye
+  15. https://twitter.com/harvardnlp
+  16. http://nlp.seas.harvard.edu/2018/04/03/attention.html#prelims
+  17. http://nlp.seas.harvard.edu/2018/04/03/attention.html#background
+  18. http://nlp.seas.harvard.edu/2018/04/03/attention.html#model-architecture
+  19. http://nlp.seas.harvard.edu/2018/04/03/attention.html#encoder-and-decoder-stacks
+  20. http://nlp.seas.harvard.edu/2018/04/03/attention.html#encoder
+  21. http://nlp.seas.harvard.edu/2018/04/03/attention.html#decoder
+  22. http://nlp.seas.harvard.edu/2018/04/03/attention.html#attention
+  23. http://nlp.seas.harvard.edu/2018/04/03/attention.html#applications-of-attention-in-our-model
+  24. http://nlp.seas.harvard.edu/2018/04/03/attention.html#position-wise-feed-forward-networks
+  25. http://nlp.seas.harvard.edu/2018/04/03/attention.html#embeddings-and-softmax
+  26. http://nlp.seas.harvard.edu/2018/04/03/attention.html#positional-encoding
+  27. http://nlp.seas.harvard.edu/2018/04/03/attention.html#full-model
+  28. http://nlp.seas.harvard.edu/2018/04/03/attention.html#training
+  29. http://nlp.seas.harvard.edu/2018/04/03/attention.html#batches-and-masking
+  30. http://nlp.seas.harvard.edu/2018/04/03/attention.html#training-loop
+  31. http://nlp.seas.harvard.edu/2018/04/03/attention.html#training-data-and-batching
+  32. http://nlp.seas.harvard.edu/2018/04/03/attention.html#hardware-and-schedule
+  33. http://nlp.seas.harvard.edu/2018/04/03/attention.html#optimizer
+  34. http://nlp.seas.harvard.edu/2018/04/03/attention.html#id173
+  35. http://nlp.seas.harvard.edu/2018/04/03/attention.html#label-smoothing
+  36. http://nlp.seas.harvard.edu/2018/04/03/attention.html#a-first--example
+  37. http://nlp.seas.harvard.edu/2018/04/03/attention.html#synthetic-data
+  38. http://nlp.seas.harvard.edu/2018/04/03/attention.html#loss-computation
+  39. http://nlp.seas.harvard.edu/2018/04/03/attention.html#greedy-decoding
+  40. http://nlp.seas.harvard.edu/2018/04/03/attention.html#a-real-world-example
+  41. http://nlp.seas.harvard.edu/2018/04/03/attention.html#data-loading
+  42. http://nlp.seas.harvard.edu/2018/04/03/attention.html#iterators
+  43. http://nlp.seas.harvard.edu/2018/04/03/attention.html#multi-gpu-training
+  44. http://nlp.seas.harvard.edu/2018/04/03/attention.html#training-the-system
+  45. http://nlp.seas.harvard.edu/2018/04/03/attention.html#additional-components-bpe-search-averaging
+  46. http://nlp.seas.harvard.edu/2018/04/03/attention.html#results
+  47. http://nlp.seas.harvard.edu/2018/04/03/attention.html#attention-visualization
+  48. http://nlp.seas.harvard.edu/2018/04/03/attention.html#conclusion
+  49. https://arxiv.org/abs/1409.0473
+  50. https://arxiv.org/abs/1308.0850
+  51. https://arxiv.org/abs/1512.03385
+  52. https://arxiv.org/abs/1607.06450
+  53. http://jmlr.org/papers/v15/srivastava14a.html
+  54. https://arxiv.org/abs/1409.0473
+  55. https://arxiv.org/abs/1703.03906
+  56. https://arxiv.org/abs/1609.08144
+  57. https://arxiv.org/abs/1608.05859
+  58. https://arxiv.org/pdf/1705.03122.pdf
+  59. https://arxiv.org/pdf/1705.03122.pdf
+  60. https://arxiv.org/abs/1412.6980
+  61. https://arxiv.org/abs/1512.00567
+  62. https://github.com/openid4/openid4-py
+  63. https://github.com/rsennrich/subword-id4
+  64. https://arxiv.org/abs/1608.05859
+  65. https://github.com/openid4/openid4-py/blob/master/oid4/translate/beam.py
+  66. http://openid4.net/models-py/
+  67. https://disqus.com/?ref_noscript
+  68. https://disqus.com/?ref_noscript
+  69. mailto:srush@seas.harvard.edu
+  70. https://github.com/harvardnlp
+  71. https://twitter.com/harvardnlp
+
+   hidden links:
+  73. http://nlp.seas.harvard.edu/2018/04/03/attention.html

@@ -1,0 +1,883 @@
+6
+1
+0
+2
+
+ 
+
+v
+o
+n
+1
+2
+
+ 
+
+ 
+ 
+]
+e
+n
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+6
+7
+5
+1
+0
+
+.
+
+1
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+under review as a conference paper at iclr 2017
+
+quasi-recurrent neural networks
+
+james bradbury   , stephen merity   , caiming xiong & richard socher
+salesforce research
+palo alto, california
+{james.bradbury,smerity,cxiong,rsocher}@salesforce.com
+
+abstract
+
+recurrent neural networks are a powerful tool for modeling sequential data, but
+the dependence of each timestep   s computation on the previous timestep   s out-
+put limits parallelism and makes id56s unwieldy for very long sequences. we
+introduce quasi-recurrent neural networks (qid56s), an approach to neural se-
+quence modeling that alternates convolutional layers, which apply in parallel
+across timesteps, and a minimalist recurrent pooling function that applies in par-
+allel across channels. despite lacking trainable recurrent layers, stacked qid56s
+have better predictive accuracy than stacked lstms of the same hidden size. due
+to their increased parallelism, they are up to 16 times faster at train and test time.
+experiments on id38, sentiment classi   cation, and character-level
+id4 demonstrate these advantages and underline the viabil-
+ity of qid56s as a basic building block for a variety of sequence tasks.
+
+1
+
+introduction
+
+recurrent neural networks (id56s), including gated variants such as the long short-term memory
+(lstm) (hochreiter & schmidhuber, 1997) have become the standard model architecture for deep
+learning approaches to sequence modeling tasks. id56s repeatedly apply a function with trainable
+parameters to a hidden state. recurrent layers can also be stacked, increasing network depth, repre-
+sentational power and often accuracy. id56 applications in the natural language domain range from
+sentence classi   cation (wang et al., 2015) to word- and character-level id38 (zaremba
+et al., 2014). id56s are also commonly the basic building block for more complex models for tasks
+such as machine translation (bahdanau et al., 2015; luong et al., 2015; bradbury & socher, 2016)
+or id53 (kumar et al., 2016; xiong et al., 2016). unfortunately standard id56s, in-
+cluding lstms, are limited in their capability to handle tasks involving very long sequences, such
+as document classi   cation or character-level machine translation, as the computation of features or
+states for different parts of the document cannot occur in parallel.
+convolutional neural networks (id98s) (krizhevsky et al., 2012), though more popular on tasks in-
+volving image data, have also been applied to sequence encoding tasks (zhang et al., 2015). such
+models apply time-invariant    lter functions in parallel to windows along the input sequence. id98s
+possess several advantages over recurrent models, including increased parallelism and better scal-
+ing to long sequences such as those often seen with character-level language data. convolutional
+models for sequence processing have been more successful when combined with id56 layers in a
+hybrid architecture (lee et al., 2016), because traditional max- and average-pooling approaches to
+combining convolutional features across timesteps assume time invariance and hence cannot make
+full use of large-scale sequence order information.
+we present quasi-recurrent neural networks for neural sequence modeling. qid56s address both
+drawbacks of standard models:
+like id98s, qid56s allow for parallel computation across both
+timestep and minibatch dimensions, enabling high throughput and good scaling to long sequences.
+like id56s, qid56s allow the output to depend on the overall order of elements in the sequence.
+we describe qid56 variants tailored to several natural language tasks, including document-level
+sentiment classi   cation, id38, and character-level machine translation. these models
+outperform strong lstm baselines on all three tasks while dramatically reducing computation time.
+
+   equal contribution
+
+1
+
+under review as a conference paper at iclr 2017
+
+figure 1: block diagrams showing the computation structure of the qid56 compared with typical
+lstm and id98 architectures. red signi   es convolutions or id127s; a continuous
+blocid116 that those computations can proceed in parallel. blue signi   es parameterless functions
+that operate in parallel along the channel/feature dimension. lstms can be factored into (red) linear
+blocks and (blue) elementwise blocks, but computation at each timestep still depends on the results
+from the previous timestep.
+
+2 model
+
+each layer of a quasi-recurrent neural network consists of two kinds of subcomponents, analogous
+to convolution and pooling layers in id98s. the convolutional component, like convolutional layers
+in id98s, allows fully parallel computation across both minibatches and spatial dimensions, in this
+case the sequence dimension. the pooling component, like pooling layers in id98s, lacks trainable
+parameters and allows fully parallel computation across minibatch and feature dimensions.
+given an input sequence x     rt  n of t n-dimensional vectors x1 . . . xt , the convolutional sub-
+component of a qid56 performs convolutions in the timestep dimension with a bank of m    lters,
+producing a sequence z     rt  m of m-dimensional candidate vectors zt. in order to be useful for
+tasks that include prediction of the next token, the    lters must not allow the computation for any
+given timestep to access information from future timesteps. that is, with    lters of width k, each zt
+depends only on xt   k+1 through xt. this concept, known as a masked convolution (van den oord
+et al., 2016), is implemented by padding the input to the left by the convolution   s    lter size minus
+one.
+we apply additional convolutions with separate    lter banks to obtain sequences of vectors for the
+elementwise gates that are needed for the pooling function. while the candidate vectors are passed
+through a tanh nonlinearity, the gates use an elementwise sigmoid. if the pooling function requires a
+forget gate ft and an output gate ot at each timestep, the full set of computations in the convolutional
+component is then:
+
+z = tanh(wz     x)
+f =   (wf     x)
+o =   (wo     x),
+
+(1)
+
+where wz,wf , and wo, each in rk  n  m, are the convolutional    lter banks and     denotes a
+masked convolution along the timestep dimension. note that if the    lter width is 2, these equations
+reduce to the lstm-like
+
+zt = tanh(w1
+ft =   (w1
+ot =   (w1
+
+zxt   1 + w2
+f xt)
+oxt).
+
+f xt   1 + w2
+oxt   1 + w2
+
+zxt)
+
+(2)
+
+convolution    lters of larger width effectively compute higher id165 features at each timestep; thus
+larger widths are especially important for character-level tasks.
+suitable functions for the pooling subcomponent can be constructed from the familiar elementwise
+gates of the traditional lstm cell. we seek a function controlled by gates that can mix states across
+timesteps, but which acts independently on each channel of the state vector. the simplest option,
+which balduzzi & ghifary (2016) term    dynamic average pooling   , uses only a forget gate:
+
+ht = ft (cid:12) ht   1 + (1     ft) (cid:12) zt,
+
+(3)
+
+2
+
+lstmid98lstm/linearlinearlstm/linearlinearfo-poolconvolutionfo-poolconvolutionmax-poolconvolutionmax-poolconvolutionqid56under review as a conference paper at iclr 2017
+
+where (cid:12) denotes elementwise multiplication. the function may also include an output gate:
+
+ct = ft (cid:12) ct   1 + (1     ft) (cid:12) zt
+ht = ot (cid:12) ct.
+
+or the recurrence relation may include an independent input and forget gate:
+
+ct = ft (cid:12) ct   1 + it (cid:12) zt
+ht = ot (cid:12) ct.
+
+(4)
+
+(5)
+
+we term these three options f -pooling, fo-pooling, and ifo-pooling respectively; in each case we
+initialize h or c to zero. although the recurrent parts of these functions must be calculated for
+each timestep in sequence, their simplicity and parallelism along feature dimensions means that,
+in practice, evaluating them over even long sequences requires a negligible amount of computation
+time.
+a single qid56 layer thus performs an input-dependent pooling, followed by a gated linear combi-
+nation of convolutional features. as with convolutional neural networks, two or more qid56 layers
+should be stacked to create a model with the capacity to approximate more complex functions.
+
+2.1 variants
+
+motivated by several common natural language tasks, and the long history of work on related ar-
+chitectures, we introduce several extensions to the stacked qid56 described above. notably, many
+extensions to both recurrent and convolutional models can be applied directly to the qid56 as it
+combines elements of both model types.
+id173 an important extension to the stacked qid56 is a robust id173 scheme
+inspired by recent work in regularizing lstms.
+the need for an effective id173 method for lstms, and dropout   s relative lack of ef   cacy
+when applied to recurrent connections, led to the development of recurrent dropout schemes, in-
+cluding variational id136   based dropout (gal & ghahramani, 2016) and zoneout (krueger et al.,
+2016). these schemes extend dropout to the recurrent setting by taking advantage of the repeating
+structure of recurrent networks, providing more powerful and less destructive id173.
+variational id136   based dropout locks the dropout mask used for the recurrent connections
+across timesteps, so a single id56 pass uses a single stochastic subset of the recurrent weights.
+zoneout stochastically chooses a new subset of channels to    zone out    at each timestep; for these
+channels the network copies states from one timestep to the next without modi   cation.
+as qid56s lack recurrent weights, the variational id136 approach does not apply. thus we
+extended zoneout to the qid56 architecture by modifying the pooling function to keep the previous
+pooling state for a stochastic subset of channels. conveniently, this is equivalent to stochastically
+setting a subset of the qid56   s f gate channels to 1, or applying dropout on 1     f:
+
+f = 1     dropout(1       (wf     x)))
+
+(6)
+thus the pooling function itself need not be modi   ed at all. we note that when using an off-the-
+shelf dropout layer in this context, it is important to remove automatic rescaling functionality from
+the implementation if it is present. in many experiments, we also apply ordinary dropout between
+layers, including between id27s and the    rst qid56 layer.
+densely-connected layers we can also extend the qid56 architecture using techniques intro-
+duced for convolutional networks. for sequence classi   cation tasks, we found it helpful to use
+skip-connections between every qid56 layer, a technique termed    dense convolution    by huang
+et al. (2016). where traditional feed-forward or convolutional networks have connections only be-
+tween subsequent layers, a    densenet    with l layers has feed-forward or convolutional connections
+between every pair of layers, for a total of l(l   1). this can improve gradient    ow and convergence
+properties, especially in deeper networks, although it requires a parameter count that is quadratic in
+the number of layers.
+when applying this technique to the qid56, we include connections between the input embeddings
+and every qid56 layer and between every pair of qid56 layers. this is equivalent to concatenating
+
+3
+
+under review as a conference paper at iclr 2017
+
+figure 2: the qid56 encoder   decoder architecture used for machine translation experiments.
+
+each qid56 layer   s input to its output along the channel dimension before feeding the state into the
+next layer. the output of the last layer alone is then used as the overall encoding result.
+encoder   decoder models to demonstrate the generality of qid56s, we extend the model architec-
+ture to sequence-to-sequence tasks, such as machine translation, by using a qid56 as encoder and a
+modi   ed qid56, enhanced with attention, as decoder. the motivation for modifying the decoder is
+that simply feeding the last encoder hidden state (the output of the encoder   s pooling layer) into the
+decoder   s recurrent pooling layer, analogously to conventional recurrent encoder   decoder architec-
+tures, would not allow the encoder state to affect the gate or update values that are provided to the
+decoder   s pooling layer. this would substantially limit the representational power of the decoder.
+instead, the output of each decoder qid56 layer   s convolution functions is supplemented at every
+timestep with the    nal encoder hidden state. this is accomplished by adding the result of the convo-
+z     x(cid:96), in rt  m) with broadcasting to a linearly projected copy of layer
+lution for layer (cid:96) (e.g., w(cid:96)
+(cid:96)   s last encoder state (e.g., v(cid:96)
+z
+
+t , in rm):
+  h(cid:96)
+z(cid:96) = tanh(w(cid:96)
+f(cid:96) =   (w(cid:96)
+o(cid:96) =   (w(cid:96)
+
+z     x(cid:96) + v(cid:96)
+z
+  h(cid:96)
+t )
+f
+  h(cid:96)
+t ),
+
+f     x(cid:96) + v(cid:96)
+o     x(cid:96) + v(cid:96)
+
+o
+
+  h(cid:96)
+
+t )
+
+where the tilde denotes that   h is an encoder variable. encoder   decoder models which operate on
+long sequences are made signi   cantly more powerful with the addition of soft attention (bahdanau
+et al., 2015), which removes the need for the entire input representation to    t into a    xed-length
+encoding vector. in our experiments, we computed an attentional sum of the encoder   s last layer   s
+hidden states. we used the dot products of these encoder hidden states with the decoder   s last layer   s
+un-gated hidden states, applying a softmax along the encoder timesteps, to weight the encoder states
+into an attentional sum kt for each decoder timestep. this context, and the decoder state, are then
+fed into a linear layer followed by the output gate:
+
+(7)
+
+(8)
+
+  st = softmax
+
+t      hl
+(cl
+s )
+
+(cid:88)
+
+all s
+  st  hl
+s
+
+kt =
+t = ot (cid:12) (wkkt + wccl
+hl
+t ),
+
+s
+
+where l is the last layer.
+while the    rst step of this attention procedure is quadratic in the sequence length, in practice it
+takes signi   cantly less computation time than the model   s linear and convolutional layers due to the
+simple and highly parallel dot-product scoring function.
+
+4
+
+fo-poolconvolutionfo-poolconvolutionfo-poollinearf-poollinearattentionoutput gateslinearunder review as a conference paper at iclr 2017
+
+model
+nbid166-bi (wang & manning, 2012)
+2 layer sequential bow id98 (johnson & zhang, 2014)
+ensemble of id56s and nb-id166 (mesnil et al., 2014)
+2-layer lstm (longpre et al., 2016)
+residual 2-layer bi-lstm (longpre et al., 2016)
+our models
+densely-connected 4-layer lstm (cudnn optimized)
+densely-connected 4-layer qid56
+densely-connected 4-layer qid56 with k = 4
+
+time / epoch (s) test acc (%)
+
+   
+   
+   
+   
+   
+
+480
+150
+160
+
+91.2
+92.3
+92.6
+87.6
+90.1
+
+90.9
+91.4
+91.1
+
+table 1: accuracy comparison on the imdb binary sentiment classi   cation task. all of our models
+use 256 units per layer; all layers other than the    rst layer, whose    lter width may vary, use    lter
+width k = 2. train times are reported on a single nvidia k40 gpu. we exclude semi-supervised
+models that conduct additional training on the unlabeled portion of the dataset.
+
+3 experiments
+
+we evaluate the performance of the qid56 on three different natural language tasks: document-level
+sentiment classi   cation, id38, and character-based id4. our
+qid56 models outperform lstm-based models of equal hidden size on all three tasks while dra-
+matically improving computation speed. experiments were implemented in chainer (tokui et al.).
+
+3.1 sentiment classification
+
+we evaluate the qid56 architecture on a popular document-level sentiment classi   cation bench-
+mark, the imdb movie review dataset (maas et al., 2011). the dataset consists of a balanced sample
+of 25,000 positive and 25,000 negative reviews, divided into equal-size train and test sets, with an
+average document length of 231 words (wang & manning, 2012). we compare only to other results
+that do not make use of additional unlabeled data (thus excluding e.g., miyato et al. (2016)).
+our best performance on a held-out development set was achieved using a four-layer densely-
+connected qid56 with 256 units per layer and word vectors initialized using 300-dimensional cased
+glove embeddings (pennington et al., 2014). dropout of 0.3 was applied between layers, and we
+used l2 id173 of 4    10   6. optimization was performed on minibatches of 24 examples
+using rmsprop (tieleman & hinton, 2012) with learning rate of 0.001,    = 0.9, and   = 10   8.
+small batch sizes and long sequence lengths provide an ideal situation for demonstrating the
+qid56   s performance advantages over traditional recurrent architectures. we observed a speedup
+of 3.2x on imdb train time per epoch compared to the optimized lstm implementation provided
+in nvidia   s cudnn library. for speci   c batch sizes and sequence lengths, a 16x speed gain is
+possible. figure 4 provides extensive speed comparisons.
+in figure 3, we visualize the hidden state vectors cl
+t of the    nal qid56 layer on part of an example
+from the imdb dataset. even without any post-processing, changes in the hidden state are visible
+and interpretable in regards to the input. this is a consequence of the elementwise nature of the
+recurrent pooling function, which delays direct interaction between different channels of the hidden
+state until the computation of the next qid56 layer.
+
+3.2 id38
+
+we replicate the id38 experiment of zaremba et al. (2014) and gal & ghahramani
+(2016) to benchmark the qid56 architecture for natural language sequence prediction. the experi-
+ment uses a standard preprocessed version of the id32 (ptb) by mikolov et al. (2010).
+we implemented a gated qid56 model with medium hidden size: 2 layers with 640 units in each
+layer. both qid56 layers use a convolutional    lter width k of two timesteps. while the    medium   
+models used in other work (zaremba et al., 2014; gal & ghahramani, 2016) consist of 650 units in
+
+5
+
+under review as a conference paper at iclr 2017
+
+figure 3: visualization of the    nal qid56 layer   s hidden state vectors cl
+in the imdb task, with
+t
+timesteps along the vertical axis. colors denote neuron activations. after an initial positive statement
+   this movie is simply gorgeous    (off graph at timestep 9), timestep 117 triggers a reset of most
+hidden states due to the phrase    not exactly a bad story    (soon after    main weakness is its story   ).
+only at timestep 158, after    i recommend this movie to everyone, even if you   ve never played the
+game   , do the hidden units recover.
+
+each layer, it was more computationally convenient to use a multiple of 32. as the id32
+is a relatively small dataset, preventing over   tting is of considerable importance and a major focus
+of recent research. it is not obvious in advance which of the many id56 id173 schemes
+would perform well when applied to the qid56. our tests showed encouraging results from zoneout
+applied to the qid56   s recurrent pooling layer, implemented as described in section 2.1.
+the experimental settings largely followed the    medium    setup of zaremba et al. (2014). optimiza-
+tion was performed by stochastic id119 (sgd) without momentum. the learning rate was
+set at 1 for six epochs, then decayed by 0.95 for each subsequent epoch, for a total of 72 epochs.
+we additionally used l2 id173 of 2    10   4 and rescaled gradients with norm above 10.
+zoneout was applied by performing dropout with ratio 0.1 on the forget gates of the qid56, without
+rescaling the output of the dropout function. batches consist of 20 examples, each 105 timesteps.
+comparing our results on the gated qid56 with zoneout to the results of lstms with both ordinary
+and variational dropout in table 2, we see that the qid56 is highly competitive. the qid56 without
+zoneout strongly outperforms both our medium lstm and the medium lstm of zaremba et al.
+(2014) which do not use recurrent dropout and is even competitive with variational lstms. this
+may be due to the limited computational capacity that the qid56   s pooling layer has relative to the
+lstm   s recurrent weights, providing structural id173 over the recurrence.
+without zoneout, early stopping based upon validation loss was required as the qid56 would be-
+gin over   tting. by applying a small amount of zoneout (p = 0.1), no early stopping is required
+and the qid56 achieves competitive levels of perplexity to the variational lstm of gal & ghahra-
+
+model
+lstm (medium) (zaremba et al., 2014)
+variational lstm (medium, mc) (gal & ghahramani, 2016)
+lstm with charid98 embeddings (kim et al., 2016)
+zoneout + variational lstm (medium) (merity et al., 2016)
+our models
+lstm (medium)
+qid56 (medium)
+qid56 + zoneout (p = 0.1) (medium)
+
+parameters validation
+
+20m
+20m
+19m
+20m
+
+20m
+18m
+18m
+
+86.2
+81.9
+   
+84.4
+
+85.7
+82.9
+82.1
+
+test
+
+82.7
+79.7
+78.9
+80.6
+
+82.0
+79.9
+78.3
+
+table 2: single model perplexity on validation and test sets for the id32 language model-
+ing task. lower is better.    medium    refers to a two-layer network with 640 or 650 hidden units per
+layer. all qid56 models include dropout of 0.5 on embeddings and between layers. mc refers to
+monte carlo dropout averaging at test time.
+
+6
+
+under review as a conference paper at iclr 2017
+
+e
+z
+i
+s
+h
+c
+t
+a
+b
+
+8
+16
+32
+64
+128
+256
+
+32
+5.5x
+5.5x
+4.2x
+3.0x
+2.1x
+1.4x
+
+sequence length
+64
+8.8x
+6.7x
+4.5x
+3.0x
+1.9x
+1.4x
+
+128
+11.0x
+7.8x
+4.9x
+3.0x
+2.0x
+1.3x
+
+256
+12.4x
+8.3x
+4.9x
+3.0x
+2.0x
+1.3x
+
+512
+16.9x
+10.8x
+6.4x
+3.7x
+2.4x
+1.3x
+
+figure 4: left: training speed for two-layer 640-unit ptb lm on a batch of 20 examples of 105
+timesteps.    id56    and    softmax    include the forward and backward times, while    optimization
+overhead    includes gradient clipping, l2 id173, and sgd computations.
+right: id136 speed advantage of a 320-unit qid56 layer alone over an equal-sized cudnn
+lstm layer for data with the given batch size and sequence length. training results are similar.
+
+mani (2016), which had variational id136 based dropout of 0.2 applied recurrently. their best
+performing variation also used monte carlo (mc) dropout averaging at test time of 1000 different
+masks, making it computationally more expensive to run.
+when training on the ptb dataset with an nvidia k40 gpu, we found that the qid56 is sub-
+stantially faster than a standard lstm, even when comparing against the optimized cudnn lstm.
+in figure 4 we provide a breakdown of the time taken for chainer   s default lstm, the cudnn
+lstm, and qid56 to perform a full forward and backward pass on a single batch during training of
+the id56 lm on ptb. for both lstm implementations, running time was dominated by the id56
+computations, even with the highly optimized cudnn implementation. for the qid56 implementa-
+tion, however, the    id56    layers are no longer the bottleneck. indeed, there are diminishing returns
+from further optimization of the qid56 itself as the softmax and optimization overhead take equal
+or greater time. note that the softmax, over a vocabulary size of only 10,000 words, is relatively
+small; for tasks with larger vocabularies, the softmax would likely dominate computation time.
+it is also important to note that the cudnn library   s id56 primitives do not natively support any form
+of recurrent dropout. that is, running an lstm that uses a state-of-the-art id173 scheme at
+cudnn-like speeds would likely require an entirely custom kernel.
+
+3.3 character-level id4
+
+we evaluate the sequence-to-sequence qid56 architecture described in 2.1 on a challenging neu-
+ral machine translation task, iwslt german   english spoken-domain translation, applying fully
+character-level segmentation. this dataset consists of 209,772 sentence pairs of parallel training
+data from transcribed ted and tedx presentations, with a mean sentence length of 103 characters
+for german and 93 for english. we remove training sentences with more than 300 characters in
+english or german, and use a uni   ed vocabulary of 187 unicode code points.
+our best performance on a development set (ted.tst2013) was achieved using a four-layer encoder   
+decoder qid56 with 320 units per layer, no dropout or l2 id173, and gradient rescaling
+to a maximum magnitude of 5. inputs were supplied to the encoder reversed, while the encoder
+convolutions were not masked. the    rst encoder layer used convolutional    lter width k = 6, while
+the other encoder layers used k = 2. optimization was performed for 10 epochs on minibatches
+of 16 examples using adam (kingma & ba, 2014) with    = 0.001,   1 = 0.9,   2 = 0.999, and
+  = 10   8. decoding was performed using id125 with beam width 8 and length id172
+   = 0.6. the modi   ed log-id203 ranking criterion is provided in the appendix.
+results using this architecture were compared to an equal-sized four-layer encoder   decoder lstm
+with attention, applying dropout of 0.2. we again optimized using adam; other hyperparameters
+were equal to their values for the qid56 and the same id125 procedure was applied. table
+3 shows that the qid56 outperformed the character-level lstm, almost matching the performance
+of a word-level attentional baseline.
+
+7
+
+lstmlstm (cudnn)qid560100200300400500time (ms/batch)id56softmaxoptimization overheadunder review as a conference paper at iclr 2017
+
+model
+word-level lstm w/attn (ranzato et al., 2016)
+word-level id98 w/attn, input feeding (wiseman & rush, 2016)
+our models
+char-level 4-layer lstm
+char-level 4-layer qid56 with k = 6
+
+train time
+
+   
+   
+
+4.2 hrs/epoch
+1.0 hrs/epoch
+
+id7 (ted.tst2014)
+
+20.2
+24.0
+
+16.53
+19.41
+
+table 3: translation performance, measured by id7, and train speed in hours per epoch, for the
+iwslt german-english spoken language translation task. all models were trained on in-domain
+data only, and use negative log-likelihood as the training criterion. our models were trained for 10
+epochs. the qid56 model uses k = 2 for all layers other than the    rst encoder layer.
+
+4 related work
+
+exploring alternatives to traditional id56s for sequence tasks is a major area of current research.
+quasi-recurrent neural networks are related to several such recently described models, especially the
+strongly-typed recurrent neural networks (t-id56) introduced by balduzzi & ghifary (2016). while
+the motivation and constraints described in that work are different, balduzzi & ghifary (2016)   s
+concepts of    learnware    and       rmware    parallel our discussion of convolution-like and pooling-like
+subcomponents. as the use of a fully connected layer for recurrent connections violates the con-
+straint of    strong typing   , all strongly-typed id56 architectures (including the t-id56, t-gru, and
+t-lstm) are also quasi-recurrent. however, some qid56 models (including those with attention
+or skip-connections) are not    strongly typed   . in particular, a t-id56 differs from a qid56 as de-
+scribed in this paper with    lter size 1 and f -pooling only in the absence of an activation function
+on z. similarly, t-grus and t-lstms differ from qid56s with    lter size 2 and fo- or ifo-pooling
+respectively in that they lack tanh on z and use tanh rather than sigmoid on o.
+the qid56 is also related to work in hybrid convolutional   recurrent models. zhou et al. (2015)
+apply id98s at the word level to generate id165 features used by an lstm for text classi   cation.
+xiao & cho (2016) also tackle text classi   cation by applying convolutions at the character level,
+with a stride to reduce sequence length, then feeding these features into a bidirectional lstm.
+a similar approach was taken by lee et al. (2016) for character-level machine translation. their
+model   s encoder uses a convolutional layer followed by max-pooling to reduce sequence length, a
+four-layer highway network, and a bidirectional gru. the parallelism of the convolutional, pooling,
+and highway layers allows training speed comparable to subword-level models without hard-coded
+text segmentation.
+the qid56 encoder   decoder model shares the favorable parallelism and path-length properties ex-
+hibited by the bytenet (kalchbrenner et al., 2016), an architecture for character-level machine trans-
+lation based on residual convolutions over binary trees. their model was constructed to achieve three
+desired properties: parallelism, linear-time computational complexity, and short paths between any
+pair of words in order to better propagate gradient signals.
+
+5 conclusion
+
+intuitively, many aspects of the semantics of long sequences are context-invariant and can be com-
+puted in parallel (e.g., convolutionally), but some aspects require long-distance context and must be
+computed recurrently. many existing neural network architectures either fail to take advantage of the
+contextual information or fail to take advantage of the parallelism. qid56s exploit both parallelism
+and context, exhibiting advantages from both convolutional and recurrent neural networks. qid56s
+have better predictive accuracy than lstm-based models of equal hidden size, even though they use
+fewer parameters and run substantially faster. our experiments show that the speed and accuracy
+advantages remain consistent across tasks and at both word and character levels.
+extensions to both id98s and id56s are often directly applicable to the qid56, while the model   s
+hidden states are more interpretable than those of other recurrent architectures as its channels main-
+tain their independence across timesteps. we believe that qid56s can serve as a building block for
+long-sequence tasks that were previously impractical with traditional id56s.
+
+8
+
+under review as a conference paper at iclr 2017
+
+references
+dzmitry bahdanau, kyunghyun cho, and yoshua bengio. id4 by jointly
+
+learning to align and translate. in iclr, 2015.
+
+david balduzzi and muhammad ghifary. strongly-typed recurrent neural networks. in icml, 2016.
+
+james bradbury and richard socher. metamind id4 system for wmt 2016.
+in proceedings of the first conference on machine translation, berlin, germany. association for
+computational linguistics, 2016.
+
+yarin gal and zoubin ghahramani. a theoretically grounded application of dropout in recurrent
+
+neural networks. in nips, 2016.
+
+sepp hochreiter and j  urgen schmidhuber. long short-term memory. neural computation, 9(8):
+
+1735   1780, nov 1997. issn 0899-7667.
+
+gao huang, zhuang liu, and kilian q weinberger. densely connected convolutional networks.
+
+arxiv preprint arxiv:1608.06993, 2016.
+
+rie johnson and tong zhang. effective use of word order for text categorization with convolutional
+
+neural networks. arxiv preprint arxiv:1412.1058, 2014.
+
+nal kalchbrenner, lasse espeholt, karen simonyan, aaron van den oord, alex graves, and koray
+kavukcuoglu. id4 in linear time. arxiv preprint arxiv:1610.10099, 2016.
+
+yoon kim, yacine jernite, david sontag, and alexander m. rush. character-aware neural language
+
+models. arxiv preprint arxiv:1508.06615, 2016.
+
+diederik kingma and jimmy ba. adam: a method for stochastic optimization. arxiv preprint
+
+arxiv:1412.6980, 2014.
+
+alex krizhevsky, ilya sutskever, and geoffrey e hinton. id163 classi   cation with deep convo-
+
+lutional neural networks. in nips, 2012.
+
+david krueger, tegan maharaj, j  anos kram  ar, mohammad pezeshki, nicolas ballas, nan rosemary
+ke, anirudh goyal, yoshua bengio, hugo larochelle, aaron courville, et al. zoneout: regu-
+larizing id56s by randomly preserving hidden activations. arxiv preprint arxiv:1606.01305,
+2016.
+
+ankit kumar, ozan irsoy, peter ondruska, mohit iyyer, james bradbury, ishaan gulrajani, victor
+zhong, romain paulus, and richard socher. ask me anything: dynamic memory networks for
+natural language processing. in icml, 2016.
+
+jason lee, kyunghyun cho, and thomas hofmann. fully character-level id4
+
+without explicit segmentation. arxiv preprint arxiv:1610.03017, 2016.
+
+shayne longpre, sabeek pradhan, caiming xiong, and richard socher. a way out of the odyssey:
+
+analyzing and combining recent insights for lstms. submitted to iclr, 2016.
+
+m. t. luong, h. pham, and c. d. manning. effective approaches to attention-based neural machine
+
+translation. in emnlp, 2015.
+
+andrew l maas, andrew y ng, and christopher potts. multi-dimensional id31 with
+
+learned representations. technical report, 2011.
+
+stephen merity, caiming xiong, james bradbury, and richard socher. pointer sentinel mixture
+
+models. arxiv preprint arxiv:1609.07843, 2016.
+
+gr  egoire mesnil, tomas mikolov, marc   aurelio ranzato, and yoshua bengio. ensemble of gen-
+erative and discriminative techniques for id31 of movie reviews. arxiv preprint
+arxiv:1412.5335, 2014.
+
+tomas mikolov, martin kara     at, luk  as burget, jan cernock  y, and sanjeev khudanpur. recurrent
+
+neural network based language model. in interspeech, 2010.
+
+9
+
+under review as a conference paper at iclr 2017
+
+takeru miyato, andrew m dai, and ian goodfellow. virtual adversarial training for semi-supervised
+
+text classi   cation. arxiv preprint arxiv:1605.07725, 2016.
+
+jeffrey pennington, richard socher, and christopher d manning. glove: global vectors for word
+
+representation. in emnlp, 2014.
+
+marc   aurelio ranzato, sumit chopra, michael auli, and wojciech zaremba. sequence level train-
+
+ing with recurrent neural networks. in iclr, 2016.
+
+tijmen tieleman and geoffrey hinton. lecture 6.5-rmsprop: divide the gradient by a running
+average of its recent magnitude. coursera: neural networks for machine learning, 4(2),
+2012.
+
+seiya tokui, kenta oono, and shohei hido. chainer: a next-generation open source framework for
+
+deep learning.
+
+aaron van den oord, nal kalchbrenner, and koray kavukcuoglu. pixel recurrent neural networks.
+
+arxiv preprint arxiv:1601.06759, 2016.
+
+sida wang and christopher d manning. baselines and bigrams: simple, good sentiment and topic
+
+classi   cation. in acl, 2012.
+
+xin wang, yuanchao liu, chengjie sun, baoxun wang, and xiaolong wang. predicting polarities
+
+of tweets by composing id27s with long short-term memory. in acl, 2015.
+
+sam wiseman and alexander m rush. sequence-to-sequence learning as beam-search optimization.
+
+arxiv preprint arxiv:1606.02960, 2016.
+
+yonghui wu, mike schuster, zhifeng chen, quoc v le, mohammad norouzi, wolfgang macherey,
+maxim krikun, yuan cao, qin gao, klaus macherey, et al. google   s neural machine trans-
+arxiv preprint
+lation system: bridging the gap between human and machine translation.
+arxiv:1609.08144, 2016.
+
+yijun xiao and kyunghyun cho. ef   cient character-level document classi   cation by combining
+
+convolution and recurrent layers. arxiv preprint arxiv:1602.00367, 2016.
+
+caiming xiong, stephen merity, and richard socher. dynamic memory networks for visual and
+
+textual id53. in icml, 2016.
+
+wojciech zaremba, ilya sutskever, and oriol vinyals. recurrent neural network id173.
+
+arxiv preprint arxiv:1409.2329, 2014.
+
+xiang zhang, junbo zhao, and yann lecun. character-level convolutional networks for text clas-
+
+si   cation. in nips, 2015.
+
+chunting zhou, chonglin sun, zhiyuan liu, and francis lau. a c-lstm neural network for text
+
+classi   cation. arxiv preprint arxiv:1511.08630, 2015.
+
+10
+
+under review as a conference paper at iclr 2017
+
+appendix
+
+id125 ranking criterion
+
+the modi   ed log-id203 ranking criterion we used in id125 for translation experiments
+is:
+
+log(pcand) =
+
+t +   
+
+t
+
+. . .
+
+ttrg +   
+
+ttrg
+
+log(p(wi|w1 . . . wi   1)),
+
+(9)
+
+t(cid:88)
+
+i=1
+
+where    is a length id172 parameter (wu et al., 2016), wi is the ith output character, and
+ttrg is a    target length    equal to the source sentence length plus    ve characters. this reduces at
+   = 0 to ordinary id125 with probabilities:
+
+t(cid:88)
+
+i=1
+
+t(cid:88)
+
+i=1
+
+log(pcand) =
+
+log(p(wi|w1 . . . wi   1)),
+
+log(pcand)     1
+t
+
+log(p(wi|w1 . . . wi   1)).
+
+(10)
+
+(11)
+
+and at    = 1 to id125 with probabilities normalized by length (up to the target length):
+
+conveniently, this ranking criterion can be computed at intermediate beam-search timesteps, obvi-
+ating the need to apply a separate reranking on complete hypotheses.
+
+11
+
+

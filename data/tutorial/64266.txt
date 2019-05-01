@@ -1,0 +1,346 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]becoming human: artificial intelligence magazine
+     * [9]     consulting
+     * [10]     tutorials
+     * [11]       submit an article
+     * [12]     communities
+     * [13]     our bot
+     __________________________________________________________________
+
+beat atari with deep id23! (part 2: id25 improvements)
+
+   [14]go to the profile of adrien lucas ecoffet
+   [15]adrien lucas ecoffet (button) blockedunblock (button)
+   followfollowing
+   oct 30, 2017
+   [1*fpmzcfbplzhqruxtnfeilw.png]
+   [16]https://wallpapercave.com/wp/7pefo6w.png
+
+   note: before reading part 2, i recommend you read [17]beat atari with
+   deep id23! (part 1: id25)
+
+   finally, part 2 is here! training id25s can take a while, especially as
+   you get closer to the state of the art. add to that a few mistakes
+   along the way and life getting in the way and you end up writing your
+   next post a few months later...
+
+   today we will be reproducing [18]human-level control through deep
+   id23, deepmind   s famous nature paper, which brings
+   simple but important improvements to their id25 algorithm. further, we
+   will soon find that we   ve outgrown breakout and switch to a new and
+   exciting game: space invaders.
+
+   without further ado, let   s jump in to our improvements!
+
+target networks
+
+   the first new improvement deepmind introduces here is the notion of a
+   target network. in their own words:
+   [1*05ib9my3vtel6u2rzrsz1a.png]
+
+   ok    what does this mean actually?
+
+   this is actually quite simple: you probably remember from the previous
+   post that we were trying to optimize the q function defined as follows:
+
+     q(s, a) = r +    max      (q(s   , a   ))
+
+   because this definition is recursive (the q value depends on other q
+   values), in id24 we end up training a network to predict its own
+   output, as we pointed out last time.
+
+   the problem of course is that at each minibatch of training, we are
+   changing both q(s, a) and q(s   , a   ), in other words, we are getting
+   closer to our target but also moving our target! this can make it a lot
+   harder for our network to converge.
+
+   it thus seems like we should instead use a fixed target so as to avoid
+   this problem of the network    chasing its own tail   , but of course that
+   isn   t possible since the target q function should get better and better
+   as we train.
+
+   the compromise of using a target network is as follows: every 10,000
+   iterations, we will make a copy of our q-network and use it to compute
+   our target instead of the current q-network.
+
+   many versions of keras do not have an easy way to clone a model and
+   some methods might not work with all backends. my technique for
+   reliably cloning models in keras was thus to simply save the model to a
+   file and re-load that file: not very elegant, but highly reliable:
+
+   iframe: [19]/media/7262d40deb7c20cedefd0df93d05a8fe?postid=d3563f665a2c
+
+   once you   ve created a target_model variable by backing up your model
+   every 10,000 iterations, implementing target networks is embarrassingly
+   simple: it consists in a trivial modification to our fit_batch function
+   from last time to make it predict from the target model instead of the
+   regular model. here   s the diff:
+   [1*ftxy1hfochbdofuwavcjmq.png]
+
+   so how efficient is using such a simple change? quite a bit actually,
+   in fact this change alone gets our breakout score up from 251 to 404!
+   below we can see that the agent trained without a target network
+   struggles a lot more than the one trained with a target network: it is
+   a lot slower and gets a lower score.
+   [1*mjz3ajnmzhzrx1lb-d-93w.gif]
+   left: no target network, right: with target network.
+
+   in fact, we perform so well on breakout with this improvement that i
+   propose we stop using it as our example and switch to a more
+   challenging game: space invaders!
+
+   here too, of course, we benefit from using a target network, which
+   takes our score from 365 to 490, but unlike with breakout, there are
+   still major improvements to be made.
+   [1*np82jtvkibsw-ecmb_oh5a.gif]
+   left: no target network, right: with target network.
+
+   space invaders is great for our purposes because, unlike breakout, it
+   is unwinnable: faster and faster waves of ships will keep showing up
+   until we die.
+
+   one other interesting aspect of space invaders is the presence of the
+      mothership   : the purple ship that you can see at the top of the
+   screen, which awards a large (but random) amount of points. although
+   the agent trained with a target networks seems to get the mothership at
+   times, it doesn   t particularly go out of its way to do so, which is due
+   to the reward clipping we implemented last time. getting rid of that
+   aspect would certainly be useful   
+
+huber loss
+
+   the second improvement to id25s that we will make is implementing the
+   [20]huber loss. it is described in the paper in these words:
+   [1*c92e9wgi-qyelewf7at4wa.png]
+
+   well    that was confusing! so confusing in fact that people have
+   implemented incorrect interpretations of this statement in the past.
+   open ai gives the correct interpretation in their [21]baselines post:
+
+     in the id25 [22]nature paper the authors write:    we also found it
+     helpful to clip the error term from the update [   ] to be between -1
+     and 1.   . there are two ways to interpret this statement         clip the
+     objective, or clip the multiplicative term when computing gradient.
+     the former seems more natural, but it causes the gradient to be zero
+     on transitions with high error, which leads to suboptimal
+     performance, as found in one [23]id25 implementation. the latter is
+     correct and has a simple mathematical interpretation         [24]huber
+     loss.
+
+   huber loss is actually quite simple: as you might recall from last
+   time, we have so far been asking our network to minimize the mse (mean
+   squared error) of the q function, ie, if our network predicts a q value
+   of, say, 8 for a given state-action pair but the true value happens to
+   be 11, our error will be (8   11)   = 9. the network will seek to minimize
+   this error by predicting values closer to the true values.
+
+   one important property of mse is that it makes the network    care    a lot
+   more about large errors than about small ones due to the squaring
+   operation: again, if we are currently predicting 8 but the true value
+   is 11, we can reduce the error by 5    points    by taking our prediction 1
+   unit closer, but if we are already predicting 9, taking our prediction
+   closer by 1 unit only reduces the error by 3    points   .
+
+   intuitively, this is a good thing since we   d like to put a higher
+   priority on minimizing large errors than small ones, but in the case of
+   id25s, this can have a perverse impact: if a large error shows up, the
+   network will change radically to try to minimize it, but since the
+   network is trying to predict its own output, a radical change will mean
+   that the target value will also change radically, and so we might not
+   actually reduce the error as much as we would have if we had changed
+   things more slowly.
+
+   an alternative to the mse is the mae (mean absolute error), which takes
+   the absolute value of the residual, so that in our example of
+   predicting 8 when the answer is 11, the error is |8   11| = 3. mae cares
+   about reducing large errors just as much as small errors, which seems
+   to be good in terms of preventing the    radical change    issue mentioned
+   above. however, it ignores our intuition that large errors should
+   somehow    matter more    and isn   t differentiable at 0, which is a bit
+   annoying since we are doing id119 (though keras would handle
+   this automatically for us).
+
+   this is where the huber loss comes in: it uses mse for low values and
+   mae for large values. specifically, it is usually defined as follows:
+   [1*xszm2vjfehp126mbpeekgg.png]
+
+   or in code:
+
+   iframe: [25]/media/739cf8cd203c3e63664f34cf198064af?postid=d3563f665a2c
+
+   very simple. note that the 1/2 logic just there to make differentiation
+   nicer but is basically irrelevant for our purposes.
+   [1*5dgn0hs0d_lntv8wcuklnq.png]
+   huber loss (in blue) and squared error (in orange)
+
+   before we actually use huber loss, we need to vectorize the above
+   function so it can be used by keras. in this case, vectorizing means
+   getting rid of our    if    statement and using a vector of booleans
+   instead:
+
+   iframe: [26]/media/5b617db33bde2d0d33daf5a3b9842ea3?postid=d3563f665a2c
+
+   to use huber loss, we now just need to replace loss='mse' by
+   loss=huber_loss in our model.compile code.
+
+   further, whenever we call load_model(remember, we needed it for the
+   target network), we will need to pass custom_objects={'huber_loss':
+   huber_loss as an argument to tell keras where to find huber_loss.
+
+   now that we have huber loss, we can try to remove our reward clipping
+   from last time! it is worth noting that this is a departure from the
+   instructions in the deepmind paper, which still clips rewards to 1 or
+   -1. however, i get great results by doing this on space invaders, in
+   particular thanks to the fact that my agent now actively targets the
+   mothership, as can be seen below (score: 1,205).
+   [1*rajw7x1whqtyd8u5uu7xda.gif]
+   space invaders with target network, huber loss, and no reward clipping.
+
+bigger networks, longer training
+
+   [1*s_lwpffvoag8dcevi_7vsq.png]
+   a reminder of the general network architecture.
+
+   well this one explains itself: train a bigger network for longer.
+   specifically, deepmind   s nature paper states:
+   [1*iqmzhswd8ei9scyghxcvvg.png]
+
+   in case you forgot the previous network architecture, the short story
+   is that all layers have doubled in size (the first convolutional layer
+   has 32 filters instead of 16, the second has 64 instead of 32, and the
+   hidden dense layer has 512 units instead of 256) and there is an extra
+   convolutional layer before the first dense layer, which means our
+   network is more than twice as big as the previous network.
+
+   the new model in code:
+
+   iframe: [27]/media/d3a40eeda19c789e6df38bbc4db7c0c1?postid=d3563f665a2c
+
+   perhaps it is also useful to see the specific differences with the old
+   model, here is the diff:
+   [1*pmtef8wxppz1xkuvtbsncq.png]
+
+   finally, to handle this much larger network, we of course need to train
+   for longer. as per deepmind:
+
+     we trained for a total of 50 million frames
+
+   this is 5x more than the 10 million frames we used last time. this,
+   combined with the larger model adds up to what deep learning experts
+   call a    long-ass time   : training for the full 50 million iterations
+   would take around 10 days on my machine!
+   [0*hagl6cc0nxa7jqoo.jpg]
+
+   well    except i actually did have time for that, and after 10 days of
+   training, i got a id25 that could get 1,500 points on space invaders,
+   thus well within the range of deepmind   s results of 1,976    893 points:
+   [1*f66_4meexlfekfyqmyhdxa.gif]
+
+   have fun trying to improve your atari id25s even more!
+     __________________________________________________________________
+
+   next post we will investigate double and dueling id25s. stay tuned!
+
+   ps: i   m all about feedback. if anything was unclear or even incorrect
+   in this tutorial, please leave a comment so i can keep improving these
+   posts.
+
+   iframe: [28]/media/c43026df6fee7cdb1aab8aaf916125ea?postid=d3563f665a2c
+
+   [29][1*2f7oqe2ajk1ksrhkmd9zmw.png]
+   [30][1*v-ppfkswhbvlwwamsvhhwg.png]
+   [31][1*wt2auqisieaozxj-i7brdq.png]
+
+     * [32]machine learning
+     * [33]ai
+     * [34]deep learning
+     * [35]id23
+     * [36]artificial intelligence
+
+   (button)
+   (button)
+   (button) 385 claps
+   (button) (button) (button) 6 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [37]go to the profile of adrien lucas ecoffet
+
+[38]adrien lucas ecoffet
+
+     (button) follow
+   [39]becoming human: artificial intelligence magazine
+
+[40]becoming human: artificial intelligence magazine
+
+   latest news, info and tutorials on artificial intelligence, machine
+   learning, deep learning, big data and what it means for humanity.
+
+     * (button)
+       (button) 385
+     * (button)
+     *
+     *
+
+   [41]becoming human: artificial intelligence magazine
+   never miss a story from becoming human: artificial intelligence
+   magazine, when you sign up for medium. [42]learn more
+   never miss a story from becoming human: artificial intelligence
+   magazine
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://becominghuman.ai/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/d3563f665a2c
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://becominghuman.ai/beat-atari-with-deep-reinforcement-learning-part-2-id25-improvements-d3563f665a2c&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://becominghuman.ai/beat-atari-with-deep-reinforcement-learning-part-2-id25-improvements-d3563f665a2c&source=--------------------------nav_reg&operation=register
+   8. https://becominghuman.ai/?source=logo-lo_dfmqy6ynzcmp---5e5bef33608a
+   9. https://becominghuman.ai/artificial-intelligence-software-developers-af09386dc05d
+  10. https://becominghuman.ai/tagged/tutorial
+  11. https://becominghuman.ai/write-for-us-48270209de63
+  12. https://becominghuman.ai/artificial-intelligence-communities-c305f28e674c
+  13. http://m.me/becominghumanai
+  14. https://becominghuman.ai/@adrienle?source=post_header_lockup
+  15. https://becominghuman.ai/@adrienle
+  16. https://wallpapercave.com/wp/7pefo6w.png
+  17. https://becominghuman.ai/lets-build-an-atari-ai-part-1-id25-df57e8ff3b26
+  18. http://www.davidqiu.com:8888/research/nature14236.pdf
+  19. https://becominghuman.ai/media/7262d40deb7c20cedefd0df93d05a8fe?postid=d3563f665a2c
+  20. https://en.wikipedia.org/wiki/huber_loss
+  21. https://blog.openai.com/openai-baselines-id25/
+  22. https://www.nature.com/nature/journal/v518/n7540/full/nature14236.html
+  23. https://github.com/devsisters/id25-tensorflow/issues/16
+  24. https://en.wikipedia.org/wiki/huber_loss
+  25. https://becominghuman.ai/media/739cf8cd203c3e63664f34cf198064af?postid=d3563f665a2c
+  26. https://becominghuman.ai/media/5b617db33bde2d0d33daf5a3b9842ea3?postid=d3563f665a2c
+  27. https://becominghuman.ai/media/d3a40eeda19c789e6df38bbc4db7c0c1?postid=d3563f665a2c
+  28. https://becominghuman.ai/media/c43026df6fee7cdb1aab8aaf916125ea?postid=d3563f665a2c
+  29. https://becominghuman.ai/artificial-intelligence-communities-c305f28e674c
+  30. https://upscri.be/8f5f8b
+  31. https://becominghuman.ai/write-for-us-48270209de63
+  32. https://becominghuman.ai/tagged/machine-learning?source=post
+  33. https://becominghuman.ai/tagged/ai?source=post
+  34. https://becominghuman.ai/tagged/deep-learning?source=post
+  35. https://becominghuman.ai/tagged/reinforcement-learning?source=post
+  36. https://becominghuman.ai/tagged/artificial-intelligence?source=post
+  37. https://becominghuman.ai/@adrienle?source=footer_card
+  38. https://becominghuman.ai/@adrienle
+  39. https://becominghuman.ai/?source=footer_card
+  40. https://becominghuman.ai/?source=footer_card
+  41. https://becominghuman.ai/
+  42. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  44. https://medium.com/p/d3563f665a2c/share/twitter
+  45. https://medium.com/p/d3563f665a2c/share/facebook
+  46. https://medium.com/p/d3563f665a2c/share/twitter
+  47. https://medium.com/p/d3563f665a2c/share/facebook

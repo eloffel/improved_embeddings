@@ -1,0 +1,1272 @@
+7
+1
+0
+2
+
+ 
+
+n
+a
+j
+ 
+
+3
+1
+
+ 
+ 
+]
+i
+
+a
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+3
+2
+8
+9
+0
+
+.
+
+1
+1
+6
+1
+:
+v
+i
+x
+r
+a
+
+under review as a conference paper at iclr 2017
+
+dialogue learning with human-in-the-loop
+
+jiwei li, alexander h. miller, sumit chopra, marc   aurelio ranzato, jason weston
+facebook ai research,
+new york, usa
+{jiwel,ahm,spchopra,ranzato,jase}@fb.com
+
+abstract
+
+an important aspect of developing conversational agents is to give a bot the ability
+to improve through communicating with humans and to learn from the mistakes
+that it makes. most research has focused on learning from    xed training sets of
+labeled data rather than interacting with a dialogue partner in an online fashion.
+in this paper we explore this direction in a id23 setting where
+the bot improves its question-answering ability from feedback a teacher gives fol-
+lowing its generated responses. we build a simulator that tests various aspects of
+such learning in a synthetic environment, and introduce models that work in this
+regime. finally, real experiments with mechanical turk validate the approach.
+
+1
+
+introduction
+
+a good conversational agent (which we sometimes refer to as a learner or bot1) should have the
+ability to learn from the online feedback from a teacher: adapting its model when making mistakes
+and reinforcing the model when the teacher   s feedback is positive. this is particularly important
+in the situation where the bot is initially trained in a supervised way on a    xed synthetic, domain-
+speci   c or pre-built dataset before release, but will be exposed to a different environment after
+release (e.g., more diverse natural language utterance usage when talking with real humans, different
+distributions, special cases, etc.). most recent research has focused on training a bot from    xed
+training sets of labeled data but seldom on how the bot can improve through online interaction with
+humans. human (rather than machine) language learning happens during communication (bassiri,
+2011; werts et al., 1995), and not from labeled datasets, hence making this an important subject to
+study.
+in this work, we explore this direction by training a bot through interaction with teachers in an
+online fashion. the task is formalized under the general framework of id23 via
+the teacher   s (dialogue partner   s) feedback to the dialogue actions from the bot. the dialogue takes
+place in the context of question-answering tasks and the bot has to, given either a short story or a
+set of facts, answer a set of questions from the teacher. we consider two types of feedback: explicit
+numerical rewards as in conventional id23, and textual feedback which is more
+natural in human dialogue, following (weston, 2016). we consider two online training scenarios:
+(i) where the task is built with a dialogue simulator allowing for easy analysis and repeatability of
+experiments; and (ii) where the teachers are real humans using amazon mechanical turk.
+we explore important issues involved in online learning such as how a bot can be most ef   ciently
+trained using a minimal amount of teacher   s feedback, how a bot can harness different types of
+feedback signal, how to avoid pitfalls such as instability during online learing with different types
+of feedback via data balancing and exploration, and how to make learning with real humans feasible
+via data batching. our    ndings indicate that it is feasible to build a pipeline that starts from a model
+trained with    xed data and then learns from interactions with humans to improve itself.
+
+1in this paper, we refer to a learner (either a human or a bot/dialogue agent which is a machine learning
+
+algorithm) as the student, and their more knowledgeable dialogue partner as the teacher.
+
+1
+
+under review as a conference paper at iclr 2017
+
+2 related work
+
+id23 has been widely applied to dialogue, especially in slot    lling to solve
+domain-speci   c tasks (walker, 2000; schatzmann et al., 2006; singh et al., 2000; 2002). efforts
+include id100 (mdps) (levin et al., 1997; 2000; walker et al., 2003; pierac-
+cini et al., 2009), pomdp models (young et al., 2010; 2013; ga  sic et al., 2013; 2014) and policy
+learning (su et al., 2016). such a line of research focuses mainly on frames with slots to    ll, where
+the bot will use id23 to model a state transition pattern, generating dialogue ut-
+terances to prompt the appropriate user responses to put in the desired slots. this goal is different
+from ours, where we study end-to-end learning systems and also consider non-reward based setups
+via textual feedback.
+our work is related to the line of research that focuses on supervised learning for id53
+(qa) from dialogues (dodge et al., 2015; weston, 2016), either given a database of knowledge
+(bordes et al., 2015; miller et al., 2016) or short texts (weston et al., 2015; hermann et al., 2015;
+rajpurkar et al., 2016). in our work, the discourse includes the statements made in the past, the
+question and answer, and crucially the response from the teacher. the latter is what makes the
+setting different from the standard qa setting, i.e. we use methods that leverage this response also,
+not just answering questions. further, qa works only consider    xed datasets with gold annotations,
+i.e. they do not consider a id23 setting.
+our work is closely related to a recent work from weston (2016) that learns through conducting
+conversations where supervision is given naturally in the response during the conversation. that
+work introduced the use of forward prediction that learns by predicting the teacher   s feedback, in
+addition to using reward-based learning of correct answers. however, two important issues were
+not addressed: (i) it did not use a id23 setting, but instead used pre-built datasets
+with    xed policies given in advance; and (ii) experiments used only simulated and no real language
+data. hence, models that can learn policies from real online communication were not investigated.
+to make the differences with our work clear, we will now detail these points further.
+the experiments in (weston, 2016) involve constructing pre-built    xed datasets, rather than training
+the learner within a simulator, as in our work. pre-built datasets can only be made by    xing a prior
+in advance. they achieve this by choosing an omniscient (but deliberately imperfect) labeler that
+gets   acc examples always correct (the paper looked at values 50%, 10% and 1%). again, this was
+not learned, and was    xed to generate the datasets. note that the paper refers to these answers as
+coming from    the learner    (which should be the model), but since the policy is    xed it actually does
+not depend on the model. in a realistic setting one does not have access to an omniscient labeler,
+one has to learn a policy completely from scratch, online, starting with a random policy, so their
+setting was not practically viable. in our work, when policy training is viewed as batch learning
+over iterations of the dataset, updating the policy on each iteration, (weston, 2016) can be viewed
+as training only one iteration, whereas we perform multiple iterations. this is explained further in
+sections 4.2 and 5.1. we show in our experiments that performance improves over the iterations,
+i.e. it is better than the    rst iteration. we show that such online learning works for both reward-
+based numerical feedback and for forward prediction methods using textual feedback (under certain
+conditions which are detailed). this is a key contribution of our work.
+finally, (weston, 2016) only conducted experiments on synthetic or templated language, and not
+real language, especially the feedback from the teacher was scripted. while we believe that synthetic
+datasets are very important for developing understanding (hence we develop a simulator and conduct
+experiments also with synthetic data), for a new method to gain traction it must be shown to work
+on real data. we hence employ mechanical turk to collect real language data for the questions and
+importantly for the teacher feedback and construct experiments in this real setting.
+
+3 dataset and tasks
+
+we begin by describing the data setup we use. in our    rst set of experiments we build a simulator
+as a testbed for learning algorithms. in our second set of experiments we use mechanical turk to
+provide real human teachers giving feedback.
+
+2
+
+under review as a conference paper at iclr 2017
+
+3.1 simulator
+
+the simulator adapts two existing    xed datasets to our online setting. following weston (2016), we
+use (i) the single supporting fact problem from the babi datasets (weston et al., 2015) which consists
+of 1000 short stories from a simulated world interspersed with questions; and (ii) the wikimovies
+dataset (weston et al., 2015) which consists of roughly 100k (templated) questions over 75k entities
+based on questions with answers in the open movie database (omdb). each dialogue takes place
+between a teacher, scripted by the simulation, and a bot. the communication protocol is as follows:
+(1) the teacher    rst asks a question from the    xed set of questions existing in the dataset, (2) the bot
+answers the question, and    nally (3) the teacher gives feedback on the bot   s answer.
+we follow the paradigm de   ned in (weston, 2016) where the teacher   s feedback takes the form of
+either textual feedback, a numerical reward, or both, depending on the task. for each dataset, there
+are ten tasks, which are further described in sec. a and illustrated in figure 5 of the appendix. we
+also refer the readers to (weston, 2016) for more detailed descriptions and the motivation behind
+these tasks. in the main text of this paper we only consider task 6 (   partial feedback   ): the teacher
+replies with positive textual feedback (6 possible templates) when the bot answers correctly, and
+positive reward is given only 50% of the time. when the bot is wrong, the teacher gives textual
+feedback containing the answer. descriptions and experiments on the other tasks are detailed in the
+appendix. example dialogues are given in figure 1.
+the difference between our simulation and the original    xed tasks of weston (2016) is that models
+are trained on-the-   y. after receiving feedback and/or rewards, we update the model (policy) and
+then deploy it to collect teacher   s feedback in the next episode or batch. this means the model   s
+policy affects the data which is used to train it, which was not the case in the previous work.
+
+figure 1: simulator sample dialogues for the babi task (left) and wikimovies (right). we
+consider 10 different tasks following weston (2016) but here describe only task 6; other tasks are
+detailed in the appendix. the teacher   s dialogue is in black and the bot is in red. (+) indicates
+receiving positive reward, given only 50% of the time even when correct.
+babi task 6: partial rewards
+mary went to the hallway.
+john moved to the bathroom.
+mary travelled to the kitchen.
+where is mary?
+yes, that   s right!
+where is john?
+yes, that   s correct! (+)
+
+wikimovies task 6: partial rewards
+what    lms are about hawaii?
+correct!
+who acted in licence to kill?
+no, the answer is timothy dalton.
+what genre is saratoga trunk in?
+yes! (+)
+
+billy madison
+
+50 first dates
+
+bathroom
+
+kitchen
+
+drama
+
+. . .
+
+figure 2: human dialogue from mechanical turk (based on wikimovies) the human teacher   s
+dialogue is in black and the bot is in red. we show examples where the bot answers correctly (left)
+and incorrectly (right). real humans provide more variability of language in both questions and
+textual feedback than in the simulator setup (cf. figure 1).
+
+2012
+
+richard shepard
+
+sample dialogues with correct answers from the bot:
+who wrote the linguini incident ?
+richard shepard is one of the right answers here.
+what year did the world before her premiere?
+yep! that   s when it came out.
+which are the movie genres of mystery of the 13th guest?
+right, it can also be categorized as a mystery.
+sample dialogues with incorrect answers from the bot:
+what are some movies about a supermarket ?
+there were many options and this one was not among them.
+which are the genres of the    lm juwanna mann ?
+that is incorrect. remember the question asked for a genre not name.
+who wrote the story of movie coraline ?
+fantasy
+that   s a movie genre and not the name of the writer. a better answer would of been henry selick
+or neil gaiman.
+
+kevin pollak
+
+supermarket
+
+crime
+
+3
+
+under review as a conference paper at iclr 2017
+
+3.2 mechanical turk experiments
+
+finally, we extended wikimovies using mechanical turk so that real human teachers are giving
+feedback rather than using a simulation. as both the questions and feedback are templated in the
+simulation, they are now both replaced with natural human utterances. rather than having a set of
+simulated tasks, we have only one task, and we gave instructions to the teachers that they could
+give feedback as they see    t. the exact instructions given to the turkers is given in appendix b. in
+general, each independent response contains feedback like (i) positive or negative sentences; or (ii)
+a phrase containing the answer or (iii) a hint, which are similar to setups de   ned in the simulator.
+however, some human responses cannot be so easily categorized, and the lexical variability is much
+larger in human responses. some examples of the collected data are given in figure 2.
+
+4 methods
+
+4.1 model architecture
+
+(cid:88)
+
+in our experiments, we used variants of the end-to-end memory network (memn2n) model
+(sukhbaatar et al., 2015) as our underlying architecture for learning from dialogue.
+the input to memn2n is the last utterance of the dialogue history x as well as a set of memories
+(context) c=c1, c2, ..., cn . the memory c encodes both short-term memory, e.g., dialogue histories
+between the bot and the teacher, and long-term memories, e.g., the knowledge base facts that the bot
+has access to. given the input x and c, the goal is to produce an output/label a.
+in the    rst step, the query x is transformed to a vector representation u0 by summing up its con-
+stituent id27s: u0 = ax. the input x is a bag-of-words vector and a is the d    v word
+embedding matrix where d denotes the emebbding dimension and v denotes the vocabulary size.
+each memory ci is similarly transformed to a vector mi. the model will read information from the
+memory by comparing input representation u0 with memory vectors mi using softmax weights:
+
+o1 =
+
+p1
+i mi
+
+p1
+i = softmax(ut
+
+0 mi)
+
+(1)
+
+i
+
+this process selects memories relevant to the last utterance x, i.e., the memories with large values
+of p1
+i . the returned memory vector o1 is the weighted sum of memory vectors. this process can
+be repeated to query the memory n times (so called    hops   ) by adding on to the original input,
+u1 = o1 + u0, or to the previous state, un = on + un   1, and then using un to query the memories
+again.
+in the end, un is input to a softmax function for the    nal prediction:
+
+n yl)
+
+n y1, ut
+
+n y2, ..., ut
+
+a = softmax(ut
+
+(2)
+where y1, . . . , yl denote the set of candidate answers. if the answer is a word, yi is the corresponding
+id27. if the answer is a sentence, yi is the embedding for the sentence achieved in the
+same way that we obtain embeddings for query x and memory c.
+the standard way memn2n is trained is via a cross id178 criterion on known input-output pairs,
+which we refer to as supervised or imitation learning. as our work is in a id23
+setup where our model must make predictions to learn, this procedure will not work, so we instead
+consider id23 algorithms which we describe next.
+
+4.2 id23
+
+in this section, we present the algorithms we used to train memn2n in an online fashion. our learn-
+ing setup can be cast as a particular form of id23. the policy is implemented by
+the memn2n model. the state is the dialogue history. the action space corresponds to the set of
+answers the memn2n has to choose from to answer the teacher   s question. in our setting, the policy
+chooses only one action for each episode. the reward is either 1 (a reward from the teacher when
+the bot answers correctly) or 0 otherwise. note that in our experiments, a reward equal to 0 might
+mean that the answer is incorrect or that the positive reward is simply missing. the overall setup is
+closest to standard contextual bandits, except that the reward is binary.
+
+4
+
+under review as a conference paper at iclr 2017
+
+when working with real human dialogues, e.g. collecting data via mechanical turk, it is easier to
+set up a task whereby a bot is deployed to respond to a large batch of utterances, as opposed to a
+single one. the latter would be more dif   cult to manage and scale up since it would require some
+form of synchronization between the model replicas interacting with each human.
+this is comparable to the real world situation where a teacher can either ask a student a single
+question and give feedback right away, or set up a test that contains many questions and grade all of
+them at once. only after the learner completes all questions, it can hear feedback from the teacher.
+we use batch size to refer to how many dialogue episodes the current model is used to collect
+feedback before updating its parameters. in the id23 literature, batch size is
+related to off-policy learning since the memn2n policy is trained using episodes collected with a
+stale version of the model. our experiments show that our model and base algorithms are very robust
+to the choice of batch size, alleviating the need for correction terms in the learning algorithm (bottou
+et al., 2013).
+we consider two strategies: (i) online batch size, whereby the target policy is updated after doing a
+single pass over each batch (a batch size of 1 reverts to the usual on-policy online learning); and (ii)
+dataset-sized batch, whereby training is continued to convergence on the batch which is the size of
+the dataset, and then the target policy is updated with the new model, and a new batch is drawn and
+the procedure iterates. these strategies can be applied to all the methods we use, described below.
+next, we discuss the learning algorithms we considered in this work.
+
+4.2.1 reward-based imitation (rbi)
+
+the simplest algorithm we    rst consider is the one employed in weston (2016). rbi relies on
+positive rewards provided by the teacher. it is trained to imitate the correct behavior of the learner,
+i.e., learning to predict the correct answers (with reward 1) at training time and disregarding the
+other ones. this is implemented by using a memn2n that maps a dialogue input to a prediction, i.e.
+using the cross id178 criterion on the positively rewarded subset of the data.
+in order to make this work in the online setting which requires exploration to    nd the correct answer,
+we employ an  -greedy strategy: the learner makes a prediction using its own model (the answer
+assigned the highest id203) with id203 1      , otherwise it picks a random answer with
+id203  . the teacher will then give a reward of +1 if the answer is correct, otherwise 0. the
+bot will then learn to imitate the correct answers: predicting the correct answers while ignoring the
+incorrect ones.
+
+4.2.2 reinforce
+
+the second algorithm we use is the reinforce algorithm (williams, 1992), which maximizes
+the expected cumulative reward of the episode, in our case the expected reward provided by the
+teacher. the expectation is approximated by sampling an answer from the model distribution. let a
+denote the answer that the learner gives, p(a) denote the id203 that current model assigns to a,
+r denote the teacher   s reward, and j(  ) denote the expectation of the reward. we have:
+
+   j(  )         log p(a)[r     b]
+
+(3)
+
+where b is the baseline value, which is estimated using a id75 model that takes as input
+the output of the memory network after the last hop, and outputs a scalar b denoting the estimation
+of the future reward. the baseline model is trained by minimizing the mean squared loss between
+the estimated reward b and actual reward r, ||r     b||2. we refer the readers to (ranzato et al., 2015;
+zaremba & sutskever, 2015) for more details. the baseline estimator model is independent from
+the policy model, and its error is not backpropagated through the policy model.
+the major difference between rbi and reinforce is that (i) the learner only tries to imitate
+correct behavior in rbi while in reinforce it also leverages the incorrect behavior, and (ii) the
+learner explores using an  -greedy strategy in rbi while in reinforce it uses the distribution
+over actions produced by the model itself.
+
+5
+
+under review as a conference paper at iclr 2017
+
+4.2.3 forward prediction (fp)
+
+fp (weston, 2016) handles the situation where a numerical reward for a bot   s answer is not available,
+meaning that there are no +1 or 0 labels available after a student   s utterance. instead, the model
+assumes the teacher gives textual feedback t to the bot   s answer, taking the form of a dialogue
+utterance, and the model tries to predict this instead. suppose that x denotes the teacher   s question
+and c=c1, c2, ..., cn denotes the dialogue history as before. in fp, the model    rst maps the teacher   s
+initial question x and dialogue history c to a vector representation u using a memory network with
+multiple hops. then the model will perform another hop of attention over all possible student   s
+answers in a, with an additional part that incorporates the information of which candidate (i.e., a)
+was actually selected in the dialogue:
+
+p  a = softmax(ut y  a)
+
+o =
+
+p  a(y  a +       1[  a = a])
+
+(4)
+
+(cid:88)
+
+  a   a
+
+where y  a denotes the vector representation for the student   s answer candidate   a.    is a (learned)
+d-dimensional vector to signify the actual action a that the student chooses. o is then combined with
+u to predict the teacher   s feedback t using a softmax:
+u1 = o + u t = softmax(ut
+
+(5)
+where xri denotes the embedding for the ith response. in the online setting, the teacher will give
+textual feedback, and the learner needs to update its model using the feedback. it was shown in
+weston (2016) that in an off-line setting this procedure can work either on its own, or in conjunction
+with a method that uses numerical rewards as well for improved performance. in the online setting,
+we consider two simple extensions:
+
+1 xr2, ..., ut
+
+1 xr1 , ut
+
+1 xrn )
+
+     -greedy exploration: with id203   the student will give a random answer, and with
+id203 1       it will give the answer that its model assigns the largest id203. this
+method enables the model to explore the space of actions and to potentially discover correct
+answers.
+    data balancing: cluster the set of teacher responses t and then balance training across the
+clusters equally.2 this is a type of experience replay (mnih et al., 2013) but sampling with
+an evened distribution. balancing stops part of the distribution dominating the learning. for
+example, if the model is not exposed to suf   cient positive and negative feedback, and one
+class overly dominates, the learning process degenerates to a model that always predicts
+the same output regardless of its input.
+
+5 experiments
+
+experiments are    rst conducted using our simulator, and then using amazon mechanical turk with
+real human subjects taking the role of the teacher3.
+
+5.1 simulator
+
+online experiments
+in our    rst experiments, we considered both the babi and wikimovies tasks
+and varied batch size, random exploration rate  , and type of model. figure 3 and figure 4 shows
+(task 6) results on babi and wikimovies. other tasks yield similar conclusions and are reported in
+the appendix.
+overall, we obtain the following conclusions:
+
+    in general rbi and fp do work in a id23 setting, but can perform better
+    in particular rbi can fail without exploration. rbi needs random noise for exploring labels
+
+with random exploration.
+
+otherwise it can get stuck predicting a subset of labels and fail.
+
+2in the simulated data, because the responses are templates, this can be implemented by    rst randomly
+sampling the response, and then randomly sampling a story with that response; we keep the history of all
+stories seen from which we sample. for real data slightly more sophisticated id91 should be used.
+
+3 code and data are available at https://github.com/facebook/memnn/tree/master/hitl.
+
+6
+
+under review as a conference paper at iclr 2017
+
+figure 3: training epoch vs. test accuracy for babi (task 6) varying exploration   and batch
+size. random exploration is important for both reward-based (rbi) and forward prediction (fp).
+performance is largely independent of batch size, and rbi performs similarly to reinforce.
+note that supervised, rather than id23, with gold standard labels achieves 100%
+accuracy on this task.
+
+    reinforce obtains similar performance to rbi with optimal  .
+    fp with balancing or with exploration via   both outperform fp alone.
+    for both rbi and fp, performance is largely independent of online batch size.
+
+dataset batch size experiments given that larger online batch sizes appear to work well, and
+that this could be important in a real-world data collection setup where the same model is deployed to
+gather a large amount of feedback from humans, we conducted further experiments where the batch
+size is exactly equal to the dataset size and for each batch training is completed to convergence.
+
+7
+
+020406080epoch0.20.30.40.50.60.70.80.91.0accuracyrandom exploration for rbi =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp with balancing =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.91.0accuracycomparing rbi, fp and reinforcereinforcerbifp020406080100epoch0.20.30.40.50.60.70.80.91.0accuracyrbi (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000020406080100epoch0.30.40.50.60.70.80.9accuracyfp (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000under review as a conference paper at iclr 2017
+
+figure 4: wikimovies: training epoch vs. test accuracy on task 6 varying (top left panel) explo-
+ration rate   while setting batch size to 32 for rbi, (top right panel) for fp, (bottom left) batch size
+for rbi, and (bottom right) comparing rbi, reinforce and fp with   = 0.5. the model is robust
+to the choice of batch size. rbi and reinforce perform comparably. note that supervised, rather
+than id23, with gold standard labels achieves 80% accuracy on this task (weston,
+2016).
+
+after the model has been trained on the dataset, it is deployed to collect a new dataset of questions
+and answers, and the process is repeated. table 1 reports test error at each iteration of training,
+using the babi task 6 as the case study (see the appendix for results on other tasks). the following
+conclusions can be made for this setting:
+
+    rbi improves in performance as we iterate. unlike in the online case, rbi does not need
+random exploration. we believe this is because the    rst batch, which is collected with a
+randomly initialized model, contains enough variety of examples with positive rewards that
+the model does not get stuck predicting a subset of labels.
+
+    fp is not stable in this setting. this is because once the model gets very good at making
+predictions (at the third iteration), it is not exposed to a suf   cient number of negative re-
+sponses anymore. from that point on, learning degenerates and performance drops as the
+model always predicts the same responses. at the next iteration, it will recover again since
+it has a more balanced training set, but then it will collapse again in an oscillating behavior.
+    fp does work if extended with balancing or random exploration with suf   ciently large  .
+    rbi+fp also works well and helps with the instability of fp, alleviating the need for random
+
+exploration and data balancing.
+
+overall, our simulation results indicate that while a bot can be effectively trained fully online from
+bot-teacher interactions, collecting real dialogue data in batches (which is easier to collect and iterate
+experiments over) is also a viable approach. we hence pursue the latter approach in our next set of
+experiments.
+
+8
+
+05101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for rbi =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for fp =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrbi (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracycomparing rbi, fp and reinforcereinforcerbifpunder review as a conference paper at iclr 2017
+
+iteration
+imitation learning
+reward based imitation (rbi)
+forward pred. (fp)
+rbi+fp
+fp (balanced)
+fp (rand. exploration   = 0.25)
+fp (rand. exploration   = 0.5)
+
+1
+
+0.24
+0.74
+0.99
+0.99
+0.99
+0.96
+0.98
+
+2
+
+0.23
+0.87
+0.96
+0.96
+0.97
+0.88
+0.98
+
+3
+
+0.23
+0.90
+1.00
+0.97
+0.97
+0.94
+0.99
+
+4
+
+0.22
+0.96
+0.30
+0.95
+0.97
+0.26
+0.98
+
+5
+
+0.23
+0.96
+1.00
+0.94
+0.97
+0.64
+0.95
+
+6
+
+0.23
+0.98
+0.29
+0.97
+0.97
+0.99
+0.99
+
+table 1: test accuracy of various models per iteration in the dataset batch size case (using batch size
+equal to the size of the full training set) for babi, task 6. results > 0.95 are in bold.
+
+relation to experiments in weston (2016) as described in detail in section 2 the datasets we
+use in our experiments were introduced in (weston et al., 2015). however, that work involved
+constructing pre-built    xed policies (and hence, datasets), rather than training the learner in a rein-
+forcement/interactive learning using a simulator, as in our work. they achieved this by choosing
+an omniscient (but deliberately imperfect) labeler that gets   acc examples always correct (the paper
+looked at values 1%, 10% and 50%). in a realistic setting one does not have access to an omniscient
+labeler, one has to learn a policy completely from scratch, online, starting with a random policy, as
+we do here. nevertheless, it is possible to compare our learnt policies to those results because we
+use the same train/valid/test splits.
+the clearest comparison comparison is via table 1, where the policy is learnt using batch iterations
+of the dataset, updating the policy on each iteration. weston et al. (2015) can be viewed as training
+only one iteration, with a pre-built policy, as explained above, where 59%, 81% and 99% accuracy
+was obtained for rbi for   acc with 1%, 10% and 50% respectively4. while   acc of 50% is good
+enough to solve the task, lower values are not.
+in this work a random policy begins with 74%
+accuracy on the    rst iteration, but importantly on each iteration the policy is updated and improves,
+with values of 87%, 90% on iterations 2 and 3 respectively, and 98% on iteration 6. this is a key
+differentiator to the work of (weston et al., 2015) where such improvement was not shown. we
+show that such online learning works for both reward-based numerical feedback and for forward
+prediction methods using textual feedback (as long as balancing or random exploration is performed
+suf   ciently). the    nal performance outperforms most values of   acc from weston et al. (2015)
+unless    is so large that the task is already solved. this is a key contribution of our work.
+similar conclusions can be made for figures 3 and 4. despite our initial random policy starting at
+close to 0% accuracy, if random exploration       0.2 is employed then after a number of epochs
+the performance is better than most values of   acc from weston et al. (2015), e.g. compare the
+accuracies given in the previous paragraph (59%, 81% and 99%) to figure 3, top left.
+
+5.2 human feedback
+
+we employed turkers to both ask questions and then give textual feedback on the bot   s answers, as
+described in section 3.2. our experimental protocol was as follows. we    rst trained a memn2n
+using supervised (i.e., imitation) learning on a training set of 1000 questions produced by turkers
+and using the known correct answers provided by the original dataset (and no textual feedback).
+next, using the trained policy, we collected textual feedback for the responses of the bot for an
+additional 10,000 questions. examples from the collected dataset are given in figure 2. given this
+dataset, we compare various models: rbi, fp and fp+rbi. as we know the correct answers to
+the additional questions, we can assign a positive reward to questions the bot got correct. we hence
+measure the impact of the sparseness of this reward signal, where a fraction r of additional examples
+have rewards. the models are tested on a test set of    8,000 questions (produced by turkers), and
+hyperparameters are tuned on a similarly sized validation set. note this is a harder task than the
+wikimovies task in the simulator due to the use natural language from turkers, hence lower test
+performance is expected.
+
+4note, this is not the same as a randomly initialized neural network policy, because due to the synthetic
+construction with an omniscient labeler the labels will be balanced. in our work, we learn the policy from
+randomly initialized weights which are updated as we learn the policy.
+
+9
+
+under review as a conference paper at iclr 2017
+
+results are given in table 2. they indicate that both rbi and fp are useful. when rewards are
+sparse, fp still works via the textual feedback while rbi can only use the initial 1000 examples
+when r = 0. as fp does not use numericalrewards at all, it is invariant to the parameter r. the
+combination of fp and rbi outperforms either alone.
+
+model
+reward based imitation (rbi)
+forward prediction (fp)
+rbi+fp
+
+r = 0
+0.333
+0.358
+0.431
+
+r = 0.1
+0.340
+0.358
+0.438
+
+r = 0.5
+0.365
+0.358
+0.443
+
+r = 1
+0.375
+0.358
+0.441
+
+table 2: incorporating feedback from humans via mechanical turk. textual feedback is
+provided for 10,000 model predictions (from a model trained with 1k labeled training examples),
+and additional sparse binary rewards (fraction r of examples have rewards). forward prediction and
+reward-based imitation are both useful, with their combination performing best.
+
+we also conducted additional experiments comparing with (i) synthetic feedback and (ii) the fully
+supervised case which are given in appendix c.1. they show that the results with human feedback
+are competitive with these approaches.
+
+6 conclusion
+
+we studied dialogue learning of end-to-end models using textual feedback and numerical rewards.
+both fully online and iterative batch settings are viable approaches to policy learning, as long as
+possible instabilities in the learning algorithms are taken into account. secondly, we showed for
+the    rst time that the recently introduced fp method can work in both an online setting and on
+real human feedback. overall, our results indicate that it is feasible to build a practical pipeline
+that starts with a model trained on an initial    xed dataset, which then learns from interactions with
+humans in a (semi-)online fashion to improve itself. future research should work towards doing this
+in a never-ending learning setup.
+
+references
+mohammad amin bassiri.
+
+noticing l2 form. english language and literature studies, 1(2):61, 2011.
+
+interactional feedback and the impact of attitude and motivation on
+
+antoine bordes, nicolas usunier, sumit chopra, and jason weston. large-scale simple question
+
+answering with memory networks. arxiv preprint arxiv:1506.02075, 2015.
+
+leon bottou, jonas peters, denis x. quionero-candela, joaquin amd charles, d. max chicker-
+ing, elon portugaly, dipankar ray, patrice simard, and ed snelson. counterfactual reasoning
+and learning systems: the example of computational advertising. journal of machine learning
+research, 14:3207   3260, 2013.
+
+jesse dodge, andreea gane, xiang zhang, antoine bordes, sumit chopra, alexander miller, arthur
+szlam, and jason weston. evaluating prerequisite qualities for learning end-to-end dialog sys-
+tems. arxiv preprint arxiv:1511.06931, 2015.
+
+milica ga  sic, catherine breslin, matthew henderson, dongho kim, martin szummer, blaise thom-
+son, pirros tsiakoulis, and steve young. pomdp-based dialogue manager adaptation to extended
+domains. in proceedings of sigdial, 2013.
+
+milica ga  sic, dongho kim, pirros tsiakoulis, catherine breslin, matthew henderson, martin
+szummer, blaise thomson, and steve young. incremental on-line adaptation of pomdp-based
+dialogue managers to extended domains. in proceedings on interspeech, 2014.
+
+karl moritz hermann, tomas kocisky, edward grefenstette, lasse espeholt, will kay, mustafa
+in advances in
+
+suleyman, and phil blunsom. teaching machines to read and comprehend.
+neural information processing systems, pp. 1693   1701, 2015.
+
+10
+
+under review as a conference paper at iclr 2017
+
+esther levin, roberto pieraccini, and wieland eckert. learning dialogue strategies within the
+markov decision process framework. in automatic id103 and understanding, 1997.
+proceedings., 1997 ieee workshop on, pp. 72   79. ieee, 1997.
+
+esther levin, roberto pieraccini, and wieland eckert. a stochastic model of human-machine in-
+teraction for learning dialog strategies. ieee transactions on speech and audio processing, 8(1):
+11   23, 2000.
+
+alexander miller, adam fisch, jesse dodge, amir-hossein karimi, antoine bordes, and ja-
+arxiv preprint
+
+son weston. key-value memory networks for directly reading documents.
+arxiv:1606.03126, 2016.
+
+volodymyr mnih, koray kavukcuoglu, david silver, alex graves, ioannis antonoglou, daan wier-
+stra, and martin riedmiller. playing atari with deep id23. arxiv preprint
+arxiv:1312.5602, 2013.
+
+roberto pieraccini, david suendermann, krishna dayanidhi, and jackson liscombe. are we there
+yet? research in commercial spoken id71. in international conference on text, speech
+and dialogue, pp. 3   13. springer, 2009.
+
+pranav rajpurkar, jian zhang, konstantin lopyrev, and percy liang. squad: 100,000+ questions
+
+for machine comprehension of text. arxiv preprint arxiv:1606.05250, 2016.
+
+marc   aurelio ranzato, sumit chopra, michael auli, and wojciech zaremba. sequence level train-
+
+ing with recurrent neural networks. arxiv preprint arxiv:1511.06732, 2015.
+
+jost schatzmann, karl weilhammer, matt stuttle, and steve young. a survey of statistical user sim-
+ulation techniques for reinforcement-learning of dialogue management strategies. the knowledge
+engineering review, 21(02):97   126, 2006.
+
+satinder singh, michael kearns, diane j litman, marilyn a walker, et al. empirical evaluation of
+
+a id23 spoken dialogue system. in aaai/iaai, pp. 645   651, 2000.
+
+satinder singh, diane litman, michael kearns, and marilyn walker. optimizing dialogue man-
+agement with id23: experiments with the njfun system. journal of arti   cial
+intelligence research, 16:105   133, 2002.
+
+pei-hao su, milica gasic, nikola mrksic, lina rojas-barahona, stefan ultes, david vandyke,
+tsung-hsien wen, and steve young. continuously learning neural dialogue management. arxiv
+preprint arxiv:1606.02689, 2016.
+
+sainbayar sukhbaatar, jason weston, rob fergus, et al. end-to-end memory networks. in advances
+
+in neural information processing systems, pp. 2440   2448, 2015.
+
+marilyn a. walker. an application of id23 to dialogue strategy selection in a
+spoken dialogue system for email. journal of arti   cial intelligence research, 12:387   416, 2000.
+
+marilyn a walker, rashmi prasad, and amanda stent. a trainable generator for recommendations
+
+in multimodal dialog. in interspeech, 2003.
+
+margaret g werts, mark wolery, ariane holcombe, and david l gast. instructive feedback: review
+
+of parameters and effects. journal of behavioral education, 5(1):55   75, 1995.
+
+jason weston. dialog-based language learning. arxiv preprint arxiv:1604.06045, 2016.
+
+jason weston, antoine bordes, sumit chopra, alexander m rush, bart van merri  enboer, armand
+joulin, and tomas mikolov. towards ai-complete id53: a set of prerequisite toy
+tasks. arxiv preprint arxiv:1502.05698, 2015.
+
+ronald j williams. simple statistical gradient-following algorithms for connectionist reinforcement
+
+learning. machine learning, 8(3-4):229   256, 1992.
+
+steve young, milica ga  si  c, simon keizer, franc  ois mairesse, jost schatzmann, blaise thomson,
+and kai yu. the hidden information state model: a practical framework for pomdp-based spoken
+dialogue management. computer speech & language, 24(2):150   174, 2010.
+
+11
+
+under review as a conference paper at iclr 2017
+
+steve young, milica ga  si  c, blaise thomson, and jason d williams. pomdp-based statistical spoken
+
+id71: a review. proceedings of the ieee, 101(5):1160   1179, 2013.
+
+wojciech zaremba and ilya sutskever. id23 id63s. arxiv
+
+preprint arxiv:1505.00521, 362, 2015.
+
+12
+
+under review as a conference paper at iclr 2017
+
+a further simulator task details
+
+the tasks in weston (2016) were speci   cally:
+- task 1: the teacher tells the student exactly what they should have said (supervised baseline).
+- task 2: the teacher replies with positive textual feedback and reward, or negative textual feedback.
+- task 3: the teacher gives textual feedback containing the answer when the bot is wrong.
+- task 4: the teacher provides a hint by providing the class of the correct answer, e.g.,    no it   s a
+movie    for the question    which movie did forest gump star in?   .
+- task 5: the teacher provides a reason why the student   s answer is wrong by pointing out the
+relevant supporting fact from the knowledge base.
+- task 6: the teacher gives positive reward only 50% of the time.
+- task 7: rewards are missing and the teacher only gives natural language feedback.
+- task 8: combines tasks 1 and 2 to see whether a learner can learn successfully from both forms
+of supervision at once.
+- task 9: the bot asks questions of the teacher about what it has done wrong.
+- task 10: the bot will receive a hint rather than the correct answer after asking for help.
+we refer the readers to (weston, 2016) for more detailed descriptions and the motivation behind
+these tasks. the difference in our system is that the model can be trained on-the-   y via the simulator:
+after receiving feedback and/or rewards, the model can update itself and apply its learning to the next
+episode. we present results on tasks 2, 3 and 4 in this appendix
+
+b instructions given to turkers
+
+these are the instructions given for the textual feedback mechanical turk task (we also constructed
+a separate task to collect the initial questions, not described here):
+
+title: write brief responses to given dialogue exchanges (about 15 min)
+
+description: write a brief response to a student   s answer to a teacher   s question, providing feedback
+to the student on their answer.
+instructions:
+
+each task consists of the following triplets:
+
+1. a question by the teacher
+2. the correct answer(s) to the question (separated by    or   )
+3. a proposed answer in reply to the question from the student
+
+consider the scenario where you are the teacher and have already asked the question, and received
+the reply from the student. please compose a brief response giving feedback to the student about
+their answer. the correct answers are provided so that you know whether the student was correct or
+not.
+for example, given 1) question:    what is a color in the united states    ag?   ; 2) correct answer:
+   white, blue, red   ; 3) student reply:    red   , your response could be something like    that   s right!   ; for
+3) reply:    green   , you might say    no that   s not right    or    nope, a correct answer is actually white   .
+please vary responses and try to minimize spelling mistakes. if the same responses are copied/pasted
+or overused, we   ll reject the hit.
+avoid naming the student or addressing    the class    directly.
+we will consider bonuses for higher quality responses during review.
+
+13
+
+under review as a conference paper at iclr 2017
+
+t : which movie did tom hanks star in ?
+s : forrest gump
+task 1: imitating an expert student
+s: forrest gump
+t: (no response)
+task 2: positive and negative feedback
+t: yes, that   s right! (+)
+task 3: answers supplied by teacher
+t: yes, that is correct. (+)
+task 4: hints supplied by teacher
+t: correct! (+)
+task 5: supporting facts supplied by teacher
+t: that   s right. (+)
+
+task 6: partial feedback
+if random(0,1)<0.5 then
+t: that   s correct. (+)
+else t: that   s correct.
+task 7: no feedback
+t: yes.
+task 8: imitation and feedback mixture
+if random(0,1)<0.5 then
+t: yes, that   s right! (+)
+
+else t: (no response)
+task 9: asking for corrections
+t: correct! (+)
+
+task 10: asking for supporting facts
+t: yes, that   s right! (+)
+
+t : which movie did tom hanks star in ?
+s : brad pitt.
+task 1: imitating an expert student
+s: forrest gump
+t: (no response)
+task 2: positive and negative feedback
+t: no, that   s incorrect!
+task 3: answers supplied by teacher
+t: no, the answer is forrest gump !
+task 4: hints supplied by teacher
+t: no, it   s a movie !
+task 5: supporting facts supplied by teacher
+t: no, because forrest gump starred actors
+tom hanks, robin wright, gary sinise !
+task 6: partial feedback
+t: sorry, wrong.
+
+task 7: no feedback
+t: no.
+task 8: imitation and feedback mixture
+if random(0,1)<0.5 then
+
+t: wrong.
+
+else s: forrest gump
+task 9: asking for corrections
+t: no, that   s wrong.
+s: can you help me?
+t: forrest gump !
+task 10: asking for supporting facts
+t: sorry, that   s not it.
+s: can you help me?
+t: a relevant fact is that forrest gump starred actors
+tom hanks, robin wright, gary sinise !
+
+figure 5: the ten tasks our simulator implements, which evaluate different forms of teacher response
+and binary feedback. in each case the same example from wikimovies is given for simplicity, where
+the student answered correctly for all tasks (left) or incorrectly (right). red text denotes responses
+by the bot with s denoting the bot. blue text is spoken by the teacher with t denoting the teacher   s
+response. for imitation learning the teacher provides the response the student should say denoted
+with s in tasks 1 and 8. a (+) denotes a positive reward.
+
+c additional experiments
+
+iteration
+
+imitation learning
+
+reward based imitation (rbi)
+
+forward pred. (fp)
+
+rbi+fp
+
+fp (balanced)
+
+fp (rand. exploration   = 0.25)
+fp (rand. exploration   = 0.5)
+
+1
+
+0.24
+0.95
+1.00
+0.99
+0.99
+0.99
+0.98
+
+2
+
+0.23
+0.99
+0.19
+0.99
+0.97
+0.91
+0.93
+
+3
+
+0.23
+0.99
+0.86
+0.99
+0.98
+0.93
+0.97
+
+4
+
+0.23
+0.99
+0.30
+0.99
+0.98
+0.88
+0.96
+
+5
+
+0.25
+1.00
+99
+99
+0.96
+0.94
+0.95
+
+6
+
+0.25
+1.00
+0.22
+0.99
+0.97
+0.94
+0.97
+
+table 3: test accuracy of various models in the dataset batch size case (using batch size equal to the
+size of the full training set) for babi, task 3. results > 0.95 are in bold.
+
+14
+
+under review as a conference paper at iclr 2017
+
+figure 6: training epoch vs. test accuracy for babi (task 2) varying exploration   and batch
+size.
+
+15
+
+020406080epoch0.20.30.40.50.60.70.80.91.0accuracyrandom exploration for rbi =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp with balancing =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.91.0accuracycomparing rbi, fp and reinforcereinforcerbifp020406080100epoch0.20.30.40.50.60.70.80.91.0accuracyrbi (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000020406080100epoch0.20.30.40.50.60.70.80.9accuracyfp (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000under review as a conference paper at iclr 2017
+
+figure 7: training epoch vs. test accuracy for babi (task 3) varying exploration   and batch
+size. random exploration is important for both reward-based (rbi) and forward prediction (fp).
+
+16
+
+020406080epoch0.20.30.40.50.60.70.80.91.0accuracyrandom exploration for rbi =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp with balancing =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.91.0accuracycomparing rbi, fp and reinforcereinforcerbifp020406080100epoch0.20.30.40.50.60.70.80.91.0accuracyrbi (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000020406080100epoch0.30.40.50.60.70.80.9accuracyfp (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000under review as a conference paper at iclr 2017
+
+figure 8: training epoch vs. test accuracy for babi (task 4) varying exploration   and batch
+size. random exploration is important for both reward-based (rbi) and forward prediction (fp).
+
+17
+
+020406080epoch0.20.30.40.50.60.70.80.91.0accuracyrandom exploration for rbi =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.9accuracyrandom exploration for fp with balancing =0 =0.2 =0.4 =0.6 =0.8 =1020406080epoch0.20.30.40.50.60.70.80.91.0accuracycomparing rbi, fp and reinforcereinforcerbifp020406080100epoch0.20.30.40.50.60.70.80.91.0accuracyrbi (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000020406080100epoch0.20.30.40.50.60.70.80.9accuracyfp (eps=0.6) varying batch sizebatch 20batch 80batch 320batch 1000under review as a conference paper at iclr 2017
+
+figure 9: wikimovies: training epoch vs. test accuracy on task 2 varying (top left panel) explo-
+ration rate   while setting batch size to 32 for rbi, (top right panel) for fp, (bottom left) batch size
+for rbi, and (bottom right) comparing rbi, reinforce and fp setting   = 0.5. the model is
+robust to the choice of batch size. rbi and reinforce perform comparably.
+
+18
+
+05101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for rbi =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for fp =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrbi (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracycomparing rbi, fp and reinforcereinforcerbifpunder review as a conference paper at iclr 2017
+
+figure 10: wikimovies: training epoch vs. test accuracy on task 3 varying (top left panel) explo-
+ration rate   while setting batch size to 32 for rbi, (top right panel) for fp, (bottom left) batch size
+for rbi, and (bottom right) comparing rbi, reinforce and fp setting   = 0.5. the model is
+robust to the choice of batch size. rbi and reinforce perform comparably.
+
+19
+
+05101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for rbi =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for fp =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrbi (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracycomparing rbi, fp and reinforcereinforcerbifpunder review as a conference paper at iclr 2017
+
+figure 11: wikimovies: training epoch vs. test accuracy on task 4 varying (top left panel) explo-
+ration rate   while setting batch size to 32 for rbi, (top right panel) for fp, (bottom left) batch size
+for rbi, and (bottom right) comparing rbi, reinforce and fp setting   = 0.5. the model is
+robust to the choice of batch size. rbi and reinforce perform comparably.
+
+20
+
+05101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for rbi =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrandom exploration for fp =0 =0.1 =0.2 =0.3 =0.4 =0.5 =105101520epoch0.10.20.30.40.50.60.7accuracyrbi (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracycomparing rbi, fp and reinforcereinforcerbifpunder review as a conference paper at iclr 2017
+
+figure 12: wikimovies: training epoch vs. test accuracy with varying batch size for fp on task 2
+(top left panel), 3 (top right panel), 4 (bottom left panel) and 6 (top right panel) setting   = 0.5. the
+model is robust to the choice of batch size.
+
+21
+
+05101520epoch0.10.20.30.40.50.60.7accuracyfp (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracyfp (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracyfp (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full dataset05101520epoch0.10.20.30.40.50.60.7accuracyfp (eps=0.5) varying batch sizebatch 32batch 320batch 3200batch 32000full datasetunder review as a conference paper at iclr 2017
+
+c.1 additional experiments for mechanical turk setup
+
+in the experiment in section 5.2 we conducted experiments with real human feedback. here, we
+compare this to a form of synthetic feedback, mostly as a sanity check, but also to see how much
+improvement we can get if the signal is simpler and cleaner (as it is synthetic). we hence constructed
+synthetic feedback for the 10,000 responses, using either task 2 (positive or negative feedback), task
+3 (answers provided by teacher) or a mix (task 2+3) where we use one or the other for each example
+(50% chance of each). the latter makes the synthetic data have a mixed setup of responses, which
+more closely mimics the real data case. the results are given in table 4. the rbi+fp combination is
+better using the synthetic data than the real data with task 2+3 or task 3, which is to be expected, but
+the real data is competitive, despite the dif   culty of dealing with its lexical and semantic variability.
+the real data is better than using task 2 synthetic data.
+for comparison purposes, we also ran a supervised (imitation learning) memn2n on different sized
+training sets of turker authored questions with gold annotated labels (so, there are no numerical
+rewards or textual feedback, this is a pure supervised setting). the results are given in table 5. they
+indicate that rbi+fp and even fp alone get close to the performance of fully supervised learning.
+
+model
+reward based imitation (rbi)
+forward prediction (fp) [real]
+rbi+fp [real]
+forward prediction (fp) [synthetic task 2]
+forward prediction (fp) [synthetic task 2+3]
+forward prediction (fp) [synthetic task 3]
+rbi+fp [synthetic task 2]
+rbi+fp [synthetic task 2+3]
+rbi+fp [synthetic task 3]
+
+r = 0
+0.333
+0.358
+0.431
+0.188
+0.328
+0.361
+0.382
+0.459
+0.473
+
+r = 0.1
+0.340
+0.358
+0.438
+0.188
+0.328
+0.361
+0.383
+0.465
+0.486
+
+r = 0.5
+0.365
+0.358
+0.443
+0.188
+0.328
+0.361
+0.407
+0.464
+0.490
+
+r = 1
+0.375
+0.358
+0.441
+0.188
+0.328
+0.361
+0.408
+0.478
+0.494
+
+table 4: incorporating feedback from humans via mechanical turk: comparing real human
+feedback to synthetic feedback. textual feedback is provided for 10,000 model predictions (from
+a model trained with 1k labeled training examples), and additional sparse binary rewards (fraction r
+of examples have rewards). we compare real feedback (rows 2 and 3) to synthetic feedback when
+using fp or rbi+fp (rows 4 and 5).
+
+train data size
+supervised memn2n 0.333
+
+1k
+
+5k
+
+0.429
+
+10k
+0.476
+
+20k
+0.526
+
+60k
+0.599
+
+table 5: fully supervised (imitation learning) results on human questions
+
+  = 0
+  = 0.1
+  = 0.25
+  = 0.5
+  = 1
+
+r = 0
+0.499
+0.494
+0.493
+0.501
+0.497
+
+r = 0.1
+0.502
+0.496
+0.495
+0.499
+0.497
+
+r = 0.5
+0.501
+0.501
+0.496
+0.501
+0.498
+
+r = 1
+0.502
+0.502
+0.499
+0.504
+0.497
+
+table 6: second iteration of feedback using synthetic textual feedback of synthetic task2+3 with
+the rbi+fp method, an additional iteration of data collection of 10k examples, varying sparse binary
+reward fraction r and exploration  . the performance of the    rst iteration model was 0.478.
+
+c.2 second iteration of feedback
+
+we conducted experiments with an additional iteration of data collection for the case of binary
+rewards and textual feedback using the synthetic task 2+3 mix. we selected the best model from
+the previous training, using rbi+fp with r = 1 which previously gave a test accuracy of 0.478
+(see table 4). using that model as a predictor, we collected an additional 10,000 training examples.
+
+22
+
+under review as a conference paper at iclr 2017
+
+we then continue to train our model using the original 1k+10k training set, plus the additional 10k.
+as before, we report the test accuracy varying r on the additional collected set. we also report the
+performance from varying  , the proportion of random exploration of predictions on the new set.
+the results are reported in table 6. overall, performance is improved in the second iteration, with
+slightly better performance for large r and   = 0.5. however, the improvement is mostly invariant
+to those parameters, likely because fp takes advantage of feedback from incorrect predictions in any
+case.
+
+23
+
+

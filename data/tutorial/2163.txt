@@ -1,0 +1,358 @@
+   #[1]colin_morris
+
+   [2]colin_morris
+
+   [3]blog [4]toys [5]about
+
+dissecting google's billion word language model part 1: character embeddings
+
+   sep 21, 2016
+
+   earlier this year, some researchers from google brain published a paper
+   called [6]exploring the limits of id38, in which they
+   described a language model that improved perplexity on the [7]one
+   billion word benchmark by a staggering margin (down from about 50 to
+   30). last week, they [8]released that model.
+
+   as someone with an [9]interest in character-aware language models, i   ve
+   been looking forward to sniffing around this thing.
+
+   in this post, i   ll go into the very first layer of the model: character
+   embeddings.
+
+background - language models
+
+   to begin with, let   s define what we mean by a language model. a
+   language model is just a id203 distribution over sequences of
+   words. given a sentence like    hello world   , or    buffalo buffalo buffalo
+   buffalo buffalo buffalo buffalo buffalo   , the model outputs a
+   id203, telling us how likely that sentence is.
+
+   language models are evaluated by their [10]perplexity on heldout data,
+   which is essentially a measure of how likely the model thinks that
+   heldout data is. lower is better.
+
+   the lm_1b language model takes one word of a sentence at a time, and
+   produces a id203 distribution over the next word in the sequence.
+   therefore it can calculate the id203 of a sentence like    hello
+   world.    as   
+p("<s> hello world . </s>") = product(p("<s>"),  p("hello" | "<s>"),
+    p("world" | "<s> hello"), p("." | "<s> hello world"),
+    p("</s>" | "<s> hello world ."))
+
+   ("<s>" and "</s>" are beginning and end of sentence markers.)
+
+the lm_1b architecture
+
+   [lm1b_arch_a.png] modified diagram from pg. 2 of [11]exploring the
+   limits of id38
+
+   the lm_1b architecture has three major components, shown in the image
+   on the right:
+    1. the    char id98    stage (blue) takes the raw characters of the input
+       word and produces a word-embedding.
+    2. the [12]lstm (yellow) takes that word representation, along with
+       its state vector (i.e. its memory of words it   s seen so far in the
+       current sentence), and outputs a representation of the word that
+       comes next.
+    3. a final softmax layer (green) learns a distribution over all the
+       words of the vocabulary, given the output of the lstm.
+
+char id98?
+
+   this is short for character-level convolutional neural network. if you
+   don   t know what that means, forget i said anything - because in this
+   post, i   ll be focusing on what happens before the network does any
+   convolving. namely, character embeddings.
+
+character embeddings?
+
+   the most obvious way to represent a character as input to our neural
+   network is to use a [13]one-hot encoding. for example, if we were just
+   encoding the lowercase roman alphabet, we could say   
+onehot('a') = [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+onehot('c') = [0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+
+   and so on. instead, we   re going to learn a    dense    representation of
+   each character. if you   ve used id27 systems like [14]id97
+   then this will sound familiar.
+
+   the first layer of the char id98 component of the model is just
+   responsible for translating the raw characters of the input word into
+   these character embeddings, which are passed up to the convolutional
+   filters.
+
+   in lm_1b, the character alphabet is of size 256 (non-ascii characters
+   are expanded into multiple bytes, each encoded separately), and the
+   space these characters are embedded into is of dimension 16. for
+   example,    a    is represented by the following vector:
+array([ 1.10141766, -0.67602301,  0.69620615,  1.96468627,  0.84881932,
+        0.88931531, -1.02173674,  0.72357982, -0.56537604,  0.09024946,
+       -1.30529296, -0.76146501, -0.30620322,  0.54770935, -0.74167275,
+        1.02123129], dtype=float32)
+
+   that   s pretty hard to interpret. let   s use [15]id167 to shrink our
+   character embeddings down to 2 dimensions, to get a sense of where they
+   fall relative to one another. id167 will try to arrange our embeddings
+   so that pairs of characters that are close together in the
+   16-dimensional embedding space are also close together in the 2-d
+   projection.
+   [tsne_embeddings.png] id167 embedding of commonly occurring characters.
+   salmon markers are special meta characters. <s> and </s> mark the
+   beginning and end of a sentence. <w> and </w> mark beginning and end of
+   a word. <pad> is used to right-pad words to the max length of 50.
+   yellow markers are punctuation, blue are digits, and light/dark green
+   are uppercase/lowercase alphabetical characters.
+
+   a few interesting regularities jump out here:
+     * not only are digits clumped closely together, they   re basically
+       arranged in order along a snaky number line!
+     * in many cases, the uppercase and lowercase versions of a letter are
+       very close. however, a few, such as    k/k    are widely separated. in
+       the original embedding space, 50% of lowercase letters have their
+       uppercase counterpart as their nearest alphabetical neighbor.
+     * in the upper-right corner, all the ascii punctuation marks that can
+       end a sentence (.?!) are in a tight huddle
+     * meta characters (in salmon-pink) form a loose cluster. non-terminal
+       punctuation forms an even looser one (with    %    and    )    as
+       outliers).
+
+   there   s also a lack of regularity that   s worth noting here. other than
+   the (inconsistent) association of uppercase/lowercase pairs,
+   alphabetical characters seem to be arranged randomly. they   re
+   well-separated from one another, and are smeared all across the
+   projected space. there   s no island of vowels, for example, or liquid
+   consonants. nor is there a clear overall separation between uppercase
+   and lowercase characters.
+
+   it could be that this information is present in the embeddings, but
+   that id167 just doesn   t have enough degrees of freedom to preserve
+   those distinctions in a 2-d planar projection. maybe by inspecting each
+   dimension in turn, we can pick up on some more subtleties in the
+   embeddings?
+   [d0.png]
+
+   hm, maybe not. you can check out (bigger) plots of [16]all 16
+   dimensions here - i haven   t managed to extract much signal from them
+   however.
+
+vector math
+
+   perhaps the most famous feature of id27s is that you can add
+   and subtract them, and (sometimes) get results that are semantically
+   meaningful. for example:
+vec('woman') + (vec('king') - vec('man')) ~= vec('queen')
+
+   it   d certainly be interesting if we could do the same with character
+   vectors. there aren   t a lot of obvious analogies to be made here, but
+   what about adding or subtracting    uppercaseness   ?
+def analogy(a, b, c):
+  """a is to b, as c is to ___,
+
+  return the three nearest neighbors of c + (b-a) and their distances.
+  """
+  # ...
+
+      a    is to    a    as    b    is to   
+>>> analogy('a', 'a', 'b')
+b: 4.2
+v: 4.2
+y: 5.1
+
+   okay, not a good start. let   s try some more:
+>>> analogy('b', 'b', 'c')
+c: 4.2
+c: 5.2
++: 5.9
+
+>>> analogy('b', 'b', 'd')
+d: 4.2
+,: 4.9
+d: 5.0
+
+>>> analogy('b', 'b', 'e')
+n: 4.7
+,: 4.7
+e: 5.0
+
+   partial success?
+
+   repeating this a bunch of times, we get the    right    answer every once
+   in a while, but it   s not clear if it   s any better than chance. remember
+   that half of lowercase letters have their uppercase counterpart as
+   their nearest neighbour. so if we strike off a short distance from a
+   letter in a random direction, we   ll probably land near its counterpart
+   a decent proportion of the time for that reason alone.
+
+vector math - for real this time
+
+   i guess the only thing left to try is   
+>>> analogy('1', '2', '2')
+2: 2.4
+e: 3.6
+3: 3.6
+
+>>> analogy('3', '4', '8')
+8: 1.8
+7: 2.2
+6: 2.3
+
+>>> analogy('2', '5', '5')
+5: 2.7
+6: 4.0
+7: 4.0
+
+# it'd be really surprising if this worked...
+>>> nearest_neighbors(vec('2') + vec('2') + vec('2'))
+2: 6.0
+1: 6.9
+3: 7.1
+
+   okay, note to self: do not use character embeddings as tip calculator.
+
+   it seems useful to embed digits of similar magnitude close to each
+   other, for reasons of substitutability.    36 years old    is pretty much
+   substitutable for    37 years old    (or even    26 years old),    $800.00    is
+   more like    $900.00    or    $700.00    than    $100.00   . and based on our id167
+   projection, it seems like the model has definitely done this. but that
+   doesn   t mean that it   s arranged the digits on a line.
+
+   (for one thing, there are probably some digit-specific quirks the model
+   needs to learn. for example, that years usually start with    20    or
+      19   .)
+
+making sense of it all
+
+   before guessing at why certain characters were embedded in
+   such-and-such a way, we should probably ask: why are they using
+   character embeddings in the first place?
+
+   one reason could be that it reduces the model complexity. the feature
+   detectors in the char id98 part of the model only need to learn 16
+   weights for every character they   re looking at, rather than 256.
+   removing the character embedding layer increases the number of feature
+   detector weights by 16x, from ~460k (4096 filters * max width of 7 *
+   16-dimensional embedding) to ~7.3m. that sounds like a lot, but the
+   total number of parameters for the whole model (id98 + lstm + softmax)
+   is 1.04 billion! so a few extra million shouldn   t be a big deal.
+
+   in fact, lm_1b uses char embeddings, because their char id98 component
+   is modeled after [17]kim et. al 2015, who used char embeddings. a
+   footnote from that paper gives this explanation:
+
+     given that |c| is usually small, some authors work with onehot
+     representations of characters. however we found that using lower
+     dimensional representations of characters (i.e. d < |c|) performed
+     slightly better.
+
+   (presumably they mean better performance in the sense of perplexity,
+   rather than e.g. training speed.)
+
+   why would character embeddings improve performance? well, why do word
+   embeddings improve performance in natural language problems? they
+   improve generalization. there are a lot of words out there, and [18]a
+   lot of them occur infrequently. if we tend to see    raspberry   ,
+      strawberry   , and    gooseberry    in similar contexts, we   ll give them
+   nearby vectors. now if we   ve seen the phrases    strawberry jam    and
+      raspberry jam    a few times, we can guess that    gooseberry jam    is a
+   reasonably probable phrase, even if we haven   t seen it in our corpus
+   once.
+
+generalizing over characters?
+
+   at first, the analogy with word vectors doesn   t seem like a good fit.
+   the billion word benchmark corpus has 800,000 distinct words, whereas
+   we   re dealing with a mere 256 characters. is generalization really a
+   concern? and how do we generalize from a    g    to other characters?
+
+   the answer seems to be that we don   t really. we can sometimes
+   generalize between uppercase and lowercase versions of the same
+   character, but other than that, alphabetical characters have distinct
+   identities, and they   re going to occur so frequently that
+   generalization isn   t a concern.
+
+   but are there characters that occur infrequently enough that
+   generalization is important? let   s see   
+   [char_frequency.png] how often does the nth most popular character
+   appear? calculated over the training fold of the billion word benchmark
+   (~770m words). a little over 50 characters are completely absent from
+   the corpus (e.g. ascii control characters).
+
+   well, it   s not quite zipfian (we get closer to a straight line with
+   only the y-axis being on a log scale, as above, rather than with a
+   log-log scale), but there   s clearly a long tail of infrequent
+   characters (mostly non-ascii code points, and some rarely occurring
+   punctuation).
+
+   maybe our embeddings are helping us generalize our reasoning about
+   those characters. in the id167 plot above, i only showed characters
+   that occur fairly frequently (i set the threshold at the least frequent
+   alphanumeric character,    x   ). what if we plot the embeddings for all
+   characters that appear in the corpus at least 50 times?
+   [tsne_embeddings_full.png] green=alphabetical, blue=digit,
+   yellow=punctuation, brownish-red=meta. pink markers are bytes beyond
+   127, and anything else that doesn't fall into any of the previous
+   categories.
+
+   this would seem to support our hypothesis! as before, our letters
+   (green markers), are pretty antisocial, and rarely in touching range of
+   one another. but in several places, our long-tail pink characters form
+   tight clusters or lines.
+
+   my (handwavey) best guess: alphabetical characters get distinct,
+   widely-separated embeddings, but characters that occur infrequently
+   (the pinks) and/or characters with a high degree of substitutability
+   (digits, terminal punctuation), will tend to be placed together.
+
+   that   s it for now. thanks to the google brain team for releasing the
+   lm_1b model. if you want to do your own experiments on it, be sure to
+   check out their instructions [19]here. i   ve made the scripts i used to
+   generate the visualizations in this post available [20]here - feel free
+   to re-use/modify them, though they   re messy as hell.
+
+   tune in next time, when we   ll look at the next stage of the char id98
+   pipeline - convolutional filters!
+
+   tagged: [21]machine learning, [22]data visualization
+   please enable javascript to view the [23]comments powered by disqus.
+
+     * colin_morris
+     *
+
+     * [24]colinmorris
+     * [25]halfeatenscone
+
+   splashing around in the shallow end of the deep learning pool.
+
+references
+
+   visible links
+   1. http://colinmorris.github.io/feed.xml
+   2. http://colinmorris.github.io/
+   3. http://colinmorris.github.io/blog/
+   4. http://colinmorris.github.io/toys/
+   5. http://colinmorris.github.io/about/
+   6. http://arxiv.org/abs/1602.02410
+   7. http://arxiv.org/abs/1312.3005
+   8. https://github.com/tensorflow/models/tree/master/research/lm_1b
+   9. http://colinmorris.github.io/blog/dreaming-rbms
+  10. https://en.wikipedia.org/wiki/perplexity#perplexity_per_word
+  11. http://arxiv.org/pdf/1602.02410v2.pdf
+  12. https://en.wikipedia.org/wiki/long_short-term_memory
+  13. https://en.wikipedia.org/wiki/one-hot
+  14. https://en.wikipedia.org/wiki/id97
+  15. https://en.wikipedia.org/wiki/t-distributed_stochastic_neighbor_embedding
+  16. http://colinmorris.github.io/lm1b/char_emb_dimens/
+  17. https://arxiv.org/abs/1508.06615
+  18. https://en.wikipedia.org/wiki/zipf's_law
+  19. https://github.com/tensorflow/models/tree/master/research/lm_1b
+  20. https://github.com/colinmorris/lm1b-notebook
+  21. http://colinmorris.github.io/blog/tagged/machine-learning/
+  22. http://colinmorris.github.io/blog/tagged/data-visualization/
+  23. https://disqus.com/?ref_noscript
+  24. https://github.com/colinmorris
+  25. https://twitter.com/halfeatenscone
+
+   hidden links:
+  27. http://colinmorris.github.io/blog/1b-words-char-embeddings
+  28. mailto:/

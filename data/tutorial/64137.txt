@@ -1,0 +1,326 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]towards data science
+     * [9]data science
+     * [10]machine learning
+     * [11]programming
+     * [12]visualization
+     * [13]ai
+     * [14]data journalism
+     * [15]contribute
+     __________________________________________________________________
+
+[learning note] dropout in recurrent networks         part 2
+
+recurrent dropout implementations in keras and pytorch
+
+   [16]go to the profile of ceshine lee
+   [17]ceshine lee (button) blockedunblock (button) followfollowing
+   sep 29, 2017
+
+   before going into the experiments, i   d like to examine the
+   implementations in detail for better understanding and future
+   reference. because of space limitation, i used #... to omit the lines
+   that aren   t essential to the current discussion.
+   [1*s9okmcrvqlpexjyioehjva.jpeg]
+   [18]https://keras.io/img/keras-logo-small.jpg
+
+keras
+
+   here i use keras that comes with tensorflow 1.3.0.
+
+   the implementation mainly resides in lstm class. we start with
+   lstm.get_constants class method. it is invoked for every batch in
+   recurrent.call method to provide dropout masks.    the input dropout and
+   recurrent dropout rates have been stored as instance attributes in
+   __init__.   
+
+   iframe: [19]/media/df9ae1fecbf27026a7e919a591c23fb1?postid=f209222481f8
+
+   the inputs are arranged in the form of (samples, time (padded with
+   zeros), input_dim). the above code block creates input masks with shape
+   (samples, input_dim), and then randomly sets elements to zero. so new
+   masks are sampled for every sequence/sample, consistent with what was
+   described in paper [1].
+
+   note four different masks are created, corresponds to the four gates in
+   lstm. only untied-weights lstm supports this setting. (more details
+   below).
+
+   iframe: [20]/media/61416439838a42cc6faad3e9362b877c?postid=f209222481f8
+
+   similarly, the above creates four recurrent masks with shape (samples,
+   hidden_units).
+
+   next we turn to lstm.step method, which is executed for each time step
+   sequentially:
+
+   iframe: [21]/media/b9d4d26ca155e31eae749c67f063a557?postid=f209222481f8
+
+   keras has [22]3 implementations of lstm, with implementation 0 as
+   default:
+
+     implementation: one of {0, 1, or 2}. if set to 0, the id56 will use
+     an implementation that uses fewer, larger matrix products, thus
+     running faster on cpu but consuming more memory. if set to 1, the
+     id56 will use more matrix products, but smaller ones, thus running
+     slower (may actually be faster on gpu) while consuming less memory.
+     if set to 2 (lstm/gru only), the id56 will combine the input gate,
+     the forget gate and the output gate into a single matrix, enabling
+     more time-efficient parallelization on the gpu. note: id56 dropout
+     must be shared for all gates, resulting in a slightly reduced
+     id173.
+
+   the implementation 2 corresponds to tied-weights lstm. and the above
+   code block implements dropout just like in this formula [1]:
+   [1*z8svksfrdwbm7y5v66t8eg.png]
+   dropout in tied-weight lstm
+
+   note how it just take the first mask and discard the rest (three
+   masks). that is because this formulation requires the id56 dropout be
+   shared for all gates.
+
+   iframe: [23]/media/fe97d8dc6c250e3d800dd9990f49b07c?postid=f209222481f8
+
+   it appears implementation 0 and 1 differs in the way how input dropout
+   is applied. in implementation 0 the transformed inputs are precomputed
+   outside step method, while in implementation 1 the inputs are dropped
+   out and transformed inside step .
+
+      note how each gate use its own dropout mask, and how transformed
+   inputs and hidden states are combined for each gate.   
+
+   that's it. the implementation doesn   t have any surprises, so you
+   [24]can use [25]dropout[26] and [27]recurrent_dropout[28] parameters
+   with confidence. the only thing you need to consider is probably
+   whether to use implementation 2 instead of 0 to speed things up.
+
+   (currently keras doesn   t seem to provide embedding dropout as described
+   in [1]. i think you can definitely write a custom layer for that,
+   though.)
+     __________________________________________________________________
+
+   [1*ncasvttdq2cwdf3ljxv1nq.png]
+   [29]http://pytorch.org/tutorials/_images/pytorch-logo-flat.png
+
+pytorch
+
+   as mentioned in part 1, pytorch doesn   t provide native support for
+   variational dropout. we   re going to use the implementation from
+   [30]salesforce/awd-lstm-lm project. (this part is targeted at pytorch
+   0.2.0 version)
+
+   lockeddropout can be used to apply the same dropout mask to every time
+   step (as in input dropout):
+
+   iframe: [31]/media/4bf29050318528d98b8ee149c3604b8a?postid=f209222481f8
+
+   pytorch generally supports two sequence tensor arrangement: (samples,
+   time, input_dim) and (time, samples, input_dim). the above code block
+   is designed for the latter arrangement. you can easily modify it to
+   support both arrangements. m is created as a dropout mask for a single
+   time step with shape (1, samples, input_dim). so a new mask is sampled
+   for each sequence, the same as in keras.
+
+   next is the weightdrop class. this form of dropout, proposed in [2], is
+   more simple, has better performance, and allows different dropout for
+   each gate even in tied-weights setting. in contrast, to implement the
+   traditional variational dropout might require splitting the lstm/id56
+   into individual time steps in for loops.
+
+   iframe: [32]/media/da9a8b8b0054893851469ae63cff9329?postid=f209222481f8
+
+   in _setup, weightdrop disables the parameter flattening (otherwise it
+   won   t work with cuda), and renames the target weight matrix (usually
+   weight_hh_l0) to one with _raw suffix. in forward, the target weight is
+   applied a dropout mask, copied and renamed to the original attribute
+   name (weight_hh_l0). note the registered parameter is the weight matrix
+   with _raw suffix (dropout operations won   t affect that weight matrix).
+
+   there are two types of weight dropout, controlled by variational
+   parameter. we need to know how the weight matrix works first before we
+   are able to understand the code: for a lstm nn.lstm, there are four
+   associated parameters, weight_ih_l0, weight_hh_l0, bias_ih_l0,
+   bias_hh_l0. the naming should be obvious enough: ih means input to
+   hidden; hh means hidden to hidden; l0 means first layer. if we use
+   nn.lstm(2, 8, num_layers=1) as an example, weight_hh_l0 (u) will have a
+   shape of (32, 8), correspond to four gates and eight hidden units (32 =
+   8 * 4). you should be able to recognize this is a tied-weights lstm.
+   this implies the hidden state matrix (h) is shaped (8, batch_size). the
+   id127 uh would produce a 32 x batch_size matrix. each
+   column represents the transformed recurrent inputs to the eight hidden
+   units and their four internal gates for one single sequence (note
+   pytorch use uh instead of hu):
+   [1*wx12ghrq2f-o_9lkjb9frq.png]
+   internal definition of lstm
+
+   for variational=true, a mask of shape (4 * hidden_units, 1) is created.
+   setting any one of the elements to zero means cutting all recurrent
+   connections to one gate in a hidden unit. this seems a bit weird. if we
+   want the dropout out to be consistent with keras tied-weights
+   implementation (the formula below), we   d want to use a mask of shape
+   (1, hidden_units). setting any one of the elements to zero means
+   cutting all recurrent connections originate from a hidden unit.
+   (remember a single recurrent dropout mask in keras is shaped (sample,
+   hidden_units).) it   s possible i   m mistaken, or it   s a bug, or the
+   author intentionally did so. i   m not sure yet.
+   [1*z8svksfrdwbm7y5v66t8eg.png]
+   (reprise) dropout in tied-weight lstm
+
+   for variational=false, a mask of shape (4 * hidden_units, hidden_units)
+   is created. hence different masks for different hidden units and
+   different gates.
+
+   one important difference between weightdrop and keras implementation is
+   dropout mask to weight matrix can only be sampled once every
+   mini-batch. if you try to sample once every sequence, then it is
+   essentially using mini-batches of size 1, losing the purpose of using
+   mini-batches. this restriction causes various degrees of variation
+   reduction inside each mini-batch, depending on the size of the
+   mini-batch. (remember in keras new dropout masks are sampled for each
+   sequence.) therefore it seems a good idea to always start with
+   variational=false configuration.
+
+   finally, the embedding dropout:
+
+   iframe: [33]/media/2ec180f294836e42e5048ddfb54b07ae?postid=f209222481f8
+
+   this should be quite straight-forward. the dropout mask is shaped
+   (num_words, 1), and the dropout is applied at word level. as mentioned
+   in [1], this implementation is likely to have some performance issue
+   when the number of words and the dimension of embedding are large. but
+   i guess the author think this is an adequate trade-off between
+   simplicity of code and performance.
+
+putting it together
+
+   an example model using all three discussed dropouts:
+
+   iframe: [34]/media/d9ccfe0b3f3b8d7801023982b82308ea?postid=f209222481f8
+
+   (line 11   15) although weightdrop doesn   t require splitting time steps,
+   but it does requires splitting id56 layers. it   s the only way we can
+   apply lockeddropout between layers.
+
+   (line 30) embedding dropout is applied here in forward.
+
+   (line 31, 35) lockeddropout is applied by simply passing it the tensor
+   and dropout rate.
+     __________________________________________________________________
+
+to be continued
+
+   this post is quite messy, sorry about that. writing technically in
+   plain english is hard    anyway, for the last part, i   ll be documenting
+   some empirical results. the results are somewhat different from what
+   the paper [1] obtained. i   ll also try to provide some explanation to
+   that.
+   [35][learning note] dropout in recurrent networks         part 1
+   theoretical foundationsbecominghuman.ai
+   [36][learning note] dropout in recurrent networks         part 3
+   some empirical result comparisonmedium.com
+
+references
+
+    1. gal, y., & ghahramani, z. (2015). [37]a theoretically grounded
+       application of dropout in recurrent neural networks.
+    2. merity, s., keskar, n. s., & socher, r. (2017). [38]regularizing
+       and optimizing lstm language models.
+
+     * [39]machine learning
+     * [40]pytorch
+     * [41]keras
+
+   (button)
+   (button)
+   (button) 92 claps
+   (button) (button) (button) 1 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [42]go to the profile of ceshine lee
+
+[43]ceshine lee
+
+   humanist. data geek.
+
+     (button) follow
+   [44]towards data science
+
+[45]towards data science
+
+   sharing concepts, ideas, and codes.
+
+     * (button)
+       (button) 92
+     * (button)
+     *
+     *
+
+   [46]towards data science
+   never miss a story from towards data science, when you sign up for
+   medium. [47]learn more
+   never miss a story from towards data science
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://towardsdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/f209222481f8
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://towardsdatascience.com/learning-note-dropout-in-recurrent-networks-part-2-f209222481f8&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://towardsdatascience.com/learning-note-dropout-in-recurrent-networks-part-2-f209222481f8&source=--------------------------nav_reg&operation=register
+   8. https://towardsdatascience.com/?source=logo-lo_lel6fuiblqcj---7f60cf5620c9
+   9. https://towardsdatascience.com/data-science/home
+  10. https://towardsdatascience.com/machine-learning/home
+  11. https://towardsdatascience.com/programming/home
+  12. https://towardsdatascience.com/data-visualization/home
+  13. https://towardsdatascience.com/artificial-intelligence/home
+  14. https://towardsdatascience.com/data-journalism/home
+  15. https://towardsdatascience.com/contribute/home
+  16. https://towardsdatascience.com/@ceshine?source=post_header_lockup
+  17. https://towardsdatascience.com/@ceshine
+  18. https://keras.io/img/keras-logo-small.jpg
+  19. https://towardsdatascience.com/media/df9ae1fecbf27026a7e919a591c23fb1?postid=f209222481f8
+  20. https://towardsdatascience.com/media/61416439838a42cc6faad3e9362b877c?postid=f209222481f8
+  21. https://towardsdatascience.com/media/b9d4d26ca155e31eae749c67f063a557?postid=f209222481f8
+  22. https://github.com/tensorflow/tensorflow/blob/v1.3.0/tensorflow/contrib/keras/python/keras/layers/recurrent.py#l140
+  23. https://towardsdatascience.com/media/fe97d8dc6c250e3d800dd9990f49b07c?postid=f209222481f8
+  24. https://keras.io/layers/recurrent/#lstm
+  25. https://keras.io/layers/recurrent/#lstm
+  26. https://keras.io/layers/recurrent/#lstm
+  27. https://keras.io/layers/recurrent/#lstm
+  28. https://keras.io/layers/recurrent/#lstm
+  29. http://pytorch.org/tutorials/_images/pytorch-logo-flat.png
+  30. https://github.com/salesforce/awd-lstm-lm/
+  31. https://towardsdatascience.com/media/4bf29050318528d98b8ee149c3604b8a?postid=f209222481f8
+  32. https://towardsdatascience.com/media/da9a8b8b0054893851469ae63cff9329?postid=f209222481f8
+  33. https://towardsdatascience.com/media/2ec180f294836e42e5048ddfb54b07ae?postid=f209222481f8
+  34. https://towardsdatascience.com/media/d9ccfe0b3f3b8d7801023982b82308ea?postid=f209222481f8
+  35. https://becominghuman.ai/learning-note-dropout-in-recurrent-networks-part-1-57a9c19a2307
+  36. https://medium.com/@ceshine/learning-note-dropout-in-recurrent-networks-part-3-1b161d030cd4
+  37. http://arxiv.org/abs/1512.05287
+  38. http://arxiv.org/abs/1708.02182
+  39. https://towardsdatascience.com/tagged/machine-learning?source=post
+  40. https://towardsdatascience.com/tagged/pytorch?source=post
+  41. https://towardsdatascience.com/tagged/keras?source=post
+  42. https://towardsdatascience.com/@ceshine?source=footer_card
+  43. https://towardsdatascience.com/@ceshine
+  44. https://towardsdatascience.com/?source=footer_card
+  45. https://towardsdatascience.com/?source=footer_card
+  46. https://towardsdatascience.com/
+  47. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  49. https://becominghuman.ai/learning-note-dropout-in-recurrent-networks-part-1-57a9c19a2307
+  50. https://medium.com/@ceshine/learning-note-dropout-in-recurrent-networks-part-3-1b161d030cd4
+  51. https://medium.com/p/f209222481f8/share/twitter
+  52. https://medium.com/p/f209222481f8/share/facebook
+  53. https://medium.com/p/f209222481f8/share/twitter
+  54. https://medium.com/p/f209222481f8/share/facebook

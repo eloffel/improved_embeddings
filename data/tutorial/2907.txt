@@ -1,0 +1,1031 @@
+   #[1]rare technologies    feed [2]rare technologies    comments feed
+   [3]rare technologies    id97 in python, part two: optimizing
+   comments feed [4]alternate [5]alternate
+
+   [tr?id=1761346240851963&ev=pageview&noscript=1]
+
+   iframe: [6]https://www.googletagmanager.com/ns.html?id=gtm-t2pcjld
+
+   [7]pragmatic machine learning rare technologies [8]navigation
+
+     * [9]services
+     * [10]products
+          + [11]pii tools
+          + [12]scaletext
+     * [13]corporate training
+          + [14]overview
+          + [15]python best practices
+          + [16]practical machine learning
+          + [17]topic modelling
+          + [18]deep learning in practice
+     * [19]for students
+          + [20]open source
+          + [21]incubator
+          + [22]competitions
+     * [23]company
+          + [24]careers
+          + [25]our team
+     * [26]blog
+     * [27]contact
+     * [28]search
+
+     * [29]services
+     * [30]products
+          + [31]pii tools
+          + [32]scaletext
+     * [33]corporate training
+          + [34]overview
+          + [35]python best practices
+          + [36]practical machine learning
+          + [37]topic modelling
+          + [38]deep learning in practice
+     * [39]for students
+          + [40]open source
+          + [41]incubator
+          + [42]competitions
+     * [43]company
+          + [44]careers
+          + [45]our team
+     * [46]blog
+     * [47]contact
+     * [48]search
+
+id97 in python, part two: optimizing
+
+   [49]radim   eh    ek 2013-09-21[50] gensim, [51]programming[52] 46
+   comments
+
+   [53]last weekend, i ported google   s [54]id97 into python. the
+   result was a clean, concise and readable code that plays well with
+   other python nlp packages. one problem remained: the performance was
+   20x slower than the original c code, even after all the obvious numpy
+   optimizations.
+
+selecting the hotspots
+
+   there are two major optimization directions: re-obfuscate (parts of)
+   the python code by converting it back into c, and parallelizing the
+   computation (the original c tool uses threads).
+
+   selecting which part to optimize was an easy task     even without
+   profiling, it   s clear the bulk of the work is done in the nested loop
+   that goes through each sentence, and for each sentence position (word)
+   tries to predict all the other words within its window. it   s a tiny
+   part of the overall code, but accounts for most of the time spent    
+   mere three lines (namely 480, 487 and 489 in [55]r26) eat up 90% of the
+   entire runtime!
+
+   the rest of the code is mostly there to prepare the input words and
+   sentences. in the original c id97, the words are assumed to reside
+   in a single file on disk, one sentence per line, with words delimited
+   by whitespace. in python, the sentences can come from anywhere, and be
+   pre-processed in any way you like. the methods accept an iterable of
+   sentences, so we can plug in the [56]brown corpus from [57]nltk like
+   this:
+>>> class browncorpus(object):
+...     """iterate over sentences from the brown corpus (part of nltk data)."""
+...     def __init__(self, dirname):
+...         self.dirname = dirname
+...
+...     def __iter__(self):
+...         for fname in os.listdir(self.dirname):
+...             fname = os.path.join(self.dirname, fname)
+...             if not os.path.isfile(fname):
+...                 continue
+...             for line in open(fname):
+...                 # each file line is a single sentence in the brown corpus
+...                 # each token is word/pos_tag
+...                 token_tags = [t.split('/') for t in line.split() if len(t.sp
+lit('/')) == 2]
+...                 # ignore words with non-alphabetic tags like ",", "!" etc (p
+unctuation, weird stuff)
+...                 words = ["%s/%s" % (token.lower(), tag[:2]) for token, tag i
+n token_tags if tag[:2].isalpha()]
+...                 if not words:  # don't bother sending out empty sentences
+...                     continue
+...                 yield words
+
+>>> for sentence in browncorpus('/users/kofola/nltk_data/corpora/brown'):
+...     print sentence
+['the/at', 'fulton/np', 'county/nn', 'grand/jj', 'jury/nn', 'said/vb', 'friday/n
+r', 'an/at', 'investigation/nn', 'of/in', "atlanta's/np", 'recent/jj', 'primary/
+nn', 'election/nn', 'produced/vb', 'no/at', 'evidence/nn', 'that/cs', 'any/dt',
+'irregularities/nn', 'took/vb', 'place/nn']
+['the/at', 'jury/nn', 'further/rb', 'said/vb', 'in/in', 'term-end/nn', 'presentm
+ents/nn', 'that/cs', 'the/at', 'city/nn', 'executive/jj', 'committee/nn', 'which
+/wd', 'had/hv', 'over-all/jj', 'charge/nn', 'of/in', 'the/at', 'election/nn', 'd
+eserves/vb', 'the/at', 'praise/nn', 'and/cc', 'thanks/nn', 'of/in', 'the/at', 'c
+ity/nn', 'of/in', 'atlanta/np', 'for/in', 'the/at', 'manner/nn', 'in/in', 'which
+/wd', 'the/at', 'election/nn', 'was/be', 'conducted/vb']
+['the/at', 'september-october/np', 'term/nn', 'jury/nn', 'had/hv', 'been/be', 'c
+harged/vb', 'by/in', 'fulton/np', 'superior/jj', 'court/nn', 'judge/nn', 'durwoo
+d/np', 'pye/np', 'to/to', 'investigate/vb', 'reports/nn', 'of/in', 'possible/jj'
+, 'irregularities/nn', 'in/in', 'the/at', 'hard-fought/jj', 'primary/nn', 'which
+/wd', 'was/be', 'won/vb', 'by/in', 'mayor-nominate/nn', 'ivan/np', 'allen/np', '
+jr./np']
+...
+
+   the sentences are constructed on the fly, from various files in the
+   brown corpus directory, without any extra preprocessing steps or
+   loading everything into ram. plugging in different training data is
+   pretty straightforward: adjust the iterator to fit the data format.
+   gensim   s [58]id97 module already contains this browncorpus
+   iterator, plus a few others, as blueprint examples.
+
+is it faster?
+
+   for testing the training speed, i   ll be using the brown corpus above.
+   with ~1 million words in 57k sentences, it   s too small for any quality
+   training, but already big enough so we can evaluate
+   improvements/regressions in performance. the speed is tested with a
+   hidden layer size of 200 and with ignoring vocabulary which appears
+   less than 5 times (size=200, min_count=5 constructor parameters). the
+   final vocabulary contains 15,079 words, so the projection weights form
+   a 15,079  200 matrix.
+
+   all results below are a best-of-ten on my macbookpro 2.3ghz laptop,
+   meaning each test was run 10 times and only the best result is
+   reported, to mitigate random noise/os multitasking influences.
+
+cython
+
+   the baseline performance of the numpy code under these conditions is
+   1.4k words per second. rewriting the training loop in cython improves
+   this to 33.3k words/sec, which is a 24x speedup.
+
+   edit: i originally used [59]memoryviews to pass arrays around in
+   cython, and converting to a memoryview is a lot slower than plain
+   casting arrays to pointers. i   ve since [60]updated the code, re-ran all
+   tests and updated the timings in this post.
+
+blas
+
+   while rewriting the loops in cython, i noticed the logic contained
+   therein could be expressed in terms of blas. blas ([61]basic linear
+   algebra subprograms) are routines for stuff like vector_y +=
+   scalar_alpha * vector_x, with funky names like saxpy or dgemm. the
+   reason why people use blas is that these basic operations can be
+   heavily optimized, so that calling saxpy is way faster than what a
+   generic compiler would produce from an equivalent, naive c loop.
+
+   numpy itself links against blas internally, but unfortunately offers no
+   way to plug directly into the c routines (or i couldn   t find a way).
+   calling blas via numpy would be crazy slow, because it would have to go
+   through python calls, acquiring gil and all.
+
+   fortunately, scipy contains a little known gem, hidden inside
+   scipy.linalg.blas, which allows us to call the c blas routines
+   directly. after some poking in scipy   s bowels, scratching my head and
+   googling around, i came up with:
+from cpython cimport pycobject_asvoidptr
+from scipy.linalg.blas import cblas
+
+ctypedef void (*saxpy_ptr) (const int *n, const float *alpha, const float *x, co
+nst int *incx, float *y, const int *incy) nogil
+
+cdef saxpy_ptr saxpy=<saxpy_ptr>pycobject_asvoidptr(cblas.saxpy._cpointer)
+
+   which gives us saxpy, aka vectorized y = alpha*x in single precision.
+   after [62]plugging in saxpy, sdot & co. in place of lines 480, 487 and
+   489, i got a ~3x speedup in the crunch code, which translated into
+   89.8k words/s in the overall training speed. this is a 64x improvement
+   over numpy, and a 2.7x improvement over plain cython.
+
+   important note on blas: this improvement hinges on the quality of the
+   blas library installed. on my macbook pro, scipy automatically links
+   against [63]apple   s veclib, which contains an excellent blas.
+   similarly, intel   s [64]mkl, amd   s [65]amcl, sun   s [66]sunperf or the
+   automatically tuned [67]atlas are all good choices. installing a
+   generic, pre-packaged blas which is not optimized for your machine (no
+   sse, unknown cpu cache sizes   ) is not a good choice.
+
+   note from radim: get my latest machine learning tips & articles
+   delivered straight to your inbox (it's free).
+   ____________________ ____________________
+
+    unsubscribe anytime, no spamming. max 2 posts per month, if lucky.
+   subscribe now
+   ____________________
+
+precomputed sigmoid table
+
+   the original c code contains an extra optimization, where instead of
+   computing y = 1 / (1 + e^-x), it looks up the value of y directly, in a
+   precomputed table in ram. this is a classic optimization from the times
+   when float operations were expensive: a trade-off between using more
+   memory & less precision vs. freeing up cpu. with dedicated fpus and
+   complex cache architectures in modern computers, it   s not such a clear
+   hit anymore.
+
+   i actually expected no performance gain at all, but profiling proved me
+   wrong. using the precomputed exp_table with cython, i got 34.7k
+   words/s, a 4% improvement. using both the blas optimization above and
+   the precomputed sigmoid table, it   s 101.8k words/s. this is the best
+   result so far, almost 73x faster than the numpy code i started with.
+   it   s also 3.5 times faster than the original c code, which runs at 29k
+   words/s on this corpus (with a single thread).
+
+summary
+
+   all the timings above in one table:
+           optimization          words per second speed-up
+   numpy baseline                1.4k             1.0x
+   original c id97           29.0k            20.7x
+   cython                        33.3k            23.8x
+   cython + blas                 89.8k            64.1x
+   cython + sigmoid table        34.7k            24.8x
+   cython + blas + sigmoid table 101.8k           72.7x
+
+where next?
+
+   with the hotspot optimized, gensim   s id97 is now both fast and easy
+   to use. the cost is an extra dependency on cython. i realize this may
+   be an issue for windows users, so i added fallback code where if the
+   fast cython fails to compile (because there   s no compiler or no
+   cython   ), it will use the slower, numpy code. this way, noob users can
+   still use id97 without going into compilation setup and
+   technicalities.
+
+   the next step is making the code run in parallel, to make use of
+   multicore machines. this will require some thought, because very fine
+   parallelization may not work well because of thread collisions (there
+   is [68]no locking in the c id97, so it   s best if the threads work
+   on very different words and sentences and avoid stepping on each
+   other   s toes). on the other hand, having coarse-grained threading
+   blocks like in the original c id97 will not work in python, because
+   gil can only be released in the low-level methods. i   ll have to give
+   this some thought     
+
+   part iii: [69]parallelizing id97 in python
+
+   [70]blas[71]optimization[72]id97
+
+comments 46
+
+    1.
+   michal illich
+       [73]2013-09-27 at 4:32 pm
+       congratulations     seems like a miracle that your python single
+       threaded code is actually faster than paralel c code from google     
+       [74]reply
+         1. radim post
+            author
+        radim
+            [75]2013-09-27 at 4:42 pm
+            hah, only than the single-threaded c code. parallelization is
+            coming next weekend     this weekend i   m going home to b  eclav
+            for hody     
+            [76]reply
+    2.
+   stefan
+       [77]2013-09-28 at 6:21 pm
+       hi radim,
+       thanks for publishing this! interesting read and full of useful
+       information! id like to check your code, did you release it already
+       somewhere?
+       greets
+       stefan
+       [78]reply
+         1. radim post
+            author
+        radim
+            [79]2013-09-28 at 6:28 pm
+            hello stefan, sure     search for    id97 module    on this
+            page.
+            [80]reply
+    3.
+   [81]rami
+       [82]2013-09-29 at 8:09 pm
+       hi,
+       nice work :).
+       i do not think you need to implement any locking mechanism. locking
+       does not buy you anything when it comes to stochastic optimization.
+       also if you use adaptaive learning rates (adagrad), most of your
+       concents will be mitigated.
+       check hogwild for the benfits of lock free implementation.
+       ([83]http://pages.cs.wisc.edu/~brecht/papers/hogwildtr.pdf)
+       [84]reply
+    4.
+   [85]gordon mohr
+       [86]2013-09-30 at 10:42 pm
+       google   s pre-trained vectors (eg
+          freebase-vectors-skipgram1000-en.bin.gz   ) gzip-compress so well
+       (2.4gb vs. 5.4 gb)    i wonder if perhaps a compressed in-memory
+       format might be another opportunity for optimization, lowering ram
+       requirements and maybe even speeding lookups/calculations (via
+       better cache-efficiency and/or core utilization). just a vague idea
+       at this point, though.
+       [87]reply
+    5.
+   [88]jeffery
+       [89]2013-09-30 at 11:22 pm
+       just test your code on my machine.
+       numpy baseline: 1.5k
+       original c code: 159k (1 thread)
+       cython + blas + sigmoid table: 67.8k
+       did i get anything wrong?
+       [90]reply
+         1. radim post
+            author
+        radim
+            [91]2013-10-01 at 8:20 am
+            hard to say. can you describe your setup/data on the gensim
+            mailing list? let   s look into this, i   m curious.
+            [92]reply
+    6.
+   [93]jeffery
+       [94]2013-09-30 at 11:27 pm
+       when you specify -threads 8, the per-thread speed is
+       words/thread/sec: 76.96k. however the total running time becomes
+       real 0m31.470s from real 1m48.107s.
+       [95]reply
+    7.
+   patrick snape
+       [96]2013-10-01 at 5:41 pm
+       hi,
+       when you say that ditching memoryviews ended up with a performance
+       gain     how much are we talking? the pyarray casting is really ugly
+       and makes the code a lot less readable. however, if it results in a
+       massive speed increase then i could learn to live with it.
+       cheers
+       [97]reply
+         1. radim post
+            author
+        radim
+            [98]2013-10-01 at 6:03 pm
+            17k words/sec with memoryviews, where it now says 33.3k.
+            but note that this was in a tight loop (hundreds of thousands
+            of calls per second), where even a little overhead makes a big
+            difference. if you do more work inside the called fnc, i
+            expect the difference will be much less pronounced. i decided
+            uglifying ~10 lines of crunch c code was worth the gain.
+            [99]reply
+              1.
+             patrick snape
+                 [100]2013-10-01 at 6:35 pm
+                 thanks for the quick response. interesting to note. i
+                 don   t usually deal with data quite that massive, but i do
+                 frequently iterate in tight loops. i   ll have to see how
+                 much of a win i get!
+                 thanks again!
+                 [101]reply
+              2.
+             [102]jeffery
+                 [103]2013-10-05 at 6:19 pm
+                 hi. radim
+                 since i have a problem on the speed, i downloaded the dev
+                 version of gensim and did the following to install.
+                 sudo python setup.py install
+                 a problem happened to me is id97_inner.pyx did not go
+                 into the models fold. so i have to copy as follows: sudo
+                 cp gensim/models/id97_inner.pyx
+                 /usr/local/lib/python2.7/dist-packages/gensim-0.8.7-py2.7
+                 .egg/gensim/models/
+                 after that, i can run the program, but i have even
+                 serious speed problem. the single thread speed drops to
+                 21k (previously version 67.8k). when i set 8 workers, it
+                 goes up to 140k. the corpus for all the test are text8.
+                 another trivial thing to speed up i would like to mention
+                 is, comiple id97.py to c-so lib, i got around 50%
+                 speed-up. say 8 workers, from 140k to 210k.
+                 [104]reply
+                   1. radim post
+                      author
+                  radim
+                      [105]2013-10-05 at 6:37 pm
+                      hi jeffery, the easiest way is to just add the
+                      gensim develop dir to your pythonpath, or install it
+                      with pip install -e .. the code will change a lot
+                      until the next release (unit tests, packaging), so
+                      there   s no point doing a    hard    install.
+                      why your speed varies i don   t know. like i said, for
+                      support come to the gensim mailing list.
+                      [106]reply
+                        1.
+                       [107]jeffery
+                           [108]2013-10-05 at 7:13 pm
+                           hi. radim
+                           thanks for your quick response. i filed that on
+                           gensim google group.
+    8. pingback: [109]3 google engineers observe consistant hyperspace
+       between languages when dimensionality is reduced by a deep neural
+       net | jmhz | jason malcolm herzmark
+    9.
+   benjamin
+       [110]2013-10-02 at 12:38 am
+       heads up for anyone trying the code     matutils.zeros_aligned is
+       only on the develop branch, so if you update gensim, it still won   t
+       run. i installed gensim from the zip file of the develop branch,
+       and it ran. 103k words/sec, whohoo!
+       [111]reply
+   10.
+   alex stewart
+       [112]2013-10-02 at 9:09 pm
+       this is really cool. i   m wondering if something like numexpr
+       ([113]http://code.google.com/p/numexpr/) might be useful here as
+       well?
+       [114]reply
+   11.
+   leon
+       [115]2013-11-19 at 10:45 am
+       hi radim, nice works. thanks for all these stuffs.
+       recently, i still have a problem about the speed. i first installed
+       the cython (   easy_install cython   ) to use optimized id97
+       training, but when i run the id97 in gensim, the value of
+          fast_version    is -1, which indicates that the optimized one is not
+       used. and i can   t figure out how to solve this.
+       any suggestions?? thanks..
+       [116]reply
+         1. radim post
+            author
+        radim
+            [117]2013-11-19 at 12:41 pm
+            hi leon, hard to say, not enough info. come on the gensim
+            mailing list or open a github issue. those are better mediums
+            for debugging.
+            [118]reply
+              1.
+             leon
+                 [119]2013-11-21 at 4:49 am
+                 hi, radim, thanks for your response. sorry to disturb you
+                 again, i am a fresher in python and gensim.
+                 i run the program on the win7 (64bit) operating systems
+                 and the cython is installed before the code running. and
+                 the speed is similar with the numpy baseline case
+                 (1.4k/s).
+                 and when i debug the code    from id97_inner import
+                 train_sentence, fast_version   , an exception is throwed:
+                    importerror: no module named id97_inner   . (the
+                 id97_inner.pyx file is also in the models directory).
+                 thanks..
+                 [120]reply
+                   1. radim post
+                      author
+                  radim
+                      [121]2013-11-21 at 8:45 am
+                      hi again leon, for the mailing list, google    gensim
+                      mailing list   .
+                      [122]reply
+                   2.
+                  luopuya
+                      [123]2013-12-10 at 11:08 am
+                      hello leon, i come across the same problem as you,
+                      did you finally solve it?
+                      [124]reply
+   12.
+   [125]florian
+       [126]2013-11-20 at 4:56 pm
+       hi radim, nice work, porting this over to scipy!
+       i can [not     pls read on   ] reproduce your claim of your port being
+       faster on a 4-processor (nehalem xeon x5550; cuad-cores @ 2.67ghz)
+       machine with    unlimited    ram (64 gb).
+       first, whether i run your pyx code (using anaconda with their
+       provided atlas package statically linked) or the original c code,
+       the training time with 16 threads (   workers    in your code) is more
+       or less the same for both id97 and id97.py on text8 with
+       otherwise all (id97) default parameters (~1 min). to be
+       precise, the python version is actually a tiny bit slower (approx.
+       12 sec, for a time of ~1.2 min).
+       next, if i train single-threaded/with one worker only, the outcome
+       is that the c version requires ~5.5 min, but your pyx code only
+       takes 4.2 min to train on text8, so indeed your version it is a bit
+       faster in this scenario.
+       third, i checked training on a single cpu with four
+       threads/workers. in this scenario, both implementations take
+       virtually the same time (~2.25 min).
+       last but not least, i tried to use your blas.patch (on the id97
+       mailing list) with the latest openblas from github, using nehalem
+       as architecture target an compiling with the    -msse4.2    instruction
+       set. i added the openblas_set_num_threads call to the main routine,
+       and ran id97 using 4 threads. still i could not reproduce your
+       speed improvements     as a matter of fact, id97 performance is
+       quite a bit *slower* when using the blas routines on 4 cores (~3
+       vs. 2.25 min).
+       finally, i checked the runtime with a single threaded run using
+       openblas via your patch, and voil  , i finally could reproduce your
+       2x speed improvement: ~2.83 vs 5.5 min!
+       care to elaborate? it seems, with openblas you do get a speed
+       improvement, but it does not improve speed when using multiple
+       threads (actually, it got worse!), and neither does the
+       anaconda/atlas-based version of python    beat    the native version in
+       multi-threaded mode   
+       [127]reply
+         1. radim post
+            author
+        radim
+            [128]2013-11-20 at 5:16 pm
+            hi florian, thanks for the performance report. the port
+            doesn   t really use scipy (except for the blas bindings).
+            the exact performance depends on a million factors: your hw,
+            os, compiler    it   s also quite possible you   re hitting your ram
+            throughput limits. all threads update the same matrix
+            concurrently (both the c and py version), so there   s a lot of
+            cache contention.
+            in any case,   similar performance is what i was going for.
+            actually, even 2x slower than c wouldn   t bother me     check out
+            the motivation section in blog post part 1. if it   s a little
+            bit faster, so much the better     
+            [129]reply
+              1.
+             [130]florian
+                 [131]2013-11-20 at 10:50 pm
+                 true; i secretly was hoping there is something i did
+                 wrong, but probably not    by now i   ve even tried to
+                 recompile numpy/scipy with the latest openblas on because
+                 i did not trust anaconda, but it did not make your code
+                 any faster, either.
+                 however, as you state, the real point is that it is
+                 always impressive when it turns out that python can keep
+                 up with a pure c library. great work!
+                 btw, i   ve    ported    your id97.py and _inner.pyx code
+                 to make it work    standalone    (without all of gensim) in
+                 py3k; i   ll ping you on github once i put it online. maybe
+                 it   s worth it distributing    id97 for py3    via pypi on
+                 its own or are you close to having all of gensim ported
+                 to py3?
+                 [132]reply
+                   1.
+                  [133]florian
+                      [134]2013-11-20 at 10:55 pm
+                      * i should add to my reply above that using openblas
+                      (compiled with sse4.2 and nehalem optimizations) +
+                      numpy with your code in single threaded mode did
+                      finally generate the speedup you report (about twice
+                      as fast as id97), but this advantage is lost as
+                      soon as i use multiple threads.
+                      [135]reply
+                   2. radim post
+                      author
+                  radim
+                      [136]2013-11-21 at 3:15 am
+                      i   m not thrilled about a py3k fork of a (part of)
+                      gensim, because it just means more support and
+                      headaches =) but of course, as long as you respect
+                      the license, it   s your call.
+                      [137]reply
+                        1. radim post
+                           author
+                       [138]radim
+                           [139]2014-05-25 at 12:44 pm
+                           for the record, gensim is now (as of 0.10.0)
+                           fully python 3 compatible. including id97.
+   13.
+   jin
+       [140]2014-03-15 at 8:01 am
+       great work!
+       when i trained the data, i got 101k words/s speed on macbook pro
+       2.4ghz dual core, but when i ran the model.most_similar(), i
+       sometimes got the python crashed with the following report:
+       thread 0 crashed:: dispatch queue: com.apple.root.default-priority
+       0 libblas.dylib
+       do u know why? i didn   t use openblas.
+       [141]reply
+         1. radim post
+            author
+        radim
+            [142]2014-03-15 at 2:29 pm
+            no idea; maybe faulty ram? problems with your scipy
+            installation? post your specs/log at the gensim mailing list.
+            [143]reply
+   14.
+   [144]jie fu
+       [145]2014-05-01 at 10:44 am
+       hi radim, have you tried numbapro (support gpu computing) to
+       parallelize the code?
+       [146]reply
+         1. radim post
+            author
+        [147]radim
+            [148]2014-05-01 at 11:41 am
+            no. but i   d be curious to hear the results     if you try,
+            please let me know.
+            [149]reply
+              1.
+             [150]jie fu
+                 [151]2014-05-01 at 2:05 pm
+                 sure, i   m modifying a sgd algorithm using numbapro (gpu).
+                 after this, i will try to modify id97 and send you
+                 the code.
+                 [152]reply
+                   1.
+                  daniel chalef
+                      [153]2015-05-14 at 4:59 pm
+                      hi jie, did you get gensim working with numbapro?
+                      daniel
+                      [154]reply
+   15.
+   vishal vishal
+       [155]2014-05-24 at 12:56 pm
+       hello ,
+       i am a huge follower of you work.
+       i am trying to develop ui for this work.but i am not an expert in
+       python so i have a littl e issue.
+       i tried saving the model to a file but encountered the following
+       error :
+       traceback (most recent call last):
+       file    id97_impl.py   , line 39, in
+       model.save(fo)
+       file
+          c:python27libsite-packagesgensim-0.9.0-py2.7.egggensimmodelsword2
+       vec.py   , line 667, in save
+       super(id97, self).save(*args, **kwargs)
+       file
+          c:python27libsite-packagesgensim-0.9.0-py2.7.egggensimutils.py   , l
+       ine 269, in save
+       pickle(self, fname)
+       file
+          c:python27libsite-packagesgensim-0.9.0-py2.7.egggensimutils.py   , l
+       ine 608, in pickle
+       with smart_open(fname,    wb   ) as fout: #    b    for binary, needed on
+       windows
+       file
+          c:python27libsite-packagesgensim-0.9.0-py2.7.egggensimutils.py   , l
+       ine 596, in smart_open
+       _, ext = path.splitext(fname)
+       file    c:python27libntpath.py   , line 190, in splitext
+       return genericpath._splitext(p, sep, altsep, extsep)
+       file    c:python27libgenericpath.py   , line 91, in _splitext
+       sepindex = p.rfind(sep)
+       attributeerror:    file    object has no attribute    rfind   
+       any idea what could be the solution?
+       [156]reply
+         1. radim post
+            author
+        [157]radim
+            [158]2014-05-24 at 1:09 pm
+            hi, you need to pass a filename (=string) to `save()`, not a
+            file object.
+            [159]reply
+   16.
+   leonid boytsov
+       [160]2014-05-29 at 3:49 am
+       exponents are still very expensive unless you use gpu or the intel
+       compiler. may take dozens of cpu cycles.
+       [161]reply
+         1.
+        leonid boytsov
+            [162]2014-05-29 at 4:20 am
+            i checked: visual studio with the fast floating point mode is
+            fast as well. but on linux with the gnu math library, this
+            optimization still makes some sense.
+            [163]reply
+              1. radim post
+                 author
+             [164]radim
+                 [165]2014-05-29 at 12:54 pm
+                 leonid, with your optimization expertise, it would be
+                 interesting if you could find more places in id97 to
+                 optimize.
+                 (the core routine is here, in c/cython:
+                 [166]https://github.com/piskvorky/gensim/blob/develop/gen
+                 sim/models/id97_inner.pyx#l580 )
+                 [167]reply
+   17.
+   priya desai
+       [168]2014-09-05 at 9:26 pm
+       hi radim,
+       how would i use id97 to calculating document similarity? i have
+       a corpus of ~300 documents and need to compare them to another set
+       of ~100,000 and pick the most similar ones.
+       thanks!
+       priya
+       [169]reply
+   18.
+   [170]partha pakray
+       [171]2014-11-05 at 3:00 pm
+       hi radim,
+       i have a problem. i have used    gensim._six import iteritems,
+       itervalues    then i got an error    importerror: no module named _six   
+       . but i already have    six    in my machine. how can i resolve that
+       one.
+       best regards,
+       partha
+       [172]reply
+         1. radim post
+            author
+        [173]radim
+            [174]2014-11-05 at 4:10 pm
+            hello partha, it   s more convenient to report problems on the
+            gensim mailing list / github issues:
+            [175]https://groups.google.com/d/forum/gensim
+            in any case,    gensim._six import iteritems, itervalues   
+            doesn   t sound like valid python. where does that line come
+            from?
+            [176]reply
+   19. pingback: [177]               python   mkl       | ijiaer
+   20. pingback: [178]decisionstats interview radim   eh    ek gensim #python
+       | decision stats
+   21. pingback: [179]getting started with id97 | textprocessing | a
+       text processing portal for humans
+
+leave a reply [180]cancel reply
+
+   your email address will not be published. required fields are marked *
+
+   comment
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+   _____________________________________________
+
+   name * ______________________________
+
+   email * ______________________________
+
+   website ______________________________
+
+   submit
+
+   current [181][email protected] * 4.2_________________
+
+   leave this field empty ____________________
+
+author of post
+
+   radim   eh    ek
+
+radim   eh    ek's bio:
+
+   founder at rare technologies, creator of gensim. sw engineer since
+   2004, phd in ai in 2011. lover of geology, history and beginnings in
+   general. occasional travel blogger.
+
+need expert consulting in ml and nlp?
+
+   ________________________________________
+
+   ________________________________________
+
+
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   ________________________________________
+   please leave this field empty. ________________________________________
+
+   send
+
+categories
+
+   categories[select category___________]
+
+archives
+
+   archives [select month__]
+
+recent posts
+
+     * [182]export pii drill-down reports
+     * [183]personal data analytics
+     * [184]scanning office 365 for sensitive pii information
+     * [185]pivoted document length normalisation
+     * [186]sent2vec: an unsupervised approach towards learning sentence
+       embeddings
+
+stay ahead of the curve
+
+get our latest tutorials, updates and insights delivered straight to your
+inbox.
+
+   ____________________
+
+   ____________________
+
+   subscribe
+   ____________________
+   1-2 times a month, if lucky. your information will not be shared.
+
+   [187][footer-logo.png]
+     * [188]services
+     * [189]careers
+     * [190]our team
+     * [191]corporate training
+     * [192]blog
+     * [193]incubator
+     * [194]contact
+     * [195]competitions
+     * [196]site map
+
+   rare technologies [197][email protected] sv  tova 5, prague, czech
+   republic [198](eu) +420 776 288 853
+   type and press    enter    to search ____________________
+
+references
+
+   visible links
+   1. https://rare-technologies.com/feed/
+   2. https://rare-technologies.com/comments/feed/
+   3. https://rare-technologies.com/id97-in-python-part-two-optimizing/feed/
+   4. https://rare-technologies.com/wp-json/oembed/1.0/embed?url=https://rare-technologies.com/id97-in-python-part-two-optimizing/
+   5. https://rare-technologies.com/wp-json/oembed/1.0/embed?url=https://rare-technologies.com/id97-in-python-part-two-optimizing/&format=xml
+   6. https://www.googletagmanager.com/ns.html?id=gtm-t2pcjld
+   7. https://rare-technologies.com/
+   8. https://rare-technologies.com/id97-in-python-part-two-optimizing/
+   9. https://rare-technologies.com/services/
+  10. https://rare-technologies.com/id97-in-python-part-two-optimizing/
+  11. https://pii-tools.com/
+  12. https://scaletext.com/
+  13. https://rare-technologies.com/corporate-training/
+  14. https://rare-technologies.com/corporate-training/
+  15. https://rare-technologies.com/python-best-practices/
+  16. https://rare-technologies.com/practical-machine-learning/
+  17. https://rare-technologies.com/topic-modelling-training/
+  18. https://rare-technologies.com/deep_learning_training/
+  19. https://rare-technologies.com/incubator
+  20. https://github.com/rare-technologies/
+  21. https://rare-technologies.com/incubator/
+  22. https://rare-technologies.com/competitions/
+  23. https://rare-technologies.com/#braintrust
+  24. https://rare-technologies.com/careers/
+  25. https://rare-technologies.com/our-team/
+  26. https://rare-technologies.com/blog/
+  27. https://rare-technologies.com/contact/
+  28. https://rare-technologies.com/id97-in-python-part-two-optimizing/
+  29. https://rare-technologies.com/services/
+  30. https://rare-technologies.com/id97-in-python-part-two-optimizing/
+  31. https://pii-tools.com/
+  32. https://scaletext.com/
+  33. https://rare-technologies.com/corporate-training/
+  34. https://rare-technologies.com/corporate-training/
+  35. https://rare-technologies.com/python-best-practices/
+  36. https://rare-technologies.com/practical-machine-learning/
+  37. https://rare-technologies.com/topic-modelling-training/
+  38. https://rare-technologies.com/deep_learning_training/
+  39. https://rare-technologies.com/incubator
+  40. https://github.com/rare-technologies/
+  41. https://rare-technologies.com/incubator/
+  42. https://rare-technologies.com/competitions/
+  43. https://rare-technologies.com/#braintrust
+  44. https://rare-technologies.com/careers/
+  45. https://rare-technologies.com/our-team/
+  46. https://rare-technologies.com/blog/
+  47. https://rare-technologies.com/contact/
+  48. https://rare-technologies.com/id97-in-python-part-two-optimizing/
+  49. https://rare-technologies.com/author/radim/
+  50. https://rare-technologies.com/category/gensim/
+  51. https://rare-technologies.com/category/programming/
+  52. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comments
+  53. http://radimrehurek.com/deep-learning-with-id97-and-gensim/
+  54. https://code.google.com/p/id97/
+  55. https://code.google.com/p/id97/source/browse/trunk/id97.c#480
+  56. https://en.wikipedia.org/wiki/brown_corpus
+  57. http://nltk.org/
+  58. https://github.com/piskvorky/gensim/blob/develop/gensim/models/id97.py
+  59. http://docs.cython.org/src/userguide/memoryviews.html
+  60. https://github.com/piskvorky/gensim/commit/d8ae9b54bb694874315266efe45590bb9238997d
+  61. https://en.wikipedia.org/wiki/basic_linear_algebra_subprograms
+  62. https://github.com/piskvorky/gensim/blob/develop/gensim/models/id97_inner.pyx
+  63. https://developer.apple.com/library/mac/documentation/performance/conceptual/veclib/reference/reference.html
+  64. https://software.intel.com/en-us/intel-mkl
+  65. http://developer.amd.com/tools-and-sdks/cpu-development/amd-core-math-library-acml/
+  66. https://docs.oracle.com/cd/e18659_01/html/821-2763/gjgis.html
+  67. http://math-atlas.sourceforge.net/
+  68. https://groups.google.com/d/msg/id97-toolkit/nlvyxu99cam/rryqhcaxksqj
+  69. http://radimrehurek.com/2013/10/parallelizing-id97-in-python/
+  70. https://rare-technologies.com/tag/blas/
+  71. https://rare-technologies.com/tag/optimization/
+  72. https://rare-technologies.com/tag/id97/
+  73. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2139
+  74. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2139#respond
+  75. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2140
+  76. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2140#respond
+  77. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2141
+  78. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2141#respond
+  79. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2142
+  80. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2142#respond
+  81. https://bit.ly/embeddings
+  82. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2143
+  83. http://pages.cs.wisc.edu/~brecht/papers/hogwildtr.pdf
+  84. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2143#respond
+  85. http://memesteading.com/
+  86. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2144
+  87. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2144#respond
+  88. http://www.lleess.com/
+  89. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2145
+  90. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2145#respond
+  91. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2147
+  92. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2147#respond
+  93. http://www.lleess.com/
+  94. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2146
+  95. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2146#respond
+  96. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2148
+  97. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2148#respond
+  98. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2149
+  99. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2149#respond
+ 100. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2151
+ 101. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2151#respond
+ 102. http://www.lleess.com/
+ 103. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2154
+ 104. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2154#respond
+ 105. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2155
+ 106. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2155#respond
+ 107. http://www.lleess.com/
+ 108. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2156
+ 109. http://jmhz.net/2013/09/3-google-engineers-observe-consistant-hyperspace-between-languages-when-dimensionality-is-reduced-by-a-deep-neural-net/
+ 110. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2152
+ 111. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2152#respond
+ 112. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2153
+ 113. https://code.google.com/p/numexpr/
+ 114. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2153#respond
+ 115. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2157
+ 116. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2157#respond
+ 117. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2158
+ 118. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2158#respond
+ 119. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2164
+ 120. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2164#respond
+ 121. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2165
+ 122. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2165#respond
+ 123. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2166
+ 124. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2166#respond
+ 125. http://fnl.es/
+ 126. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2159
+ 127. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2159#respond
+ 128. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2160
+ 129. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2160#respond
+ 130. http://fnl.es/
+ 131. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2161
+ 132. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2161#respond
+ 133. http://fnl.es/
+ 134. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2162
+ 135. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2162#respond
+ 136. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2163
+ 137. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2163#respond
+ 138. http://radimrehurek.com/
+ 139. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2174
+ 140. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2167
+ 141. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2167#respond
+ 142. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2168
+ 143. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2168#respond
+ 144. https://sites.google.com/site/bigaidream/
+ 145. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2169
+ 146. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2169#respond
+ 147. http://radimrehurek.com/
+ 148. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2170
+ 149. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2170#respond
+ 150. https://sites.google.com/site/bigaidream/
+ 151. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2171
+ 152. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2171#respond
+ 153. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2182
+ 154. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2182#respond
+ 155. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2172
+ 156. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2172#respond
+ 157. http://radimrehurek.com/
+ 158. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2173
+ 159. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2173#respond
+ 160. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2175
+ 161. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2175#respond
+ 162. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2176
+ 163. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2176#respond
+ 164. http://radimrehurek.com/
+ 165. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2177
+ 166. https://github.com/piskvorky/gensim/blob/develop/gensim/models/id97_inner.pyx#l580
+ 167. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2177#respond
+ 168. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2178
+ 169. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2178#respond
+ 170. http://www.parthapakray.com/
+ 171. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2179
+ 172. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2179#respond
+ 173. http://radimrehurek.com/
+ 174. https://rare-technologies.com/id97-in-python-part-two-optimizing/#comment-2180
+ 175. https://groups.google.com/d/forum/gensim
+ 176. https://rare-technologies.com/id97-in-python-part-two-optimizing/?replytocom=2180#respond
+ 177. http://ijiaer.com/python-with-mkl-hpc/
+ 178. http://decisionstats.com/2015/12/07/decisionstats-interview-radim-rehurek-gensim-python/
+ 179. http://textprocessing.org/getting-started-with-id97
+ 180. https://rare-technologies.com/id97-in-python-part-two-optimizing/#respond
+ 181. https://rare-technologies.com/cdn-cgi/l/email-protection
+ 182. https://rare-technologies.com/personal-data-reports/
+ 183. https://rare-technologies.com/pii_analytics/
+ 184. https://rare-technologies.com/pii-scan-o365-connector/
+ 185. https://rare-technologies.com/pivoted-document-length-normalisation/
+ 186. https://rare-technologies.com/sent2vec-an-unsupervised-approach-towards-learning-sentence-embeddings/
+ 187. https://rare-technologies.com/id97-in-python-part-two-optimizing/
+ 188. https://rare-technologies.com/services/
+ 189. https://rare-technologies.com/careers/
+ 190. https://rare-technologies.com/our-team/
+ 191. https://rare-technologies.com/corporate-training/
+ 192. https://rare-technologies.com/blog/
+ 193. https://rare-technologies.com/incubator/
+ 194. https://rare-technologies.com/contact/
+ 195. https://rare-technologies.com/competitions/
+ 196. https://rare-technologies.com/sitemap
+ 197. https://rare-technologies.com/cdn-cgi/l/email-protection#e78e898188a795869582ca9382848f89888b88808e8294c984888a
+ 198. tel:+420 776 288 853
+
+   hidden links:
+ 200. https://rare-technologies.com/id97-in-python-part-two-optimizing/#top
+ 201. https://www.facebook.com/raretechnologies
+ 202. https://twitter.com/raretechteam
+ 203. https://www.linkedin.com/company/6457766
+ 204. https://github.com/piskvorky/
+ 205. https://rare-technologies.com/feed/

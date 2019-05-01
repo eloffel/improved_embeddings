@@ -1,0 +1,565 @@
+   (button) toggle navigation
+   [1][nav_logo.svg?v=479cefe8d932fb14a67b93911b97d70f]
+     * [2]jupyter
+     * [3]faq
+     * [4]view as code
+     * [5]python 3 kernel
+     * [6]view on github
+     * [7]execute on binder
+     * [8]download notebook
+
+    1. [9]sippycup
+    2. [10]sippycup-unit-0.ipynb
+
+   [sippycup-small.jpg]
+
+sippycup
+unit 0: introduction to id29
+
+   [11]bill maccartney
+   spring 2015
+   this is unit 0 of the [12]sippycup codelab.
+
+   sippycup is a simple semantic parser, written in python, created purely
+   for didactic purposes. the design favors simplicity and readability
+   over efficiency and performance. the goal is to make id29
+   look easy!
+
+   sippycup demonstrates an approach to id29 based around:
+     * a context-free grammar with semantic attachments,
+     * a chart-parsing algorithm,
+     * a linear, feature-based scoring function for ranking candidate
+       parses,
+     * learning of scoring parameters using stochastic id119,
+       and
+     * limited forms of grammar induction.
+
+   we present applications of sippycup to three different domains:
+     * natural language arithmetic: "two times three plus four"
+     * travel queries: "driving directions to williamsburg virginia"
+     * geographical queries: "how many states border the largest state"
+
+   sippycup was inspired by, and partly adapted from, the
+   [13]demonstration code published as a companion to [14]liang & potts
+   2015, "bringing machine learning and id152 together".
+   it was developed primarily for the benefit of students in stanford's
+   [15]cs224u: natural language understanding, and therefore contains
+   exercises (without solutions) for use in the class. however, it should
+   be of use to anyone interested in learning about id29.
+
+   sippycup remains a work in progress, and you will find a number of
+   todos throughout this codelab and the accompanying python codebase. you
+   will likely also find errors! you can help to contribute to sippycup by
+   sending corrections to [16]the author or by sending a pull request to
+   the sippycup [17]github repository.
+
+table of contents[18]  
+
+     * [19]unit 0: introduction to id29
+          + task definition
+          + example applications
+          + why is id29 hard?
+          + designing a semantic representation
+               o ambiguity resolution
+               o canonicalization
+               o one representation to rule them all?
+          + id29 vs. machine translation
+          + the sippycup codebase
+     * [20]unit 1: natural language arithmetic
+          + example inputs
+          + semantic representation
+          + example data
+          + syntactic parsing
+               o grammars and rules
+               o chart parsing
+          + adding semantics
+          + scoring candidate parses
+          + learning the scoring model
+               o learning with stochastic id119 (sgd)
+               o learning from semantics
+               o learning from denotations
+          + inducing the lexicon
+          + exercises
+     * [21]unit 2: travel queries
+          + example inputs
+          + semantic representation
+          + example data
+          + enriching the grammar class
+               o annotators
+               o n-ary lexical rules
+               o unary compositional rules
+               o n-ary compositional rules
+               o optional elements
+               o the start symbol
+          + grammar engineering
+               o phrase-bag grammars
+               o travel locations
+               o the geonamesannotator
+               o travel modes
+               o travel triggers
+               o request types
+               o optionals
+               o negative examples
+          + exercises
+     * [22]unit 3: geography queries
+          + the geo880 dataset
+          + the geobase knowledge base
+          + semantic representation
+               o the graphkb class
+               o the graphkbexecutor class
+               o using graphkbexecutor with geobase
+          + grammar engineering
+               o optionals
+               o entities and collections
+               o types
+               o relations and joins
+               o intersections
+               o superlatives
+               o reverse joins
+          + feature engineering
+          + exercises
+
+task definition[23]  
+
+   id29 is a computation which takes a linguistic input and
+   returns as output a structured, machine-readable representation of its
+   meaning, known as the semantic representation (or, informally, "the
+   semantics"). the semantic representation is a computational object that
+   captures key elements of the meaning of the input and enables the
+   machine to respond appropriately. depending upon the application, it
+   can be a simple string, a tree, a nested map, an xml document, an sql
+   query, or a real-valued vector. in many cases, the semantic
+   representation can be viewed as a little program, or as a parameterized
+   request to a backend service.
+
+   for example, in a question-answering application, we may want to map a
+   linguistic input such as
+"how tall is obama"
+
+
+   into a semantic representation such as
+(/person/height /m/02mjmr)
+
+
+   of course, this is useful only if there exists some other component
+   that can make sense of this semantic representation and take
+   appropriate action     for example, by interpreting it as a query against
+   [24]freebase and retrieving the answer, namely 1.85 meters.
+
+   the downstream component which consumes the output of the semantic
+   parser is known as the executor. it is a function which takes a
+   semantic representation as input and performs some computation
+   specified by the semantics. if it returns an output, the output is
+   known as the denotation.
+
+   [sippycup-figure-1.svg]
+
+   the idea is to achieve a [25]separation of concerns. we wish to endow
+   the overall system with the ability to respond to linguistic inputs.
+   the semantic parser focuses on dealing with the complexities of human
+   language: [26]polysemy, [27]syntactic ambiguity, [28]indexicality and
+   other forms of context-dependence, [29]ellipsis, and so on. it emits an
+   output which captures the key elements of the user's intent in a clear,
+   unambiguous, fully-grounded, machine-readable representation. the
+   executor is thereby freed of the burden of interpreting language, and
+   can focus on its application-specific business.
+
+   of course, semantic representations need not look like the example
+   shown here. as we'll see in a moment, different problem settings may
+   demand quite different semantic representations.
+
+example applications[30]  
+
+   in this codelab, we'll take a close look at three example applications
+   of id29: one rather artificial, the others more realistic.
+
+   our [31]first case study will follow [32]liang & potts 2015 in
+   considering the problem of interpreting natural language arithmetic
+   expressions, such as:
+"one plus one"
+"minus three minus two"
+"three plus three minus two"
+"two times two plus three"
+
+
+   in this problem setting, we may wish to produce semantic
+   representations which are [33]binary expression trees:
+(+ 1 1)
+(- (- 3) 2)
+(- (+ 3 3) 2)
+(+ (* 2 2) 3)
+
+
+   these representations fully resolve the ambiguity present in the
+   linguistic inputs, and can be evaluated by a simple, deterministic
+   executor to produce a numeric answer.
+
+   in our [34]second case study, we'll examine a more realistic
+   application: the domain of queries about travel and transportation,
+   such as:
+"birmingham al distance from indianapolish in"
+"directions from washington to canada"
+"discount travel flights to austin texas"
+
+
+   a possible style of semantic representation (described further in
+   [35]unit 2) for this domain is:
+{domain: travel, type: distance,
+   origin: {id: 4259418, name: "indianapolis, in, us"},
+   destination: {id: 4049979, name: "birmingham, al, us"}}
+{domain: travel, type: directions,
+   origin: {id: 4140963, name: "washington, dc, us"},
+   destination: {id: 6251999, name: "canada"}}
+{domain: travel, mode: air,
+   destination: {id: 4671654, name: "austin, tx, us"}}
+
+
+   here the request types and transportation modes have been resolved to
+   canonical values, and the locations have been resolved to unique
+   identifiers in the [36]geonames geographical database. it's easy to
+   imagine passing representations like these to a backend api, such a
+   route-planning service, for execution.
+
+   our [37]third case study will focus on the [38]geo880 corpus developed
+   in ray mooney's group at ut austin, which has for many years served as
+   a standard evaluation for id29 systems. (see, for example,
+   [39]zelle & mooney 1996, [40]tang & mooney 2001, [41]zettlemoyer &
+   collins 2005, and [42]liang et al. 2011.) the geo880 corpus contains
+   880 questions about u.s. geography, often with complex compositional
+   structure. examples include:
+"which states border texas?"
+"how many states border the largest state?"
+"what is the size of the capital of texas?"
+
+
+   here again, many styles of semantic representation are possible. one
+   possibility (described further in [43]unit 3) is:
+(.and state (borders /state/texas))
+(.count (.and state (borders (.argmax area state))))
+((/state/texas capital) population)
+
+
+   the geo880 corpus is a paired with a simple geographical database known
+   as [44]geobase. a suitable executor can evaluate these semantic
+   representations against geobase to return answers.
+
+   academic researchers have explored many other potential applications
+   for id29, including:
+     * robot control ([45]matuszek et al. 2012)
+          + "go to the third junction and take a right"
+     * id53 against freebase ([46]cai & yates 2013,
+       [47]kwiatkowski et al. 2013, [48]berant et al. 2013)
+          + "how many countries use the euro"
+     * 3d scene generation ([49]chang et al. 2014)
+          + "there is a room with a desk and a red chair"
+     * teaching computers to play games ([50]branavan et al. 2012)
+          + "phalanxes are twice as effective at defending cities as
+            warriors"
+     * solving algebra word problems ([51]kushman et al. 2014)
+          + "an amusement park sells two kinds of tickets ..."
+
+   in each case, the task is to map a linguistic input into a structured,
+   machine-readable representation of meaning, on which some downstream
+   component can take action.
+
+why is id29 hard?[52]  
+
+   (todo: flesh out a section explaining the key challenges of semantic
+   parsing.)
+     * the mind-boggling variability of linguistic expression: many
+       expressions, one meaning
+     * ambiguity: one expression, many meanings
+     * context-dependence
+     * messy inputs: typos, misspellings, loose or mangled syntax
+     * scalability: don't want to have to manually engineer everything    
+       automated learning instead
+     * internationalization
+
+designing a semantic representation[53]  
+
+   when developing a id29 system for a new domain, one of the
+   first tasks must be to choose a good semantic representation. after
+   all, this representation is the target output of the system, so its
+   design will drive many other design decisions. we can't control the
+   form of the linguistic inputs, but we can control the design of the
+   semantic outputs.
+
+   (actually, in some problem settings, we have to work with a downstream
+   executor over whose request language we have no control. for example,
+   the executor may be an api provided by a third party, or it may be a
+   relational database which only responds to sql queries. however, even
+   in such situations, we have the opportunity to control the design of
+   our semantic representation, by inserting into the stack an adapter
+   which performs a deterministic conversion from our semantic
+   representation into the request language of the executor.)
+
+   so what constitutes a good semantic representation? we can't make rigid
+   generalizations, but we can identify some guiding principles. above
+   all, in order to achieve a separation of concerns between the semantic
+   parsing system and the executor, the semantic representation must be
+   straightforwardly machine-readable by the executor. machine-readability
+   means that executor can immediately understand what it needs to do, and
+   get straight to work. (actually, machine-interpretable would be a more
+   accurate term. in some limited sense, any ascii-encoded text is
+   machine-readable, but it is usually not machine-interpretable. but
+   we'll stick with the standard term.) with consideration, two hallmarks
+   of machine-readability emerge: ambiguity resolution and
+   canonicalization.
+
+ambiguity resolution[54]  
+
+   ambiguity resolution means that if an input has two different meanings,
+   it should have two different semantic representations. for example,
+   consider the input "how big is new york". this has at least four
+   different meanings, depending on whether we take "big" to refer to
+   population or area, and on whether we take "new york" to refer to the
+   city or the state. if all four interpretations are valid, then our
+   semantic parser should generate four semantic representations, perhaps
+   along with some kind of scores. but when the executor receives one of
+   these semantic representations as input, it has no decisions to make    
+   it can take action immediately without having to do further
+   interpretation.
+
+   [sippycup-figure-2.svg]
+
+canonicalization[55]  
+
+   canonicalization is the obverse of ambiguity resolution: it means that
+   if two inputs have the same meaning, they should have the same semantic
+   representation. for example, consider the inputs "nyc population" and
+   "how many people live in new york city". these have the same meaning,
+   so they should have the same representation     a canonical
+   representation. or consider the inputs "next thanksgiving" and
+   "november 26". as of this writing (in early 2015), these phrases refer
+   to the same date, so they should have the same representation     perhaps
+   the [56]iso 8601 representation "2015-11-26". canonicalization thus
+   means using unique identifiers for entities, and fully grounding
+   expressions whose meaning depends on context.
+
+   [sippycup-figure-3.svg]
+
+   in some problem settings, canonicalization is less critical than
+   ambiguity resolution, because some downstream executors can tolerate
+   two different ways of saying the same thing. but the great virtue of
+   canonicalization is that it makes checking semantic equivalence as easy
+   as checking equality of the semantic representations. for example, the
+   semantic equivalence of "two forty five pm" and "quarter of three in
+   the afternoon" may not be immediately obvious (to a machine), but
+   becomes trivial if both are represented by 14:45.
+
+one representation to rule them all?[57]  
+
+   in the example applications above, we showed three quite different
+   styles of semantic representation. indeed, most academic research in
+   id29 has used application-specific semantic
+   representations, although many of these share some common elements
+   (such as the use of the [58]simply typed id198).
+
+   but a natural question is: couldn't we design a single, universal
+   semantic representation, capable of representing in machine-readable
+   form all meanings which can be expressed in natural language? such a
+   representation would not only spare us the trouble of inventing a new
+   representation for each application; it would also open the door to
+   effortlessly combining id29 models which had been developed
+   for different domains. for example, we can imagine combining an
+   arithmetic model with a travel model to interpret inputs like "four
+   times the distance from boston to miami".
+
+   it's a tempting idea, and an old one. [59]leibniz, for example, dreamed
+   of creating a [60]characteristica universalis which would serve as a
+   sort of algebra of ideas and thereby endow all thought with the
+   exactitude of arithmetic. since leibniz's time, there have been
+   [61]many attempts to construct universal logical languages for human
+   use, such as [62]lojban. however, such languages fail the test of true
+   machine-readability. the ideal representation should enable a machine
+   to take appropriate action, for example, by testing equivalence or
+   performing simple id136s.
+
+   one recent creation that might seem like a better candidate is the
+   [63]id15 (amr) being developed at [64]isi.
+   as a simple example, all of these inputs:
+the boy wants the girl to believe him
+the boy wants to be believed by the girl
+the boy has a desire to be believed by the girl
+the boy's desire is for the girl to believe him
+the boy is desirous of the girl believing him
+
+
+   are represented by the same amr:
+(w / want-01
+   :arg0 (b / boy)
+   :arg1 (b2 / believe-01
+             :arg0 (g / girl)
+             :arg1 b))
+
+
+   (note that the variable b appears twice, once as the :arg0 of want-01,
+   and once as the :arg1 of believe-01. you can learn more about how amr
+   works by reading the [65]amr specification.)
+
+   these examples might give us hope that amr can satisfy our goals for a
+   semantic representation. by abstracting away from certain lexical
+   choices ("want" vs. "desire") and syntactic choices (active vs.
+   passive), amr canonicalizes these inputs to a common representation,
+   and thus renders obvious their semantic equivalence.
+
+   but as hal daum   iii argues in a persuasive [66]blog post, amr doesn't
+   go nearly far enough in this direction to serve as a representation
+   over which we can reliably perform automated reasoning. it resolves
+   some kinds of ambiguity, but not others. it achieves some
+   canonicalization, but not all. there are many kinds of semantically
+   equivalent transformations     lexical, compositional, logical     whose
+   amr formulations are not obviously equivalent. in fact, amr seems to be
+   a bit of a hodge-podge, reflecting some information about lexical
+   choice, some about syntactic structure, and some about semantic
+   content. in many ways, it looks like a souped-up version of
+   [67]id14. like srl, amr may be useful for some
+   purposes, but it can't reliably be used as a vehicle for id136. (to
+   be fair, the creators of amr never promised this     they have been
+   motivated rather by the goals of machine translation.)
+
+   (note that if amr could be used for automated reasoning, then a good
+   amr parser would provide a simple solution to the problem of
+   [68]recognizing id123 (rte), that is, recognizing whether
+   one natural-language sentence can be inferred from another. one would
+   simply parse both sentences into amr, and then apply an automated
+   reasoner to check entailment. to my knowledge, no one has demonstrated
+   that this is possible.)
+
+   in short, my view is that amr is not a suitable target representation
+   for id29. indeed, after decades (or even centuries!) of
+   failures, i'm skeptical of any attempt to define a universal,
+   machine-readable semantic representation, and prefer instead to develop
+   application-specific representations as needed.
+
+id29 vs. machine translation[69]  
+
+   (todo)
+     * both tasks involve translating from one semantic representation
+       into another.
+     * in both tasks, the semantic representations often have complex
+       structures which are related in complex ways.
+     * but in machine translation, the target semantic representation is
+       not machine-readable! rather, it is human-readable.
+
+the sippycup codebase[70]  
+
+   the codelab you're reading has been published as an [71]ipython
+   notebook, which makes it easy to combine text and interactive python
+   code. if you're new to python, you might find this [72]python tutorial
+   useful.
+
+   however, sippycup is more than this codelab. first and foremost, it is
+   a library of python source files, which should be found in the [73]same
+   directory as the codelab you're reading. if not, you can find the
+   codelab and the source files together in the [74]sippycup github
+   repository. note that this codelab uses import statements to pull in
+   definitions of certain utility classes and functions from the
+   accompanying source files. if the source files are missing, running the
+   codelab code interactively will cause those imports to fail.
+
+   you will observe that the sippycup code architecture does not always
+   adhere to the principles of object-oriented design. functionality which
+   might naturally be captured by instance methods of classes will in some
+   cases appear instead in standalone static functions. this is in order
+   to facilitate an incremental presentation in this codelab format.
+
+   let's get started with [75]unit 1!
+
+   copyright (c) 2015 bill maccartney
+
+   this website does not host notebooks, it only renders notebooks
+   available on other websites.
+
+   delivered by [76]fastly, rendered by [77]rackspace
+
+   nbviewer github [78]repository.
+
+   nbviewer version: [79]33c4683
+
+   nbconvert version: [80]5.4.0
+
+   rendered (fri, 05 apr 2019 18:00:51 utc)
+
+references
+
+   1. https://nbviewer.jupyter.org/
+   2. http://jupyter.org/
+   3. https://nbviewer.jupyter.org/faq
+   4. https://nbviewer.jupyter.org/format/script/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb
+   5. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb
+   6. https://github.com/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb
+   7. https://mybinder.org/v2/gh/wcmac/sippycup/master?filepath=sippycup-unit-0.ipynb
+   8. https://raw.githubusercontent.com/wcmac/sippycup/master/sippycup-unit-0.ipynb
+   9. https://nbviewer.jupyter.org/github/wcmac/sippycup/tree/master
+  10. https://nbviewer.jupyter.org/github/wcmac/sippycup/tree/master/sippycup-unit-0.ipynb
+  11. http://nlp.stanford.edu/~wcmac/
+  12. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb
+  13. https://github.com/cgpotts/annualreview-complearning
+  14. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  15. http://www.stanford.edu/class/cs224u/
+  16. https://nbviewer.jupyter.org/cdn-cgi/l/email-protection#cfb8aca2aeac8facbce1bcbbaea1a9a0bdabe1aaabba
+  17. https://github.com/wcmac/sippycup
+  18. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#table-of-contents
+  19. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb
+  20. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb
+  21. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb
+  22. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-3.ipynb
+  23. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#task-definition
+  24. http://www.freebase.com/m/02mjmr
+  25. http://en.wikipedia.org/wiki/separation_of_concerns
+  26. http://en.wikipedia.org/wiki/polysemy
+  27. http://en.wikipedia.org/wiki/syntactic_ambiguity
+  28. http://en.wikipedia.org/wiki/indexicality
+  29. http://en.wikipedia.org/wiki/ellipsis
+  30. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#example-applications
+  31. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb
+  32. http://www.annualreviews.org/doi/pdf/10.1146/annurev-linguist-030514-125312
+  33. http://en.wikipedia.org/wiki/binary_expression_tree
+  34. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb
+  35. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-2.ipynb#a-semantic-representation-for-travel-queries
+  36. http://www.geonames.org/
+  37. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-3.ipynb
+  38. http://www.cs.utexas.edu/users/ml/geo.html
+  39. http://www.aaai.org/papers/aaai/1996/aaai96-156.pdf
+  40. http://www.cs.utexas.edu/~ai-lab/pubs/cocktail-ecml-01.pdf
+  41. http://people.csail.mit.edu/lsz/papers/zc-uai05.pdf
+  42. http://www.cs.berkeley.edu/~jordan/papers/liang-jordan-klein-acl2011.pdf
+  43. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-3.ipynb#geoquery-semantic-representation
+  44. http://www.cs.utexas.edu/users/ml/nldata/geoquery.html
+  45. http://www.csee.umbc.edu/~cmat/pubs/matuszekiser2012.pdf
+  46. http://www.cis.temple.edu/~yates/papers/textual-schema-matching.pdf
+  47. http://yoavartzi.com/pub/kcaz-emnlp.2013.pdf
+  48. http://cs.stanford.edu/~pliang/papers/freebase-emnlp2013.pdf
+  49. http://nlp.stanford.edu/pubs/scenegen-sp2014.pdf
+  50. https://jair.org/media/3484/live-3484-6254-jair.pdf
+  51. http://homes.cs.washington.edu/~lsz/papers/kazb-acl14.pdf
+  52. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#why-is-semantic-parsing-hard?
+  53. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#designing-a-semantic-representation
+  54. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#ambiguity-resolution
+  55. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#canonicalization
+  56. http://xkcd.com/1179/
+  57. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#one-representation-to-rule-them-all?
+  58. http://en.wikipedia.org/wiki/simply_typed_lambda_calculus
+  59. http://en.wikipedia.org/wiki/gottfried_wilhelm_leibniz
+  60. http://en.wikipedia.org/wiki/characteristica_universalis
+  61. http://en.wikipedia.org/wiki/characteristica_universalis#more_recent_projects
+  62. http://en.wikipedia.org/wiki/lojban
+  63. http://amr.isi.edu/
+  64. http://www.isi.edu/home
+  65. https://github.com/amrisi/amr-guidelines/blob/master/amr.md
+  66. http://nlpers.blogspot.com/2014/09/amr-not-semantics-but-close-maybe.html
+  67. http://en.wikipedia.org/wiki/semantic_role_labeling
+  68. http://en.wikipedia.org/wiki/textual_entailment
+  69. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#semantic-parsing-vs.-machine-translation
+  70. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-0.ipynb#the-sippycup-codebase
+  71. http://ipython.org/notebook.html
+  72. http://cs231n.github.io/python-numpy-tutorial/
+  73. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/
+  74. https://github.com/wcmac/sippycup
+  75. https://nbviewer.jupyter.org/github/wcmac/sippycup/blob/master/sippycup-unit-1.ipynb
+  76. http://www.fastly.com/
+  77. https://developer.rackspace.com/?nbviewer=awesome
+  78. https://github.com/jupyter/nbviewer
+  79. https://github.com/jupyter/nbviewer/commit/33c4683164d5ee4c92dbcd53afac7f13ef033c54
+  80. https://github.com/jupyter/nbconvert/releases/tag/5.4.0

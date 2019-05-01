@@ -1,0 +1,277 @@
+natural language analytics made simple and visual with neo4j
+
+   i was really impressed by this blog post on [1]summarizing opinions
+   with a graph from [2]max and always waited for part 2 to show up :)
+
+   the blog post explains an really interesting approach by [3]kavita
+   ganesan which uses a graph representation of sentences of review
+   content to extract the most significant statements about a product.
+   opiniosis overview
+
+   each word of the sentence is represented by a shared node in the graph
+   with order of words being reflected by relationships pointing to the
+   next word, which carries the sentence-id and a positional information
+   of the leading word.
+
+   by just looking at the graph structure, it turns out that the most
+   significant statements (positive or negative) are repeated across many
+   reviews. differences in formulation or inserted fill words only affect
+   the graph structure minimally but reinforce it for the parts where they
+   overlap.
+
+   you can find all the details of the approach in this [4]presentation or
+   the [5]accompanying research.
+
+   i always joked that you could create this graph in [6]neo4j
+   representation without programming just by writing a simple [7]cypher
+   statement, but i actually never tried.
+
+   until now, and to be honest i   m impressed how easy it was to write down
+   the essence and then extend and expand the statement until it covered a
+   large number of inputs.
+
+   the essence of creating the graph can be formulated as: "each word of
+   the sentence is represented by a shared node in the graph with order of
+   words being reflected by relationships pointing to the next word".
+
+   in cypher:
+// "great device but the calls drop too frequently"
+with split("my phone calls drop frequently with the iphone"," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+create (w1)-[:next]->(w2);
+
+with split("great device but the calls drop too frequently"," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[:next]->(w2);
+
+   running this statement with the two example reviews from the
+   aforementioned blog post generates this graph representation:
+
+   pretty cool, i can also run queries for instance to find common phrases
+   (for phones):
+match path = (w:word {name:"calls"})-[:next*..3]->()
+return [n in nodes(path) | n.name] as phrase
+limit 5;
+
+   the cypher features used so far:
+     * with to provide data to the next query statement
+     * split() to split text along delimiters
+     * size() for the size of collections and strings
+     * range() to create a range of numbers
+     * unwind to turn a collection into result rows
+     * collection index access to get the individual words
+     * merge to "find-or-create" data in the graph, with a label :word for
+       each of the nodes and a property name
+     * create to create the relationship between two nodes (you would want
+       to use merge on the relationship in this concrete case)
+
+   for merge to work efficiently you would want to create an constraint in
+   your graph, like this:
+
+   create constraint on (w:word) assert w.name is unique;
+
+but i wanted moar features!
+
+   so i added one after the other in quick succession, becoming happier as
+   i went along as i didn   t hit any real stumbling blocks.
+
+i want to record followship frequency
+
+   easy, use on create and on match with merge
+with split("my phone calls drop frequently with the iphone"," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[r:next]->(w2)
+  on create set r.count = 1 on match set r.count = r.count +1;
+
+i want to record the word frequencies too
+
+   same approach, only note that the last word is only merged by the
+   second statement
+with split("my phone calls drop frequently with the iphone"," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+  on create set w1.count = 1 on match set w1.count = w1.count + 1
+merge (w2:word {name:words[idx+1]})
+  on create set w2.count = 1
+  on match set w2.count = w2.count + (case when idx = size(words)-2 then 1 else
+0 end)
+merge (w1)-[r:next]->(w2)
+  on create set r.count = 1
+  on match set r.count = r.count +1;
+
+i also want to sentence number and word position
+
+   i pass the sentence number from the the outside as sid, the position is
+   `idx`
+with 1 as sid, split("my phone calls drop frequently with the iphone"," ") as wo
+rds
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+  on create set w1.count = 1 on match set w1.count = w1.count + 1
+merge (w2:word {name:words[idx+1]})
+  on create set w2.count = 1
+  on match set w2.count = w2.count + (case when idx = size(words)-2 then 1 else
+0 end)
+merge (w1)-[r:next]->(w2)
+  on create set r.count = 1, r.pos = [sid,idx]
+  on match set r.count = r.count +1, r.pos = r.pos = [sid,idx];
+
+i want all words to be lower-case
+
+   apply tolower() to the text
+with "my phone calls drop frequently with the iphone" as text
+with split(tolower(text)," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[:next]->(w2)
+
+i want to clean up punctuation
+
+   just use replace() repeatedly with the text
+with "great device, but the calls drop too frequently." as text
+with replace(replace(tolower(text),".",""),",","") as normalized
+with split(normalized," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[:next]->(w2)
+
+i want to remove many punctuation symbols
+
+   work over a collection of punctuations symbols with `reduce`
+with "great device, but the calls drop too frequently." as text
+with reduce(t=tolower(text), delim in [",",".","!","?",'"',":",";","'","-"] | re
+place(t,delim,"")) as normalized
+with split(normalized," ") as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[:next]->(w2)
+
+i want to trim whitespace
+
+   use trim() with each word of the collection
+with "great device, but the calls drop too frequently." as text
+with replace(replace(tolower(text),".",""),",","") as normalized
+with [w in split(normalized," ") | trim(w)] as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[:next]->(w2)
+
+i want to filter out stop words
+
+   filter the words after splitting and trimming by checking against a
+   collection with `in`
+with "great device, but the calls drop too frequently." as text
+with replace(replace(tolower(text),".",""),",","") as normalized
+with [w in split(normalized," ") | trim(w)] as words
+with [w in words where not w in ["the","an","on"]] as words
+unwind range(0,size(words)-2) as idx
+
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[:next]->(w2)
+
+   cleanup
+match (n) optional match (n)-[r]-() delete n,r
+
+i want to load the text from a file
+
+   load csv actually doesn   t care if the file is a csv or not
+
+   we use the lord of the rings poem of the [8]one ring as input, locatd
+   in a [9]dropbox text file.
+
+   load csv loads each row as array of strings (when not used with a
+   header row), using the provided field terminator (comma by default). if
+   we choose a full stop as a field terminator, it actually splits on
+   sentence ends (mostly). so we can just unwind each row into it   s cells
+   (text fragments) and then treat each of those as we did a piece of text
+   before.
+three rings for the elven-kings under the sky,
+seven for the dwarf-lords in their halls of stone,
+nine for mortal men doomed to die,
+one for the dark lord on his dark throne
+in the land of mordor where the shadows lie.
+one ring to rule them all, one ring to find them,
+one ring to bring them all and in the darkness bind them
+in the land of mordor where the shadows lie.
+
+load csv from "https://dl.dropboxusercontent.com/u/14493611/one-ring.txt" as row
+ fieldterminator "."
+with row
+unwind row as text
+with reduce(t=tolower(text), delim in [",",".","!","?",'"',":",";","'","-"] | re
+place(t,delim,"")) as normalized
+with [w in split(normalized," ") | trim(w)] as words
+unwind range(0,size(words)-2) as idx
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[r:next]->(w2)
+  on create set r.count = 1 on match set r.count = r.count +1
+
+i want to ingest really large files
+
+   prefix your load csv with using periodic commit x for committing after
+   x rows
+using periodic commit 1000
+load csv from "https://dl.dropboxusercontent.com/u/14493611/one-ring.txt" as row
+ fieldterminator "."
+with row
+unwind row as text
+with reduce(t=tolower(text), delim in [",",".","!","?",'"',":",";","'","-"] | re
+place(t,delim,"")) as normalized
+with [w in split(normalized," ") | trim(w)] as words
+unwind range(0,size(words)-2) as idx
+merge (w1:word {name:words[idx]})
+merge (w2:word {name:words[idx+1]})
+merge (w1)-[r:next]->(w2)
+
+   there are many ways how you can use the data, either follow what kavita
+   suggests in her paper or just play around freely with the graph, like i
+   did below.
+
+   finding the most important phrase of the text is easy. look for paths
+   with high reference counts and compute a score of total reference
+   counts of the paths and order by it.
+match path = (w:word)-[:next*..5]->()
+where all (r in rels(path) where r.count > 1)
+return [w in nodes(path)| w.name] as phrase, reduce(sum=0,r in rels(path)| sum +
+ r.count) as score
+order by score desc
+limit 1
+
+   you can also see this post in the full beauty of a [10]neo4j
+   graph-gist.
+
+   last updated 2015-01-08 15:58:16 cet
+
+references
+
+   1. http://maxdemarzi.com/2012/08/10/summarize-opinions-with-a-graph-part-1/
+   2. http://twitter.com/
+   3. http://twitter.com/kav_gan
+   4. http://kavita-ganesan.com/system/files/private/opinosis-presentation.ppt.pdf
+   5. http://www.kavita-ganesan.com/opinosis
+   6. http://neo4j.com/
+   7. http://neo4j.com/developer/cypher
+   8. http://en.wikipedia.org/wiki/one_ring
+   9. https://dl.dropboxusercontent.com/u/14493611/one-ring.txt
+  10. http://gist.neo4j.org/?dropbox-14493611/blog/adoc/simple_nlp_with_graphs.adoc

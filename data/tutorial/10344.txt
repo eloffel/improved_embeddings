@@ -1,0 +1,749 @@
+6
+1
+0
+2
+
+ 
+
+y
+a
+m
+6
+1
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+7
+9
+3
+6
+0
+
+.
+
+1
+1
+5
+1
+:
+v
+i
+x
+r
+a
+
+compressing id27s
+
+martin andrews
+
+red cat labs, singapore
+
+martin.andrews@redcatlabs.com
+
+http://www.redcatlabs.com
+
+abstract. recent methods for learning vector space representations of
+words have succeeded in capturing    ne-grained semantic and syntactic
+regularities using large-scale unlabled text analysis. however, these rep-
+resentations typically consist of dense vectors that require a great deal
+of storage and cause the internal structure of the vector space to be
+opaque. a more    idealized    representation of a vocabulary would be both
+compact and readily interpretable. with this goal, this paper    rst shows
+that lloyd   s algorithm can compress the standard dense vector repre-
+sentation by a factor of 10 without much loss in performance. then,
+using that compressed size as a    storage budget   , we describe a new
+gpu-friendly factorization procedure to obtain a representation which
+gains interpretability as a side-e   ect of being sparse and non-negative
+in each encoding dimension. word similarity and word-analogy tests are
+used to demonstrate the e   ectiveness of the compressed representations
+obtained.
+
+1
+
+introduction
+
+distributed representations of words have been shown to bene   t nlp tasks like
+parsing, id39, and id31, as well as being used
+as the raw material for other deep learning tasks.
+
+surprisingly, these word vector embeddings can be derived directly from raw,
+unannotated corpora. once created, the vector embedding e can be expressed
+simply as a list of vocabulary words (of size v ), and a matrix of size v    d,
+where d is the dimensionality of the embedding space.
+
+as argued in murphy et al. (2012)[1], while this dense matrix representation
+may be handled with ease by computers, there are cognitive arguments against
+such a representation being the basis of language (see gri   ths et al. (2007)[2] for
+broader discussion on this point). for instance, it seems unlikely that the same
+small set of features are su   cient and necessary to describe all semantic domains
+of a full adult vocabulary. it would also be uneconomical for people to store all
+negative properties of a concept, such as the fact that dogs do not have wheels,
+or that airplanes are not used for communication. indeed, in feature norming
+exercises (for example vinson and vigliocco, 2008 [3]) where participants are
+asked to list the properties of a word, the aggregate descriptions are typically
+limited to approximately 10-20 characteristics for a given concrete concept.
+
+so, for cognitive plausibility, we claim that a feature set should have three
+characteristics: it should only store positive facts; it should have a wide range of
+feature types, to cover all semantic domains in the typical mental lexicon; and
+only a small number of these should be active to describe each word/concept.
+
+2 models
+
+in this work, a 300-dimensional glove embedding [4] was used as a concrete
+baseline for a number of di   erent lossy compression methods 1.
+
+2.1 simple compression
+
+a number of di   erent compression methods were explored to establish a    storage
+budget    for the subsequent experiments in sparse encodings. these intial methods
+focussed on discarding data, while resulting in an approximately equivalent level
+of performance in the    google    word analogy task (described later).
+
+the methods that were explored included (i) directly discarding a    xed pro-
+portion of the vector dimensions; (ii) thresholding the data; (iii) quantising the
+data based on curves of the form   |vi|   for each dimension i of a given vector v;
+and (iv) adaptive level encoding. this last approach, e   ciently implemented via
+lloyd   s algorithm [5], was shown to be capable of approximating each element
+vi of the entire vocabulary with only 8 discrete levels (each dimension i being
+independently calibrated) while still performing acceptably on the analogy task.
+thus, for the 300-dimensional embedding, a 900-bit    storage budget    was
+
+established, and used as the storage bound for the sparsi   cation experiments.
+
+2.2 lloyd   s algorithm
+
+for a given number of quantisation levels n and an element e     e, we want to
+create a set of quantisation levels eq that minimises:
+
+x
+
+e   e
+
+min
+
+q
+
+(e     eq)2
+
+this process can be performed iteratively, starting with the eq placed uni-
+
+formly within the values of e sorted numerically.
+
+the algorithm then iteratively updates the eq such that the centroid of each
+neighbouring cluster is found, and the eq are then updated to these positions.
+the algorithm stops when no more changes are required.
+
+this optimisation is done for each element/column of the embedding inde-
+pendently, and a list of the respective levels of eq is stored, in addition to the
+index within each list for each element of the representation.
+
+1 the techniques described in this paper can be applied to any embedding, since
+
+nothing speci   c to glove has been used.
+
+2.3 sparse compression
+
+non-negative sparse embedding (   nnse   ) a very promising approach
+to sparse embedding was taken in murphy et al. (2012)[1], where the following
+optimisation was solved iteratively to generate a sparse embedding a (which is
+v vectors each with dimensionality k), and also creates a    dictionary    d (which
+maps the sparse elements of a onto the real-valued embedding e) :
+
+argmina   rm  k,d   rk  n
+
+v
+
+x
+
+i=1
+
+||ei,:     ai,:    d||2 +   ||ai,:||1
+
+where : di,:, dt
+
+i,:     1, 1        i     k
+
+and ai,j     0, 1        i     v, 1        j     k
+
+although this produced excellent embedding results, one requirement is to
+vary the parameters k and    such that the sparse embedding a had a    reasonable   
+number of positive entries. since one of the targets of this paper is compression,
+targetting a concrete compression level, this hyperparameter search is not ac-
+ceptable.
+
+winner-take-all autoencoders another approach to sparse encoding, ap-
+plied chie   y to visual tasks, was described in makhzani and frey (2014[6]). their
+   winner-take-all autoencoders    obtained strict sparsity targets by interposing
+a drop-out layer that only allows the top-   fraction of the layer   s inputs to be
+passed through, while the rest are set to zero. an important implementation de-
+tail is that this drop-out is done on a per dimension basis over each minibatch of
+training examples. this implicitly causes the training to balance the occurrences
+of non-zero entries across the di   erent dimensions of the embedding space, while
+allowing the ai,: vectors to have varying numbers of non-zero entries.
+
+unfortunately, obtaining the top-   fraction of a set of numbers requires sort-
+ing the list, which means that including this layer in an neural network will
+move data-intensive computations o    the gpu. in order to produce a sparse
+embedding in reasonable time, however, the gpu is required, so an algorithmic
+short-cut was implemented that can be e   ciently executed inside the gpu.
+
+gpu-friendly top-   clearly, determining the top-   percentile of a distribu-
+tion is equivalent to determining the hurdle value h    above which the fraction   
+of the realised values in the minibatch lie 2.
+
+for a given embedding dimension j, and assuming that        50% and that
+the distribution is not pathelogical, this hurdle can be bounded above by h+
+j =
+max(a:,j) and below by h   
+j = mean(a:,j). a binary section search can then
+be made for h   , since the fractional percentile that any given h corresponds to
+
+2 a minibatch has 16,384 examples     large enough for distribution approximations.
+
+can be determined by taking the mean of a simple matrix a:,j > h indicator
+function. 3.
+
+although a thorough implementation could include stopping criteria, that
+would not make sense within the gpu   s cores    execution    ow. so a    xed number
+of bisection iterations was used (speci   cally 5 for our 16,384 minibatch size). this
+was found to give robust results, with a value of h being found that identi   ed
+(approximately) the top-   percentile consistently. the net result of avoiding
+cpu operations was a 39   speed-up.
+
+experiments were also conducted to try and optimise the placement of each
+h estimate, using distributional properties of n (), or linear interpolation. these
+were not successful, however, since it appears that the neural network learns to
+exploit the distribution assumptions being made, so as to win arti   cially low h
+(and thus a higher accepted    than required).
+
+sparse autoencoding for id27s to avoid learning from scratch
+the entire sparse matrix a, an autoencoding scheme was set up, so that the tar-
+get embedding e was mapped onto intermediate layers, then quantised, then
+mapped back to itself (via a trainable dictionary d).
+
+the layers of the implemented autoencoder are described in table 1, where
+concrete sizes are given, assuming a vocabulary size of 217 = 131, 072 words, 300-
+dimensional underlying embedding, and a sparse embedding of size k = 1024.
+
+the quantity being optimised via id119 was the l2 error between
+the output embedding e    , and the input e, and this scheme was accelerated
+using adam (kingma et al., 2014[7]).
+
+note that no regularisation terms were used. there is regularisation being
+implicitly applied due to the top-   sparsity constraint, coupled with the batch
+id172 that occurs in the layer before the sparse encoding. these combine
+to constrain the sparse encoding a within reasonable bounds.
+
+in order to improve convergence, a scheme was used whereby a variable   
+(initially zero) was incremented (by 0.01) after each epoch only if the l2 er-
+ror over the epoch averaged less than 0.01. the variables   t and   t were then
+dynamically adjusted as follows:
+
+  t = 50%    (e10  ) +       (1     e10  )
+  t = 0.2    e0.01  
+
+having this path-dependent speed regulator enabled learning pressure to be
+applied incrementally through training in a way that was sensitive to current
+training progress. in particular, the sparsity factor   0 was started out at    easy   
+values, so that the initial weights could migrate to areas where they were at least
+tackling the underlying problem - and   t then moved asymptotically closer to   
+over the course of a thousand epochs. similarly, the guassian noise layer seemed
+to improve search in later periods, and this was decayed more slowly.
+
+3 also,   +
+
+0 = (1/batchsize) initially, since it is the maximum value in a:,j
+
+after training, the noise-layer was switched o   , and the network-learned a
+
+and e     were used for the performance analyses below.
+
+table 1. sparse auto-encoding model structure
+
+parameter set
+
+intra-layer operations output shape
+
+id27 (all tokens) e
+
+(217, 300)     r
+
+hidden layer
+
+max(wh x + bh , 0)
+
+(217, 300    8)     r+
+
+pre-binary linear layer
+
+wlx + bl
+
+(217, 1024)     r
+
+batch id172 layer
+
+batchnormalize(x)
+
+(217, 1024)     r
+
+recti   cation
+
+gaussian noise
+
+max(x, 0)
+
+x + n (0,   t)
+
+(217, 1024)     r+
+
+(217, 1024)     r
+
+top-   sparsi   cation
+
+drop-all-but-  (x,   t)
+
+(217, 1024)     r+
+
+sparse encoded version
+
+a = x
+
+output (= e   )
+
+wf x + bf
+
+(217, 1024)     r
+
+(217, 300)     r
+
+representation of sparse encodings suppose a non-negative sparse encod-
+ing over a k-dimensional space is required, and a speci   c    bit budget    of n bits
+is given. since the majority of encoding values will be zero, the representation
+need only store the addresses of the non-zero elements, and their values. and
+since the ordering of the list of values is an additional degree of freedom, one
+can increase the information content by storing (a) the length of the list, (b) the
+locations of each of the values in declining numerical order, (c) the highest value,
+and (d) the percentage ratio between each sucessive pair (typically in the range
+[70%...100%]). while (c) might be stored with some    delity, the remaining ratios
+are less exacting. supposing that 3-bits is su   cient for each ratio (d), then the
+required sparsity ratio    can be determined 4 :
+
+   =
+
+n
+
+k(log2(k) + 3)
+
+in addition to the n    v bits of storage required, there is the additional
+overhead of storing the dictionary d - which consists of k    d elements, which
+can be a signi   cant factor if k is large.
+
+4 this is how the    values are chosen for the the experiments
+
+3 experiments
+
+3.1 corpus
+
+the text corpus used here was the concatenation of (a) the    one billion word
+benchmark    (chelba et al. (2013)[8]), and (b) a cleaned version of english
+wikipedia (august 2013 dump, using only pages with greater than 20 pageviews),
+which was pre-processed by removing non-textual elements, sentence splitting,
+and id121. after preprocessing the corpus contained 1.2 billion tokens
+(680 million and 524 million from each respective source) 5.
+
+models were derived using windows of 5 tokens to each side of the focus word.
+rather than focus on a word occurrence limit (as is common), a vocabulary-size
+of 217 = 131, 072 words was chosen, since (a) it made batching more convenient,
+and (b) the limit is arbitrary either way.
+
+3.2 test datasets
+
+we evaluated each word representation on seven datasets covering similarity and
+analogy tasks, using the test framework of levy et al. (2015)[9], which has code
+and data available at : https://bitbucket.org/omerlevy/hyperwords.
+
+word similarity five datasets were used to evaluate word similarity: the pop-
+ular wordsim353 (finkelstein et al., (2002)[10]) partitioned into two datasets,
+wordsim similarity and wordsim relatedness (zesch et al., (2008)[11]; agirre et
+al. (2009)[12]); bruni et al.   s (2012)[13] men dataset; radinsky et al.   s (2011)[14]
+mechanical turk dataset; and luong et al.   s (2013)[15] rare words dataset. all
+these datasets contain word pairs together with human-assigned similarity scores.
+the word vectors are evaluated by ranking the pairs according to their cosine
+similarities, and measuring the correlation (spearman   s   ) with the human rat-
+ings.
+
+word analogy the two analogy datasets present questions of the form    a is
+to a    as b is to b      , where b    is hidden, and must be guessed from the entire
+vocabulary. msr   s analogy dataset (mikolov et al. (2013a)[16]) contains 8000
+morpho-syntactic analogy questions, such as    good is to best as smart is to
+smartest   . google   s analogy dataset (mikolov et al. (2013b)[17]) contains 19544
+questions, about half of the same kind as in msr (syntactic analogies), and
+another half of a more semantic nature, such as capital cities (   paris is to france
+as tokyo is to japan   ). after    ltering questions involving out-of-vocabulary
+words, i.e. words that did not appear in the pruned corpus, we remain with
+7118 instances in msr and 19296 instances in google.
+
+as in levy and goldberg (2014)[18], the analogy questions are answered
+
+using both 3cosadd as well as 3cosmul.
+
+5 importantly, these resources have been made freely available without restrictive li-
+censes, and in the same spirit, the code for this paper is being released under a
+permissive license.
+
+3.3 results
+
+embeddings with representations compressed by the lloyd algorithm and the
+non-negative sparse encoding methods outlined above were run, with results
+shown in tables 2 and 3.
+
+in addition to the reconstructed embeddings e     for each method, the raw
+results of the similarity and analogy tests were run on the intermediate sparse
+embeddings a themselves.
+
+table 2. similarity results
+
+method
+
+wordsim wordsim bruni et al. radinsky et al. luong et al.
+
+similarity relatedness men
+
+m. turk
+
+rare words
+
+glove baseline
+
+lloyd-8
+
+66.2%
+
+65.9%
+
+e    (k = 4096,    = 1.50%)
+
+65.0%
+
+e    (k = 1024,    = 6.75%)
+
+64.7%
+
+a(k = 4096,    = 1.50%)
+
+63.7%
+
+a(k = 1024,    = 6.75%)
+
+69.2%
+
+lsh-900
+
+62.0%
+
+52.1%
+
+51.5%
+
+50.2%
+
+51.0%
+
+45.2%
+
+51.3%
+
+45.8%
+
+69.1%
+
+68.6%
+
+68.5%
+
+67.7%
+
+62.4%
+
+69.5%
+
+65.9%
+
+63.2%
+
+62.3%
+
+62.7%
+
+62.7%
+
+49.5%
+
+62.1%
+
+59.2%
+
+22.8%
+
+22.7%
+
+22.2%
+
+21.9%
+
+18.0%
+
+17.4%
+
+22.0%
+
+table 3. analogy results
+
+method
+
+google
+
+msr
+
+add/mul
+
+add/mul
+
+glove baseline
+
+67.1% / 68.5%
+
+53.4% / 56.6%
+
+lloyd-8
+
+65.9% / 67.4%
+
+51.9% / 54.5%
+
+e    (k = 4096,    = 1.50%)
+
+62.5% / 66.4%
+
+51.8% / 54.1%
+
+e    (k = 1024,    = 6.75%)
+
+62.4% / 62.9%
+
+49.0% / 50.1%
+
+a(k = 4096,    = 1.50%)
+
+37.6% / 40.8%
+
+27.3% / 29.9%
+
+a(k = 1024,    = 6.75%)
+
+52.5% / 55.1%
+
+40.5% / 43.8%
+
+lsh-900
+
+53.0% / 53.1%
+
+41.2% / 42.2%
+
+as a point of comparison, a random vector approach (binarised locality sensi-
+tive hashing :    lsh   , charikar (2002)[19]) was also tested, with the same 900-bit
+constraint.
+
+4 discussion
+
+4.1 level quantisation vs. more sophisticated methods
+
+the level-quantisation approaches to compression work extremely well, and are
+relatively simple to implement. assuming values would otherwise be stored as
+32-bit    oats, the lloyd method acheives very similar scores, with only 3-bits per
+value (the overhead of storing the quantisation levels is only the equivalent of
+storing 8 of the original word-vectors). however, they do not accomplish the goal
+of learning about the underlying embedding through an e   cient compression
+algorithm.
+
+4.2 performance of sparse embeddings
+
+as can be seen from table 2, the reconstruction (e    ) results for both sparse
+embedding methods are only marginally below those of the original embeddings,
+and generally better than the lsh re-representation. this is satisfying, because
+it shows that the gpu-friendly method outlined here actually reconstructs the
+embedding without a signi   cant loss in performance, within the same    bit budget   
+as the quantisation methods.
+
+the fact that the sparse encodings a can also perform as embeddings on
+their own (without involving the learned dictionary d) is encouraging, since it
+implies that there is more information about the underlying language that can
+be obtained from existing id27s    for free   .
+
+interestingly, their performance on similarity tasks is far higher than on the
+analogy ones (particularly in the case of k = 4096 which has an    of only 1.50%).
+this can be understood by considering the algebra of the sparse non-negative
+vectors being used. for similarity purposes, non-negative vectors can scored by
+the same a cosine measure that works for more general dense, real-valued vectors.
+however, for the analogy tasks, there are implicit subtractions being done, which
+result in direction vectors that are not part of the same algebra. this deserves
+further work, to see whether other operators would be able to make use of
+the sparse vector spaces    geometry more fully (potentially including ideas from
+mahadevan and chandar (2015)[20]).
+
+4.3 interpretability of the sparse    a   
+
+table 4 (which lists the highest weighted words in each dimension that    motor-
+bike    is also most highly weighted) clearly demonstrates that the a sparse repre-
+sentation has learned something about the structure of the english language    for
+free   , using only data obtained from an embedding trained on unlabelled data
+itself.
+
+table 4. top    motorbike    dimensions
+
+model
+
+glove baseline
+
+a(k = 1024,    = 6.75%)
+
+5 conclusion
+
+top words in each of    rst 7 dimensions
+lb., four-bladed, propeller, propellers, two-bladed, ...
+passerine, 1975-79, rennae, fyrstenberg, edw, coots, ...
+bancboston, oshiomhole, 30-sept, holmer, smithee, recon, ...
+http://www.nytimes.com, (888), receival, jamiat, shyi, ...
+subjunctive, purley, 11-july, broaddus, muharram, ebit, ...
+proximus, pattani, 31-feb, wgc, 30-nov, crossgen, 2,631
+o   cership, tvcolumn, integrable, salticidae, o-157, ...
+vehicles, vehicle, cars, scrappage, car, 4x4, armored
+prix, races, race, laps, vettel, rikknen, sprint
+ski, coal, gas, taxicab, nuclear, wine, cellphone
+kool, electrons, pulpit, efta, gallen, gasol, birdman
+eric, anglo, tornadoes, rt, asteroids, dera, rim
+wear, trousers, dresses, jeans, wearing, worn, pants
+stabbed, kercher, 16-year-old, 15-year-old, 18-year-old, ...
+
+the joint goals of good compression rates and cognitive plausibility are realistic
+and achievable.
+
+using the gpu-friendly sparsity winner-take-all autoencoder scheme de-
+scribed, sparse, non-negative encodings have been demonstrated that combine
+high compression with interpretability    for free   .
+
+further work will include the investigation of operators that respect the
+geometry of these sparse vectors, so that analogy tests might perform in-line
+with the word similarity scores (which are purely direction-based).
+
+acknowledgments the author thanks dc frontiers, the creators of the data-
+centric service    handshakes    (http://www.handshakes.com.sg/), for their will-
+ingness to support this on-going research. dc frontiers is the recipient of a
+technology enterprise commercialisation scheme grant from spring singa-
+pore, under which this work took place.
+
+references
+
+1. brian murphy, partha pratim talukdar, and tom mitchell. learning e   ective and
+interpretable semantic models using non-negative sparse embedding. in interna-
+tional conference on computational linguistics (coling 2012), mumbai, india.
+http://aclweb.org/anthology/c/c12/c12-1118.pdf, 2012.
+
+2. thomas l gri   ths, mark steyvers, and joshua b tenenbaum. topics in semantic
+
+representation. psychological review, 114(2):211, 2007.
+
+3. david p. vinson and gabriella vigliocco. semantic feature production norms for a
+large set of objects and events. behavior research methods, 40(1):183   190, 2008.
+
+4. je   rey pennington, richard socher, and christopher d manning. glove: global
+vectors for word representation. proceedings of the empiricial methods in natural
+language processing (emnlp 2014) 12: 1532-1543, 2014.
+
+5. s. lloyd. least squares quantization in pcm. ieee trans. inf. theor., 28(2):129   
+
+137, september 2006.
+
+6. alireza makhzani and brendan j. frey. a winner-take-all method for training
+
+sparse convolutional autoencoders. corr, abs/1409.2752, 2014.
+
+7. diederik kingma and jimmy ba. adam: a method for stochastic optimization.
+
+arxiv preprint arxiv:1412.6980, 2014.
+
+8. ciprian chelba, tomas mikolov, mike schuster, qi ge, thorsten brants, and
+phillipp koehn. one billion word benchmark for measuring progress in statistical
+id38. corr, abs/1312.3005, 2013.
+
+9. omer levy, yoav goldberg, and ido dagan. improving distributional similarity
+with lessons learned from id27s. transactions of the association for
+computational linguistics, 3:211   225, 2015.
+
+10. placing search in context: the concept revisited. acm trans. inf. syst., 20(1):116   
+
+131, january 2002.
+
+11. torsten zesch, christof m  uller, and iryna gurevych. using wiktionary for com-
+puting semantic relatedness. in proceedings of the 23rd national conference on
+arti   cial intelligence - volume 2, aaai   08, pages 861   866. aaai press, 2008.
+
+12. eneko agirre, enrique alfonseca, keith hall, jana kravalova, marius pa  sca, and
+aitor soroa. a study on similarity and relatedness using distributional and
+id138-based approaches. in proceedings of human language technologies: the
+2009 annual conference of the north american chapter of the association for
+computational linguistics, naacl    09, pages 19   27, stroudsburg, pa, usa, 2009.
+association for computational linguistics.
+
+13. elia bruni, gemma boleda, marco baroni, and nam-khanh tran. distributional
+semantics in technicolor. in proceedings of the 50th annual meeting of the asso-
+ciation for computational linguistics: long papers - volume 1, acl    12, pages
+136   145, stroudsburg, pa, usa, 2012. association for computational linguistics.
+14. kira radinsky, eugene agichtein, evgeniy gabrilovich, and shaul markovitch. a
+word at a time: computing word relatedness using temporal semantic analysis. in
+proceedings of the 20th international conference on world wide web, www    11,
+pages 337   346, new york, ny, usa, 2011. acm.
+
+15. minh-thang luong, richard socher, and christopher d. manning. better word
+representations with id56s for morphology. in conll, so   a,
+bulgaria, 2013.
+
+16. tomas mikolov, wen tau yih, and geo   rey zweig. linguistic regularities in con-
+tinuous space word representations. in proceedings of the 2013 conference of the
+north american chapter of the association for computational linguistics: hu-
+man language technologies (naacl-hlt-2013). association for computational
+linguistics, may 2013.
+
+17. tomas mikolov, kai chen, greg corrado, and je   rey dean. e   cient estimation
+
+of word representations in vector space. arxiv preprint arxiv:1301.3781, 2013.
+
+18. omer levy, yoav goldberg, and israel ramat-gan. linguistic regularities in sparse
+
+and explicit word representations. in conll, pages 171   180, 2014.
+
+19. moses s. charikar. similarity estimation techniques from rounding algorithms. in
+proceedings of the thiry-fourth annual acm symposium on theory of computing,
+stoc    02, pages 380   388, new york, ny, usa, 2002. acm.
+
+20. sridhar mahadevan and sarath chandar. reasoning about linguistic regularities
+
+in id27s using matrix manifolds. corr, abs/1507.07636, 2015.
+
+

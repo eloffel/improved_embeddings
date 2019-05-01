@@ -1,0 +1,1516 @@
+    #[1]r2rt full atom feed [2]r2rt categories atom feed
+
+   (button) toggle navigation [3]r2rt
+
+written memories: understanding, deriving and extending the lstm
+
+   tue 26 july 2016
+
+   when i was first introduced to id137 (lstms),
+   it was hard to look past their complexity. i didn   t understand why they
+   were designed the way they were designed, just that they worked. it
+   turns out that lstms can be understood, and that, despite their
+   superficial complexity, lstms are actually based on a couple incredibly
+   simple, even beautiful, insights into neural networks. this post is
+   what i wish i had when first learning about recurrent neural networks
+   (id56s).
+
+   in this post, we do a few things:
+    1. we   ll define and describe id56s generally, focusing on the
+       limitations of vanilla id56s that led to the development of the
+       lstm.
+    2. we   ll describe the intuitions behind the lstm architecture, which
+       will enable us to build up to and derive the lstm. along the way we
+       will derive the gru. we   ll also derive a pseudo lstm, which we   ll
+       see is better in principle and performance to the standard lstm.
+    3. we   ll then extend these intuitions to show how they lead directly
+       to a few recent and exciting architectures: highway and residual
+       networks, and id63s.
+
+   this is a post about theory, not implementations. for how to implement
+   id56s using tensorflow, check out my posts [4]recurrent neural networks
+   in tensorflow i and [5]recurrent neural networks in tensorflow ii.
+
+contents / quick links:
+
+     * [6]recurrent neural networks
+     * [7]what id56s can do; choosing the time step
+     * [8]the vanilla id56
+     * [9]information morphing and vanishing and exploding sensitivity
+     * [10]a mathematically sufficient condition for vanishing sensitivity
+     * [11]a minimum weight initialization for avoid vanishing gradients
+     * [12]id26 through time and vanishing sensitivity
+     * [13]dealing with vanishing and exploding gradients
+     * [14]written memories: the intuition behind lstms
+     * [15]using selectivity to control and coordinate writing
+     * [16]gates as a mechanism for selectivity
+     * [17]gluing gates together to derive a prototype lstm
+     * [18]three working models: the normalized prototype, the gru and the
+       pseudo lstm
+     * [19]deriving the lstm
+     * [20]the lstm with peepholes
+     * [21]an empirical comparison of the basic lstm and the pseudo lstm
+     * [22]extending the lstm
+
+prerequisites[23]^1
+
+   this post assumes the reader is already familiar with:
+    1. feedforward neural networks
+    2. id26
+    3. basic id202
+
+   we   ll review everything else, starting with id56s in general.
+
+recurrent neural networks
+
+   from one moment to the next, our brain operates as a function: it
+   accepts inputs from our senses (external) and our thoughts (internal)
+   and produces outputs in the form of actions (external) and new thoughts
+   (internal). we see a bear and then think    bear   . we can model this
+   behavior with a feedforward neural network: we can teach a feedforward
+   neural network to think    bear    when it is shown an image of a bear.
+
+   but our brain is not a one-shot function. it runs repeatedly through
+   time. we see a bear, then think    bear   , then think    run   .[24]^2
+   importantly, the very same function that transforms the image of a bear
+   into the thought    bear    also transforms the thought    bear    into the
+   thought    run   . it is a recurring function, which we can model with a
+   recurrent neural network (id56).
+
+   an id56 is a composition of identical feedforward neural networks, one
+   for each moment, or step in time, which we will refer to as    id56
+   cells   . note that this is a much broader definition of an id56 than that
+   usually given (the    vanilla    id56 is covered later on as a precursor to
+   the lstm). these cells operate on their own output, allowing them to be
+   composed. they can also operate on external input and produce external
+   output. here is a diagram of a single id56 cell:
+   single id56 cell single id56 cell
+
+   here is a diagram of three composed id56 cells:
+   composed id56 cells composed id56 cells
+
+   you can think of the recurrent outputs as a    state    that is passed to
+   the next timestep. thus an id56 cell accepts a prior state and an
+   (optional) current input and produces a current state and an (optional)
+   current output.
+
+   here is the algebraic description of the id56 cell:
+
+   \[\left(\begin{matrix} s_t \\ o_t \\ \end{matrix}\right) =
+   f\left(\begin{matrix} s_{t-1} \\ x_t \\ \end{matrix}\right)\]
+
+   where:
+     * \(s_t\) and \(s_{t-1}\) are our current and prior states,
+     * \(o_t\) is our (possibly empty) current output,
+     * \(x_t\) is our (possibly empty) current input, and
+     * \(f\) is our recurrent function.
+
+   our brain operates in place: current neural activity takes the place of
+   past neural activity. we can see id56s as operating in place as well:
+   because id56 cells are identical, they can all be viewed as the same
+   object, with the    state    of the id56 cell being overwritten at each time
+   step. here is a diagram of this framing:
+   id56 state loop id56 state loop
+
+   most introductions to id56s start with this    single cell loop    framing,
+   but i think you   ll find the sequential frame more intuitive,
+   particularly when thinking about id26. when starting with
+   the single cell loop framing, id56   s are said to    unrolled    to obtain
+   the sequential framing above.
+
+what id56s can do; choosing the time step
+
+   the id56 structure described above is incredibly general. in theory, it
+   can do anything: if we give the neural network inside each cell at
+   least one hidden layer, each cell becomes a universal function
+   approximator.[25]^3 this means that an id56 cell can emulate any
+   function, from which it follows that an id56 could, in theory, emulate
+   our brain perfectly. though we know that the brain can theoretically be
+   modeled this way, it   s an entirely different matter to actually design
+   and train an id56 to do this. we are, however, making good progress.
+
+   with this analogy of the brain in mind, all we need to do to see how we
+   can use an id56 to handle a task is to ask how a human would handle the
+   same task.
+
+   consider, for example, english-to-french translation. a human reads an
+   english sentence (   the cat sat on the mat   ), pauses, and then writes
+   out the french translation (   le chat s   assit sur le tapis   ). to emulate
+   this behavior with an id56, the only choice we have to make (other than
+   designing the id56 cell itself, which for now we treat as a black box)
+   is deciding what the time steps used should be, which determines the
+   form the inputs and outputs, or how the id56 interacts with the external
+   world.
+
+   one option is to set the time step according to the content. that is,
+   we might use the entire sentence as a time step, in which case our id56
+   is just a feed-forward network:
+   translation using sentence-based time step translation using
+   sentence-based time step
+
+   the final state does not matter when translating a single sentence. it
+   might matter, however, if the sentence were part of a paragraph being
+   translated, since it would contain information about the prior
+   sentences. note that the intial state is indicated above as blank, but
+   when evaluating individual sequences, it can useful to train the
+   initial state as a variable. it may be that the best    a sequence is
+   starting    state representation might not be the blank zero state.
+
+   alternatively, we might say that each word or each character is a time
+   step. here is an illustration of what an id56 translating    the cat sat   
+   on a per word basis might look like:
+   translation using word-based time step translation using word-based
+   time step
+
+   after the first time step, the state contains an internal
+   representation of    the   ; after the second, of    the cat   ; after the the
+   third,    the cat sat   . the network does not produce any outputs at the
+   first three time steps. it starts producing outputs when it receives a
+   blank input, at which point it knows the input has terminated. when it
+   is done producing outputs, it produces a blank output to signal that
+   it   s finished.
+
+   in practice, even powerful id56 architectures like deep lstms might not
+   perform well on multiple tasks (here there are two: reading, then
+   translating). to accomodate this, we can split the network into
+   multiple id56s, each of which specializes in one task. in this example,
+   we would use an    encoder    network that reads in the english (blue) and
+   a separate    decoder    network that reads in the french (orange):
+   translation using word-based time step and two id56s translation using
+   word-based time step and two id56s
+
+   additionally, as shown in the above diagram, the decoder network is
+   being fed in the last true value (i.e., the target value during
+   training, and the network   s prior choice of translated word during
+   testing). for an example of an id56 encoder-decoder model, see [26]cho
+   et al. (2014).
+
+   notice that having two separate networks still fits the definition of a
+   single id56: we can define the recurring function as a split function
+   that takes, alongside its other inputs, an input specifying which split
+   of the function to use.
+
+   the time step does not have to be content-based; it can be an actual
+   unit of time. for example, we might consider the time step to be one
+   second, and enforce a reading rate of 5 characters per second. the
+   inputs for the first three time steps would be the c, at sa and t on.
+
+   we could also do something more interesting: we can let the id56 decide
+   when its ready to move on to the next input, and even what that input
+   should be. this is similar to how a human might focus on certain words
+   or phrases for an extended period of time to translate them or might
+   double back through the source. to do this, we use the id56   s output (an
+   external action) to determine its next input dynamically. for example,
+   we might have the id56 output actions like    read the last input again   ,
+      backtrack 5 timesteps of input   , etc. successful attention-based
+   translation models are a play on this: they accept the entire english
+   sequence at each time step and their id56 cell decides which parts are
+   most relevant to the current french word they are producing.
+
+   there is nothing special about this english-to-french translation
+   example. whatever the human task we choose, we can build different id56
+   models by choosing different time steps. we can even reframe something
+   like handwritten digit recognition, for which a one-shot function
+   (single time step) is the typical approach, as a many-time step task.
+   indeed, take a look at some of the mnist digits yourself and observe
+   how you need to focus on some longer than others. feedforward neural
+   networks cannot exhibit that behavior; id56s can.
+
+the vanilla id56
+
+   now that we   ve covered the big picture, lets take a look inside the id56
+   cell. the most basic id56 cell is a single layer neural network, the
+   output of which is used as both the id56 cell   s current (external)
+   output and the id56 cell   s current state:
+   vanilla id56 cell vanilla id56 cell
+
+   note how the prior state vector is the same size as the current state
+   vector. as discussed above, this is critical for composition of id56
+   cells. here is the algebraic description of the vanilla id56 cell:
+
+   \[s_t = \phi(ws_{t-1} + ux_t + b)\]
+
+   where:
+     * \(\phi\) is the activation function (e.g., sigmoid, tanh, relu),
+     * \(s_t \in \bbb{r}^n\) is the current state (and current output),
+     * \(s_{t-1} \in \bbb{r}^n\) is the prior state,
+     * \(x_t \in \bbb{r}^m\) is the current input,
+     * \(w \in \bbb{r}^{n \times n}\), \(u \in \bbb{r}^{m \times n}\), and
+       \(b \in \bbb{r}^n\) are the weights and biases, and
+     * \(n\) and \(m\) are the state and input sizes.
+
+   even this basic id56 cell is quite powerful. though it does not meet the
+   criteria for universal function approximation within a single cell, it
+   is known that a series of composed vanilla id56 cells is turing complete
+   and can therefore implement any algorithm. see [27]siegelmann and
+   sontag (1992). this is nice, in theory, but there is a problem in
+   practice: training vanilla id56s with id26 algorithm turns
+   out to be quite difficult, even more so than training very deep
+   feedforward neural networks. this difficulty is due to the problems of
+   information morphing and vanishing and exploding sensitivity caused by
+   repeated application of the same nonlinear function.
+
+information morphing and vanishing and exploding sensitivity[28]^4
+
+   instead of the brain, consider modeling the entire world as an id56:
+   from each moment to the next, the state of the world is modified by a
+   fantastically complex recurring function called time. now consider how
+   a small change today will affect the world in one hundred years. it
+   could be that something as small as the flutter of a butterfly   s wing
+   will ultimately cause a typhoon halfway around the world.[29]^5 but it
+   could also be that our actions today ultimately do not matter. so
+   einstein wasn   t around to discover relativity? this would have made a
+   difference in the 1950s, but maybe then someone else discovers
+   relativity, so that the difference becomes smaller by the 2000s, and
+   ultimately approaches zero by the year 2050. finally, it could be that
+   the importance of a small change fluctuates: perhaps einstein   s
+   discovery was in fact caused by a comment his wife made in response to
+   a butteryfly that happened to flutter by, so that the butterfly
+   exploded into a big change during the 20th century that then quickly
+   vanished.
+
+   in the einstein example, note that the past change is the introduction
+   of new information (the theory of relativity), and more generally that
+   the introduction of this new information was a direct result of our
+   recurring function (the flow of time). thus, we can consider
+   information itself as a change that is morphed by the recurring
+   function such that its effects vanish, explode or simply fluctuate.
+
+   this discussion shows that the state of the world (or an id56) is
+   constantly changing and that the present can be either extremely
+   sensitive or extremely insensitive to past changes: effects can
+   compound or dissolve. these are problems, and they extend to id56s (and
+   feedforward neural networks) in general:
+    1. information morphing
+       first, if information constantly morphs, it is difficult to exploit
+       past information properly when we need it. the best usable state of
+       the information may have occured at some point in the past. on top
+       of learning how to exploit the information today (if it were around
+       in its original, usable form), we must also learn how to decode the
+       original state from the current state, if that is even possible.
+       this leads to difficult learning and poor results.[30]^6
+       it   s very easy to show that information morphing occurs in a
+       vanilla id56. indeed, suppose it were possible for an id56 cell to
+       maintain its prior state completely in the absence of external
+       inputs. then \(f(x) = \phi(ws_{t-1} + b)\) is the identity function
+       with respect to \(s_{t-1}\). but the identity function is linear
+       and \(f(x)\) is nonlinear, so we have a contradiction. therefore,
+       an id56 cell inevitably morphs the state from one time step to the
+       next. even the trivial task of outputting \(s_t = x_t\) is
+       impossible for a vanilla id56.
+       this is the root cause of what is known in some circles as the
+       degradation problem. see, e.g., [31]he et al. (2015). the authors
+       of he et al. claims this is    unexpected    and    counterintuitive   ,
+       but i hope this discussion shows that the degradation problem, or
+       information morphing, is actually quite natural (and in many cases
+       desirable). we   ll see below that although information morphing was
+       not among the original motivations for introducing lstms, the
+       principle behind lstms happens to solve the problem effectively. in
+       fact, the effectiveness of the residual networks used by he at al.
+       (2015) is a result of the fundamental principle of lstms.
+    2. vanishing and exploding gradients
+       second, we train id56s using the id26 algorithm. but
+       id26 is a gradient-based algorithm, and vanishing and
+       exploding    sensitivity    is just another way of saying vanishing and
+       exploding gradients (the latter is the accepted term, but i find
+       the former more descriptive). if the gradients explode, we can   t
+       train our model. if they vanish, it   s difficult for us to learn
+       long-term dependencies, since id26 will be too sensitive
+       to recent distractions. this makes training difficult.
+       i   ll come back to the difficulty of training id56s via
+       id26 in a second, but first i   d like to give a short
+       mathematical demonstration of how easy it is for the vanilla id56 to
+       suffer from the vanishing gradients and what we can do to help
+       avoid this at the start of training.
+
+a mathematically sufficient condition for vanishing sensitivity
+
+   in this section i give a mathematical proof of a sufficient condition
+   for vanishing sensitivity in vanilla id56s. this section is a bit mathy,
+   and you can safely skip the details of the proof. it is essentially the
+   same as the proof of the similar result in [32]pascanu et al. (2013),
+   but i think you will find this presentation easier to follow. the proof
+   here also takes advantage of the mean value theorem to go one step
+   further than pascanu et al. and reach a slightly stronger result,
+   effectively showing vanishing causation rather than vanishing
+   sensitivity.[33]^7 note that mathematical analyses of vanishing and
+   exploding gradients date back to the early 1990s, in [34]bengio et al.
+   (1994) and [35]hochreiter (1991) (original in german, relevant portions
+   summarized in [36]hochreiter and schmidhuber (1997)).
+
+   let \(s_t\) be our state vector at time \(t\) and let \(\delta v\) be
+   the change in a vector \(v\) induced by a change in the state vector,
+   \(\delta s_t\), at time \(t\). our objective is to provide a
+   mathematically sufficient condition so that the change in state at time
+   step \(t + k\) caused by a change in state at time step \(t\) vanishes
+   as \(n \to \infty\); i.e., we will prove a sufficient condition for:
+
+   \[\lim_{k \to \infty}\frac{\delta s_{t+k}}{\delta s_t} = 0.\]
+
+   by constrast, pascanu et al. (2013) proved the same sufficient
+   condition for the following result, which can easily be extended to
+   obtain the above:
+
+   \[\lim_{k \to \infty}\frac{\partial s_{t+k}}{\partial s_t} = 0.\]
+
+   to begin, from our definition of a vanilla id56 cell, we have:
+
+   \[s_{t+1} = \phi(z_t) \hspace{30px} \text{where} \hspace{30px} z_t =
+   ws_{t} + ux_{t+1} + b.\]
+
+   applying the mean value theorem in several variables, we get that there
+   exists \(c \in [z_t,\ z_t + \delta z_t]\) such that:
+
+   \[\begin{split} \delta s_{t+1} & = [\phi'(c)] \delta z_t\\ & =
+   [\phi'(c)]\delta(w s_t).\\ & = [\phi'(c)]w\delta s_t.\\ \end{split}\]
+
+   now let \(\vert a \vert\) represent the matrix 2-norm, \(\rvert
+   v\rvert\) the euclidean vector norm, and define:
+
+   \[\gamma = \sup_{c \in [z_t,\ z_t + \delta z_t]}\vert [\phi'(c)] \vert
+   \\\]
+
+   note that for the logistic sigmoid, \(\gamma \leq \frac{1}{4}\), and
+   for tanh, \(\gamma \leq 1\).[37]^8
+
+   taking the vector norm of each side, we obtain, where the first
+   inequality comes from the definition of the 2-norm (applied twice), and
+   second from the definition of supremum:
+
+   \[ \begin{equation} \begin{split} \rvert\delta s_{t+1}\rvert & =
+   \rvert[\phi'(c)]w\delta s_t\rvert\\ & \leq \vert [\phi'(c)] \vert \vert
+   w \vert \rvert\delta s_{t}\rvert\\ & \leq \gamma \vert w \vert
+   \rvert\delta s_{t}\rvert\\ & = \vert \gamma w \vert \rvert\delta
+   s_{t}\rvert. \end{split} \end{equation}\]
+
+   by expanding this formula over \(k\) time steps we get \(\rvert\delta
+   s_{t+k}\rvert \leq \vert \gamma w \vert^k \rvert\delta s_{t}\rvert\) so
+   that:
+
+   \[ \frac{\rvert\delta s_{t+k}\rvert}{\rvert\delta s_t\rvert} \leq \vert
+   \gamma w \vert^k. \]
+
+   therefore, if \(\vert \gamma w \vert < 1\), we have that
+   \(\frac{\rvert\delta s_{t+k}\rvert}{\rvert\delta s_t\rvert}\) decreases
+   exponentially in time, and have proven a sufficient condition for:
+
+   \[\lim_{k \to \infty}\frac{\delta s_{t+k}}{\delta s_t} = 0.\]
+
+   when will \(\vert \gamma w \vert < 1\)? \(\gamma\) is bounded to
+   \(\frac{1}{4}\) for the logistic sigmoid and to 1 for tanh, which tells
+   us that the sufficient condition for vanishing gradients is for \(\vert
+   w \vert\) to be less than 4 or 1, respectively.
+
+   an immediate lesson from this is that if our weight initializations for
+   \(w\) are too small, our id56 may be unable to learn anything right off
+   the bat, due to vanishing gradients. let   s now extend this analysis to
+   determine a desirable weight initialization.
+
+a minimum weight initialization for avoid vanishing gradients
+
+   it is beneficial to find a weight initialization that will not
+   immediately suffer from this problem. extending the above analysis to
+   find the initialization of \(w\) that gets us as close to equality as
+   possible leads to a nice result.
+
+   first, let us assume that \(\phi = \tanh\) and take \(\gamma =
+   1\),[38]^9 but you could just as easily assume that \(\phi = \sigma\)
+   and take \(\gamma = \frac{1}{4}\) to reach a different result.
+
+   our goal is to find an initialization of w for which:
+    1. \(\vert \gamma w \vert = 1\).
+    2. we get as close to equality as possible in equation (1).
+
+   from point 1, since we took \(\gamma\) to be 1, we have \(\vert w \vert
+   = 1\). from point 2, we get that we should try to set all singular
+   values of \(w\) to 1, not just the largest. then, if all singular
+   values of \(w\) equal 1, that means that the norm of each column of
+   \(w\) is 1 (since each column is \(we_i\) for some elementary basis
+   vector \(e_i\) and we have \(\rvert we_i\rvert = \rvert e_i\rvert =
+   1\)). that means that for column \(j\) we have:
+
+   \[\sigma_{i}w_{ij}^2 = 1\]
+
+   there are \(n\) entries in column \(j\), and we are choosing each from
+   the same random distribution, so let us find a distribution for a
+   random weight \(w\) for which:
+
+   \[n\mathbb{e}(w^2) = 1\]
+
+   now let   s suppose we want to initialize \(w\) uniformly in the interval
+   \([-r,\ r]\). then the mean of \(w\) is 0, so that, by definition,
+   \(\mathbb{e}(w^2)\) is its variance, \(\mathbb{v}(w)\). the variance of
+   a uniform distribution over the interval \([a,\ b]\) is given by
+   \(\frac{(b-a)^2}{12}\), from which we get \(\mathbb{v}(w) =
+   \frac{r^2}{3}\). substituting this into our equation we get:
+
+   \[n\frac{r^2}{3} = 1\]
+
+   so that:
+
+   \[r = \frac{\sqrt{3}}{\sqrt{n}}\]
+
+   this suggests that we initialize our weights from the uniform
+   distribution over the interval: \[\bigg[ -\frac{\sqrt{3}}{\sqrt{n}},\
+   \frac{\sqrt{3}}{\sqrt{n}}\bigg].\]
+
+   this is a nice result because it is the xavier-glorot initialization
+   for a square weight matrix, yet was motivated by a different idea. the
+   xavier-glorot initialization, introduced by [39]glorot and bengio
+   (2010), has proven to be an effective weight initialization
+   prescription in practice. more generally, the xavier-glorot
+   prescription applies to \(m\)-by-\(n\) weight matrices used in a layer
+   that has an activation function whose derivative is near one at the
+   origin (like \(\tanh\)), and says that we should initialize our weights
+   according to a uniform distribution of the interval:
+   \[\bigg[-\frac{\sqrt{6}}{\sqrt{m + n}},\ \frac{\sqrt{6}}{\sqrt{m +
+   n}}\bigg].\]
+
+   you can easily modify the above analysis to obtain initialization
+   prescriptions when using the logistic sigmoid (use \(\gamma =
+   \frac{1}{4}\)) and when initializing the weights according to a
+   different random distribution (e.g., a gaussian distribution).
+
+id26 through time and vanishing sensitivity
+
+   training an id56 with id26 is very similar to training a
+   feedforward network with id26. since it is assumed you are
+   already familiar with id26 generally, there are only a few
+   comments to make:
+    1. we backpropagate errors through time
+       for id56s we need to backpropagate errors from the current id56 cell
+       back through the state, back through time, to prior id56 cells. this
+       allows the id56 to learn to capture long term time dependencies.
+       because the model   s parameters are shared across id56 cells (each
+       id56 cell has identical weights and biases), we need to calculate
+       the gradient with respect to each time step separately and then add
+       them up. this is similar to the way we backpropagate errors to
+       shared parameters in other models, such as convolutional networks.
+    2. there is a trade-off between weight update frequency and accurate
+       gradients
+       for all gradient-based training algorithms, there is an unavoidable
+       trade-off between (1) frequency of parameter updates (backward
+       passes), and (2) accurate long-term gradients. to see this,
+       consider what happens when we update the gradients at each step,
+       but backpropagate errors more than one step back:
+         1. at time \(t\) we use our current weights, \(w_t\), to
+            calculate the current output and current state, \(o_t\) and
+            \(s_t\).
+         2. second, we use \(o_t\) to run a backward pass and update
+            \(w_t\) to \(w_{t+1}\).
+         3. third, at time \(t+1\), we use \(w_{t+1}\) and \(s_t\), as
+            calculated in step 1 using the original \(w_t\), to calculate
+            \(o_{t+1}\) and \(s_{t+1}\).
+         4. finally, we use \(o_{t+1}\) to run a backward pass. but
+            \(o_{t+1}\) was computed using \(s_t\), which was computed
+            using \(w_t\) (not \(w_{t+1}\)), which means the gradients we
+            compute for weights at time step \(t\) are evaluated at our
+            old weights, \(w_t\), and not the current weights,
+            \(w_{t+1}\). they are thus only an estimate of the gradient,
+            if it were computed with respect to the current weights. this
+            effect will only compound as we backpropagate errors even
+            further.
+       we could compute more accurate gradients by doing fewer parameter
+       updates (backward passes), but then we might be giving up training
+       speed (which can be particularly harmful at the start of training).
+       note the similarity to the trade off to the one faces by choosing a
+       mini-batch size for mini-batch id119: the larger the
+       batch size, the more accurate the estimate of the gradient, but
+       also the fewer gradient updates.
+       we could also choose to not propagate errors back more steps than
+       the frequency of our parameter updates, but then we are not
+       calculating the full gradient of the cost with respect to the
+       weights and this is just the flip-side of the coin; the same
+       trade-off occurs.
+       this effect is discussed in [40]williams and zipser (1995), which
+       provides an excellent overview of the options for calculating
+       gradients for gradient-based training algorithms.
+    3. vanishing gradients plus shared parameters means unbalanced
+       gradient flow and oversensitivity to recent distractions
+       consider a feedforward neural network. exponentially vanishing
+       gradients mean that changes made to the weights in the earlier
+       layers will be exponentially smaller than those made to the weights
+       in later layers. this is bad, even if we train the network for
+       exponentially longer, so that the early layers eventually learn. to
+       see this, consider that during training the early layers and later
+       layers learn how to communicate with each other. the early layers
+       initially send crude signals, so the later layers quickly become
+       very good at interpretting these crude signals. but then the early
+       laters are encouraged to learn how to produce better crude symbols
+       rather than producing more sophisticated ones.
+       id56s have it worse, because unlike for feedforward nets, the
+       weights in early layers and later layers are shared. this means
+       that instead of simply miscommunicating, they can directly
+       conflict: the gradient to a particular weight might be positive in
+       the early layers but negative in the later layers, resulting in a
+       negative overall gradient, so that the early layers are unlearning
+       faster than they can learn. in the words of hochreiter and
+       schmidhuber (1997):    id26 through time is too sensitive
+       to recent distractions.   
+    4. therefore it makes sense to truncate id26
+       limiting the number of steps that we backpropagate errors in
+       training is called truncating the id26. notice
+       immediately that if the input/output sequence we are fitting is
+       infinitely long we must truncate the id26, else our
+       algorithm would halt on the backward pass. if the sequence is
+       finite but very long, we may still need to truncate the
+       id26 due to computation infeasability.
+       however, even if we had a supercomputer that could instantly
+       backpropagate an error an infinite number of timesteps, point 2
+       above tells us that we need to truncate our id26 due to
+       our gradients becoming inaccurate as a result of weight updates.
+       finally, vanishing gradients create yet another reason for us
+       truncate our id26. if our gradients vanish, then
+       gradients that are backpropagated many steps will be very small and
+       have a negligible effect on training.
+       note that we choose not only how often to truncate id26,
+       but also how often to update our model parameters. see my post on
+       [41]styles of truncated id26 for an empirical comparison
+       of two possible methods of truncation, or refer to the discussion
+       in [42]williams and zipser (1995).
+    5. there is also such thing as forward propagation of gradient
+       components
+       something useful to know (in case you come up with the idea
+       yourself), is that id26 is not our only choice for
+       training id56s. instead of backpropagating errors, we can also
+       propagate gradient components forward, allowing us to compute the
+       error gradient with respect to the weights at each time step. this
+       alternate algorithm is called    real-time recurrent learning
+       (rtrl)   . full rtrl is too computationally expensive to be
+       practical, running in \(o(n^4)\) time (as compared to truncated
+       id26, which is \(o(n^2)\) when parameters are updated
+       with the same frequency as backward passes). similar to how
+       truncated id26 approximates full id26 (whose
+       time complexity, \(o(n^2l)\), can be much higher than rtrl when the
+       number of time steps, \(l\), is large), there exists an approximate
+       version of rtrl called subgrouped rtrl. it promises the same time
+       complexity as truncated id26 (\(o(n^2)\)) when the size
+       of the subgroups is fixed, but is qualitatively different in how it
+       approximates the gradient. note that rtrl is a gradient-based
+       algorithm and therefore suffers from the vanishing and exploding
+       gradient problem. you can learn more about rtrl in [43]williams and
+       zipser (1995). rtrl is just something i wanted to bring to your
+       attention, and beyond our scope; in this post, i assume the use of
+       truncated id26 to calculate our gradients.
+
+dealing with vanishing and exploding gradients
+
+   if our gradient explodes id26 will not work because we will
+   get nan values for the gradient at early layers. an easy solution for
+   this is to clip the gradient to a maximum value, as proposed by
+   [44]mikolov (2012) and reasserted in [45]pascanu et al. (2013). this
+   works in practice to prevent nan values and allows training to
+   continue.
+
+   vanishing gradients are tricker to deal with in vanilla id56s. we saw
+   above that good weight initializations are crucial, but this only
+   impacts the start of training     what about the middle of training? the
+   approach suggested in [46]pascanu et al. (2013) is to introduce a
+   id173 term that enforces constant backwards error flow. this
+   is an easy solution that seems to work for the few experiments on which
+   it was tested in pascanu et al. (2013). unfortunately, it is difficult
+   to find a justification for why this should work all the time, because
+   we are imposing an opinion about the way gradients should flow on the
+   model. this opinion may be correct for some tasks, in which case our
+   imposition will help achieve better results. however, it may be that
+   for some tasks we want gradients to vanish completely, and for others,
+   it may be that we want them to grow. in these cases, the regularizer
+   would detract from the model   s performance, and there doesn   t seem to
+   be any justification for saying that one situation is more common than
+   the other. lstms avoid this issue altogether.
+
+written memories: the intuition behind lstms
+
+   very much like the messages passed by children playing a game of
+   [47]broken telephone, information is morphed by id56 cells and the
+   original message is lost. a small change in the original message may
+   not have made any difference in the final message, or it may have
+   resulted in something completely different.
+
+   how can we protect the integrity of messages? this is the fundamental
+   principle of lstms: to ensure the integrity of our messages in the real
+   world, we write them down. writing is a delta to the current state: it
+   is an act of creation (pen on paper) or destruction (carving in stone);
+   the subject itself does not morph when you write on it and the error
+   gradient on the backward-pass is constant.
+
+   this is precisely what was proposed by the landmark paper of
+   [48]hocreiter and schmidhuber (1997), which introduced the lstm. they
+   asked:    how can we achieve constant error flow through a single unit
+   with a single connection to itself [i.e., a single piece of isolated
+   information]?   
+
+   the answer, quite simply, is to avoid information morphing: changes to
+   the state of an lstm are explicitly written in, by an explicit addition
+   or subtraction, so that each element of the state stays constant
+   without outside interference:    the unit   s activation has to remain
+   constant     this will be ensured by using the identity function   .
+
+     the fundamental principle of lstms: write it down.
+
+     to ensure the integrity of our messages in the real world, we write
+     them down. writing is an incremental change that can be additive
+     (pen on paper) or subtractive (carving in rock), and which remains
+     unchanged absent outside interference. in lstms, everything is
+     written down and, assuming no interference from other state units or
+     external inputs, carries its prior state forward.
+
+     practically speaking, this means that any state changes are
+     incremental, so that \(s_{t+1} = s_t + \delta s_{t+1}\).[49]^10
+
+   now hochreiter and schmidhuber observed that just    writing it down    had
+   been tried before, but hadn   t worked so well. to see why, consider what
+   happens when we keep writing in changes:
+
+   some of our writes are positive, and some are negative, so it   s not
+   true that our canvas necessarily blows up: our writes could
+   theoretically cancel each other out. however, it turns out that it   s
+   quite hard to learn how to coordinate this. in particular, at the start
+   of training, we start with random initializations and our network is
+   making some fairly random writes. from the very start of training, we
+   end up with something that looks like this:
+   pollock no. 5 pollock no. 5
+
+   even if we eventually learn to coordinate our writes properly, it   s
+   very difficult to record anything useful on top of that chaos (albeit,
+   in this example, very pretty and somewhat regular chaos that was
+   [50]worth $140 million about 10 years ago). this is the fundamental
+   challenge of lstms: uncontrolled and uncoordinated writing causes chaos
+   and overflow from which it can be very hard to recover.
+
+     the fundamental challenge of lstms: uncontrolled and uncoordinated
+     writing.
+
+     uncontrolled and uncoordinated writes, particularly at the start of
+     training when writes are completely random, create a chaotic state
+     that leads to bad results and from which it can be difficult to
+     recover.
+
+   hochreiter and schmidhuber recognized this problem, splitting it into
+   several subproblems, which they termed    input weight conflict   ,    output
+   weight conflict   , the    abuse problem   , and    internal state drift   . the
+   lstm architecture was carefully designed in order to overcome these
+   problems, starting with the idea of selectivity.
+
+using selectivity to control and coordinate writing
+
+   according to the early literature on lstms, the key to overcoming the
+   fundamental challenge of lstms and keeping our state under control is
+   to be selective in three things: what we write, what we read (because
+   we need to read something to know what to write), and what we forget
+   (because obselete information is a distraction and should be
+   forgotten).
+
+   part of the reason our state can become so chaotic is that the base id56
+   writes to every element of the state. this is a problem i suffer from a
+   lot. i have a paper in front of my computer and i write down a lot of
+   things on the same paper. when it fills i take out the paper under it
+   and start writing on that one. the cycle repeats and i end up with a
+   bunch of papers on my desk that contain an overwhelming amount of
+   gibberish.
+
+   hochreiter and schmidhuber describe this as    input weight conflict   : if
+   each unit is being written to by all units at each time step, it will
+   collect a lot of useless information, rendering its original state
+   unusable. thus, the id56 must learn how to use some of its units to
+   cancel out other incoming writes and    protect    the state, which results
+   in difficult learning.
+
+     first form of selectivity: write selectively.
+
+     to get the most out of our writings in the real world, we need to be
+     selective about what we write; when taking class notes, we only
+     record the most important points and we certainly don   t write our
+     new notes on top of our old notes. in order for our id56 cells to do
+     this, they need a mechanism for selective writing.
+
+   the second reason our state can become chaotic is the flip side of the
+   first: for each write it makes, the base id56 reads from every element
+   of the state. as a mild example: if i   m writing a blog post on the
+   intuition behind lstms while on vacation in a national park with a wild
+   bear on the loose, i might include the things i   ve been reading about
+   bear safety in my blog post. this is just one thing, and only mildly
+   chaotic, but imagine what this post would look like if i included all
+   the things   
+
+   hochreiter and schmidhuber describe this as    output weight conflict   :
+   if irrelevant units are read by all other units at each time step, they
+   produce a potentially huge influx of irrelevant information. thus, the
+   id56 must learn how to use some of its units to cancel out the
+   irrelevant information, which results in difficult learning.
+
+   note the difference between reads and writes: if we choose not to read
+   from a unit, it cannot affect any element of our state and our read
+   decision impacts the entire state. if we choose not to write to a unit,
+   that impacts only that single element of our state. this does not mean
+   the impact of selective reads is more significant than the impact of
+   selective writes: reads are summed together and squashed by a
+   non-linearity, whereas writes are absolute, so that the impact of a
+   read decision is broad but shallow, and the impact of a write decision
+   is narrow but deep.
+
+     second form of selectivity: read selectively.
+
+     in order to perform well in the real-world, we need to apply the
+     most relevant knowledge by being selective in what we read or
+     consume. in order for our id56 cells to do this, they need a
+     mechanism for selective reading.
+
+   the third form of selectivity relates to how we dispose of information
+   that is no longer needed. my old paper notes get thrown out. otherwise
+   i end up with an overwhelming number of papers, even if i were to be
+   selective in writing them. unused files in my dropbox get overwritten,
+   else i would run out of space, even if i were to be selective in
+   creating them.
+
+   this intuition was not introduced in the original lstm paper, which led
+   the original lstm model to have trouble with simple tasks involving
+   long sequences. rather, it was introduced by [51]gers et al. (2000).
+   according to gers et al., in some cases the state of the original lstm
+   model would grow indefinitely, eventually causing the network to break
+   down. in other words, the original lstm suffered from information
+   overload.
+
+     third form of selectivity: forget selectively.
+
+     in the real-world, we can only keep so many things in mind at once;
+     in order to make room for new information, we need to selectively
+     forget the least relevant old information. in order for our id56
+     cells to do this, they need a mechanism for selective forgetting.
+
+   with that, there are just two more steps to deriving the lstm:
+    1. we need to determine a mechanism for selectivity, and
+    2. we need to glue the pieces together.
+
+gates as a mechanism for selectivity
+
+   selective reading, writing and forgetting involves separate read, write
+   and forget decisions for each element of the state. we will make these
+   decisions by taking advantage of state-sized read, write and forget
+   vectors with values between 0 and 1 specifying the percentage of
+   reading, writing and forgetting that we do for each state element. note
+   that while it may be more natural to think of reading, writing and
+   forgetting as binary decisions, we need our decisions to be implemented
+   via a differentiable function. the logistic sigmoid is a natural choice
+   since it is differentiable and produces continuous values between 0 and
+   1.
+
+   we call these read, write and forget vectors    gates   , and we can
+   compute them using the simplest function we have, as we did for the
+   vanilla id56: the single-layer neural network. our three gates at time
+   step \(t\) are denoted \(i_t\), the input gate (for writing), \(o_t\),
+   the output gate (for reading) and \(f_t\), the forget gate (for
+   remembering). from the names, we immediately notice that two things are
+   backwards for lstms:
+     * admittedly this is a bit of a chicken and egg, but i would usually
+       think of first reading then writing. indeed, this ordering is
+       strongly suggested by the id56 cell specification   we need to read
+       the prior state before we can write to a new one, so that even if
+       we are starting with a blank initial state, we are reading from it.
+       the names input gate and output gate suggest the opposite temporal
+       relationship, which the lstm adopts. we   ll see that this
+       complicates the architecture.
+     * the forget gate is used for forgetting, but it actually operates as
+       a remember gate. e.g., a 1 in a forget gate vector means remember
+       everything, not forget everything. this makes no practical
+       difference, but might be confusing.
+
+   here are the mathematical definitions of the gates (notice the
+   similarities):
+
+   \[ \begin{equation} \begin{split} i_t &= \sigma(w_is_{t-1} + u_ix_t +
+   b_i) \\ o_t &= \sigma(w_os_{t-1} + u_ox_t + b_o) \\ f_t &=
+   \sigma(w_fs_{t-1} + u_fx_t + b_f) \\ \end{split} \end{equation}\]
+
+   we could use more complicated functions for the gates as well. a simple
+   yet effective recent example is the use of    multiplicative
+   integration   . see [52]wu et al. (2016).
+
+   let   s now take a closer look at how our gates interact.
+
+gluing gates together to derive a prototype lstm
+
+   if there were no write gate, read selectivity says that we should use
+   the read gate when reading the prior state in order to produce the next
+   write to the state (as discussed above, the read naturally comes before
+   the write when we are zoomed in on a single id56 cell). the fundamental
+   principle of lstms says that our write will be incremental to the prior
+   state; therefore, we are calculating \(\delta s_t\), not \(s_t\). let   s
+   call this would-be \(\delta s_t\) our candidate write, and denote it
+   \(\tilde{s}_t\).
+
+   we calculate \(\tilde{s}_t\) the same way we would calculate the state
+   in a vanilla id56, except that instead of using the prior state,
+   \(s_{t-1}\), we first multiply the prior state element-wise by the read
+   gate to get the gated prior state, \(o_t \odot s_{t-1}\):
+
+   \[\tilde{s_t} = \phi(w(o_t \odot s_{t-1}) + ux_t + b)\]
+
+   note that \(\odot\) denotes element-wise multiplication, and \(o_t\) is
+   our read gate (output gate).
+
+   \(\tilde{s}_t\) is only a candidate write because we are applying
+   selective writing and have a write gate. thus, we multiply
+   \(\tilde{s}_t\) element-wise by our write gate, \(i_t\), to obtain our
+   true write, \(i_t \odot \tilde{s}_t\).
+
+   the final step is to add this to our prior state, but forget
+   selectivity says that we need to have a mechanism for forgetting. so
+   before we add anything to our prior state, we multiply it
+   (element-wise) by the forget gate (which actually operates as a
+   remember gate). our final prototype lstm equation is:
+
+   \[s_t = f_t \odot s_{t-1} + i_t \odot \tilde{s}_t\]
+
+   if we gather all of our equations together, we get the full spec for
+   our prototype lstm cell (note that \(s_t\) is also the cell   s external
+   output at each time step):
+
+   the prototype lstm
+
+   \[ \begin{equation} \begin{split} i_t &= \sigma(w_is_{t-1} + u_ix_t +
+   b_i) \\ o_t &= \sigma(w_os_{t-1} + u_ox_t + b_o) \\ f_t &=
+   \sigma(w_fs_{t-1} + u_fx_t + b_f) \\ \\ \tilde{s_t}& = \phi(w(o_t \odot
+   s_{t-1}) + ux_t + b)\\ s_t &= f_t \odot s_{t-1} + i_t \odot \tilde{s}_t
+   \end{split} \end{equation}\]
+
+   at the risk of distracting you from the equations (which are far more
+   descriptive), here is what the data flow looks like:
+   prototype lstm cell prototype lstm cell
+
+   in theory, this prototype should work, and it would be quite beautiful
+   if it did. in practice, the selectivity measures taken are not
+   (usually) enough to overcome the fundamental challenge of lstms: the
+   selective forgets and the selective writes are not coordinated at the
+   start of training which can cause the state to quickly become large and
+   chaotic. further, since the state is potentially unbounded, the gates
+   and the candidate write will often become saturated, which causes
+   problems for training.
+
+   this was observed by hochreiter and schmidhuber (1997), who termed the
+   problem    internal state drift   , because    if the [writes] are mostly
+   positive or mostly negative, then the internal state will tend to drift
+   away over time   . it turns out that this problem is so severe that the
+   prototype we created above tends to fail in practice, even with very
+   small initial learning rates and carefully chosen bias initializations.
+   the clearest empirical demonstration of this can be found in [53]greff
+   et al. (2015), which contains an empirical comparison of 8 lstm
+   variants. the worst performing variant, often failing to converge, is
+   substantially similar to the prototype above.
+
+   by enforcing a bound on the state to prevent it from blowing up, we can
+   overcome this problem. there are a few ways to do this, which lead to
+   different models of the lstm.
+
+three working models: the normalized prototype, the gru and the pseudo lstm
+
+   the selectivity measures taken in our prototype lstm were not powerful
+   enough to overcome the fundamental challenge of lstms. in particular,
+   the state, which is used to compute both the gates and the candidate
+   write can grow unbounded.
+
+   i   ll cover three options, each of which bounds the state in order to
+   give us a working lstm:
+
+the normalized prototype: a soft bound via id172
+
+   we can impose a soft bound by normalizing the state. one method that
+   has worked for me in preliminary tests is simply dividing \(s_t\) by
+   \(\sqrt{\text{var}(s_t) + 1}\), where we add 1 to prevent the initially
+   zero state from blowing up. we might also subtract the mean state
+   before dividing out the variance, but this did not seem to help in
+   preliminary tests. we might then consider adding in scale and shift
+   factors for expressiveness, a la layer id172[54]^11, but then
+   the model ventures into layer normalized lstm territory (and we may
+   want to compare it to other layer normalized lstm models).
+
+   in any case, this provides a method for creating a soft bound on the
+   state, and has performed slightly better for me in preliminary tests
+   than regular lstms (including the pseudo lstm derived below).
+
+the gru: a hard bound via write-forget coupling, or overwriting
+
+   one way to impose a hard bound on the state and coordinate our writes
+   and forgets is to explicitly link them; in other words, instead of
+   doing selective writes and selective forgets, we forego some
+   expressiveness and do selective overwrites by setting our forget gate
+   equal to 1 minus our write gate, so that:
+
+   \[s_t = (1-i_t) \odot s_{t-1} + i_t \odot \tilde{s}_t\]
+
+   this works because it turns \(s_t\) into an element-wise weighted
+   average of \(s_{t-1}\) and \(\tilde{s}_t\), which is bounded if both
+   \(s_{t-1}\) and \(\tilde{s}_t\) are bounded. this is the case if we use
+   \(\phi = \tanh\) (whose output is bound to (-1, 1)).
+
+   we   ve now derived the gated recurrent unit (gru). to conform for the
+   gru terminology used in the literature, we call the overwrite gate an
+   update gate and label it \(z_t\). note that although called an    update   
+   gate, it operates as    do-not-update    gate by specifying the percentage
+   of the prior state that we don   t want to overwrite. thus, the update
+   gate, \(z_t\), is the same as the forget gate from our prototype lstm,
+   \(f_t\), and the write gate is calculated by \(1 - z_t\).
+
+   note that, for whatever reason, the authors who introduced the gru
+   called their read gate a reset gate (at least we get to use \(r_t\) for
+   it!).
+
+   the gru
+
+   \[ \begin{equation} \begin{split} r_t &= \sigma(w_rs_{t-1} + u_rx_t +
+   b_r) \\ z_t &= \sigma(w_zs_{t-1} + u_zx_t + b_z) \\ \\ \tilde{s_t}& =
+   \phi(w(r_t \odot s_{t-1}) + ux_t + b)\\ s_t &= z_t \odot s_{t-1} + (1 -
+   z_t) \odot \tilde{s}_t \end{split} \end{equation}\]
+
+   at the risk of distracting you from the equations (which are far more
+   descriptive), here is what the data flow looks like:
+   gru cell gru cell
+
+   this is the gru cell first introduced by [55]cho et al. (2014). i hope
+   you agree that the derivation of the gru in this post was motivated at
+   every step. there hasn   t been a single arbitrary    hiccup    in our logic,
+   as there will be in order for us to arrive at the lstm. contrary to
+   what some authors have written (e.g.,    the gru is an alternative to the
+   lstm which is similarly difficult to justify    - [56]jozefowicz et al.
+   (2015)), we see that the gru is a very natural architecture.
+
+the pseudo lstm: a hard bound via non-linear squashing
+
+   we now take the second-to-last step on our journey to full lstms, by
+   using a third method to bind our state: we pass the state through a
+   squashing function (e.g., the logistic sigmoid or tanh). the hiccup
+   here is that we cannot apply the squashing function to the state itself
+   (for this would result in information morphing and violate our
+   fundamental principle of lstms). instead, we pass the state through the
+   squashing function every time we need to use it for anything except
+   making incremental writes to it. by doing this, our gates and candidate
+   write don   t become saturated and we maintain good gradient flow.
+
+   to this point, our external output has been the same as our state, but
+   here, the only time we don   t squash the state is when we make
+   incremental writes to it. thus, our cell   s output and state are
+   different.
+
+   this is an easy enough modification to our prototype. denoting our new
+   squashing function by \(\phi\) (it does not have to be the same as the
+   nonlinearity we use to compute the candidate write but tanh is
+   generally used for both in practice):
+
+   the pseudo lstm
+
+   \[ \begin{equation} \begin{split} i_t &= \sigma(w_i(\phi(s_{t-1})) +
+   u_ix_t + b_i) \\ o_t &= \sigma(w_o(\phi(s_{t-1})) + u_ox_t + b_o) \\
+   f_t &= \sigma(w_f(\phi(s_{t-1})) + u_fx_t + b_f) \\ \\ \tilde{s_t}& =
+   \phi(w(o_t \odot \phi(s_{t-1})) + ux_t + b)\\ s_t &= f_t \odot s_{t-1}
+   + i_t \odot \tilde{s}_t\\ \\ \text{id56}_{out} & = \phi(s_t) \end{split}
+   \end{equation}\]
+
+   at the risk of distracting you from the equations (which are far more
+   descriptive), here is what the data flow looks like:
+   pseudo lstm cell pseudo lstm cell
+
+   the pseudo lstm is almost an lstm - it   s just backwards. from this
+   presentation, we see clearly that the only motivated difference between
+   the gru and the lstm is the approach they take to bounding the state.
+   we   ll see that this pseudo lstm has some advantages over the standard
+   lstm.
+
+deriving the lstm
+
+   there are a number of lstm variants used in the literature, but the
+   differences between them are not so important for our purposes. they
+   all share one key difference with our pseudo lstm: the real lstm places
+   the read operation after the write operation.
+
+     lstm diff 1 (the lstm hiccup): read comes after write. this forces
+     the lstm to pass a shadow state between time steps.
+
+   if you read hochreiter and schmidhuber (1997) you will observe that
+   they were thinking of the state (as we   ve been using state so far) as
+   being separate from the rest of the id56 cell.[57]^12 hochreiter and
+   schmidhuber thought of the state as a    memory cell    that had a
+      constant error    (because absent reading and writing, it carries the
+   state forward and has a constant gradient during id26).
+   perhaps this is why, viewing the state as a separate memory cell, they
+   saw the order of operations as inputs (writes) followed by outputs
+   (reads). indeed, most diagrams of the lstm, including the ones in
+   hochreiter and schmidhuber (1997) and [58]graves (2013) are confusing
+   because they focus on this    memory cell    rather than on the lstm cell
+   as a whole.[59]^13 i don   t include examples here so as to not distract
+   from raw understanding.
+
+   this difference in read-write order has the following important
+   implication: we need to read the state in order to create a candidate
+   write. but if creating the candidate write comes before the read
+   operation inside our id56 cell, we can   t do that unless we pass a
+   pre-gated    shadow state    from one time step to the next along with our
+   normal state. the write-then-read order thus forces the lstm to pass a
+   shadow state from id56 cell to id56 cell.
+
+   going forward, to conform to the common letters used in describing the
+   lstm, we rename the main state, \(s_t\), to \(c_t\) (c is for cell, or
+   constant error). we   ll make the corresponding change to our candidate
+   write, which will now be \(\tilde{c}_t\). we will also introduce a
+   separate shadow state, \(h_t\) (h is for hidden state) that will has
+   the same size as our regular state. \(h_{t-1}\) is analogous to the
+   gated prior state from our prototype lstm, \(o_t \odot s_{t-1}\),
+   except that it is squashed by a non-linearity (to impose a bound on the
+   values used to compute the candidate write). thus the prior state our
+   lstm receives at time step \(t\) is a tuple of closely-related vectors:
+   \((c_{t-1},\ h_{t-1})\), where \(h_{t-1} = o_{t-1} \odot
+   \phi(c_{t-1})\).
+
+   this is truly a hiccup, and not because it makes things more
+   complicated (which it does). it   s a hiccup because we end up using a
+   read gate calculated at time \(t-1\), using the shadow state from time
+   \(t-2\) and the the inputs from time \(t-1\), in order to gate the
+   relevant state information for use at time \(t\). this is like day
+   trading based on yesterday   s news.
+
+   our hiccup created an \(h_{t-1}\), the presence of which goes on to
+   create two more differences to our pseudo lstm:
+
+   first, instead of using the (squashed) ungated prior state,
+   \(\phi(c_{t-1})\), to compute the gates, the standard lstm uses
+   \(h_{t-1} = o_{t-1} \odot \phi(c_{t-1})\), which has been subjected to
+   a read gate, and an outdated read gate at that.
+
+     lstm diff 2: gates are computed using the gated shadow state,
+     \(h_{t-1} = o_{t-1} \odot \phi(c_{t-1})\), instead of a squashed
+     main state, \(\phi(c_{t-1})\).
+
+   second, instead of using the (squashed) ungated state, \(\phi(c_{t})\)
+   as the lstm   s external output, the standard lstm uses \(h_{t} = o_{t}
+   \odot \phi(c_{t})\), which has been subjected to a read gate.
+
+     lstm diff 3: the lstm   s external output is the gated shadow state,
+     \(h_{t} = o_{t} \odot \phi(c_{t})\), instead of a squashed main
+     state, \(\phi(c_{t})\).
+
+   while we can see how these differences came to be, as a result of the
+      memory cell    view of the lstm   s true state, at least the first and
+   third lack a principled motivation (the second can be interpreted as
+   asserting that information that is irrelevant for the candidate write
+   is also irrelevant for gate computations, which makes sense). thus,
+   while i strongly disagreed above with [60]jozefowicz et al. (2015)
+   about the gru being    difficult to justify   , i agree with them that
+   there are lstm components whose    purpose is not immediately apparent   .
+
+   we will now rewrite our pseudo lstm backwards, taking into account all
+   three differences, to get a real lstm. it now receives two quantities
+   as the prior state, \(c_{t-1}\) and \(h_{t-1}\), and produces two
+   quantities which it will pass to the next time step, \(c_{t}\) and
+   \(h_{t}\). the lstm we get is quite    normal   : this is the version of
+   the lstm you will find implemented as the    basiclstmcell    in
+   tensorflow.
+
+   the basic lstm
+
+   \[ \begin{equation} \begin{split} i_t &= \sigma(w_ih_{t-1} + u_ix_t +
+   b_i) \\ o_t &= \sigma(w_oh_{t-1} + u_ox_t + b_o) \\ f_t &=
+   \sigma(w_fh_{t-1} + u_fx_t + b_f) \\ \\ \tilde{c_t}& = \phi(wh_{t-1} +
+   ux_t + b)\\ c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c}_t\\ \\ h_t
+   &= o_t \odot \phi(c_t)\\ \\ \text{id56}_{out} & = h_t \end{split}
+   \end{equation}\]
+
+   at the risk of distracting you from the equations (which are far more
+   descriptive), here is what the data flow looks like:
+   basic lstm cell basic lstm cell
+
+the lstm with peepholes
+
+   the potential downside of lstm diff 2 (hiding of potentially relevant
+   information) was recognized by [61]gers and schmidhuber (2000), who
+   introduced    peephole    connections in response. peepholes connections
+   include the original unmodified prior state, \(c_{t-1}\) in the
+   calculation of the gates. in introducing these peepholes, gers and
+   schmidhuber (2000) also noticed the outdated input to the read gate
+   (due to lstm diff 1), and partially fixed it by moving the calculation
+   of the read gate, \(o_t\), to come after the calculation of \(c_t\), so
+   that \(o_t\) uses \(c_t\) instead of \(c_{t-1}\) in its peephole
+   connection.
+
+   making these changes, we get one of the most common variants of the
+   lstm. this is the architecture used in [62]graves (2013). note that
+   each \(p_x\) is an \(n \times n\) matrix (a peephole matrix), much like
+   each \(w_x\).
+
+   the lstm with peepholes
+
+   \[ \begin{equation} \begin{split} i_t &= \sigma(w_ih_{t-1} + u_ix_t +
+   p_ic_{t-1} + b_i) \\ f_t &= \sigma(w_fh_{t-1} + u_fx_t + p_fc_{t-1} +
+   b_f) \\ \\ \tilde{c_t}& = \phi(wh_{t-1} + ux_t + b)\\ c_t &= f_t \odot
+   c_{t-1} + i_t \odot \tilde{c}_t\\ \\ o_t &= \sigma(w_oh_{t-1} + u_ox_t
+   + p_oc_{t} + b_o) \\ \\ h_t &= o_t \odot \phi(c_t)\\ \\
+   \text{id56}_{out} & = h_t \end{split} \end{equation}\]
+
+an empirical comparison of the basic lstm and the pseudo lstm
+
+   i now compare the basic lstm to our pseudo lstm to see if lstm diffs 1,
+   2 and 3 really are harmful. all combinations of the three differences
+   are tested, for a total of 8 possible architectures:
+    1. pseudo lstm: as above.
+    2. pseudo lstm plus lstm diff 1: shadow state containing read-gated
+       squashed state, \(o_{t-1} \odot \phi(c_{t-1})\), is passed to time
+       step \(t\), where it used in computation of the candidate write
+       only. gates and outputs are calculated using the ungated squashed
+       state.
+    3. pseudo lstm plus lstm diffs 1 and 2: shadow state containing
+       read-gated squashed state, \(o_{t-1} \odot \phi(c_{t-1})\), is
+       passed to time step \(t\), where it used in computation of the
+       candidate write and each of the three gates.
+    4. pseudo lstm plus lstm diffs 1 and 3: shadow state containing
+       read-gated squashed state, \(o_{t-1} \odot \phi(c_{t-1})\), is
+       passed to time step \(t\), where it used in computation of the
+       candidate write only. the shadow state, \(o_t \odot \phi(c_t)\), is
+       also used as the cell output at time step \(t\) (i.e., the cell
+       output is read-gated).
+    5. pseudo lstm plus lstm diff 2: read-gated squashed prior state,
+       \(o_t \odot \phi(s_{t-1})\), is used in place of squashed prior
+       state, \(\phi(s_{t-1})\), to compute the write gate and forget
+       gate.
+    6. pseudo lstm plus lstm diffs 2 and 3: read-gated squashed prior
+       state, \(o_t \odot \phi(s_{t-1})\), is used in place of squashed
+       prior state, \(\phi(s_{t-1})\), to compute the write gate and
+       forget gate, and also to gate the cell output.
+    7. pseudo lstm plus lstm diff 3: pseudo lstm using read-gated squashed
+       state as its external output, \(o_t \odot \phi(s_t)\), instead of
+       squashed state, \(\phi(s_t)\).
+    8. basic lstm: as above.
+
+   in architectures 5-7, the read gate is calculated at time \(t\) (i.e.,
+   they do not incorporate the time delay caused by lstm diff 1). all
+   architectures use a forget gate bias of 1, and read/write gate biases
+   of 0.
+
+   using the ptb dataset, i run 5 trials of up to 20 epochs of each.
+   training is cut short if the loss does not fall after 2 epochs, and the
+   minimum epoch validation loss is reported. gradients are calculated
+   with respect to a softmax/cross-id178 loss via id26
+   truncated to 30 steps, and learning is performed in batches of 30 with
+   an adamoptimizer and learning rates of 3e-3, 1e-3, 3e-4, and 1e-4. the
+   state size used is 250. no dropout, layer id172 or other
+   features are added. architectures are composed of a single layer of id56
+   cells (i.e., this is not a comparison of deep architectures). id56
+   inputs are passed through an embedding layer, and id56 outputs are
+   passed through a softmax.
+
+   the best epoch validation losses, shown as the average of 5 runs with a
+   95% confidence interval, are as follows (lower is better):
+   lr 1 (pseudo) 2 {1} 3 {1,2} 4 {1,3} 5 {2} 6 {2,3} 7 {3} 8 (basic)
+   3e-03 433.7    10.6 430.6    6.1 390.3    1.2 424.5    3.5 389.0    1.4
+   399.1    2.4 425.7    1.4 396.2    1.6
+   1e-03 387.2    0.8 388.6    1.0 388.7    0.6 414.3    2.5 386.0    0.8 396.3
+      1.9 413.9    2.4 396.6    0.9
+   3e-04 389.2    0.6 391.1    0.8 391.3    0.8 407.9    4.3 388.8    0.6 397.7
+      1.5 408.7    1.7 398.8    2.1
+   1e-04 403.9    1.0 403.9    0.8 404.2    1.3 419.7    0.4 403.1    1.2 416.8
+      1.4 419.9    1.4 418.1    1.2
+
+   we see that lstm diff 2 (using a read gated state for write and forget
+   gate computations) is actually slightly beneficial as compared to the
+   pseudo lstm. in fact, lstm diff 2 is neutral or beneficial in all cases
+   where it is added. it turns out (at least for this task), that
+   information is that irrelevant to the candidate write computation is
+   also irrelevant to the gate computations.
+
+   we see that lstm diff 1 (using a prior state for the candidate write
+   that was gated using a read gate computed at the prior time step) is
+   not significant, though it tends to be slightly harmful.
+
+   finally, we see that lstm diff 3 (using a read gated state for the cell
+   outputs) significantly harms performance, but that lstm diff 2 does a
+   good job of recovering the loss.
+
+   thus, we conclude that lstm diff 2 is a worthwhile solo addition to the
+   pseudo lstm. the pseudo lstm + lstm diff 2 was the winner for all
+   tested learning rates and outperformed the basic lstm by a significant
+   margin on the full range of tested learning rates.
+
+extending the lstm
+
+   at this point, we   ve completely derived the lstm, we know why it works,
+   and we know why each component of the lstm is the way it is. we   ve also
+   used our intuitions to create an lstm variant that is empirically
+   better than the basic lstm on tests, and objectively better in the
+   sense that it uses the most recent available information.
+
+   we   ll now (very) briefly take a look at how this knowledge was applied
+   in two recent and exciting innovations: highway and residual networks,
+   and memory-augmented recurrent architectures.
+
+id199 and residual networks
+
+   two new architectures, id199 and residual networks, draw on
+   the intuitions of lstms to produce state of the art results on tasks
+   using feedforward networks. very deep feedforward nets have
+   historically been difficult to train for the very same reasons as
+   recurrent architectures: even in the absence of a recurring function,
+   gradients vanish and information morphs. a residual network, introduced
+   by [63]he et al. (2015), won the id163 2015 classification task by
+   enabling the training of a very deep feedforward network. highway
+   networks, introduced by [64]srivastava et al. (2015) demonstrate a
+   similar ability, and have shown impressive experimental results. both
+   residual networks and id199 are an application of the
+   fundamental principle of lstms to feedforward neural networks.
+
+   their derivation begins as a direct application of the fundamental
+   principle of lstms:
+
+   let \(x_l\) represent the network   s representation of the network
+   inputs, \(x_0\), at layer \(l\). then instead of transforming the
+   current representation at each layer, \(x_{n+1} = t(x_n)\), we compute
+   the delta to the current state: \(x_{n+1} = x_n + \delta x_{n+1}\).
+
+   however, in doing this, we run into the fundamental challenge of lstms:
+   uncontrolled and uncoordinated deltas. intuitively, the fundamental
+   challenge is not as much of a challenge for feedforward networks. even
+   if the representation progresses uncontrollably as we move deeper
+   through the network, the layers are no longer linked (there is no
+   parameter sharing between layers), so that deeper layers can adapt to
+   the increasing average level of chaos (and, if we apply batch
+   id172, the magnitude and variance of the chaos becomes less
+   relevant). in any case, the fundamental challenge is still an issue,
+   and just as the gru and lstm diverge in their treatment of this issue,
+   so too do id199 and residual networks.
+
+   id199 overcome the challenge as does the lstm: they train a
+   write gate and a forget gate at each layer (in the absence of a
+   recurring function, parameters are not shared across layers). in
+   srivastava et al. (2015), the two gates are merged, as per the gru,
+   into a single overwrite gate. this does a good enough job of overcoming
+   the fundamental challenge of lstms and enables the training of very
+   deep feedforward networks.
+
+   residual networks take a slightly different approach. in order to
+   control the deltas being written, residual networks use a multi-layer
+   neural network to calculate them. this is a form of selectivity: it
+   enables a much more precise delta calculation and is expressive enough
+   to replace gating mechanisms entirely (observe that both are second
+   order mechanisms that differ in how they are calculated). it   s likely
+   that we can apply this same approach to an lstm architecture in order
+   to overcome the fundamental challenge of lstms in an id56 context (query
+   whether it is more effective than using gates).
+
+id63
+
+   as a second extension of the lstm, consider the id63
+   (ntm), introduced in [65]graves et al. (2014), which is a example of a
+   memory-augmented recurrent architecture.
+
+   recall that the reason the lstm is backwards from our pseudo lstm was
+   that the main state was viewed as a memory cell separate from the rest
+   of the id56 cell. the problem was that the rest of the cell   s state was
+   represented by a mere shadow of the lstm   s memory cell. ntms take this
+   memory cell view but fix the shadow state problem, by introducing three
+   key architectural changes to the lstm:
+     * instead of a memory cell (represented by a state vector), they use
+       a memory bank (represented by a state matrix), which is a    long   
+       memory cell, in that instead of a state unit having a single real
+       value, it has a vector of real values. this forces the memory bank
+       to coordinate reads and writes to write entire memories and to
+       retrieve entire memories at once. in short, it is an opinionated
+       approach that enforces organization within the state.
+     * the read, write and forget gates, now called read and write    heads   
+       (where the write head represents both write and forget gates), are
+       much more sophisticated and include several opinionated decisions
+       as to their functionality. for example, a sparsity constraint is
+       employed so that there is a limit to the amount of reading and
+       writing done at each time step. to get around the limits of
+       sparsity on each head, graves et al. allow for multiple read and
+       write heads.
+     * instead of a shadow state, which is a mere image of the memory
+       cell, ntms have a    controller   , which coordinates the interaction
+       between the id56 cell   s external inputs and outputs and the internal
+       memory bank. the controller can be, e.g., an lstm itself, thereby
+       maintaining an independent state. in this sense, the ntm   s memory
+       bank truly is separate from the rest of the id56 cell.
+
+   the power of this architecture should be immediately clear: instead of
+   reading and writing single numbers, we write vectors of numbers. this
+   frees the rest of the network from having to coordinate groups of reads
+   and writes, allowing it to focus on higher order tasks instead.
+
+   this was a very brief introduction to a topic that i am not myself well
+   acquainted to, so i encourage you to read the source: [66]graves et al.
+   (2014).
+
+conclusion
+
+   in this post, we   ve covered a lot of material, which has hopefully
+   provided some powerful intuitions into recurrent architectures and
+   neural networks generally. you should now have a solid understanding of
+   lstms and the motivations behind them, and hopefully have gotten some
+   ideas about how to apply the principles of lstms to building deep
+   recurrent and feedforward archictures.
+     __________________________________________________________________
+
+    1. a great introductory resource for the prerequisites is andrew ng   s
+       [67]machine learning (first 5 weeks). a great intermediate resource
+       is andrej karpathy   s [68]cs231n.[69]   
+    2. do educate yourself on [70]bear safety; your first thought may be
+       think    run   , but that   s not a good idea.[71]   
+    3. a universal function approximator can emulate any (borel
+       measurable) function. some smart people have proven mathematically
+       that feedforward neural networks with a single, large hidden layer
+       operate as universal function approximators. see [72]michael
+       nielson   s writeup for the visual intuitions behind this, or refer
+       to the original papers by [73]hornik et al. (1989) and [74]cybenko
+       (1989) for formal proofs.[75]   
+    4. while commonly known as the vanishing and exploding gradient
+       problem, in my view this name hides the true nature of the problem.
+       the alternate name, vanishing and exploding sensitivity, is
+       borrowed from [76]graves et al. (2014), id63s[77]   
+    5. credit to [78]ilya sutskever   s thesis for the butterfly effect
+       reference.[79]   
+    6. it is worth noting that there is a type of id56, the    echo state   
+       network, designed to take advantage of information morphing. it
+       works by choosing an initial recurring function that is regular in
+       the way information morphs, so that the state today is an    echo    of
+       the past. in echo state networks, we don   t train the initial
+       function (for that would change the way information morphs, making
+       it unpredictable). rather, we learn to interpret the state of the
+       network from its outputs. essentially, these networks take
+       advantage of information morphing to impose a time signature on the
+       morphing data, and we learn to be archeologists (e.g., in real
+       life, we know how long ago dinosaurs lived by looking at the
+       radioactive decay of the rocks surrounding their fossils).[80]   
+    7. pascanu et al. (2013) mention this stronger result in passing in
+       section 2.2 of their paper, but it is never explicitly
+       justified.[81]   
+    8. to see why this is the case, consider the following argument:
+       \(\gamma\) is the largest singular value of \([\phi'(c)]\) (the
+       jacobian of \(\phi\) evaluated at some vector \(c\)) for all
+       vectors \(c\) on the interval \([z_t,\ z_t + \delta z_t]\). for
+       point-wise non-linearities like the logistic sigmoid and tanh,
+       \([\phi'(c)]\) will be a diagonal matrix whose entry in row \(i\),
+       column \(i\) will be the derivative of \(\phi\) evaluated at the
+       \(i\)th element of \(c\). since \([\phi'(c)]\) is a diagonal
+       matrix, the absolute values of its diagonal entries are its
+       singular values. therefore, if \(\phi'(x)\) is bounded for all real
+       numbers \(x\), so too will be the singular values of
+       \([\phi'(c)]\), regardless of what \(c\) is. the derivatives of the
+       logistic sigmoid and tanh both reach their maximum values (upper
+       bounds) of \(\frac{1}{4}\) and \(1\) respectively when evaluated at
+       0. therefore, it follows that for the logistic sigmoid, \(\gamma
+       \leq \frac{1}{4}\), and for tanh, \(\gamma \leq 1\).[82]   
+    9. this is a more or less fair assumption, since our initial weights
+       will be small and at least some of our activations will not be
+       saturated to start, so that \(\gamma\), the supremum of the norm of
+       the jacobian of \(\tanh(z(s_t))\) should be very close to 1.[83]   
+   10. note that the usage of \(\delta\) here is different than in the
+       discussion of vanishing gradients above. here the delta is from one
+       timestep to the next; above the deltas are two state vectors at the
+       same time step.[84]   
+   11. see my post [85]id56s in tensorflow ii for more on layer
+       id172, which is a recent id56 add-on introduced by [86]lei
+       ba et al. (2016)[87]   
+   12. this is actually quite natural once we get to the pseudo lstm: any
+       time the state interacts with anything but its own delta (i.e.,
+       writes to the state), it is squashed.[88]   
+   13. the one good diagram of lstms includes the whole lstm cell and can
+       be found in [89]christopher olah   s post on lstms.[90]   
+
+   (button)
+
+   meditations
+
+   please enable javascript to view the [91]comments powered by disqus.
+
+references
+
+   visible links
+   1. https://r2rt.com/feeds/all.atom.xml
+   2. https://r2rt.com/feeds/meditations.atom.xml
+   3. https://r2rt.com/
+   4. https://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
+   5. https://r2rt.com/recurrent-neural-networks-in-tensorflow-ii.html
+   6. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#recurrent-neural-networks
+   7. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#what-id56s-can-do-choosing-the-time-step
+   8. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#the-vanilla-id56
+   9. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#information-morphing-and-vanishing-and-exploding-sensitivity
+  10. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#a-mathematically-sufficient-condition-for-vanishing-sensitivity
+  11. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#a-minimum-weight-initialization-for-avoid-vanishing-gradients
+  12. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#id26-through-time-and-vanishing-sensitivity
+  13. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#dealing-with-vanishing-and-exploding-gradients
+  14. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#written-memories-the-intuition-behind-lstms
+  15. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#using-selectivity-to-control-and-coordinate-writing
+  16. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#gates-as-a-mechanism-for-selectivity
+  17. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#gluing-gates-together-to-derive-a-prototype-lstm
+  18. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#three-working-models-the-normalized-prototype-the-gru-and-the-pseudo-lstm
+  19. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#deriving-the-lstm
+  20. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#the-lstm-with-peepholes
+  21. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#an-empirical-comparison-of-the-basic-lstm-and-the-pseudo-lstm
+  22. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#extending-the-lstm
+  23. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn1
+  24. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn2
+  25. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn3
+  26. https://arxiv.org/pdf/1406.1078v3.pdf
+  27. http://binds.cs.umass.edu/papers/1995_siegelmann_jcomsyssci.pdf
+  28. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn4
+  29. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn5
+  30. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn6
+  31. https://arxiv.org/abs/1512.03385
+  32. http://www.jmlr.org/proceedings/papers/v28/pascanu13.pdf
+  33. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn7
+  34. http://www.dsi.unifi.it/~paolo/ps/tnn-94-gradient.pdf
+  35. http://people.idsia.ch/~juergen/sepphochreiter1991thesisadvisorschmidhuber.pdf
+  36. http://isle.illinois.edu/sst/meetings/2015/hochreiter-lstm.pdf
+  37. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn8
+  38. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn9
+  39. http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+  40. https://web.stanford.edu/class/psych209a/readingsbydate/02_25/williams zipser95recnets.pdf
+  41. https://r2rt.com/styles-of-truncated-id26.html
+  42. https://web.stanford.edu/class/psych209a/readingsbydate/02_25/williams zipser95recnets.pdf
+  43. https://web.stanford.edu/class/psych209a/readingsbydate/02_25/williams zipser95recnets.pdf
+  44. http://www.fit.vutbr.cz/~imikolov/id56lm/thesis.pdf
+  45. http://www.jmlr.org/proceedings/papers/v28/pascanu13.pdf
+  46. http://www.jmlr.org/proceedings/papers/v28/pascanu13.pdf
+  47. https://en.wikipedia.org/wiki/chinese_whispers
+  48. http://isle.illinois.edu/sst/meetings/2015/hochreiter-lstm.pdf
+  49. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn10
+  50. https://en.wikipedia.org/wiki/no._5,_1948
+  51. http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.55.5709&rep=rep1&type=pdf
+  52. https://arxiv.org/abs/1606.06630
+  53. https://arxiv.org/abs/1503.04069
+  54. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn11
+  55. http://emnlp2014.org/papers/pdf/emnlp2014179.pdf
+  56. http://jmlr.org/proceedings/papers/v37/jozefowicz15.pdf
+  57. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn12
+  58. https://arxiv.org/abs/1308.0850
+  59. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fn13
+  60. http://jmlr.org/proceedings/papers/v37/jozefowicz15.pdf
+  61. ftp://ftp.idsia.ch/pub/juergen/timecount-ijid982000.pdf
+  62. http://arxiv.org/pdf/1308.0850v5.pdf
+  63. https://arxiv.org/abs/1512.03385
+  64. https://arxiv.org/abs/1505.00387
+  65. https://arxiv.org/abs/1410.5401
+  66. https://arxiv.org/abs/1410.5401
+  67. https://www.coursera.org/learn/machine-learning/
+  68. http://cs231n.github.io/
+  69. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref1
+  70. http://www.bearsmart.com/play/bear-encounters/
+  71. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref2
+  72. http://neuralnetworksanddeeplearning.com/chap4.html
+  73. http://deeplearning.cs.cmu.edu/pdfs/kornick_et_al.pdf
+  74. https://www.dartmouth.edu/~gvc/cybenko_mcss.pdf
+  75. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref3
+  76. https://arxiv.org/pdf/1410.5401.pdf
+  77. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref4
+  78. http://www.cs.utoronto.ca/~ilya/pubs/ilya_sutskever_phd_thesis.pdf
+  79. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref5
+  80. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref6
+  81. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref7
+  82. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref8
+  83. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref9
+  84. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref10
+  85. https://r2rt.com/recurrent-neural-networks-in-tensorflow-ii.html
+  86. http://arxiv.org/abs/1607.06450
+  87. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref11
+  88. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref12
+  89. http://colah.github.io/posts/2015-08-understanding-lstms/
+  90. https://r2rt.com/written-memories-understanding-deriving-and-extending-the-lstm.html#fnref13
+  91. https://disqus.com/?ref_noscript
+
+   hidden links:
+  93. https://r2rt.com/category/meditations.html

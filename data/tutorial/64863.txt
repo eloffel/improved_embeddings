@@ -1,0 +1,941 @@
+                high-level explanation of variational id136
+
+    by jason eisner (2011)
+
+   [this was a long email to my reading group in january 2011. see the
+   link below for further reading.]
+
+   by popular demand, here is a high-level explanation of variational
+   id136, to read before our unit in the [1]nlp reading group. this
+   should be easy reading since i've left out almost all the math. so
+   please do spend 30 minutes reading it, if only to make it worth my
+   while to have written it. :-)
+
+   i threw in some background on what we are trying to do with id136
+   in general. those parts will be old hat to some of you. the variational
+   stuff is near the start and end of the message.
+
+   the part-of-speech tagging example at the end is a good one to think
+   about whenever you are trying to remember how variational id136
+   works. the setting is familiar in nlp, and it illustrates all the
+   important points.
+
+   some people may find this page more valuable after they have learned
+   one or more specific variational methods, such as the mean-field
+   approximation, which is used in id58 and elsewhere. in
+   general, this page assumes familiarity with models like markov random
+   fields.
+
+   -cheers, jason
+
+overview
+
+   problem: (1) given an input x, the posterior id203 distribution
+   over outputs y is too complicated to work with. or (2) given a training
+   corpus x, the posterior id203 distribution over parameters y is
+   too complicated to work with.
+
+   solution: approximate that complicated posterior p(y | x) with a
+   simpler distribution q(y).
+
+   typically, q makes more independence assumptions than p. this is more
+   or less "okay" because q only has to model y for the particular x that
+   we actually saw, not the full relation between x and y.
+
+   which simpler distribution q? well, you define a whole family q of
+   distributions that would be computationally easy to work with. then you
+   pick the q in q that best approximates the posterior (under some
+   measure of "best").
+
+  terminology
+
+   case (1) above leads to variational decoding, which can be used within
+   variational em training. case (2) leads to id58, which
+   combines training and decoding into a single optimization problem.
+
+   some examples of variational methods include the mean-field
+   approximation, loopy belief propagation, tree-reweighted belief
+   propagation, and expectation propagation.
+
+   q is called the variational approximation to the posterior. the term
+   variational is used because you pick the best q in q -- the term
+   derives from the "calculus of variations," which deals with
+   optimization problems that pick the best function (in this case, a
+   distribution q). a particular q in q is specified by setting some
+   variational parameters -- the knobs on q that you can turn to get a
+   good approximation.
+
+  why it's not trivial
+
+   notice that the method is not the same as just throwing away the
+   complex model p(x,y) and using a simpler one q(x,y) in its place. we
+   never define anything like q(x,y), only q(y) for a given input x. the
+   complex model p is still used to define what we're trying to
+   approximate by q(y), namely p(y | x), which may differ for each input
+   x.
+
+   a similar approach would be to do mcmc sampling of y values from p(y |
+   x) and then train a simpler model q(y) on those samples. even though q
+   is simple, it may be able to adequately model the variation in those
+   samples for a given, typical x.
+
+   but in contrast to the above, variational methods don't require any
+   sampling, so they are fast and deterministic. they achieve this by
+   carefully choosing the objective function that decides whether q is a
+   good approximation to p, and by exploiting the simple structure of q.
+
+   below, i'll give a little background on id136, and then a couple of
+   simple nlp examples of variational id136.
+
+background on probabilistic id136
+
+  background: your id203 model
+
+   the general setting for all id136 problems is that you're working
+   with a joint id203 distribution over a bunch of variables. (for
+   example, a graphical model.) the variables might be discrete,
+   continuous, structured, whatever.
+
+   you know the id203 distribution and you have an efficient
+   function to compute it. that is, for any configuration defined by an
+   assignment of values to the random variables, you can compute the
+   id203 of that configuration.
+
+   more precisely, you only have to be able to compute an unnormalized
+   id203 (i.e., the id203 times some unknown constant z).
+   that's helpful because it lets you define mrfs and crfs and such.
+
+   you might protest that you don't know the distribution -- that's why
+   you have to train the model. however, read on! we'll regard that as
+   just part of id136.
+
+  background: input, output, and nuisance variables
+
+   you observe some of the variables (input to your system). you want to
+   infer the values of some of the other variables (output of your
+   system).
+
+   of course, this id136 is to be conditioned on the observed input:
+   you want to know the posterior distribution p(output | input). but
+   that's proportional to p(input, output), so the function for computing
+   unnormalized probabilities is the same.
+
+   in addition to input and output variables, there may be nuisance
+   variables that are useful in defining the relation between input and
+   output. examples include alignments and clusters: google translate may
+   reconstruct these internally when translating a sentence, but they are
+   ultimately not part of the input or output. so p(input,output) is
+   defined as    [nuisance] p(input,nuisance,output).
+
+   think now about continuous parameters of the system, like transition
+   probabilities or mixture weights or grammar probabilities. these too
+   are usually nuisance variables, since usually they are not part of the
+   input or output! the system merely guesses what they are (e.g.,
+   "training") in order to help map input to output. so they really are no
+   different from alignments.
+
+   remark: the previous paragraph adopted a bayesian perspective, where
+   the parameters are regarded as just more variables in your model. so
+   now you have a joint distribution over input, output, parameters, and
+   other nuisance variables. this joint distribution is typically defined
+   to include a prior over the parameters (maybe a trivial uniform prior,
+   or maybe a prior that combats overfitting by encouraging simplicity).
+
+   advanced remark: i'll assume that the model has a fixed number of
+   variables. that's not too much of a limitation, since some of these
+   variables could be unboundedly complicated (a sequence, tree, grammar,
+   distribution, function, etc.). however, you'll sometimes see id136
+   techniques that change the number of variables before id136 starts
+   (collapsed, block, and auxiliary-variable methods) or even during
+   id136 (e.g., reversible-jump mcmc).
+
+  background: id136 methods
+
+   to design an id136 method, the first and most important step is to
+   decide how you will handle the uncertainty in each variable.
+
+   input: for input variables, there is no uncertainty.
+
+   output: for output variables, it depends on who your customer is. are
+   you being asked to report the whole posterior distribution over values
+   (given the input)? samples from that distribution? the mode of that
+   distribution (i.e., the single most likely value)? the minimum-risk
+   estimate (i.e., the estimate with lowest expected loss under the
+   posterior distribution)?
+
+   and if there are several output variables, do you report these things
+   about the joint posterior distribution over all of them? or do you
+   report separately about each output variable, treating the others
+   temporarily as nuisance variables? (this is like doing several separate
+   tasks with the input.)
+
+   nuisance: for nuisance variables, the right thing to do is to sum over
+   their possible values (integrate them out or marginalize them out).
+   however, as we'll see below, for purely computational reasons, you
+   might need to sum approximately, either by sampling or by variational
+   methods.
+
+   another traditional approximation is to maximize over the nuisance
+   variables. some particular examples of this strategy have special
+   names: em training (maximize over parameters), "hard em" or "viterbi
+   em" training (maximize over both parameters and hidden data), and map
+   decoding (maximize over hidden data for given parameters). but
+   maximizing over variables v,w,... can be regarded as a special case of
+   a variational method (where q is limited so that each distribution q in
+   q puts all its mass on some single assignment to v,w, so that picking
+   the best q will pick the best single assignment). it's probably not the
+   best choice of variational method, since you can usually use a larger q
+   (which provides better choices of q) at about the same computational
+   cost.
+
+  background: intractable coupling
+
+   the problem with id136 is computation. of course it's very easy to
+   define the result you want mathematically, e.g.,
+
+   argmax[{assignment to output variables}]    [{assignment to nuisance
+   variables}] p(output,nuisance,input)
+
+   this expression happens to define what is called the marginal map
+   output. however, computing this output is quite another story! the
+   above expression maximizes and sums over exponentially many
+   assignments, or even infinitely many in the case of continuous
+   variables.
+
+   sometimes there is a nice efficient way to compute such expressions, by
+   exploiting properties of conjugate priors, or by using dynamic
+   programming or other combinatorial optimization techniques. but
+   sometimes there isn't any efficient way.
+
+   the trouble is that these variables aren't independent: they covary in
+   complicated ways. to figure out the distribution over one variable, you
+   have to look at its interactions with the other variables, including
+   nuisance variables. we speak of intractable coupling when these
+   interactions make it computationally intractable to find the marginal
+   distribution of some variable.
+
+   a good general solution to this problem is mcmc. you can often design a
+   method for sampling from the id203 distribution. this handles the
+   coupling between variables by letting the variables evolve in a
+   co-dependent way. (id150 is the most basic technique. fancier
+   samplers may exploit conjugacy or id145 as subroutines,
+   e.g., for collapsed gibbs, block gibbs, and metropolis-hastings
+   proposals.)
+
+motivation: variational methods
+
+   unfortunately, mcmc can be slow to get accurate answers. sure, the
+   longer you run it, the more accurate your sampling distribution and the
+   more samples you can take. if you have infinite time, it's perfectly
+   accurate. but brute-force summations are perfectly accurate too and
+   they'd only take finite time.
+
+   often you want to say, "look, it can't be all that hard! the different
+   variables may covary in the posterior distribution, but most of them
+   don't interact all that much ..."
+
+   for one thing, some of the variables don't even vary very much in the
+   posterior distribution p(y | x) -- the input x pretty much tells you
+   what they must be. so they certainly can't covary much. (that is, many
+   variables have low id178 under the posterior distribution, which
+   implies that they also have low mutual information with other
+   variables.)
+
+   even when variables do vary a lot, we may be able to greatly speed up
+   id136 by ignoring some of the interaction, and pretending that the
+   variables are just behaving that way "on their own." the mean-field
+   method throws away all of the interactions. other methods keep as many
+   interactions as they can handle efficiently.
+
+examples
+
+  hand-waving example: speech ir
+
+   consider ir over speech:
+
+   input: the spoken document.
+   output: a relevance score (with respect to a query).
+   nuisance variable: the text transcription of the document. this is
+   related to the input using an asr system.
+
+   what one should do in principle:
+   for each individual path through the asr speech lattice, evaluate how
+   relevant that transcription is.
+   average over the paths in proportion to their id203 to get an
+   expected relevance score for the document. (there are exponentially
+   many paths, but the average may be approximated by sampling paths.)
+
+   what people do in practice:
+   relevance depends on the bag of words along the true path.
+   since the true path is uncertain, just get the expected bag of words,
+   and compute the relevance of that.
+   the expected bag of words is a vector of fractional expected counts,
+   obtained by running forward-backward over the lattice. for example,
+   maybe the word "pen" is in the document an expected 0.4 times.
+
+   in other words, people compute the relevance of the expectation instead
+   of the expected relevance. this is essentially a variational
+   approximation, because it pretends that the count of "pen" is
+   independent of the count of other word types. that's an approximation!
+   suppose the lattice puts "pencil" (0.6) in competition with "pen sill"
+   (0.4). so if "pen" occurs, then "sill" probably occurs as well, and
+   "pencil" doesn't.
+
+   since the approximation ignores those interactions, it would
+   incorrectly judge the document as being 0.4*0.6 likely to match the
+   query "pen and pencil" (the true id203 is 0), and as being only
+   0.4*0.4 likely to match "pen and sill" (the true id203 is 0.4).
+
+   even so, the approximation is pretty good for most queries, since the
+   interactions are very weak for any word tokens that are separated by
+   more than a few seconds.
+
+   formally, we're approximating the lattice using a simple family q of
+   distributions over bags of words: in these distributions, p("pen") at
+   one position is independent of p("sill") at the next position. what the
+   forward-backward algorithm is doing is to find the best approximation q
+   in this family (for some sense of "best").
+
+   then, we can compute the expected relevance under this approximate
+   distribution q. that's much easier than computing it under the true
+   distribution over paths! under the approximate distribution, "pen"
+   appears with id203 0.4 and "pencil" appears independently with
+   id203 0.6. so the id203 that a document drawn from this
+   distribution would match the boolean query "pen and pencil" is 0.4*0.6,
+   as noted above. or if you prefer vector space queries, the expected
+   tf-idf dot product of such a document with the bag-of-words query "pen
+   pencil" would be 0.4 * 1 * (idf weight of "pen") + 0.6 * 1 * (idf
+   weight of "pencil").
+
+   in short, once we throw away the interactions between different terms,
+   the expected relevance rearranges easily into something that is easy to
+   compute. in the vector space case, the expected relevance rearranges
+   into the relevance of the expectation -- that is, apply the usual dot
+   product relevance formula to a fractional vector representing the
+   expected bag of words -- which was exactly the intuition at the start
+   of the section.
+
+  more formal example: id58 for id48s
+
+   consider id48 id52:
+
+   p(  ,tags,words) = p(  ) * p(tags |   ) * p(words | tags,  )
+
+   where    is the unknown parameter vector of the id48. the term p(  )
+   represents a prior distribution over   .
+
+   let's take an unsupervised setting: we've observed the words (input),
+   and we want to infer the tags (output), while averaging over the
+   uncertainty about    (nuisance):
+
+   p(tags | words) = (1/z(words)) *    [  ] p(  ,tags,words)
+
+   why is this so hard? where's the intractable coupling? well, if    were
+   observed , we could just run forward-backward. forward-backward is
+   fast: it exploits the conditional independence guaranteed by the markov
+   property. it also exploits the independence of sentences from one
+   another (that's what lets us run forward-backward on one sentence at a
+   time).
+
+   but    is not observed in this case! remember that if a variable in a
+   graphical model is unobserved, then its children become interdependent
+   (because observing one child tells you something about the parent,
+   which tells you something about the other children). in this case, when
+      is unobserved, we lose the independence assumptions mentioned above.
+   e.g., our tagging of one sentence is no longer independent of our
+   tagging of the next sentence, because the two taggings have to agree on
+   some plausible    that would make both taggings plausible at once.
+
+   (in fact, you can see exactly how the taggings become interdependent.
+   consider the case where the prior p(  ) is defined using dirichlet
+   distributions for p(tag[i] | tag[i-1]) and p(word[i] | tag[i]). then
+   collapsing out    leaves us with a polya urn process (the finite version
+   of a chinese restaurant process) in which the id203 of using a
+   particular transition or emission goes up in relation to the number of
+   times it's been used already.)
+
+   em tries to get around this problem by fixing    to a particular value
+   whenever it runs forward-backward. unfortunately, em is only maximizing
+   over    rather than summing over   .
+
+   to approximately sum over   , as we want, we'll use id58.
+   this will approximate the posterior by one in which different sentences
+   are independent again, and in which the tags within a sentence are
+   conditionally independent again in that they satisfy a markov property.
+
+   for pedagogical reasons, i'll add one more variable, so that we still
+   have an em-style learning problem even though we're summing over   .
+   let's suppose p has some implicit hyperparameters    (for example, which
+   define dirichlet concentration parameters in the prior p(  )). that
+   gives us something to learn: although we're summing over   , let's
+   maximize over   .
+
+   given observed words, we want to adjust    to increase the log
+   likelihood of our observations, log p(words). however, we will settle
+   for increasing a lower bound.
+
+   the key trick -- used in many though not all variational methods -- is
+   to write the true log-likelihood as the log of an expectation under
+   some q. we can then get a lower bound via jensen's inequality, which
+   tells us that log expectation >= expectation log (since log is concave
+   and q is a distribution). for any p and q,
+       log p(words)
+       = log    [{  ,tags}] p(  ,tags,words)
+       = log    [{  ,tags}] q(  ,tags) (p(  ,tags,words)/q(  ,tags))
+       = log e[q] (p(  ,tags,words)/q(  ,tags))
+
+       >= e[q] log (p(  ,tags,words)/q(  ,tags))   by jensen's inequality
+       = e[q] log p(  ,tags,words) - e[q] log q(  ,tags)
+
+   the right-hand side is called the variational lower bound. we can
+   increase it by adjusting p (via the parameters   ) and q (via the
+   variational parameters provided by the family q). our goal will be to
+   jointly find p and q that make it as large as possible, on the twofold
+   grounds of
+
+   (a) approximate learning (choosing p's parameters   ). the left-hand
+   side is what we'd really like to maximize. if we've found (p,q) that
+   make the right-hand side (the variational lower bound) large, then the
+   p we've found makes the left-hand side even larger. in short, we've
+   found a good   . (warning: this justification is a bit hand-wavy, since
+   the right-hand side may be -5928349.23, and all that tells us about the
+   left-hand side is that it is between -5928349.23 and 0. what we're
+   really hoping is that improving the right-hand side tends to improve
+   the left-hand side, but there's no guarantee that the opposite doesn't
+   happen.)
+
+   (b) approximate id136 (choosing q's parameters). once we've reached
+   a local maximum (p,q), we can query that q to find out (approximately)
+   about the hidden tags and    parameters under that p. this is because at
+   any local maximum (p,q), we cannot improve q further for that p, so
+   q(  ,tags) is the best possible approximation (within q) of the
+   posterior p(  ,tags | words). we query the approximate distribution q
+   only because the actual distribution p is too complicated to query.
+   we'll see below why this is true.
+
+   in general, the variational lower bound is a non-convex function, so we
+   will only be able to find a local maximum. hope you're not
+   disappointed.
+
+  variants
+
+   here are a few variants that may help you think about the framework:
+
+                          tags   optimization problem           name of (approxima
+tion) method
+1. maximize   sum       sum    empirical bayes                variational em
+2. given      sum       sum    bayesian posterior id136   id58
+3. given      maximize  sum    map estimation                 (variational) em
+4. given      given     sum    marginal id136             (variational) infe
+rence
+5. given      given     max    map decoding                   viterbi algorithm
+or id125
+
+   in the final column, em means we're maximizing over some unknowns
+   (hyperparameters    or parameters   ). more precisely, em refers to a
+   specific kind of "alternating optimization" algorithm for this. bayes
+   means that we're instead doing the proper bayesian thing and summing
+   (integrating) over all unknowns. variational says we're willing to use
+   an approximation.
+
+   case 1. is the variational em setting above, where we are trying to
+   maximize p(words) =    [{  ,tags}] p(  ,tags,words) with respect to   ,
+   summing over some nuisance variables. this maximization objective is
+   dubbed empirical bayes because it's not quite bayesian: instead of
+   stating a distribution over    that describes our true prior belief, we
+   lack the courage to commit to such a belief, so we sneakily tune    to
+   find an "empirical prior" that places mass on    values that were likely
+   to have generated our data. of course, variational em only manages to
+   optimize a lower bound on the empirical bayes objective. in optimizing
+   this bound, we are interested in both (a) and (b) above. where not
+   otherwise stated, this webpage focuses on case 1.
+
+   case 2. earlier i introduced    "for pedagogical reasons" so we'd have a
+   hyperparameter to optimize. suppose instead i'd just stated   =1, which
+   defines a specific, fixed prior over    (presumably representing our
+   true bayesian beliefs). then we'd be summing over all unknowns, namely
+   the parameters   , which is a proper bayesian method   or at least a
+   variational approximation, dubbed id58. unlike case 1,
+   when we optimize the variational lower bound, p(  ,tags,words) is
+   already fixed. we only have to optimize q(  ,tags) to approximate
+   p(  ,tags | words). that is, (b) above is the main goal since there is
+   no longer an    for (a) to learn.
+
+   case 3. let's simplify further. suppose we continue to fix   =1, but now
+   we maximize over    instead of summing. this is traditionally called
+   maximum a posteriori (map) estimation since it finds the parameters   
+   with the highest posterior id203, p(   | words) &propto;
+   p(  ,words) =    [tags] p(  ,tags,words).
+
+   formally, this looks the same as case 1   a maximization of a sum.
+   indeed, you can regard case 1's empirical bayes objective as map
+   estimation too. (more specifically, case 1 was maximum likelihood
+   estimation, since we assumed no prior or equivalently a flat prior over
+     .) to be precise, case 1 finds the best parameters    of a hierarchical
+   model that generates    from    and then generates the tags and words
+   given   . case 3 merely gets rid of the top level of this hierarchical
+   model, so it finds the best    instead of the best   . but abstractly
+   it's the same setting. just as in case 1, our variational objective in
+   case 3 is a lower bound on log p(words), and our definition of p(words)
+   still sums over something, this time just the tags. our model is now
+   p(tags,words |   ), and our variational distribution is now just
+   q(tags), which we tune to approximate p(tags |   ,words). we are again
+   optimizing both p and q, i.e., our goals are again both (a) and (b).
+
+   so the method is again called variational em, as in case 1. but why
+   variational em? we don't have a variational distribution over   
+   anymore. you'll protest that case 3 is just the ordinary em setting! or
+   more precisely, map-em, the trivial extension of em that seeks the map
+   estimate of    (instead of just the maximum likelihood estimate) by
+   including p(  ) at the m step.
+
+   the reason it's still variational em in general is that we do still
+   have a variational distribution q(tags). now, if this distribution is
+   unrestricted, so that we can set it to exactly equal p(tags |   ,words),
+   then the variational gap shrinks to 0. then the alternating
+   optimization algorithm for variational em reduces to the ordinary em
+   algorithm.
+
+   that is the case where you can exactly compute the objective    [tags]
+   p(  ,tags,words) rather than approximating it with a lower bound. you
+   can indeed do this for an id48. but more generally, you might have a
+   fancy tagging model where this sum is intractable: the model is not an
+   id48, or it's an id48 with an astronomical number of states. then you'll
+   have to settle for maximizing a variational lower bound to the
+   intractable sum, just as in the previous cases. ordinary em is just the
+   special case where the approximate distribution q(tags) is exact.
+
+   (an example of a fancy tagging model is one where multiple tokens of
+   the same word are rewarded for having the same tag. this is not an id48
+   since it no longer has the markov property.)
+
+   (does the special case of an ordinary id48 work out in a familiar way?
+   yes. the maximization objective is a sum over all tag sequences and can
+   be computed by the forward algorithm. to adjust    to maximize this sum,
+   the algorithms in the next section follow the gradient, which can be
+   computed with the forward-backward algorithm. alternating optimization
+   in this case turns out to be identical to the ordinary presentation of
+   em for id48s (baum-welch): the e step uses forward-backward to find
+   quantities that parameterize q(tags) = p(tags |   ,words), and the m
+   step uses those quantities to improve p's parameters   .)
+
+   case 4. simplifying even more, if    and    are both fixed, there's no
+   training. we are just reconstructing the tag sequence under a known
+   model. this can be done by the forward-backward algorithm   or a
+   variational approximation to it in the case of a fancier tagging model,
+   known as variational id136. either way, this corresponds to only
+   the e step of case 3.
+
+   formally, case 4 is the same as case 2. they're both probabilistic
+   id136 of unknown variables: (  ,tags) jointly in case 2 and just
+   tags in case 4. the different terminology ("learning" vs. "id136")
+   merely reflects how we think about those variables. (we regard the tags
+   as variables to be inferred because they're output variables of
+   interest to the user. we regard    as parameters to be learned because   
+   represents knowledge about the language that could be used to tag
+   future sentences. of course, that same knowledge about the language is
+   implicit in the tagged corpus -- think about how em derives    from the
+   tagged corpus -- but the tagged corpus has unbounded size
+   (non-parametric) whereas    is finite-dimensional (parametric).
+   "learning" usually means that you have derived some compact sufficient
+   statistics of the training data, such as the parameter vector   , that
+   could be applied to new test data.)
+
+   case 5. as one last simplification, we could give up on summation
+   altogether and simply look for a single good tag sequence for the
+   observed words, instead of an approximate distribution q(tags) over
+   possible sequences. making a single choice of the output variables is
+   called decoding, and it's map decoding if we make the choice of maximum
+   posterior id203. for an id48, this can be done by the viterbi
+   algorithm. for a fancier tagging model, you might have to use a
+   heuristic search algorithm like id125 or simulated annealing or
+   something. or you could do variational decoding, which approximates
+   p(tags | words) by q(tags) as in case 4 and then does viterbi decoding
+   on q.
+
+   in fact, you could regard all 5 cases as formally the same, since
+   maximization can be viewed as yet another a variational approximation
+   to summation -- where "q consists only of distributions q(y) that put
+   all their mass on a single value y." so when you're maximizing over   
+   or    or tags in case 1 or 3 or 5, you can regard that as approximating
+   the distribution over    or    or tags in a particularly crude way, as a
+   point distribution.
+
+  more examples
+
+   how would you use id58 for an lda topic model?
+
+   how about a factorial id48, factorial crf, or factored language model?
+
+   how about the integration of a syntax-based mt system with a 5-gram
+   language model?
+
+variational optimization techniques
+
+   we now return to our variational em example (case 1).
+
+  optimization: gradient ascent
+
+   we saw above that we can do approximate learning by maximizing the
+   variational lower bound. but how? the most straightforward way (to my
+   mind) is gradient ascent (or [2]online gradient ascent), where the
+   gradient is with respect to both the    parameters of p and the
+   variational parameters of q.
+
+   the gradient is not too hard to compute, because the expectations in
+   the variational lower bound are expectations under q, and q is
+   specifically designed so that these expectations will be manageable.
+
+   for example, we'll see below what happens if q says that q is a product
+   distribution:
+     q(  ,tags) = q[1](  ) * q[2](tags)
+
+   where furthermore q[1] is a dirichlet distribution and q[2] is a markov
+   process (i.e., a weighted fsa trellis of taggings). so optimizing q
+   actually means optimizing q[1] and q[2] by adjusting their variational
+   parameters.
+
+   by the way, people often seem to name variational parameters by turning
+   the true parameter name sideways:    becomes   ,    becomes   . for
+   example, the variational parameters that define q[1](  ) might be
+   denoted by   , which specifies the mean and concentration of a dirichlet
+   distribution over   .
+
+    the case of mean field
+
+   factoring q(a,b,c,...) = q[a](a) * q[b](b) * q[c](c) ... like this is
+   called a mean-field approximation. are you curious where that term
+   comes from? statistical physics. imagine that a, b, c, ... are all
+   objects that are influencing each other magnetically or gravitationally
+   or something (the n-body problem). p explicitly models their
+   interactions, and we could use id150 on p to simulate how the
+   system evolves randomly over time. but instead, we approximate p with a
+   model q that just describes the gyrations of each object as if it were
+   independent of the others. this model describes the mean behavior of a
+   as if it were caused by a constant background magnetic or gravitational
+   field, without reference to what b, c, ... are doing at the time.
+
+   notice how the variational lower bound becomes easy to compute (and
+   easy to differentiate) in this case. suppose p is defined by a
+   graphical model as a product of potential functions,
+p(a,b,c,...) = p[ab](a,b) * p[bc](b,c) * p[ac](a,c) * ...
+
+   then the harder term in the variational bound can be decomposed into a
+   sum over several terms, each of which only looks at a few variables:
+e[q] log p(a,b,c,...)
+= e[q] log p[ab](a,b)   +   e[q] log p[bc](b,c)   +   e[q] log p[ac](a,c)   + ..
+.
+=    [{a,b}] q(a,b) log p[ab](a,b)   +      [{b,c}] q(b,c) log p[bc](b,c)   +      [{a
+,c}] q(a,c) log p[ac](a,c) * ...
+
+   this does involve the marginals of q, such as q(a,c). but crucially,
+   taking q to be in the mean-field family makes those easy to compute
+   (unlike the marginals of p!), because the variables are not coupled in
+   q:
+q(a,c) =    [{b,d,...}] q(a,b,c,d,...)
+       =    [{b,d,...}] q[a](a) * q[b](b) * q[c](c) * q[d](d) * ...
+       = q[a](a) * (   [b] q[b](b)) * q[c](c) * (   [d] q[d](d)) *...
+       = q[a](a) * q[c](c)
+
+   (warning: the definition of p above assumed that we did not need a
+   global normalizing constant 1/z. global id172 complicates
+   things; see the final section of this tutorial.)
+
+    the case of structured mean field
+
+   our q(  ,tags) = q[1](  ) * q[2](tags) case is called structured
+   mean-field, because    and tags are complex variables. we still have
+   interactions within each complex variable: specifically, the components
+   of    must sum to 1, and the individual tags are not fully independent
+   of one another but rather evolve according to a markov process. but
+   these remaining interactions are tractable. they can be handled
+   efficiently by standard techniques like id145.
+
+   note that there is no requirement for q[2](tags) to be a stationary
+   markov process (i.e., the same at every time step). this is important!
+   remember, q[2](tags) is approximately modeling which tags are likely at
+   each position in the sentence, according to the posterior distribution
+   given the words. so it had better treat these positions differently. if
+   the sentence is "mary has loved john," then a good q[2] will be very
+   likely to transition from verb to verb at tag 3, but from verb to noun
+   at tag 4.
+
+   formally, q[2](tags) is defined by a trellis of taggings for each
+   sentence in the corpus. the parameters of q[2] (within the family of
+   approximations q) are simply the arc probabilities in this trellis. in
+   our example, the optimal q[2] will give a higher id203 to the
+   verb -> noun arc at time 4 than to the verb -> noun arc at time 3. so
+   it is non-stationary.
+
+   (a trellis is a weighted fsa with a special, regular topology. each
+   path corresponds to a tagging of the sentence; the path's weight is
+   proportional to the id203 of that tagging.)
+
+   this non-stationarity shouldn't be surprising or computationally hard,
+   because the usual trellis for an id48 isn't stationary either. how can
+   that be if the id48 is stationary? because the trellis takes specific
+   observations into account, and the observations are whatever they are.
+   that is, the trellis describes p(tags,words) for a particular sequence
+   of words. since its arc weights consider emission probabilities like
+   p(john | noun) as well as emission probabilities, the verb -> noun arc
+   at time 4 can have a higher id203 as the verb -> noun arc at time
+   3, simply because "john" is emitted at time 4.
+
+   now, the q[2](tags) trellis is just trying to approximate the
+   conditionalization of that id48 trellis, i.e., p(tags | words) rather
+   than p(tags, words). for fixed   , the approximation is exact. notice
+   that the e step of ordinary em computes p(tags | words) in just this
+   way.
+
+  alternating optimization: variational em
+
+   gradient ascent is not the only way to maximize the variational lower
+   bound. a more common (and illuminating) technique is alternating
+   optimization between p and q. that is the variational em algorithm
+   (although above, i took the liberty of using "variational em" to mean
+   any algorithm that jointly optimizes (p,q), not necessarily by
+   alternating optimization).
+
+   remember the variational lower bound we derived above: for any   ,
+   log p(words)     >=   e[q] log p(  ,tags,words) - e[q] log q(  ,tags)
+
+   consider the variational gap -- the difference between the left-hand
+   and right-hand sides. you should be able to rearrange it to see that
+   the gap is just
+     d(q || p)
+
+   where
+     d is the kl divergence
+     p denotes the posterior distribution p(  ,tags | words)
+     q denotes our variational approximation to it, q(  ,tags)
+
+         (hint: start by rewriting log p(words) as e[q] log p(words).)
+
+   so when we proved the lower bound, we were equivalently proving that
+   d(q || p) >= 0. in fact, we were just repeating the usual proof via
+   jensen's inequality that kl divergences are always >= 0.
+
+   okay, now for variational em:
+    1. at the variational e step we adjust q given our current p. since
+       the left-hand side is fixed in this case, maximizing the right-hand
+       side is equivalent to minimizing the variational gap. in other
+       words, we want to find q that minimizes d(q || p) -- that is, q
+       that approximates p as well as possible under this divergence
+       measure.
+    2. at the variational m step, we adjust p given our current q. since q
+       is fixed, this means changing    to improve e[q] log
+       p(  ,tags,words).
+
+   to locally maximize the variational lower bound, we iterate these two
+   steps to convergence. the overall algorithm does (a) approximate
+   learning of p. within this, the variational e step is (b) approximate
+   id136.
+
+   earlier at (b) i wrote: "at any local maximum ... q(  ,tags) is the best
+   possible approximation (within q) of the posterior p(  ,tags | words)."
+   you can now see why: if we're at a local maximum, then q can't be
+   improved any further by step 1, so it must already be the minimizer of
+   d(q || p).
+
+   if the family q is expressive enough, then we may even be able to get
+   d(q || p) down to 0 by setting q to p. that is just the e step of
+   ordinary em, which actually finds the posterior distribution q(  ,tags)
+   = p(  ,tags | words). in other words, ordinary em is just the special
+   case where the variational approximation q is exact. but for more
+   complicated models, that would mean setting q to a complicated
+   distribution that we may not be able to represent in a compact way that
+   the m step can work with. so instead, we play the variational game, and
+   restrict q to force q to be simple.
+
+  more alternating optimization: message passing and other connections
+
+   often the variational e step will itself involve an alternating
+   optimization. in particular, consider our structured mean-field setting
+   where q(  ,tags) = q[1](  ) * q[2](tags) then the typical approach would
+   be to argmax q[1] (with q[2] and p fixed), then argmax q[2] (with q[1]
+   and p fixed), and finally argmax p (with q[1] and q[2] fixed).
+
+   as a special case, recall that in id58, p is fixed from
+   the start: there is nothing to learn. then we are just alternately
+   improving q[1] and q[2] in order to find a q that locally minimizes d(q
+   || p), i.e, that nicely approximates the posterior of p. at that point,
+   q[1] tells us about likely values of   , and q[2] tells us about likely
+   taggings.
+
+   the update equations here end up looking like a message-passing
+   algorithm where q[1] is sending a message to influence q[2], and
+   vice-versa. that might remind you of belief propagation, which is
+   beyond the scope of this note, but which also uses message-passing
+   updates among the factors of the model, and which can be interpreted as
+   a different kind of variational method (using d(p || q) rather than d(q
+   || p)).
+
+   here's another connection for you. since q[2](tags) decomposes over
+   sentences, we actually get q(  ,tags) = q[1](  ) * q[2,1](tags for
+   sentence 1) * q[2,2](tags for sentence 2) * ... alternating
+   optimization among all these factors will update each sentence in turn
+   given all the other sentences and   , and then update    given all the
+   sentences. this starts to look like block id150! (each
+   sentence constitutes a block: "block" gibbs (or "blocked" gibbs) is
+   like "structured" mean-field and "generalized" belief propagation, in
+   that multiple variables are grouped together; it's annoying that these
+   all use different adjectives.)
+
+   the difference is that block gibbs would randomly resample a specific
+   tagging for each sentence, given specific taggings of all other
+   sentences and a specific value for   . the variational method will
+   deterministically update the distribution over taggings for each
+   sentence, given distributions over the taggings for other sentences and
+   a distribution over   . so, it is working with distributions rather than
+   with samples -- approximate but faster. here's a nice analogy:
+                  | random samples         deterministic distribs
+                  |    (exact)                (fast approx.)
+---------------------------------------------------------------------
+want maximum      | simulated annealing    deterministic annealing
+want distribution | id150         alternating variational opt.
+
+   finally, consider the simpler case of variational decoding ("case 4" in
+   earlier discussion). here    is given, so all we're trying to do is to
+   decode the tags, but our tagging model is so fancy that it still
+   requires a variational approximation. now we don't have to learn   :
+   we're merely trying to find out about the fancy model's posterior
+   p(tags | words) -- which we can't easily represent -- by constructing a
+   simple q(tags) that approximates it. this can be done by exactly the
+   same alternating optimization procedure as above, except that we no
+   longer need to update q[1](  ) (i.e., there's no m step) or even have a
+   q[1] factor. it's all about the factors q[2,1], q[2,2], etc.: we just
+   iteratively update the distribution over each sentence's tagging given
+   the other sentences' taggings. alternatively, we could update these
+   distributions in parallel by id119 on d(q || p), since
+   that's what the alternating optimization is trying to optimize.
+
+  beyond alternating optimization
+
+   of course, there are other ways to try to optimize the variational
+   objective besides gradient ascent or alternating optimization.
+
+   in particular, one could try methods that are better at avoiding local
+   optima, which the mean-field approximation is prone to (since roughly
+   speaking, d(q || p) is locally minimized when q fits one of the modes
+   of p, and there may be many modes). one could thus try methods such as
+   simulated annealing or deterministic annealing on the mean-field
+   objective.
+     * i haven't seen simulated annealing used in a variational setting.
+       it would work like alternating optimization, except that when
+       updating one factor's variational parameters, one might not update
+       them optimally. rather, one would inject some randomness,
+       particularly at early iterations.
+     * i believe that deterministic annealing has been applied to optimize
+       the mean-field approximation, under the name mean-field annealing.
+       deterministic annealing is a form of alternating optimization,
+       where a better-behaved function is used on earlier iterations.
+
+a warning about undirected models
+
+   in the mean-field section, i argued that the variational lower bound
+   can be easy to compute. to do this, however, i supposed that p could be
+   written as
+p(a,b,c,...) = p[ab](a,b) * p[bc](b,c) * p[ac](a,c) * ...
+
+   so that each factor depended on only a few variables. implicitly, this
+   assumed a directed graphical model, which just multiplies together a
+   number of id155 distributions.
+
+   what if we had an undirected graphical model (markov random field),
+   defined by p(...) =   (...)/z? here z is chosen to ensure that p is
+   normalized. then the log p term in the variational bound would include
+   a summand -log z, which depends on the p's parameters    and is
+   intractable to compute.
+
+   good news: if -log z is just a constant, then its value doesn't matter.
+   we still know the variational lower bound up to an additive constant
+   (-log z), and can maximize it without ever computing that constant. to
+   be precise, we are maximizing a lower bound on log   (words) instead of
+   log p(words). hence, it's still possible to do id58 and
+   variational decoding (the cases where we only adjust q, leaving p and
+   hence -log z constant). this allows us to still do approximate
+   id136 (referred to above as case (b)).
+
+   bad news: however, variational em is no longer tractable in this
+   undirected case, since then we are also trying to adjust p (via   ), and
+   we can't tractably figure out how adjustments to p will affect the -log
+   z term in the variational lower bound. thus, variational em (like
+   ordinary em) fundamentally requires p to be a directed model (z=1), or
+   some other model whose -log z is tractable to compute.
+
+   so what are your options for estimating p in the bad news case?
+     * decide to do id58 instead of variational em, so that
+       -log z is an (unknown) constant. this means fixing   , on which z
+       depends.
+     * fall back to sampling methods: use mcmc to try to estimate the
+       gradient of log p with respect to   . this explicitly tries to get
+       at the gradient of -log z by sampling. (an approximation to this is
+       contrastive divergence, which uses a quick input-specific estimate
+       of that gradient.)
+     * a common trick: recall that we're trying to tune    to maximize
+  log p(words) = log    [{  ,tags}] p(  ,tags,words)
+               = log    [{  ,tags}] (  (  ,tags,words)/z)
+               = log    [{  ,tags}]   (  ,tags,words) - log z
+               = log    [{  ,tags}]   (  ,tags,words) - log    [{  ,tags,words'}]   (  ,ta
+gs,words'),
+
+       where    is parameterized by   . for the current   , we can do
+       variational id136 twice. as before, we get a lower bound on the
+       first term by optimizing q[clamped](  ,tags)     p(  ,tags | words). we
+       can similarly get a lower bound on the log z term by optimizing
+       q[free](  ,tags,words')     p(  ,tags,words'). the difference of these
+       two lower bounds is not a lower bound on anything; we optimize the
+       bounds separately, rather than optimizing their difference. the
+       payoff is that we can now use our q functions to approximate the
+       gradient of the true objective with respect to   :
+     log p =    log    [{  ,tags}]   (  ,tags,words) -    log    [{  ,tags,words'}]   (  ,tags,w
+ords')
+            = e[p(  ,tags | words)]    log   (  ,tags,words) - e[p(  ,tags,words')]
+   log   (  ,tags,words')
+                e[q[clamped](  ,tags)]    log   (  ,tags,words) - e[q[free](  ,tags,word
+s')]    log   (  ,tags,words')
+
+       the danger here is that q[free] might be quite a poor
+       approximation, as it must approximate the full prior distribution
+       p(  ,tags,words) using an inadequate family q. by contrast,
+       q[clamped] only has to approximate the posterior distribution
+       p(  ,tags | words). that is often peaked around a single (hopefully
+       correct) value (  *,tags*), and so is easy to approximate within the
+       mean-field family q, by choosing q[1](  ) that is peaked at   * and
+       q[2](tags) that is peaked at tags*.
+       one solution is to use better approximations. you could seek a
+       richer family q (at some computational expense). or you could use
+       (generalized) belief propagation, a generalization of mean-field
+       that allows more parameters than mean-field; bp does not exactly
+       construct approximations q[clamped] and q[free] to p, but it does
+       approximate their marginals, which is all we really need to
+       approximate the expectations as above.
+       another way to alleviate the difficulty in approximating
+       p(  ,tags,words) is to switch to a contrastive estimation objective.
+       then the summation in z is restricted to sum only over words' &in;
+       neighborhood n(words), and q[free] becomes an approximation of
+       p(  ,tags,words | n(words)), which might be easier to approximate
+       within q.
+     * do conditional em to make z tractable: instead of maximizing
+       likelihood, maximize conditional likelihood. this helps
+       particularly in case 3. we switch our model from a markov random
+       field to a conditional random field, defining p(tags | words) =
+         (tags,words)/z(words). often z(words) is tractable.   (tags, words)
+       may be complicated, with factors that relate tag unigrams or tag
+       bigrams to arbitrary properties of the sentence. but if each of
+       those factors considers at most a tag bigram together with the
+       sentence, then z(words) =    [tags]   (tags,words) can be computed
+       with the forward-backward algorithm.
+     __________________________________________________________________
+
+   this page online: http://cs.jhu.edu/~jason/tutorials/variational
+
+   [3]jason eisner - [4]jason@cs.jhu.edu (suggestions welcome) last mod
+   $date: 2018/01/21 05:23:52 $
+
+references
+
+   1. http://old-site.clsp.jhu.edu/wiki2/nlp_reading_group#variational_id136
+   2. http://old-site.clsp.jhu.edu/wiki2/nlp_reading_group#online_id136
+   3. http://www.cs.jhu.edu/~jason
+   4. mailto:jason@cs.jhu.edu

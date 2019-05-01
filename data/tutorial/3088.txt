@@ -1,0 +1,276 @@
+   [1]atpaino's personal site
+   [2]posts [3]research [4]cv
+
+deep text corrector
+
+   jan 3, 2017
+
+   [5]code | [6]demo
+
+   while context-sensitive spell-check systems (such as [7]autocorrect)
+   are able to automatically correct a large number of input errors in
+   instant messaging, email, and sms messages, they are unable to correct
+   even simple grammatical errors. for example, the message    i   m going to
+   store    would be unaffected by typical autocorrection systems, when the
+   user most likely intendend to communicate    i   m going to the store   .
+
+   inspired by recent advancements in nlp driven by deep learning (such as
+   those in id4 by [8]bahdanau et al., 2014), i
+   decided to try training a neural network to solve this problem.
+   specifically, i set out to construct sequence-to-sequence models
+   capable of processing a sample of conversational written english and
+   generating a corrected version of that sample. in this post i   ll
+   describe how i created this    deep text corrector    system and present
+   some encouraging initial results.
+
+   all code is available on github [9]here, and a demo of this system is
+   live [10]here.
+
+correcting grammatical errors with deep learning
+
+   the basic idea behind this project is that we can generate large
+   training datasets for the task of grammar correction by starting with
+   grammatically correct samples and introducing small errors to produce
+   input-output pairs. the details of how we construct these datasets,
+   train models using them, and produce predictions for this task are
+   described below.
+
+datasets
+
+   to create a dataset for training deep text corrector models, i started
+   with a large collection of mostly grammatically correct samples of
+   conversational written english. the primary dataset considered in this
+   project is the [11]cornell movie-dialogs corpus, which contains over
+   300k lines from movie scripts. this was the largest collection of
+   conversational written english i could find that was (mostly)
+   grammatically correct.
+
+   given a sample of text like this, the next step is to generate
+   input-output pairs to be used during training. this is done by:
+    1. drawing a sample sentence from the dataset.
+    2. setting the input sequence to this sentence after randomly applying
+       certain perturbations.
+    3. setting the output sequence to the unperturbed sentence.
+
+   where the perturbations applied in step (2) are intended to introduce
+   small grammatical errors which we would like the model to learn to
+   correct. thus far, these perturbations have been limited to:
+     * the subtraction of articles (a, an, the)
+     * the subtraction of the second part of a verb contraction (e.g.
+             ve   ,       ll   ,       s   ,       m   )
+     * the replacement of a few common homophones with one of their
+       counterparts (e.g. replacing    their    with    there   ,    then    with
+          than   )
+
+   for example, given the sample sentence:
+and who was the enemy?
+
+   the following input-output pair could be generated:
+("and who was enemy ?", "and who was the enemy ?")
+
+   the rates with which these perturbations are introduced are loosely
+   based on figures taken from the [12]conll 2014 shared task on
+   grammatical error correction. in this project, each perturbation is
+   randomly applied in 25% of cases where it could potentially be applied.
+
+training
+
+   in order to artificially increase the dataset when training a
+   sequence-to-sequence model, i performed the sampling strategy described
+   above multiple times over the movie-dialogs corpus to arrive at a
+   dataset 2-3x the size of the original corups. given this augmented
+   dataset, training proceeded in a very similar manner to
+   [13]tensorflow   s sequence-to-sequence tutorial. that is, i trained a
+   sequence-to-sequence model consisting of lstm encoders and decoders
+   bridged via an attention mechanism, as described in [14]bahdanau et
+   al., 2014.
+
+decoding
+
+   instead of using the most probable decoding according to the
+   sequence-to-sequence model, this project takes advantage of the unique
+   structure of the problem to impose the prior that all tokens in a
+   decoded sequence should either exist in the input sequence or belong to
+   a set of    corrective    tokens. the    corrective    token set is constructed
+   during training and contains all tokens seen in the target, but not the
+   source, for at least one sample in the training set. the intuition here
+   is that the errors seen during training involve the misuse of a
+   relatively small vocabulary of common words (e.g.    the   ,    an   ,    their   )
+   and that the model should only be allowed to perform corrections in
+   this domain.
+
+   this prior is carried out through a modification to the decoding loop
+   in tensorflow   s id195 model in addition to a post-processing step
+   that resolves out-of-vocabulary (oov) tokens:
+
+   biased decoding
+
+   to restrict the decoding such that it only ever chooses tokens from the
+   input sequence or corrective token set, this project applies a binary
+   mask to the model   s logits prior to extracting the prediction to be fed
+   into the next time step.
+
+   this is done by constructing a mask:
+mask[i] == 1.0 if i in (input or corrective_tokens) else 0.0
+
+   and then using it during decoding in the following manner:
+token_probs = tf.softmax(logits)
+biased_token_probs = tf.mul(token_probs, mask)
+decoded_token = math_ops.argmax(biased_token_probs, 1)
+
+   since this mask is applied to the result of a softmax transformation
+   (which guarantees all outputs are positive), we can be sure that only
+   input or corrective tokens are ever selected.
+
+   note that this logic is not used during training, as this would only
+   serve to hide potentially useful signal from the model.
+
+   handling oov tokens
+
+   since the decoding bias described above is applied within the truncated
+   vocabulary used by the model, we will still see the unknown token in
+   its output for any oov tokens. the more generic problem of resolving
+   these oov tokens is non-trivial (e.g. see [15]addressing the rare word
+   problem in id4), but in this project we can again take advantage of the
+   unique structure of the problem to create a fairly straightforward oov
+   token resolution scheme.
+
+   specifically, if we assume the sequence of oov tokens in the input is
+   equal to the sequence of oov tokens in the output sequence, then we can
+   trivially assign the appropriate token to each    unknown    token
+   encountered in the decoding.
+
+   for example, in the following scenario:
+input sequence: "alex went to store"
+target sequence: "alex went to the store"
+decoding from model: "unk went to the store"
+
+   this logic would replace the unk token in the decoding with alex.
+
+   empirically, and intuitively, this appears to be an appropriate
+   assumption, as the relatively simple class of errors these models are
+   being trained to address should never include mistakes that warrant the
+   insertion or removal of a rare token.
+
+experiments and results
+
+   below are some anecdotal and aggregate results from experiments using
+   the deep text corrector model with the [16]cornell movie-dialogs
+   corpus. the dataset consists of 304,713 lines from movie scripts, of
+   which 243,768 lines were used to train the model and 30,474 lines each
+   were used for the validation and testing sets. for the training set, 2
+   samples were drawn per line in the corpus, as described above. the sets
+   were selected such that no lines from the same movie were present in
+   both the training and testing sets.
+
+   the model being evaluated below is a sequence-to-sequence model, with
+   attention, where the encoder and decoder were both 2-layer, 512 hidden
+   unit lstms. the model was trained with a vocabulary consisting of the
+   2,000 most common words seen in the training set (note that we can use
+   a small vocabulary here due to our oov resolution strategy). a
+   bucketing scheme similar to that in [17]bahdanau et al., 2014 is used,
+   resulting in 4 models for input-output pairs of sizes smaller than 10,
+   15, 20, and 40.
+
+aggregate performance
+
+   below are reported the corpus id7 scores (as computed by [18]nltk) and
+   accuracy numbers over the test dataset for both the trained model and a
+   baseline. the baseline used here is simply the identity function, which
+   assumes no errors exist in the input; the motivation for this is to
+   test whether the introduction of the trained model could add value to
+   an existing system with no grammar-correction system in place.
+
+   encouragingly, the trained model outperforms this baseline for all
+   bucket sizes in terms of accuracy, and outperforms all but one in terms
+   of id7 score. this tells us that applying the deep text corrector
+   model to a potentially errant writing sample would, on average, result
+   in a more grammatically correct writing sample. anyone who tends to
+   make errors similar to those the model has been trained on could
+   therefore benefit from passing their messages through this model.
+   bucket (seq length) baseline id7 model id7 baseline accuracy model
+   accuracy
+   bucket 1 (10) 0.8341 0.8516 0.9083 0.9384
+   bucket 2 (15) 0.8850 0.8860 0.8156 0.8491
+   bucket 3 (20) 0.8876 0.8880 0.7291 0.7817
+   bucket 4 (40) 0.9099 0.9045 0.6073 0.6425
+
+examples
+
+   in addition to the encouraging aggregate performance of this model, we
+   can see that its is capable of generalizing beyond the specific
+   language styles present in the movie-dialogs corpus by testing it on a
+   few fabricated, grammatically incorrect sentences. below are a few
+   examples, but you can try out your own examples using the demo
+   [19]here.
+
+   decoding a sentence with a missing article:
+in [31]: decode("kvothe went to market")
+out[31]: 'kvothe went to the market'
+
+   decoding a sentence with then/than confusion:
+in [30]: decode("the cardinals did better then the cubs in the offseason")
+out[30]: 'the cardinals did better than the cubs in the offseason'
+
+   note that in addition to correcting the grammatical errors, the system
+   is able to handle oov tokens without issue.
+
+future work
+
+   while these initial results are encouraging, there is still a lot of
+   room for improvement. the biggest thing holding the project back is the
+   lack of a large dataset     the 300k samples in the cornell movie dialogs
+   dataset is tiny by modern deep learning standards. unfortunately, i am
+   not aware of any publicly available dataset of (mostly) grammatically
+   correct english. a close proxy could be comments in a    higher quality   
+   online forum, such as hacker news or certain subreddits. i may try this
+   next.
+
+   given a larger dataset, i would also like to try to introduce many
+   different kinds of errors into the training samples. the perturbations
+   used thus far are limited to fairly simple grammatical mistakes; it
+   would be very interesting to see if the model could learn to correct
+   somewhat more subtle mistakes, such as subject-verb agreement.
+
+   on the application front, i could see this system eventually being
+   accessible via a    correction    api that could be leveraged in a variety
+   of messaging applications.
+
+   [20]comments on hn
+
+     * [21]atpaino@gmail.com
+
+     * [22]atpaino
+     * [23]atpaino
+
+   alex paino's personal site and blog
+
+references
+
+   visible links
+   1. http://atpaino.com/
+   2. http://atpaino.com/posts.html
+   3. http://atpaino.com/research/index.html
+   4. http://atpaino.com/cv.pdf
+   5. https://github.com/atpaino/deep-text-corrector
+   6. http://atpaino.com/dtc.html
+   7. https://en.wikipedia.org/wiki/autocorrection
+   8. http://arxiv.org/abs/1409.0473
+   9. https://github.com/atpaino/deep-text-corrector
+  10. http://atpaino.com/dtc.html
+  11. http://www.cs.cornell.edu/~cristian/cornell_movie-dialogs_corpus.html
+  12. http://www.aclweb.org/anthology/w14-1701.pdf
+  13. https://www.tensorflow.org/tutorials/id195/
+  14. http://arxiv.org/abs/1409.0473
+  15. https://arxiv.org/pdf/1410.8206v4.pdf
+  16. http://www.cs.cornell.edu/~cristian/cornell_movie-dialogs_corpus.html
+  17. http://arxiv.org/abs/1409.0473
+  18. http://www.nltk.org/api/nltk.translate.html
+  19. http://atpaino.com/dtc.html
+  20. https://news.ycombinator.com/item?id=13350972
+  21. mailto:atpaino@gmail.com
+  22. https://github.com/atpaino
+  23. https://twitter.com/atpaino
+
+   hidden links:
+  25. http://atpaino.com/2017/01/03/deep-text-correcter.html

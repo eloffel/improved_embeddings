@@ -1,0 +1,396 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]the artificial impostor
+     * [9]deep learning
+     * [10]python
+     * [11]r
+     * [12]reading lists
+     * [13]data analysis
+     __________________________________________________________________
+
+[tensorflow] building id56 models to solve sequential mnist
+
+understanding tensorflow part 2
+
+   [14]go to the profile of ceshine lee
+   [15]ceshine lee (button) blockedunblock (button) followfollowing
+   mar 30, 2018
+   [1*4tt3xx7pw6ghkdewnbafvw.jpeg]
+   [16][notes] understanding tensorflow         part 1
+   core concepts and common confusions (from a beginner   s point of
+   view)medium.com
+
+   in this post, we   re going to lay some groundwork for the custom model
+   which will be covered in the next post by familiarizing ourselves with
+   using id56 models in tensorflow to deal with [17]the sequential mnist
+   problem. the basic framework of the code used in this post is based on
+   the following two notebooks:
+    1. [18]aymeric damien   s recurrent neural network example
+    2. [19]sungjoon   s sequence classification with lstm
+
+   i   ve put the source code for this post in a notebook hosted on google
+   colaboratory, which kindly [20]provides a free gpu runtime for the
+   public to use    i kept getting disconnected to the runtime when running
+   the notebook. so some of the model training was not completed. you can
+   copy the notebook and run it yourself.   :
+
+     [21]link to the notebook on google colab
+
+   the notebook should have done most of the talking. the following
+   sections of this post will discuss some parts of the notebook in more
+   detail, and also provide some additional information that was left out
+   in the notebook.
+
+   20180528 update (gihub repo with links to all posts and notebooks):
+   [22]ceshine/tensorflow-crash-course
+   tensorflow-crash-course - for those who already have some basic idea
+   about deep learning, and preferably are familiar   github.com
+
+overview
+
+   every example from the mnist dataset is a 28x28 image. we are going to
+   apply recurrent neural network on it in two ways:
+    1. row-by-row: the id56 cells are seeing the ith row of the image in
+       the ith step, that is, a vector of size 28. the total number of
+       time steps is 28.
+    2. pixel-by-pixel: the id56 cells are seeing the ith pixel (a single
+       number, row-first order) in the ith step. the total number of time
+       steps is 28*28 = 784.
+
+   [1*a5igm8sbybwvuzh0kxcu3q.jpeg]
+   row-by-row sequential mnist (plot taken from [23]sungjoon   s notbook)
+
+   the pixel-by-pixel case is a lot harder because a decent model has to
+   keep a very long-term memory.
+
+   we   re going to build four models (two models for each case):
+    1. first we replicate the exact same model from aymeric damien   s
+       notebook, which uses [24]basiclstmcell class to build the lstm
+       layer.
+    2. refactor the first model, replace basiclstmcell with
+       [25]lstmblockcell, and add some scaffoldding that should help us
+       debug and tune the model later.
+    3. we can further increase the speed of the lstm layer by using
+       [26]cudnngru instead, as running long sequences from the
+       pixel-by-pixel approach will drag down performance significantly.
+       the tensorboard support is also added.
+    4. finally we use the exact same model from (3) on the [27]permuted
+       sequential mnist, which shuffles the order of the pixels and makes
+       the problem even harder.
+
+improving the basiclstmcell model
+
+   we   re jumping directly to the second model, which is different from the
+   first model in the following ways:
+    1. use lstmblockcell, which should be faster than basiclstmcell
+    2. replace id56.dynamic_id56 with id56.static_id56. (so no need to unstack
+       the tensor.)
+    3. replace manual weight definitions with tf.layers.dense
+    4. replace tf.nn.softmax_cross_id178_with_logits with
+       tf.nn.softmax_cross_id178_with_logits_v2
+    5. group graph definition together
+    6. add a batch_id172 layer between lstm and dense layers.
+    7. add gradient clipping for id56 gradient
+    8. add a checkpoint saver
+    9. evaluate test accuracy every n steps (bad practice: use a
+       validation set instead)         this will be fixed once we reach the part
+       where we use dataset apis to import a new dataset.
+   10. replace gradientdescentoptimizer with rmspropoptimizer
+   11. use tf.set_random_seed to control randomness
+
+   i   m going to discuss some of them in the following sections.
+
+lstmblockcell
+
+   this tensorflow lstm benchmark is very comprehensive:
+   [28]tensorflow lstm benchmark - retuid56 1.0-dev documentation
+   there are multiple lstm implementations/kernels available in
+   tensorflow, and we also have our own kernel. in
+   this   retuid56.readthedocs.io
+
+   my takeaways:
+     * for plain lstm, you usually want to use cudnnlstm, or
+       lstmblockfused if you don   t have gpu access.
+     * if you want to do some operations between time steps like
+       variational dropout, use lstmblock.
+     * use standardlstm only if you know what you   re doing.
+     * you should probably never have any reason to use basiclstm.
+
+   tensorflow has a nice [29]wrapper that does variational dropout for
+   you:
+lstm_cell = id56.dropoutwrapper(
+    id56.lstmblockcell(num_hidden, forget_bias=1.0),
+    input_keep_prob=0.5,
+    output_keep_prob=0.5,
+    state_keep_prob=0.5,
+    variational_recurrent=true,
+    dtype=tf.float32
+)
+
+   that   s probably the main reason why you sometimes want to use
+   lstmblockcell instead of cudnnlstm. for sequential mnist the problem of
+   overfitting is relatively low, so we did not use any dropouts in the
+   notebook.
+
+dynamic id56 vs static id56
+
+   i feel the difference between [30]dynamic_id56 and [31]static_id56 is
+   somewhat vague in the documentation. these two discussion threads
+   ([32]stackoverflow and [33]github) cleared things up a bit for me. the
+   main difference seems to be that dynamic_id56 supports dynamic maximum
+   sequence length in batch level, while static_id56 doesn   t. from what
+   i   ve read, there seems to be little reason not to always use
+   dynamic_id56.
+
+   you simply supply the whole batch of input data as a tensor to
+   dynamic_id56 instead of slicing them into a list of tensor (sequences).
+   this is easier to write and read than static_id56:
+# input shape: (batch_size, length, channels)
+# static id56
+x = tf.unstack(x, timesteps, 1)
+lstm_cell = id56.basiclstmcell(num_hidden, forget_bias=1.0)
+# dynamic id56
+outputs, _ = tf.nn.dynamic_id56(
+    cell=lstm_cell, inputs=x, time_major=false,
+    dtype=tf.float32)
+
+tf.layers.dense
+
+   in the first model, you have to define the weight and the bias for the
+   linear (output) layer manually:
+weights = {
+    'out': tf.variable(tf.random_normal(
+        [num_hidden, num_classes]))
+}
+biases = {
+    'out': tf.variable(tf.random_normal([num_classes]))
+}
+
+   and calculate the output logits by doing a id127 and an
+   addition:
+return tf.matmul(outputs[-1], weights['out']) + biases['out']
+
+   albeit very good for educational purpose, you probably don   t want to do
+   it every time you need a linear layer. the abstraction provided by
+   [34]tf.layers.dense provides similar experience to [35]nn.linear layer
+   in pytorch:
+output_layer = tf.layers.dense(
+    num_classes, activation=none,
+    kernel_initializer=tf.orthogonal_initializer()
+)
+return output_layer(
+    tf.layers.batch_id172(outputs[:, -1, :]))
+
+   you can also use the shortcut function like i just did with
+   tf.layers.batch_id172 :
+return tf.layers.dense(
+    tf.layers.batch_id172(outputs[:, -1, :]),
+    num_classes, activation=none,
+    kernel_initializer=tf.orthogonal_initializer()
+)
+
+rmsprop and gradient clipping
+
+   rmsprop speeds up the convergence, and gradient clipping helps dealing
+   with the [36]exploding gradient problem of id56s.
+loss_op = tf.reduce_mean(
+    tf.nn.softmax_cross_id178_with_logits_v2(
+        logits=logits, labels=y))
+optimizer = tf.train.rmspropoptimizer(learning_rate=learning_rate)
+# get the gradients
+gvs = optimizer.compute_gradients(loss_op)
+# clip gradients (except gradients from the dense layer)
+capped_gvs = [
+    (tf.clip_by_norm(grad, 2.), var) if not
+    var.name.startswith("dense") else (grad, var)
+    for grad, var in gvs]
+# apply gradients (update trainable variables)
+train_op = optimizer.apply_gradients(capped_gvs)
+
+pixel-by-pixel sequential mnist
+
+   the row-by-row only involves 28 time steps, and is fairly easy to solve
+   with a wide range of hyper-parameters (initialization methods, number
+   of hidden units, learning rate, etc.). the pixel-by-pixel mnist with
+   784 time steps is a lot harder to crack. unfortunately i could not find
+   a set of hyper-parameters for a lstm model that could guarantee
+   converge. instead, i   ve found gru models much easier to tune and
+   succeed to reach 90%+ test accuracy in multiple cases.
+
+cudnngru
+
+   pytorch uses cudnn implementations of id56s by default, and [37]that   s
+   what makes it faster. we could also utilize those implementations in
+   tensorflow via tf.contrib.cudnn_id56:
+# x shape (batch_size, length, channels)
+gru = tf.contrib.cudnn_id56.cudnngru(
+    1, num_hidden,
+    kernel_initializer=tf.orthogonal_initializer())
+outputs, _ = gru(tf.transpose(x, (1, 0, 2)))
+
+   id56 classes from the tf.contrib.cudnn_id56 module doesn   t have a
+   time_major parameter, so the input shape is always (length, batch_size,
+   channels). moreover, if you want to get the most speed, let cudnngru
+   run through the whole sequence in a single command (as the code above
+   did) instead of feeding it step-by-step. it seems to work similarly to
+   dynamic_id56, meaning the maximum length is allow to differ between
+   batches.
+
+tensorboard
+
+   grouping variables and operations using tf.variable_scope brought us
+   this modularized graph in tensorboard:
+   [1*z-rilnuj61rkd1i9mvqiuq.png]
+
+   i   ve also save the raw and clipped gradient every 250 steps. we can use
+   those histograms to determine which threshold we should use:
+   [1*kv1gyqbrxrkmdxhee1rz9a.png]
+
+   a lot of gradients were clipped in the above example. so we might want
+   to move the threshold from 0.5 to 1.0 to speed things up.
+
+permuted pixel-by-pixel sequential mnist
+
+   this is quite simply applying a fixed permutation on every incoming
+   sequence. we   re not able to see a straight horizontal line as a all-one
+   sub-sequence anymore. the purpose is to make the problem even harder.
+
+the permutation
+
+   by utilizing tf.gather :
+# set seed to ensure we have the same permutation
+np.random.seed(100)
+permute = np.random.permutation(784)
+x = tf.gather(x_, permute, axis=1)
+
+   [1*f_jfqt61qbt5_qc-hxlnmq.png]
+   tf.gather [38][source]
+
+   remember to use a different (python) variable name, because you   re
+   going to pass the input to the placeholder (previously named as x, now
+   x_). using the same name will make tensorflow replace the permuted
+   sequences in the graph with your input, and the results will not be
+   permuted. (i should probably use a more distinguishable name than x_)
+
+what   s next
+
+   now we   re familiar with how to deal with sequential mnist with
+   tensorflow and the basic use of some id56 classes. in the next post
+   we   ll learn how to use tf.layers apis to write our customized layers,
+   and implement[39] temporal convolutional networks (tcn) in tensorflow.
+
+quick links
+
+   [40][tensorflow] implementing temporal convolutional networks
+   understanding tensorflow part 3medium.com
+   [41][tensorflow] fashion-mnist with dataset api
+   understanding tensorflow part 4medium.com
+
+     * [42]machine learning
+     * [43]tensorflow
+     * [44]python
+     * [45]deep learning
+     * [46]data science
+
+   (button)
+   (button)
+   (button) 115 claps
+   (button) (button) (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [47]go to the profile of ceshine lee
+
+[48]ceshine lee
+
+   humanist. data geek.
+
+     (button) follow
+   [49]the artificial impostor
+
+[50]the artificial impostor
+
+   pretending to write about data science, deep learning, and some others
+   (a.k.a. the whole ai package).
+
+     * (button)
+       (button) 115
+     * (button)
+     *
+     *
+
+   [51]the artificial impostor
+   never miss a story from the artificial impostor, when you sign up for
+   medium. [52]learn more
+   never miss a story from the artificial impostor
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://medium.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/f7e5ece849f5
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-2-f7e5ece849f5&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-2-f7e5ece849f5&source=--------------------------nav_reg&operation=register
+   8. https://medium.com/the-artificial-impostor?source=logo-lo_4wwyvpwao7cu---99edadf89480
+   9. https://medium.com/the-artificial-impostor/tagged/deep-learning
+  10. https://medium.com/the-artificial-impostor/tagged/python
+  11. https://medium.com/the-artificial-impostor/tagged/r-language
+  12. https://medium.com/the-artificial-impostor/tagged/readings
+  13. https://medium.com/the-artificial-impostor/tagged/data-analysis
+  14. https://medium.com/@ceshine?source=post_header_lockup
+  15. https://medium.com/@ceshine
+  16. https://medium.com/@ceshine/notes-understanding-tensorflow-part-1-5f0ebb253ad4
+  17. https://stats.stackexchange.com/questions/255097/what-is-sequential-mnist-permuted-mnist
+  18. https://github.com/aymericdamien/tensorflow-examples/blob/master/notebooks/3_neuralnetworks/recurrent_network.ipynb
+  19. https://github.com/sjchoi86/tensorflow-101/blob/master/notebooks/id56_mnist_simple.ipynb
+  20. https://medium.com/deep-learning-turkey/google-colab-free-gpu-tutorial-e113627b9f5d
+  21. https://colab.research.google.com/drive/18fqi18psdh30wuj1upd6zvgk2awxo_bj
+  22. https://github.com/ceshine/tensorflow-crash-course
+  23. https://github.com/sjchoi86/tensorflow-101/blob/master/notebooks/id56_mnist_simple.ipynb
+  24. https://www.tensorflow.org/api_docs/python/tf/contrib/id56/basiclstmcell
+  25. https://www.tensorflow.org/api_docs/python/tf/contrib/id56/lstmblockcell#__init__
+  26. https://www.tensorflow.org/api_docs/python/tf/contrib/cudnn_id56/cudnngru
+  27. https://stats.stackexchange.com/questions/255097/what-is-sequential-mnist-permuted-mnist
+  28. http://retuid56.readthedocs.io/en/latest/tf_lstm_benchmark.html
+  29. https://www.tensorflow.org/api_docs/python/tf/contrib/id56/dropoutwrapper
+  30. https://www.tensorflow.org/api_docs/python/tf/nn/dynamic_id56
+  31. https://www.tensorflow.org/api_docs/python/tf/nn/static_id56
+  32. https://stackoverflow.com/questions/39734146/whats-the-difference-between-tensorflow-dynamic-id56-and-id56
+  33. https://github.com/tensorflow/tensorflow/issues/3801
+  34. https://www.tensorflow.org/api_docs/python/tf/layers/dense
+  35. http://pytorch.org/docs/master/nn.html#linear
+  36. https://machinelearningmastery.com/exploding-gradients-in-neural-networks/
+  37. https://www.reddit.com/r/machinelearning/comments/66rriz/d_id56s_are_much_faster_in_pytorch_than_tensorflow/
+  38. https://www.tensorflow.org/api_docs/python/tf/gather
+  39. https://github.com/locuslab/tcn
+  40. https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7
+  41. https://medium.com/the-artificial-impostor/tensorflow-fashion-mnist-with-dataset-api-cce1e3cc8cd4
+  42. https://medium.com/tag/machine-learning?source=post
+  43. https://medium.com/tag/tensorflow?source=post
+  44. https://medium.com/tag/python?source=post
+  45. https://medium.com/tag/deep-learning?source=post
+  46. https://medium.com/tag/data-science?source=post
+  47. https://medium.com/@ceshine?source=footer_card
+  48. https://medium.com/@ceshine
+  49. https://medium.com/the-artificial-impostor?source=footer_card
+  50. https://medium.com/the-artificial-impostor?source=footer_card
+  51. https://medium.com/the-artificial-impostor
+  52. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  54. https://medium.com/@ceshine/notes-understanding-tensorflow-part-1-5f0ebb253ad4
+  55. https://github.com/ceshine/tensorflow-crash-course
+  56. http://retuid56.readthedocs.io/en/latest/tf_lstm_benchmark.html
+  57. https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7
+  58. https://medium.com/the-artificial-impostor/tensorflow-fashion-mnist-with-dataset-api-cce1e3cc8cd4
+  59. https://medium.com/p/f7e5ece849f5/share/twitter
+  60. https://medium.com/p/f7e5ece849f5/share/facebook
+  61. https://medium.com/p/f7e5ece849f5/share/twitter
+  62. https://medium.com/p/f7e5ece849f5/share/facebook

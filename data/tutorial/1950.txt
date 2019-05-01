@@ -1,0 +1,952 @@
+   #[1]the data science lab    feed [2]the data science lab    comments feed
+   [3]the data science lab    selection of k in id116 id91,
+   reloaded comments feed [4]improved seeding for id91 with
+   id116++ [5]2014 in review [6]alternate [7]alternate [8]the data
+   science lab [9]wordpress.com
+
+[10]the data science lab
+
+   experiments with data
+
+     * [11]about
+     * [12]contact
+     * [13]archives
+
+   january 21, 2014
+
+selection of k in id116 id91, reloaded
+
+   this article follows up on the series devoted to [14]id116 id91
+   at the data science lab. previous posts have dealt with how to
+   implement [15]lloyd   s algorithm for id91 in python, described an
+   improved initialization algorithm for [16]proper seeding of the initial
+   clusters, id116++, and introduced the [17]gap statistic as a method
+   of finding the optimal k for id116 id91.
+
+   although the gap statistic, based on a paper by [18]tibshirani et al
+   was shown to find optimal values for the number of clusters in a
+   variety of cases when the clusters where globular and mildly
+   disjointed, its performance might be hampered by the need of perfoming
+   monte carlo simulations to estimate the reference datasets. a reader of
+   this blog, [19]jonathan stray, [20]pointed out a potentially superior
+   method for selecting the k in id116 id91, so let us implement
+   it and compare.
+
+an alternative approach to finding the optimal k
+
+   the approach suggested by our reader is based on a publication by
+   [21]pham, dimov and nguyen from 2004. the article is very much worth
+   reading, as it includes an explanation of the drawbacks of the standard
+   id116 algorithm as well as a comprehensive survey on different
+   methods that have been proposed for selecting an optimal number of
+   clusters.
+
+   in section 3 of the paper, the authors justify the introduction of a
+   function f(k) to evaluate the quality of the resulting id91 and
+   help decide on the optimal value of k for each data set. quoting from
+   the paper:
+
+     a data set with n objects could be grouped into any number of
+     clusters between 1 and n , which would correspond to the lowest and
+     the highest levels of detail respectively. by specifying different k
+     values, it is possible to assess the results of grouping objects
+     into various numbers of clusters. from this evaluation, more than
+     one k value could be recommended to users, but the    nal selection is
+     made by them.
+
+   the goal of a id91 algorithm is to identify regions in which the
+   data points are concentrated. it is also important to analyze the
+   internal distribution of each cluster as well as its relation to other
+   clusters in the data set. the distorsion of a cluster is a measure of
+   the distance between points in a cluster and its centroid:
+
+   \displaystyle i_j = \sum_{\mathrm{x}_i \in c_j} ||\mathrm{x}_i - \mu_j
+   ||^2 .
+
+   the global impact of all clusters    distortions is given by the quantity
+
+   \displaystyle s_k = \sum_{j=1}^k i_j .
+
+   the authors pham et al. proceed to discuss further constrains that the
+   sought-after function f(k) should verify for it to be informative to
+   the problem of selection of k. they finally arrive at the following
+   definition:
+
+   [22]fk
+
+   n_d is the number of dimensions (attributes) of the data set and
+   \alpha_k is a weight factor. with this definition, f(k) is the ratio of
+   the real distortion to the estimated distortion and decreases when
+   there are areas of concentration in the data distribution. values of k
+   that yield small f(k) can be regarded as giving well-de   ned clusters.
+
+a python implementation of pham et al. f(k)
+
+   our implementation of the pham et al. procedure builds on the kmeans
+   and kplusplus python classes defined in our [23]article on the
+   id116++ algorithm. we define a new class that inherits from kplusplus
+   and contains a function to compute f(k) :
+class detk(kplusplus):
+    def fk(self, thisk, skm1=0):
+        x = self.x
+        nd = len(x[0])
+        a = lambda k, nd: 1 - 3/(4*nd) if k == 2 else a(k-1, nd) + (1-a(k-1, nd)
+)/6
+        self.find_centers(thisk, method='++')
+        mu, clusters = self.mu, self.clusters
+        sk = sum([np.linalg.norm(mu[i]-c)**2 \
+                 for i in range(thisk) for c in clusters[i]])
+        if thisk == 1:
+            fs = 1
+        elif skm1 == 0:
+            fs = 1
+        else:
+            fs = sk/(a(thisk,nd)*skm1)
+        return fs, sk
+
+   note the recursive definition of \alpha_k (variable a in the code
+   snapshot above) and the fact that the computation of s_k for k > 1
+   requires knowing the value of s_{k-1} , which is passed as input
+   parameter to the function.
+
+   this article aims at showing that the pham et al. procedure works and
+   is computationally more efficient than the [24]gap statistic.
+   therefore, we will code up the algorithm for the gap statistic within
+   the same class detk, so that we can run both procedures simultaneously.
+   the full code is below the fold:
+class detk(kplusplus):
+    def fk(self, thisk, skm1=0):
+        x = self.x
+        nd = len(x[0])
+        a = lambda k, nd: 1 - 3/(4*nd) if k == 2 else a(k-1, nd) + (1-a(k-1, nd)
+)/6
+        self.find_centers(thisk, method='++')
+        mu, clusters = self.mu, self.clusters
+        sk = sum([np.linalg.norm(mu[i]-c)**2 \
+                 for i in range(thisk) for c in clusters[i]])
+        if thisk == 1:
+            fs = 1
+        elif skm1 == 0:
+            fs = 1
+        else:
+            fs = sk/(a(thisk,nd)*skm1)
+        return fs, sk
+
+    def _bounding_box(self):
+        x = self.x
+        xmin, xmax = min(x,key=lambda a:a[0])[0], max(x,key=lambda a:a[0])[0]
+        ymin, ymax = min(x,key=lambda a:a[1])[1], max(x,key=lambda a:a[1])[1]
+        return (xmin,xmax), (ymin,ymax)
+
+    def gap(self, thisk):
+        x = self.x
+        (xmin,xmax), (ymin,ymax) = self._bounding_box()
+        self.init_centers(thisk)
+        self.find_centers(thisk, method='++')
+        mu, clusters = self.mu, self.clusters
+        wk = np.log(sum([np.linalg.norm(mu[i]-c)**2/(2*len(c)) \
+                    for i in range(thisk) for c in clusters[i]]))
+        # create b reference datasets
+        b = 10
+        bwkbs = zeros(b)
+        for i in range(b):
+            xb = []
+            for n in range(len(x)):
+                xb.append([random.uniform(xmin,xmax), \
+                          random.uniform(ymin,ymax)])
+            xb = np.array(xb)
+            kb = detk(thisk, x=xb)
+            kb.init_centers(thisk)
+            kb.find_centers(thisk, method='++')
+            ms, cs = kb.mu, kb.clusters
+            bwkbs[i] = np.log(sum([np.linalg.norm(ms[j]-c)**2/(2*len(c)) \
+                              for j in range(thisk) for c in cs[j]]))
+        wkb = sum(bwkbs)/b
+        sk = np.sqrt(sum((bwkbs-wkb)**2)/float(b))*np.sqrt(1+1/b)
+        return wk, wkb, sk
+
+    def run(self, maxk, which='both'):
+        ks = range(1,maxk)
+        fs = zeros(len(ks))
+        wks,wkbs,sks = zeros(len(ks)+1),zeros(len(ks)+1),zeros(len(ks)+1)
+        # special case k=1
+        self.init_centers(1)
+        if which == 'f':
+            fs[0], sk = self.fk(1)
+        elif which == 'gap':
+            wks[0], wkbs[0], sks[0] = self.gap(1)
+        else:
+            fs[0], sk = self.fk(1)
+            wks[0], wkbs[0], sks[0] = self.gap(1)
+        # rest of ks
+        for k in ks[1:]:
+            self.init_centers(k)
+            if which == 'f':
+                fs[k-1], sk = self.fk(k, skm1=sk)
+            elif which == 'gap':
+                wks[k-1], wkbs[k-1], sks[k-1] = self.gap(k)
+            else:
+                fs[k-1], sk = self.fk(k, skm1=sk)
+                wks[k-1], wkbs[k-1], sks[k-1] = self.gap(k)
+        if which == 'f':
+            self.fs = fs
+        elif which == 'gap':
+            g = []
+            for i in range(len(ks)):
+                g.append((wkbs-wks)[i] - ((wkbs-wks)[i+1]-sks[i+1]))
+            self.g = np.array(g)
+        else:
+            self.fs = fs
+            g = []
+            for i in range(len(ks)):
+                g.append((wkbs-wks)[i] - ((wkbs-wks)[i+1]-sks[i+1]))
+            self.g = np.array(g)
+
+    def plot_all(self):
+        x = self.x
+        ks = range(1, len(self.fs)+1)
+        fig = plt.figure(figsize=(18,5))
+        # plot 1
+        ax1 = fig.add_subplot(131)
+        ax1.set_xlim(-1,1)
+        ax1.set_ylim(-1,1)
+        ax1.plot(zip(*x)[0], zip(*x)[1], '.', alpha=0.5)
+        tit1 = 'n=%s' % (str(len(x)))
+        ax1.set_title(tit1, fontsize=16)
+        # plot 2
+        ax2 = fig.add_subplot(132)
+        ax2.set_ylim(0, 1.25)
+        ax2.plot(ks, self.fs, 'ro-', alpha=0.6)
+        ax2.set_xlabel('number of clusters k', fontsize=16)
+        ax2.set_ylabel('f(k)', fontsize=16)
+        foundfk = np.where(self.fs == min(self.fs))[0][0] + 1
+        tit2 = 'f(k) finds %s clusters' % (foundfk)
+        ax2.set_title(tit2, fontsize=16)
+        # plot 3
+        ax3 = fig.add_subplot(133)
+        ax3.bar(ks, self.g, alpha=0.5, color='g', align='center')
+        ax3.set_xlabel('number of clusters k', fontsize=16)
+        ax3.set_ylabel('gap', fontsize=16)
+        foundg = np.where(self.g > 0)[0][0] + 1
+        tit3 = 'gap statistic finds %s clusters' % (foundg)
+        ax3.set_title(tit3, fontsize=16)
+        ax3.xaxis.set_ticks(range(1,len(ks)+1))
+        plt.savefig('detk_n%s.png' % (str(len(x))), \
+                     bbox_inches='tight', dpi=100)
+
+   for a first experiment comparing the pham et al. and the gap statistic
+   approaches, we create a data set comprising 300 points around 2
+   gaussian-distributed clusters. we run both methods to select k spanning
+   the values k=1, \ldots, 9 . (the function run from class detk takes a
+   value k_{thr} as input and checks all values such that k < k_{thr} .)
+   note that every run of the id116 id91 algorithm for different
+   values of k is preceded by the id116++ initialization algorithm, to
+   prevent landing at suboptimal id91 solutions.
+
+   to run a full comparison of both methods, the following simple commands
+   are invoked:
+kpp = detk(2, n=300)
+kpp.run(10)
+kpp.plot_all()
+
+   this produces the following result plots:
+
+   [25]detk_n300
+
+   according to pham et al. lower values of f(k) , and especially values
+   f(k) < 0.85 are an indication of cluster-like features in the data at
+   that particular k . in the case of k=2 , the global minimum of f(k) in
+   the central plot leaves no doubt that this is the right value to choose
+   for this particular data configuration. the gap statistic, depicted in
+   the plot on the right, yields the same result of k=2 . remember that
+   the optimal k with the gap statistic is the smallest value for which
+   the gap quantity becomes positive.
+
+   similarly, we can analyze a data set consisting of 100 points around a
+   single cluster. the results are shown in the plots below. we observe
+   how the function f(k) does not show any prominent valley or value for
+   which f(k) < 0.85 for any of the surveyed k s. according to the pham et
+   al. paper, this is an indication of no id91, as is the case. the
+   gap statistic agrees that there is no more than one cluster in this
+   case.
+
+   [26]detk_n100
+
+   finally, let us look at two cases, both with 500 data points around 4
+   clusters. below are the plots of the results:
+
+   [27]detk_n500_1
+
+   [28]detk_n500
+
+   for the data distribution on the top, one can see that the 4 clusters
+   are positioned in such a way that they could also be interpreted as 2
+   clusters made of 2 subclusters each. the f(k) detects this
+   configuration and suggests 2 possible values of k , with a slight
+   preference for k=2 over k=4 . the gap statistic changes sign at k=2 ,
+   albeit barely, and it does it again and more clearly at k=4 . in both
+   cases, a strict application of the rules prescribed to select the
+   correct k does lead to a rather suboptimal, or at least dubious,
+   choice.
+
+   in the bottom plot however, the 4 clusters are somehow more evenly
+   spreaded and both algorithms succeed at identifying k=4 . the f(k)
+   method still shows a relative minimum at k=2 , indicating a potentially
+   alternative id91.
+
+performance comparison of f(k) and the gap statistic
+
+   if both methods to select the optimal k for id116 id91 yield
+   similar results, one should ask about the relative performance of them
+   in real-life data science id91 problems. it is straightforward to
+   predict that the gap statistic, with its need for running the id116
+   algorithm multiple times to create a monte carlo reference
+   distribution, will necessarily be a poorer performer. we can easily
+   test this hypothesis with our code by running both approaches and
+   timing them using the ipython magic %time function. for a data set with
+   n = 500 :
+%time kpp.run(10, which='f')
+
+   cpu times: user 2.72 s, sys: 0.00 s, total: 2.72 s
+   wall time: 2.90 s
+%time kpp.run(10, which='gap')
+
+   cpu times: user 51.30 s, sys: 0.01 s, total: 51.31 s
+   wall time: 51.40 s
+
+   in this particular example, the f(k) method is more than one order of
+   magnitude more performant than the gap statistic, and this comparison
+   looks worse for the latter the more data we take into consideration and
+   the larger the number b employed for generating the reference
+   distributions.
+
+table-top data experiment take-away message
+
+   the estimation of the optimal number of clusters within a set of data
+   points is a very important problem, as most id91 algorithms need
+   that parameter as input in order to group the data. many methods have
+   been proposed to find the proper k , among which the approach proposed
+   by pham et al. in 2004 seems to offer a very straightforward and
+   performant solution. the estimation of the function f(k) over the
+   desired range of test values for k offers an immediate way of assessing
+   when the cluster-like features appear and allows to choose among a best
+   value and other alternatives. a comparison in performance with the gap
+   statistic method of tibshirani et al. concludes that the f(k) is
+   computationally advantageous.
+   advertisements
+
+share!
+
+     * [29]twitter
+     * [30]facebook
+     *
+
+like this:
+
+   like loading...
+
+related
+
+   written by [31]datasciencelab posted in [32]experiments tagged with
+   [33]id91, [34]id116, [35]unsupervised learning
+
+30 comments
+
+    1.
+   [36]january 23, 2014 - 12:26 am [37]jonathanstray (@jonathanstray)
+       i think this is great. but then, i would.
+       i   d love to understand better how id116 works on real data. these
+       synthetic datasets are good for testing, but they are very low
+       dimensional and very clean. it   s a pretty major challenge to
+       visualize how id116 is doing in 40 dimensions    one thing that
+       happens is the algorithm gets less stable because there are many
+       more directions to slice the same data set into clusters. have you
+       seen any work explaining or evaluating this phenomenon?
+       [38]reply
+          +
+        [39]january 28, 2014 - 5:00 pm [40]datasciencelab
+            you   re totally right. i   m very curious to see how the method
+            works on multi-dimensional, real data. visualization becomes
+            much trickier though, which is why i chose this simple 2-d
+            case for didactical purposes. i need to find literature in the
+            matter before i dig deeper into practical experiments. hang in
+            there!
+            [41]reply
+               o
+             [42]march 28, 2017 - 7:51 am anonymous
+                 i used id91 in analysis of financial services data.
+                 it is highly effective to understand the dimensional
+                 structure of data as it occurs    naturally   .
+                 after a stable solution is obtained, you can use the
+                 segmentation for extensive profiling.
+                 when building on real data, a lot of time is spent trying
+                 to make the sample amenable to id91.
+                 for instance, you need to get set bounds on individual
+                 variables so that extreme outliers do not destabilise the
+                 solution, or keep it from converging.
+                 also, how do you deal with missing data? do you impute?
+                 do you exclude altogether?
+                 these decisions are subjective, driven primarily by
+                 expert knowledge of domain. due to this, clusters built
+                 by one analyst are rarely the same as those built by
+                 another.
+                 check for multicollinearity among variables before going
+                 any further.
+                 analysts constrain the minimum size of each cluster,
+                 e.g., no clusters should be less than 3% of the sample,
+                 or some such rule. some analysts may constrain the
+                 maximum number of clusters that can be identified. this
+                 is to make business strategies manageable/scalable. this
+                 will probably be different is biological/engineering
+                 industry.
+                 since many subjective decisions are involved, quality
+                 assessment of a cluster solution is different from that
+                 of a regression model. in clusters, you have to spend a
+                 lot more time looking at the results to check whether
+                 they make intuitive sense, and whether they will help you
+                 with your objective.
+    2.
+   [43]july 6, 2014 - 7:01 pm [44]coder87
+       hello guys, great articles, is it possible to see whole source code
+       with examples in one? i meant if you are sharing this code on
+       github or somewhere else.
+       thanks a lot!
+       [45]reply
+          +
+        [46]july 26, 2014 - 9:21 am [47]datasciencelab
+            hello, it   s just one gal over here, which is why i haven   t had
+            yet time to set up a github repo for all the code. but it   s in
+            the pipeline!
+            [48]reply
+               o
+             [49]november 4, 2017 - 12:53 am [50]jerome onwunalu
+                 very impressive. if you need additional helping hand with
+                 code on github repo, let me know. good work.
+    3. december 29, 2014 - 3:43 pm pingback: [51]optimal    k    when there   s
+       no cluster? gap vs pham part i | the farrago
+    4.
+   [52]february 23, 2015 - 11:13 pm anonymous
+       these changes will make the code work:
+       def init_centers(self,k):
+       self.k = k
+       self.mu = random.sample(self.x,1)
+       while len(self.mu) < self.k:
+       self._dist_from_centers()
+       self.mu.append(self._choose_next_center())
+       def plot_init_centers(self):
+       x = self.x
+       fig = plt.figure(figsize=(5,5))
+       plt.xlim(-1,1)
+       plt.ylim(-1,1)
+       plt.plot(zip(*x)[0], zip(*x)[1], '.', alpha=0.5)
+       plt.plot(zip(*self.mu)[0], zip(*self.mu)[1], 'ro')
+       plt.savefig('kpp_init_n%s_k%s.png' % (str(self.n),str(self.k)), \
+       bbox_inches='tight', dpi=200)
+       [53]reply
+    5.
+   [54]february 23, 2015 - 11:14 pm anonymous
+       sorry, no changes in plot_init_centers required. but in this one:
+       def find_centers(self, k, method=   random   ):
+       self.method = method
+       x = self.x
+       k = self.k
+       self.oldmu = random.sample(x, k)
+       if method !=    ++   :
+       # initialize to k random centers
+       self.mu = random.sample(x, k)
+       while not self._has_converged():
+       self.oldmu = self.mu
+       # assign all points in x to clusters
+       self._cluster_points()
+       # reevaluate centers
+       self._reevaluate_centers()
+       [55]reply
+    6.
+   [56]march 18, 2015 - 11:00 am vishal
+       do we have any java code available , not good at python
+       [57]reply
+    7.
+   [58]march 19, 2015 - 9:26 am melbic
+       the code isn   t running even when applying the changes from
+       anonymous. a github repo would be really, really great!
+       [59]reply
+    8.
+   [60]april 2, 2015 - 6:40 pm matt
+       this code doesn   t run, despite my attempts to aggregate the
+       required code over several posts. if you don   t want to go through
+       the hassle of setting up a repo on git, could you email me the
+       final working code that generated the plots in this post? i can
+       even create the repo for you (and credit you of course!) if you   d
+       like.
+       [61]reply
+    9.
+   [62]june 5, 2015 - 5:00 pm david
+       the lambda expression for    a    in the fk() method is incorrect. all
+       of its variables and constants are integers. thus it only returns
+       integer values for a.
+       [63]reply
+          +
+        [64]january 5, 2016 - 7:00 pm wing
+            agreed, i had to change the integer values to floats to get
+            the correct weights,
+            a = lambda k, nd: 1.0     3.0/(4.0*nd) if k == 2 else a(k-1, nd)
+            + (1.0-a(k-1, nd))/6.0
+            otherwise, it worked and is a great post!
+            [65]reply
+   10.
+   [66]june 22, 2015 - 2:21 pm froblinkin
+       so if you   re unable to get the code to run what you need to do is
+       implement anon   s fixes:
+       1. add k as an arg in find_enters and init_enters
+       def find_centers(self, k, method=   random   )
+       def init_centers(self,k)
+       2. you need to import a few modules for all 3 files, kmeans,
+       kplusplus, and detk
+       import numpy as np
+       import random
+       import matplotlib.pyplot as plt
+       3. add np. to all the zeros (np.zeros instead of zeros). i think
+       there are 4 around line 40-50
+       with these, you should be able to run the program. (a.run(10) does
+       take a little while)
+       4. i   m a bit new to python inheritance but make sure you add from
+       subclass import subclass
+       for kplusplus:
+       from kmeans import kmeans
+       for detk
+       from kplusplus import kplusplus
+       it looks like op might have ditched this blog, but he/she did a
+       pretty good job with this code and all the work he/she has done to
+       present these complex algorithms in a simplified form.
+       [67]reply
+          +
+        [68]june 22, 2015 - 2:28 pm froblinkin
+            also, if you   re passing a specific argument to only run one
+            version of the algorithm (gap or f(k) just remember to adjust
+            the graphs in plot_all accordingly as its default is to print
+            both (even as f(k) is much faster).
+            [69]reply
+   11.
+   [70]july 15, 2015 - 1:59 pm [71]marco de nadai (@denadai2)
+       page 3: unfortunately, this method of selecting
+       k
+       cannot
+       be applied to practical problems. the data distri-
+       bution in practical problems is unknown and also
+       the number of generators cannot be specified.
+       [72]reply
+          +
+        [73]november 17, 2015 - 8:20 am lukas nic
+            that is for the method of    values of k equated to the
+            number of generators   
+            you cannot use this method to find k because you cannot know
+            how many generators there were. they are covering normal
+            methods of finding k.
+            [74]reply
+   12.
+   [75]october 25, 2015 - 4:30 pm d  enan softi  
+       this function makes the calculation very slow: a = lambda k, nd: 1
+           3/(4*nd) if k == 2 else a(k-1, nd) + (1-a(k-1, nd))/6
+       it can be avoided by implementing this piece of code using
+       memoization. that way it will store all previous results and
+       therefore there will be no need to compute a(k-1, nd) again for k   s
+       that has been already computed in previous    thisk    iterations.
+       [76]reply
+          +
+        [77]october 25, 2015 - 5:52 pm [78]datasciencelab
+            great feedback. right, that   s the problem with implicit
+            functions. the code has been written for clarity without any
+            intend of optimising it. memoization is a good way to go.
+            [79]reply
+          +
+        [80]january 5, 2016 - 7:13 pm wing
+            here is a simple implementation i used     is this the kind of
+            thing you had in mind?
+                  
+            this function allows for memoization (caching) of results for
+            the recursive
+            computation of the weighting value a_k. it is used as a
+            decorator below.
+            input:
+            func = the function that will be called
+            output:
+            helper = the memoized function
+            adapted from
+            [81]http://www.python-course.eu/python3_memoization.php
+            and
+            [82]http://people.ucsc.edu/~abrsvn/nltk_parsing_demos.pdf
+            for a more complete version of memoization see
+            [83]https://wiki.python.org/moin/pythondecoratorlibrary#memoiz
+            e
+                  
+            def memoize(func):
+            memo = {}
+            def helper(*args):
+            if args not in memo:
+            memo[args] = func(*args)
+            return memo[args]
+            return helper
+                  
+            this function computes the weighting constant used to account
+            for the
+            data dimensionality. it has a memoize decorator to help with
+            the
+            recursive nature of the function     see above.
+            input:
+            k = the current value of k (num_clusters) being evaluated
+            nd = the number of features in the data
+            output:
+            a_k = the weighting factor a_k
+                  
+            @memoize
+            def get_ak(k, nd):
+            if k == 2:
+            a_k = 1.0     3.0/(4.0 * nd)
+            else:
+            a_k = get_a(k-1, nd) + (1.0     get_a(k-1, nd))/6.0
+            return a_k
+            you would then call
+            fs = sk/(get_ak(thisk,nd)*skm1)
+            rather than
+            fs = sk/(a(thisk,nd)*skm1)
+            in the fk() function
+            [84]reply
+          +
+        [85]july 19, 2016 - 4:58 pm [86]gabriel moreira
+            the problem with the original lambda recursion   
+            a = lambda k, nd: 1     3/(4*nd) if k == 2 else a(k-1, nd) +
+            (1-a(k-1, nd))/6
+                is that the else condition makes 2 recursions of a(k-1, nd),
+            when only 1 recursion is needed, whose value can be reused in
+            this formula. with 2 recursions, the complexity is a
+            exponential function of k on base 2 (i.e. for k=40 there will
+            be about 2^40 recursions). a simple reuse of the recursion
+            makes the complexity linear on k, as follows:
+            def a(k, nd):
+            if k == 2:
+            return 1     3/(4*nd)
+            else:
+            previous_a = a(k-1, nd)
+            return previous_a + (1-previous_a)/6
+            [87]reply
+   13.
+   [88]december 18, 2015 - 3:00 pm guim86
+       reblogged this on [89]d2ab.
+       [90]reply
+   14.
+   [91]december 27, 2015 - 5:11 pm queenbi
+       is nd must bigger than 1? what if nd == 1?
+       [92]reply
+   15.
+   [93]april 14, 2016 - 9:07 pm yummy
+       i got a keyerror which i believe exist in the range of index
+       file       .\kmeans_seed_deptk_0413.py   , line 144, in fk
+       for i in range(thisk) for c in clusters[i]])
+       keyerror: 2
+       any ideas on how to solve this?
+       i changed thisk to len(mu) and then it would pop up a keyerror: 1.
+       [94]reply
+   16.
+   [95]july 16, 2017 - 4:05 am amr
+       i need this code in matlab or python to matlab converter. any help?
+       [96]reply
+   17.
+   [97]october 22, 2017 - 5:18 am mshaffer
+       this runs very slow.
+       i updated the code to python3     several more errors than posted
+       above.
+       i uploaded the binary file with    points   
+       [98]http://www.mshaffer.com/arizona/dissertation/points
+       the r implementation may be faster
+       [99]https://stat.ethz.ch/r-manual/r-devel/library/cluster/html/clus
+       gap.html
+       [100]reply
+   18. march 29, 2018 - 6:22 am pingback: [101]steroids shop
+   19.
+   [102]march 19, 2019 - 3:51 am [103]mcsimenc
+       thanks for sharing
+       [104]reply
+   20.
+   [105]march 19, 2019 - 3:12 pm [106]mcsimenc
+       i am seeing best k = maxk-1 for all maxk i have tried, anyone else
+       seeing that?
+       [107]reply
+
+post a comment [108]cancel reply
+
+   enter your comment here...
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+
+   fill in your details below or click an icon to log in:
+     *
+     *
+     *
+
+       iframe: [109]googleplus-sign-in
+
+     *
+     *
+
+   [110]gravatar
+   email (address never made public)
+   ____________________
+   name
+   ____________________
+   website
+   ____________________
+   wordpress.com logo
+
+   you are commenting using your wordpress.com account. ( [111]log out /
+   [112]change )
+   google photo
+
+   you are commenting using your google account. ( [113]log out /
+   [114]change )
+   twitter picture
+
+   you are commenting using your twitter account. ( [115]log out /
+   [116]change )
+   facebook photo
+
+   you are commenting using your facebook account. ( [117]log out /
+   [118]change )
+   [119]cancel
+
+   connecting to %s
+
+   [ ] notify me of new comments via email.
+
+   [ ] notify me of new posts via email.
+
+   post comment
+
+   [120]improved seeding for id91 with id116++
+   [121]2014 in review
+
+the data science lab
+
+   this blog is a collection of articles on data science topics, machine
+   learning, visualization and fun experiments with data.
+
+recent posts
+
+     * [122]2014 in review
+     * [123]selection of k in id116 id91, reloaded
+     * [124]improved seeding for id91 with id116++
+     * [125]machine learning classics: the id88
+     * [126]list comprehension in python
+
+data science lab tweets
+
+   [127]my tweets
+
+data science lab tags
+
+   [128]animations [129]authorship attribution [130]automata
+   [131]id91 [132]coursera [133]courses [134]data exploration
+   [135]edx [136]game of life [137]gap statistic [138]general
+   [139]initialization [140]id116 [141]linear classifier [142]list
+   comprehension [143]lloyd's algorithm [144]machine learning
+   [145]matplotlib [146]mooc [147]pandas [148]id88 [149]plotting
+   [150]python [151]supervised learning [152]udacity [153]unsupervised
+   learning [154]video [155]visualization
+
+   [156]follow the data science lab on wordpress.com
+
+rss
+
+     * [157]rss - posts
+
+   [158]create a free website or blog at wordpress.com.
+
+
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   ____________________________________________________________
+   post to
+   [159]cancel reblog post
+
+   close and accept privacy & cookies: this site uses cookies. by
+   continuing to use this website, you agree to their use.
+   to find out more, including how to control cookies, see here:
+   [160]cookie policy
+
+   iframe: [161]likes-master
+
+   %d bloggers like this:
+
+references
+
+   visible links
+   1. https://datasciencelab.wordpress.com/feed/
+   2. https://datasciencelab.wordpress.com/comments/feed/
+   3. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/feed/
+   4. https://datasciencelab.wordpress.com/2014/01/15/improved-seeding-for-id91-with-id116/
+   5. https://datasciencelab.wordpress.com/2014/12/31/2014-in-review/
+   6. https://public-api.wordpress.com/oembed/?format=json&url=https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/&for=wpcom-auto-discovery
+   7. https://public-api.wordpress.com/oembed/?format=xml&url=https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/&for=wpcom-auto-discovery
+   8. https://datasciencelab.wordpress.com/osd.xml
+   9. https://s1.wp.com/opensearch.xml
+  10. https://datasciencelab.wordpress.com/
+  11. https://datasciencelab.wordpress.com/about/
+  12. https://datasciencelab.wordpress.com/contact/
+  13. https://datasciencelab.wordpress.com/archives/
+  14. https://datasciencelab.wordpress.com/tag/id116/
+  15. https://datasciencelab.wordpress.com/2013/12/12/id91-with-id116-in-python/
+  16. https://datasciencelab.wordpress.com/2014/01/15/improved-seeding-for-id91-with-id116/
+  17. https://datasciencelab.wordpress.com/2013/12/27/finding-the-k-in-id116-id91/
+  18. http://www.stanford.edu/~hastie/papers/gap.pdf
+  19. http://jonathanstray.com/
+  20. https://datasciencelab.wordpress.com/2013/12/27/finding-the-k-in-id116-id91/comment-page-1/#comment-17
+  21. http://www.ee.columbia.edu/~dpwe/papers/phamdn05-kmeans.pdf
+  22. https://datasciencelab.files.wordpress.com/2014/01/fk.png
+  23. https://datasciencelab.wordpress.com/2014/01/15/improved-seeding-for-id91-with-id116/
+  24. https://datasciencelab.wordpress.com/2013/12/27/finding-the-k-in-id116-id91/
+  25. https://datasciencelab.files.wordpress.com/2014/01/detk_n300.png
+  26. https://datasciencelab.files.wordpress.com/2014/01/detk_n100.png
+  27. https://datasciencelab.files.wordpress.com/2014/01/detk_n500_1.png
+  28. https://datasciencelab.files.wordpress.com/2014/01/detk_n500.png
+  29. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?share=twitter
+  30. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?share=facebook
+  31. https://datasciencelab.wordpress.com/author/datasciencelab/
+  32. https://datasciencelab.wordpress.com/category/experiments/
+  33. https://datasciencelab.wordpress.com/tag/id91/
+  34. https://datasciencelab.wordpress.com/tag/id116/
+  35. https://datasciencelab.wordpress.com/tag/unsupervised-learning/
+  36. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-35
+  37. http://twitter.com/jonathanstray
+  38. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=35#respond
+  39. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-38
+  40. https://datasciencelab.wordpress.com/
+  41. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=38#respond
+  42. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-699
+  43. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-174
+  44. http://fundatascience.wordpress.com/
+  45. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=174#respond
+  46. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-187
+  47. https://datasciencelab.wordpress.com/
+  48. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=187#respond
+  49. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-936
+  50. https://plus.google.com/108595481296213932143
+  51. https://haroldpimentel.wordpress.com/2014/12/29/optimal-k-when-theres-no-cluster-gap-vs-pham-part-i/
+  52. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-367
+  53. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=367#respond
+  54. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-368
+  55. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=368#respond
+  56. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-381
+  57. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=381#respond
+  58. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-382
+  59. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=382#respond
+  60. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-387
+  61. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=387#respond
+  62. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-402
+  63. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=402#respond
+  64. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-488
+  65. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=488#respond
+  66. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-406
+  67. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=406#respond
+  68. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-407
+  69. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=407#respond
+  70. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-416
+  71. http://twitter.com/denadai2
+  72. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=416#respond
+  73. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-452
+  74. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=452#respond
+  75. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-441
+  76. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=441#respond
+  77. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-442
+  78. https://datasciencelab.wordpress.com/
+  79. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=442#respond
+  80. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-489
+  81. http://www.python-course.eu/python3_memoization.php
+  82. http://people.ucsc.edu/~abrsvn/nltk_parsing_demos.pdf
+  83. https://wiki.python.org/moin/pythondecoratorlibrary#memoize
+  84. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=489#respond
+  85. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-580
+  86. http://about.me/gspmoreira
+  87. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=580#respond
+  88. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-471
+  89. https://d2ab.wordpress.com/2015/12/18/selection-of-k-in-id116-id91-reloaded/
+  90. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=471#respond
+  91. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-476
+  92. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=476#respond
+  93. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-535
+  94. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=535#respond
+  95. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-805
+  96. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=805#respond
+  97. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-921
+  98. http://www.mshaffer.com/arizona/dissertation/points
+  99. https://stat.ethz.ch/r-manual/r-devel/library/cluster/html/clusgap.html
+ 100. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=921#respond
+ 101. http://www.roids.online/steroids-shop
+ 102. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-1966
+ 103. http://gravatar.com/mcsimenc
+ 104. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=1966#respond
+ 105. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-1967
+ 106. http://gravatar.com/mcsimenc
+ 107. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/?replytocom=1967#respond
+ 108. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#respond
+ 109. https://public-api.wordpress.com/connect/?googleplus-sign-in=https://datasciencelab.wordpress.com&color_scheme=light
+ 110. https://gravatar.com/site/signup/
+ 111. javascript:highlandercomments.doexternallogout( 'wordpress' );
+ 112. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/
+ 113. javascript:highlandercomments.doexternallogout( 'googleplus' );
+ 114. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/
+ 115. javascript:highlandercomments.doexternallogout( 'twitter' );
+ 116. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/
+ 117. javascript:highlandercomments.doexternallogout( 'facebook' );
+ 118. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/
+ 119. javascript:highlandercomments.cancelexternalwindow();
+ 120. https://datasciencelab.wordpress.com/2014/01/15/improved-seeding-for-id91-with-id116/
+ 121. https://datasciencelab.wordpress.com/2014/12/31/2014-in-review/
+ 122. https://datasciencelab.wordpress.com/2014/12/31/2014-in-review/
+ 123. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/
+ 124. https://datasciencelab.wordpress.com/2014/01/15/improved-seeding-for-id91-with-id116/
+ 125. https://datasciencelab.wordpress.com/2014/01/10/machine-learning-classics-the-id88/
+ 126. https://datasciencelab.wordpress.com/2014/01/08/list-comprehension-in-python/
+ 127. https://twitter.com/408172415013761025
+ 128. https://datasciencelab.wordpress.com/tag/animations/
+ 129. https://datasciencelab.wordpress.com/tag/authorship-attribution/
+ 130. https://datasciencelab.wordpress.com/tag/automata/
+ 131. https://datasciencelab.wordpress.com/tag/id91/
+ 132. https://datasciencelab.wordpress.com/tag/coursera/
+ 133. https://datasciencelab.wordpress.com/tag/courses/
+ 134. https://datasciencelab.wordpress.com/tag/data-exploration/
+ 135. https://datasciencelab.wordpress.com/tag/edx/
+ 136. https://datasciencelab.wordpress.com/tag/game-of-life/
+ 137. https://datasciencelab.wordpress.com/tag/gap-statistic/
+ 138. https://datasciencelab.wordpress.com/tag/general/
+ 139. https://datasciencelab.wordpress.com/tag/initialization/
+ 140. https://datasciencelab.wordpress.com/tag/id116/
+ 141. https://datasciencelab.wordpress.com/tag/linear-classifier/
+ 142. https://datasciencelab.wordpress.com/tag/list-comprehension/
+ 143. https://datasciencelab.wordpress.com/tag/lloyds-algorithm/
+ 144. https://datasciencelab.wordpress.com/tag/machine-learning/
+ 145. https://datasciencelab.wordpress.com/tag/matplotlib/
+ 146. https://datasciencelab.wordpress.com/tag/mooc/
+ 147. https://datasciencelab.wordpress.com/tag/pandas/
+ 148. https://datasciencelab.wordpress.com/tag/id88/
+ 149. https://datasciencelab.wordpress.com/tag/plotting/
+ 150. https://datasciencelab.wordpress.com/tag/python/
+ 151. https://datasciencelab.wordpress.com/tag/supervised-learning/
+ 152. https://datasciencelab.wordpress.com/tag/udacity/
+ 153. https://datasciencelab.wordpress.com/tag/unsupervised-learning/
+ 154. https://datasciencelab.wordpress.com/tag/video/
+ 155. https://datasciencelab.wordpress.com/tag/visualization/
+ 156. https://datasciencelab.wordpress.com/
+ 157. https://datasciencelab.wordpress.com/feed/
+ 158. https://wordpress.com/?ref=footer_website
+ 159. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/
+ 160. https://automattic.com/cookies
+ 161. https://widgets.wp.com/likes/master.html?ver=20190321#ver=20190321
+
+   hidden links:
+ 163. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-form-guest
+ 164. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-form-load-service:wordpress.com
+ 165. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-form-load-service:twitter
+ 166. https://datasciencelab.wordpress.com/2014/01/21/selection-of-k-in-id116-id91-reloaded/#comment-form-load-service:facebook

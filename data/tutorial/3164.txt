@@ -1,0 +1,563 @@
+   [1]cs231n convolutional neural networks for visual recognition
+
+   table of contents:
+     * [2]quick intro without brain analogies
+     * [3]modeling one neuron
+          + [4]biological motivation and connections
+          + [5]single neuron as a linear classifier
+          + [6]commonly used id180
+     * [7]neural network architectures
+          + [8]layer-wise organization
+          + [9]example feed-forward computation
+          + [10]representational power
+          + [11]setting number of layers and their sizes
+     * [12]summary
+     * [13]additional references
+
+quick intro
+
+   it is possible to introduce neural networks without appealing to brain
+   analogies. in the section on linear classification we computed scores
+   for different visual categories given the image using the formula \( s
+   = w x \), where \(w\) was a matrix and \(x\) was an input column vector
+   containing all pixel data of the image. in the case of cifar-10, \(x\)
+   is a [3072x1] column vector, and \(w\) is a [10x3072] matrix, so that
+   the output scores is a vector of 10 class scores.
+
+   an example neural network would instead compute \( s = w_2 \max(0, w_1
+   x) \). here, \(w_1\) could be, for example, a [100x3072] matrix
+   transforming the image into a 100-dimensional intermediate vector. the
+   function \(max(0,-) \) is a non-linearity that is applied elementwise.
+   there are several choices we could make for the non-linearity (which
+   we   ll study below), but this one is a common choice and simply
+   thresholds all activations that are below zero to zero. finally, the
+   matrix \(w_2\) would then be of size [10x100], so that we again get 10
+   numbers out that we interpret as the class scores. notice that the
+   non-linearity is critical computationally - if we left it out, the two
+   matrices could be collapsed to a single matrix, and therefore the
+   predicted class scores would again be a linear function of the input.
+   the non-linearity is where we get the wiggle. the parameters \(w_2,
+   w_1\) are learned with stochastic id119, and their gradients
+   are derived with chain rule (and computed with id26).
+
+   a three-layer neural network could analogously look like \( s = w_3
+   \max(0, w_2 \max(0, w_1 x)) \), where all of \(w_3, w_2, w_1\) are
+   parameters to be learned. the sizes of the intermediate hidden vectors
+   are hyperparameters of the network and we   ll see how we can set them
+   later. lets now look into how we can interpret these computations from
+   the neuron/network perspective.
+
+modeling one neuron
+
+   the area of neural networks has originally been primarily inspired by
+   the goal of modeling biological neural systems, but has since diverged
+   and become a matter of engineering and achieving good results in
+   machine learning tasks. nonetheless, we begin our discussion with a
+   very brief and high-level description of the biological system that a
+   large portion of this area has been inspired by.
+
+biological motivation and connections
+
+   the basic computational unit of the brain is a neuron. approximately 86
+   billion neurons can be found in the human nervous system and they are
+   connected with approximately 10^14 - 10^15 synapses. the diagram below
+   shows a cartoon drawing of a biological neuron (left) and a common
+   mathematical model (right). each neuron receives input signals from its
+   dendrites and produces output signals along its (single) axon. the axon
+   eventually branches out and connects via synapses to dendrites of other
+   neurons. in the computational model of a neuron, the signals that
+   travel along the axons (e.g. \(x_0\)) interact multiplicatively (e.g.
+   \(w_0 x_0\)) with the dendrites of the other neuron based on the
+   synaptic strength at that synapse (e.g. \(w_0\)). the idea is that the
+   synaptic strengths (the weights \(w\)) are learnable and control the
+   strength of influence (and its direction: excitory (positive weight) or
+   inhibitory (negative weight)) of one neuron on another. in the basic
+   model, the dendrites carry the signal to the cell body where they all
+   get summed. if the final sum is above a certain threshold, the neuron
+   can fire, sending a spike along its axon. in the computational model,
+   we assume that the precise timings of the spikes do not matter, and
+   that only the frequency of the firing communicates information. based
+   on this rate code interpretation, we model the firing rate of the
+   neuron with an activation function \(f\), which represents the
+   frequency of the spikes along the axon. historically, a common choice
+   of activation function is the sigmoid function \(\sigma\), since it
+   takes a real-valued input (the signal strength after the sum) and
+   squashes it to range between 0 and 1. we will see details of these
+   id180 later in this section.
+   [neuron.png] [neuron_model.jpeg]
+   a cartoon drawing of a biological neuron (left) and its mathematical
+   model (right).
+
+   an example code for forward-propagating a single neuron might look as
+   follows:
+class neuron(object):
+  # ...
+  def forward(self, inputs):
+    """ assume inputs and weights are 1-d numpy arrays and bias is a number """
+    cell_body_sum = np.sum(inputs * self.weights) + self.bias
+    firing_rate = 1.0 / (1.0 + math.exp(-cell_body_sum)) # sigmoid activation fu
+nction
+    return firing_rate
+
+   in other words, each neuron performs a dot product with the input and
+   its weights, adds the bias and applies the non-linearity (or activation
+   function), in this case the sigmoid \(\sigma(x) = 1/(1+e^{-x})\). we
+   will go into more details about different id180 at the
+   end of this section.
+
+   coarse model. it   s important to stress that this model of a biological
+   neuron is very coarse: for example, there are many different types of
+   neurons, each with different properties. the dendrites in biological
+   neurons perform complex nonlinear computations. the synapses are not
+   just a single weight, they   re a complex non-linear dynamical system.
+   the exact timing of the output spikes in many systems is known to be
+   important, suggesting that the rate code approximation may not hold.
+   due to all these and many other simplifications, be prepared to hear
+   groaning sounds from anyone with some neuroscience background if you
+   draw analogies between neural networks and real brains. see this
+   [14]review (pdf), or more recently this [15]review if you are
+   interested.
+
+single neuron as a linear classifier
+
+   the mathematical form of the model neuron   s forward computation might
+   look familiar to you. as we saw with linear classifiers, a neuron has
+   the capacity to    like    (activation near one) or    dislike    (activation
+   near zero) certain linear regions of its input space. hence, with an
+   appropriate id168 on the neuron   s output, we can turn a single
+   neuron into a linear classifier:
+
+   binary softmax classifier. for example, we can interpret
+   \(\sigma(\sum_iw_ix_i + b)\) to be the id203 of one of the
+   classes \(p(y_i = 1 \mid x_i; w) \). the id203 of the other class
+   would be \(p(y_i = 0 \mid x_i; w) = 1 - p(y_i = 1 \mid x_i; w) \),
+   since they must sum to one. with this interpretation, we can formulate
+   the cross-id178 loss as we have seen in the linear classification
+   section, and optimizing it would lead to a binary softmax classifier
+   (also known as id28). since the sigmoid function is
+   restricted to be between 0-1, the predictions of this classifier are
+   based on whether the output of the neuron is greater than 0.5.
+
+   binary id166 classifier. alternatively, we could attach a max-margin
+   hinge loss to the output of the neuron and train it to become a binary
+   support vector machine.
+
+   id173 interpretation. the id173 loss in both
+   id166/softmax cases could in this biological view be interpreted as
+   gradual forgetting, since it would have the effect of driving all
+   synaptic weights \(w\) towards zero after every parameter update.
+
+     a single neuron can be used to implement a binary classifier (e.g.
+     binary softmax or binary id166 classifiers)
+
+commonly used id180
+
+   every activation function (or non-linearity) takes a single number and
+   performs a certain fixed mathematical operation on it. there are
+   several id180 you may encounter in practice:
+   [sigmoid.jpeg] [tanh.jpeg]
+   left: sigmoid non-linearity squashes real numbers to range between
+   [0,1] right: the tanh non-linearity squashes real numbers to range
+   between [-1,1].
+
+   sigmoid. the sigmoid non-linearity has the mathematical form
+   \(\sigma(x) = 1 / (1 + e^{-x})\) and is shown in the image above on the
+   left. as alluded to in the previous section, it takes a real-valued
+   number and    squashes    it into range between 0 and 1. in particular,
+   large negative numbers become 0 and large positive numbers become 1.
+   the sigmoid function has seen frequent use historically since it has a
+   nice interpretation as the firing rate of a neuron: from not firing at
+   all (0) to fully-saturated firing at an assumed maximum frequency (1).
+   in practice, the sigmoid non-linearity has recently fallen out of favor
+   and it is rarely ever used. it has two major drawbacks:
+     * sigmoids saturate and kill gradients. a very undesirable property
+       of the sigmoid neuron is that when the neuron   s activation
+       saturates at either tail of 0 or 1, the gradient at these regions
+       is almost zero. recall that during id26, this (local)
+       gradient will be multiplied to the gradient of this gate   s output
+       for the whole objective. therefore, if the local gradient is very
+       small, it will effectively    kill    the gradient and almost no signal
+       will flow through the neuron to its weights and recursively to its
+       data. additionally, one must pay extra caution when initializing
+       the weights of sigmoid neurons to prevent saturation. for example,
+       if the initial weights are too large then most neurons would become
+       saturated and the network will barely learn.
+     * sigmoid outputs are not zero-centered. this is undesirable since
+       neurons in later layers of processing in a neural network (more on
+       this soon) would be receiving data that is not zero-centered. this
+       has implications on the dynamics during id119, because
+       if the data coming into a neuron is always positive (e.g. \(x > 0\)
+       elementwise in \(f = w^tx + b\))), then the gradient on the weights
+       \(w\) will during id26 become either all be positive, or
+       all negative (depending on the gradient of the whole expression
+       \(f\)). this could introduce undesirable zig-zagging dynamics in
+       the gradient updates for the weights. however, notice that once
+       these gradients are added up across a batch of data the final
+       update for the weights can have variable signs, somewhat mitigating
+       this issue. therefore, this is an inconvenience but it has less
+       severe consequences compared to the saturated activation problem
+       above.
+
+   tanh. the tanh non-linearity is shown on the image above on the right.
+   it squashes a real-valued number to the range [-1, 1]. like the sigmoid
+   neuron, its activations saturate, but unlike the sigmoid neuron its
+   output is zero-centered. therefore, in practice the tanh non-linearity
+   is always preferred to the sigmoid nonlinearity. also note that the
+   tanh neuron is simply a scaled sigmoid neuron, in particular the
+   following holds: \( \tanh(x) = 2 \sigma(2x) -1 \).
+   [relu.jpeg] [alexplot.jpeg]
+   left: rectified linear unit (relu) activation function, which is zero
+   when x < 0 and then linear with slope 1 when x > 0. right: a plot from
+   [16]krizhevsky et al. (pdf) paper indicating the 6x improvement in
+   convergence with the relu unit compared to the tanh unit.
+
+   relu. the rectified linear unit has become very popular in the last few
+   years. it computes the function \(f(x) = \max(0, x)\). in other words,
+   the activation is simply thresholded at zero (see image above on the
+   left). there are several pros and cons to using the relus:
+     * (+) it was found to greatly accelerate (e.g. a factor of 6 in
+       [17]krizhevsky et al.) the convergence of stochastic gradient
+       descent compared to the sigmoid/tanh functions. it is argued that
+       this is due to its linear, non-saturating form.
+     * (+) compared to tanh/sigmoid neurons that involve expensive
+       operations (exponentials, etc.), the relu can be implemented by
+       simply thresholding a matrix of activations at zero.
+     * (-) unfortunately, relu units can be fragile during training and
+       can    die   . for example, a large gradient flowing through a relu
+       neuron could cause the weights to update in such a way that the
+       neuron will never activate on any datapoint again. if this happens,
+       then the gradient flowing through the unit will forever be zero
+       from that point on. that is, the relu units can irreversibly die
+       during training since they can get knocked off the data manifold.
+       for example, you may find that as much as 40% of your network can
+       be    dead    (i.e. neurons that never activate across the entire
+       training dataset) if the learning rate is set too high. with a
+       proper setting of the learning rate this is less frequently an
+       issue.
+
+   leaky relu. leaky relus are one attempt to fix the    dying relu   
+   problem. instead of the function being zero when x < 0, a leaky relu
+   will instead have a small negative slope (of 0.01, or so). that is, the
+   function computes \(f(x) = \mathbb{1}(x < 0) (\alpha x) +
+   \mathbb{1}(x>=0) (x) \) where \(\alpha\) is a small constant. some
+   people report success with this form of activation function, but the
+   results are not always consistent. the slope in the negative region can
+   also be made into a parameter of each neuron, as seen in prelu neurons,
+   introduced in [18]delving deep into rectifiers, by kaiming he et al.,
+   2015. however, the consistency of the benefit across tasks is presently
+   unclear.
+
+   maxout. other types of units have been proposed that do not have the
+   functional form \(f(w^tx + b)\) where a non-linearity is applied on the
+   dot product between the weights and the data. one relatively popular
+   choice is the maxout neuron (introduced recently by [19]goodfellow et
+   al.) that generalizes the relu and its leaky version. the maxout neuron
+   computes the function \(\max(w_1^tx+b_1, w_2^tx + b_2)\). notice that
+   both relu and leaky relu are a special case of this form (for example,
+   for relu we have \(w_1, b_1 = 0\)). the maxout neuron therefore enjoys
+   all the benefits of a relu unit (linear regime of operation, no
+   saturation) and does not have its drawbacks (dying relu). however,
+   unlike the relu neurons it doubles the number of parameters for every
+   single neuron, leading to a high total number of parameters.
+
+   this concludes our discussion of the most common types of neurons and
+   their id180. as a last comment, it is very rare to mix
+   and match different types of neurons in the same network, even though
+   there is no fundamental problem with doing so.
+
+   tldr:    what neuron type should i use?    use the relu non-linearity, be
+   careful with your learning rates and possibly monitor the fraction of
+      dead    units in a network. if this concerns you, give leaky relu or
+   maxout a try. never use sigmoid. try tanh, but expect it to work worse
+   than relu/maxout.
+
+neural network architectures
+
+layer-wise organization
+
+   neural networks as neurons in graphs. neural networks are modeled as
+   collections of neurons that are connected in an acyclic graph. in other
+   words, the outputs of some neurons can become inputs to other neurons.
+   cycles are not allowed since that would imply an infinite loop in the
+   forward pass of a network. instead of an amorphous blobs of connected
+   neurons, neural network models are often organized into distinct layers
+   of neurons. for regular neural networks, the most common layer type is
+   the fully-connected layer in which neurons between two adjacent layers
+   are fully pairwise connected, but neurons within a single layer share
+   no connections. below are two example neural network topologies that
+   use a stack of fully-connected layers:
+   [neural_net.jpeg] [neural_net2.jpeg]
+   left: a 2-layer neural network (one hidden layer of 4 neurons (or
+   units) and one output layer with 2 neurons), and three inputs. right: a
+   3-layer neural network with three inputs, two hidden layers of 4
+   neurons each and one output layer. notice that in both cases there are
+   connections (synapses) between neurons across layers, but not within a
+   layer.
+
+   naming conventions. notice that when we say n-layer neural network, we
+   do not count the input layer. therefore, a single-layer neural network
+   describes a network with no hidden layers (input directly mapped to
+   output). in that sense, you can sometimes hear people say that logistic
+   regression or id166s are simply a special case of single-layer neural
+   networks. you may also hear these networks interchangeably referred to
+   as    id158s    (ann) or    multi-layer id88s   
+   (mlp). many people do not like the analogies between neural networks
+   and real brains and prefer to refer to neurons as units.
+
+   output layer. unlike all layers in a neural network, the output layer
+   neurons most commonly do not have an activation function (or you can
+   think of them as having a linear identity activation function). this is
+   because the last output layer is usually taken to represent the class
+   scores (e.g. in classification), which are arbitrary real-valued
+   numbers, or some kind of real-valued target (e.g. in regression).
+
+   sizing neural networks. the two metrics that people commonly use to
+   measure the size of neural networks are the number of neurons, or more
+   commonly the number of parameters. working with the two example
+   networks in the above picture:
+     * the first network (left) has 4 + 2 = 6 neurons (not counting the
+       inputs), [3 x 4] + [4 x 2] = 20 weights and 4 + 2 = 6 biases, for a
+       total of 26 learnable parameters.
+     * the second network (right) has 4 + 4 + 1 = 9 neurons, [3 x 4] + [4
+       x 4] + [4 x 1] = 12 + 16 + 4 = 32 weights and 4 + 4 + 1 = 9 biases,
+       for a total of 41 learnable parameters.
+
+   to give you some context, modern convolutional networks contain on
+   orders of 100 million parameters and are usually made up of
+   approximately 10-20 layers (hence deep learning). however, as we will
+   see the number of effective connections is significantly greater due to
+   parameter sharing. more on this in the convolutional neural networks
+   module.
+
+example feed-forward computation
+
+   repeated id127s interwoven with activation function.
+   one of the primary reasons that neural networks are organized into
+   layers is that this structure makes it very simple and efficient to
+   evaluate neural networks using matrix vector operations. working with
+   the example three-layer neural network in the diagram above, the input
+   would be a [3x1] vector. all connection strengths for a layer can be
+   stored in a single matrix. for example, the first hidden layer   s
+   weights w1 would be of size [4x3], and the biases for all units would
+   be in the vector b1, of size [4x1]. here, every single neuron has its
+   weights in a row of w1, so the matrix vector multiplication
+   np.dot(w1,x) evaluates the activations of all neurons in that layer.
+   similarly, w2 would be a [4x4] matrix that stores the connections of
+   the second hidden layer, and w3 a [1x4] matrix for the last (output)
+   layer. the full forward pass of this 3-layer neural network is then
+   simply three id127s, interwoven with the application of
+   the activation function:
+# forward-pass of a 3-layer neural network:
+f = lambda x: 1.0/(1.0 + np.exp(-x)) # activation function (use sigmoid)
+x = np.random.randn(3, 1) # random input vector of three numbers (3x1)
+h1 = f(np.dot(w1, x) + b1) # calculate first hidden layer activations (4x1)
+h2 = f(np.dot(w2, h1) + b2) # calculate second hidden layer activations (4x1)
+out = np.dot(w3, h2) + b3 # output neuron (1x1)
+
+   in the above code, w1,w2,w3,b1,b2,b3 are the learnable parameters of
+   the network. notice also that instead of having a single input column
+   vector, the variable x could hold an entire batch of training data
+   (where each input example would be a column of x) and then all examples
+   would be efficiently evaluated in parallel. notice that the final
+   neural network layer usually doesn   t have an activation function (e.g.
+   it represents a (real-valued) class score in a classification setting).
+
+     the forward pass of a fully-connected layer corresponds to one
+     id127 followed by a bias offset and an activation
+     function.
+
+representational power
+
+   one way to look at neural networks with fully-connected layers is that
+   they define a family of functions that are parameterized by the weights
+   of the network. a natural question that arises is: what is the
+   representational power of this family of functions? in particular, are
+   there functions that cannot be modeled with a neural network?
+
+   it turns out that neural networks with at least one hidden layer are
+   universal approximators. that is, it can be shown (e.g. see
+   [20]approximation by superpositions of sigmoidal function from 1989
+   (pdf), or this [21]intuitive explanation from michael nielsen) that
+   given any continuous function \(f(x)\) and some \(\epsilon > 0\), there
+   exists a neural network \(g(x)\) with one hidden layer (with a
+   reasonable choice of non-linearity, e.g. sigmoid) such that \( \forall
+   x, \mid f(x) - g(x) \mid < \epsilon \). in other words, the neural
+   network can approximate any continuous function.
+
+   if one hidden layer suffices to approximate any function, why use more
+   layers and go deeper? the answer is that the fact that a two-layer
+   neural network is a universal approximator is, while mathematically
+   cute, a relatively weak and useless statement in practice. in one
+   dimension, the    sum of indicator bumps    function \(g(x) = \sum_i c_i
+   \mathbb{1}(a_i < x < b_i)\) where \(a,b,c\) are parameter vectors is
+   also a universal approximator, but noone would suggest that we use this
+   functional form in machine learning. neural networks work well in
+   practice because they compactly express nice, smooth functions that fit
+   well with the statistical properties of data we encounter in practice,
+   and are also easy to learn using our optimization algorithms (e.g.
+   id119). similarly, the fact that deeper networks (with
+   multiple hidden layers) can work better than a single-hidden-layer
+   networks is an empirical observation, despite the fact that their
+   representational power is equal.
+
+   as an aside, in practice it is often the case that 3-layer neural
+   networks will outperform 2-layer nets, but going even deeper
+   (4,5,6-layer) rarely helps much more. this is in stark contrast to
+   convolutional networks, where depth has been found to be an extremely
+   important component for a good recognition system (e.g. on order of 10
+   learnable layers). one argument for this observation is that images
+   contain hierarchical structure (e.g. faces are made up of eyes, which
+   are made up of edges, etc.), so several layers of processing make
+   intuitive sense for this data domain.
+
+   the full story is, of course, much more involved and a topic of much
+   recent research. if you are interested in these topics we recommend for
+   further reading:
+     * [22]deep learning book in press by bengio, goodfellow, courville,
+       in particular [23]chapter 6.4.
+     * [24]do deep nets really need to be deep?
+     * [25]fitnets: hints for thin deep nets
+
+setting number of layers and their sizes
+
+   how do we decide on what architecture to use when faced with a
+   practical problem? should we use no hidden layers? one hidden layer?
+   two hidden layers? how large should each layer be? first, note that as
+   we increase the size and number of layers in a neural network, the
+   capacity of the network increases. that is, the space of representable
+   functions grows since the neurons can collaborate to express many
+   different functions. for example, suppose we had a binary
+   classification problem in two dimensions. we could train three separate
+   neural networks, each with one hidden layer of some size and obtain the
+   following classifiers:
+   [layer_sizes.jpeg]
+   larger neural networks can represent more complicated functions. the
+   data are shown as circles colored by their class, and the decision
+   regions by a trained neural network are shown underneath. you can play
+   with these examples in this [26]convnetsjs demo.
+
+   in the diagram above, we can see that neural networks with more neurons
+   can express more complicated functions. however, this is both a
+   blessing (since we can learn to classify more complicated data) and a
+   curse (since it is easier to overfit the training data). overfitting
+   occurs when a model with high capacity fits the noise in the data
+   instead of the (assumed) underlying relationship. for example, the
+   model with 20 hidden neurons fits all the training data but at the cost
+   of segmenting the space into many disjoint red and green decision
+   regions. the model with 3 hidden neurons only has the representational
+   power to classify the data in broad strokes. it models the data as two
+   blobs and interprets the few red points inside the green cluster as
+   outliers (noise). in practice, this could lead to better generalization
+   on the test set.
+
+   based on our discussion above, it seems that smaller neural networks
+   can be preferred if the data is not complex enough to prevent
+   overfitting. however, this is incorrect - there are many other
+   preferred ways to prevent overfitting in neural networks that we will
+   discuss later (such as l2 id173, dropout, input noise). in
+   practice, it is always better to use these methods to control
+   overfitting instead of the number of neurons.
+
+   the subtle reason behind this is that smaller networks are harder to
+   train with local methods such as id119: it   s clear that
+   their id168s have relatively few local minima, but it turns out
+   that many of these minima are easier to converge to, and that they are
+   bad (i.e. with high loss). conversely, bigger neural networks contain
+   significantly more local minima, but these minima turn out to be much
+   better in terms of their actual loss. since neural networks are
+   non-convex, it is hard to study these properties mathematically, but
+   some attempts to understand these objective functions have been made,
+   e.g. in a recent paper [27]the loss surfaces of multilayer networks. in
+   practice, what you find is that if you train a small network the final
+   loss can display a good amount of variance - in some cases you get
+   lucky and converge to a good place but in some cases you get trapped in
+   one of the bad minima. on the other hand, if you train a large network
+   you   ll start to find many different solutions, but the variance in the
+   final achieved loss will be much smaller. in other words, all solutions
+   are about equally as good, and rely less on the luck of random
+   initialization.
+
+   to reiterate, the id173 strength is the preferred way to
+   control the overfitting of a neural network. we can look at the results
+   achieved by three different settings:
+   [reg_strengths.jpeg]
+   the effects of id173 strength: each neural network above has
+   20 hidden neurons, but changing the id173 strength makes its
+   final decision regions smoother with a higher id173. you can
+   play with these examples in this [28]convnetsjs demo.
+
+   the takeaway is that you should not be using smaller networks because
+   you are afraid of overfitting. instead, you should use as big of a
+   neural network as your computational budget allows, and use other
+   id173 techniques to control overfitting.
+
+summary
+
+   in summary,
+     * we introduced a very coarse model of a biological neuron
+     * we discussed several types of id180 that are used in
+       practice, with relu being the most common choice
+     * we introduced neural networks where neurons are connected with
+       fully-connected layers where neurons in adjacent layers have full
+       pair-wise connections, but neurons within a layer are not
+       connected.
+     * we saw that this layered architecture enables very efficient
+       evaluation of neural networks based on id127s
+       interwoven with the application of the activation function.
+     * we saw that that neural networks are universal function
+       approximators, but we also discussed the fact that this property
+       has little to do with their ubiquitous use. they are used because
+       they make certain    right    assumptions about the functional forms of
+       functions that come up in practice.
+     * we discussed the fact that larger networks will always work better
+       than smaller networks, but their higher model capacity must be
+       appropriately addressed with stronger id173 (such as
+       higher weight decay), or they might overfit. we will see more forms
+       of id173 (especially dropout) in later sections.
+
+additional references
+
+     * [29]deeplearning.net tutorial with theano
+     * [30]convnetjs demos for intuitions
+     * [31]michael nielsen   s tutorials
+
+     * [32]cs231n
+     * [33]cs231n
+     * [34]karpathy@cs.stanford.edu
+
+references
+
+   1. http://cs231n.github.io/
+   2. http://cs231n.github.io/neural-networks-1/#quick
+   3. http://cs231n.github.io/neural-networks-1/#intro
+   4. http://cs231n.github.io/neural-networks-1/#bio
+   5. http://cs231n.github.io/neural-networks-1/#classifier
+   6. http://cs231n.github.io/neural-networks-1/#actfun
+   7. http://cs231n.github.io/neural-networks-1/#nn
+   8. http://cs231n.github.io/neural-networks-1/#layers
+   9. http://cs231n.github.io/neural-networks-1/#feedforward
+  10. http://cs231n.github.io/neural-networks-1/#power
+  11. http://cs231n.github.io/neural-networks-1/#arch
+  12. http://cs231n.github.io/neural-networks-1/#summary
+  13. http://cs231n.github.io/neural-networks-1/#add
+  14. https://physics.ucsd.edu/neurophysics/courses/physics_171/annurev.neuro.28.061604.135703.pdf
+  15. http://www.sciencedirect.com/science/article/pii/s0959438814000130
+  16. http://www.cs.toronto.edu/~fritz/absps/id163.pdf
+  17. http://www.cs.toronto.edu/~fritz/absps/id163.pdf
+  18. http://arxiv.org/abs/1502.01852
+  19. http://www-etud.iro.umontreal.ca/~goodfeli/maxout.html
+  20. http://www.dartmouth.edu/~gvc/cybenko_mcss.pdf
+  21. http://neuralnetworksanddeeplearning.com/chap4.html
+  22. http://www.deeplearningbook.org/
+  23. http://www.deeplearningbook.org/contents/mlp.html
+  24. http://arxiv.org/abs/1312.6184
+  25. http://arxiv.org/abs/1412.6550
+  26. http://cs.stanford.edu/people/karpathy/convnetjs/demo/classify2d.html
+  27. http://arxiv.org/abs/1412.0233
+  28. http://cs.stanford.edu/people/karpathy/convnetjs/demo/classify2d.html
+  29. http://www.deeplearning.net/tutorial/mlp.html
+  30. http://cs.stanford.edu/people/karpathy/convnetjs/
+  31. http://neuralnetworksanddeeplearning.com/chap1.html
+  32. https://github.com/cs231n
+  33. https://twitter.com/cs231n
+  34. mailto:karpathy@cs.stanford.edu

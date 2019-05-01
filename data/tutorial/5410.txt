@@ -1,0 +1,424 @@
+   #[1]edit pythonextension [2]rss feed
+
+   [3]twiki>  [4]fst web>[5]fstextensions>[6]pythonextension (2016-12-07,
+   [7]kylegorman)[8] edit[9]attach
+
+[10]openfst python extension
+
+   this extension exposes the [11]openfst [12]scripting api to [13]python
+   . like the scripting api, it supports [14]arbitrary arcs and weights.
+   the extension allows for rapid prototyping and interactive construction
+   of fsts using the python repl.
+
+   note that this extension is unrelated to, and incompatible with, any
+   other third-party python extensions for [15]openfst (e.g., [16]pyfst ).
+
+   to install this package, either:
+     * issue --enable-python during configuration of [17]openfst
+     * or, install [18]openfst with far support (--enable-far) then
+       install the [19]pypi package openfst using [20]pip : pip install
+       openfst
+
+   nb: >>> indicates the python interactive prompt; all other
+   typewriter-text lines are print to stdout or stderr.
+
+module import
+
+   the python module itself is called pywrapfst but in this tutorial, we
+   will alias it to fst.
+
+>>> import pywrapfst as fst
+
+fst construction
+
+   fsts can be compiled from [21]arc-lists in the same format used by the
+   fstcompile binary.
+>>> compiler = fst.compiler()
+>>> print >> compiler, "0 1 97 120 .5"
+>>> print >> compiler, "0 1 98 121 1.5"
+>>> print >> compiler, "1 2 99 123 2.5"
+>>> print >> compiler, "2 3.5"
+>>> f = compiler.compile()   # creates the fst and flushes the compiler buffer.
+>>> f.num_states
+3
+>>> f.final(2)
+<tropical weight 3.5 at 0x1215ed0>
+
+   fsts can be read in from disk using fst.read, which takes a string
+   argument specifying the input file's location.
+>>> v = fst.fst.read("vector.fst")
+
+   this class method takes an optional second argument, a string
+   indicating the desired [22]fst type. the fst is converted to this type
+   if it the on-disk fst is not already of the desired type.
+>>> c = fst.fst.read("const.fst")
+>>> c.fst_type
+'const'
+>>> v = fst.fst.read("const.fst", fst_type="vector")
+>>> v.fst_type
+'vector'
+
+   this conversion can also be accomplished after instantiation using the
+   convert function.
+>>> v = fst.convert(c, fst_type="vector")
+>>> v.fst_type
+'vector'
+
+   note that this conversion to the vector fst type is mandatory if one
+   wishes to perform [23]mutation operations on an const fst.
+
+   fsts can be read in from [24]fst archives (fars) using the farreader
+   object.
+>>> reader = fst.farreader.open("lattice.far")
+
+   each fst stored within a far has a unique string id which can be used
+   to extract it from the reader object.
+>>> f = reader["1best"]
+
+   or, all fsts stored within a far may be accessed via iteration over the
+   reader object.
+>>> for (name, f) in reader:
+...     print name, f.num_states
+('1best', 23)
+('2best', 27)
+('3best', 27)
+...
+
+   finally, an empty mutable vector fst can be created using fst.
+>>> f = fst.fst()
+
+   by default, the resulting fst uses standard (tropical-weight) arcs, but
+   users can specify other arc types (e.g., log) via an optional argument.
+
+>>> f.arc_type
+'standard'
+>>> g = fst.fst("log")
+>>> g.arc_type
+'log'
+
+fst object attributes and properties
+
+   all fsts have the following read-only attributes ("properties" in
+   python jargon):
+   arc_type a string indicating the arc type
+   input_symbols the input symboltable, or none if no input table is set
+   fst_type a string indicating the fst (container) type
+   output_symbols the output symboltable, or none if no output table is
+   set
+   start the state id for the start state
+   weight_type a string indicating the weight type
+   mutable fsts also provide the num_states attribute, which indicates the
+   number of states in the fst.
+
+   to access fst properties (i.e., cyclicity, weightedness), use the
+   properties method.
+>>> print "is f cyclic?", f.properties(fst.cyclic, true) == fst.cyclic
+is f cyclic? true
+
+fst access and iteration
+
+   fst arcs and states can be accessed via the stateiterator, arciterator,
+   and mutablearciterator objects. these are most naturally constructed
+   using the states and arcs methods, as follows.
+>>> for state in f.states():
+...     for arc in f.arcs(state):
+...         print state, arc.ilabel, arc.olabel, arc.weight, arc.nextstate
+0 97 120 1.5 1
+0 98 121 2.5 1
+1 99 123 2.5 2
+
+   the final weight of a state can be accessed using the final instance
+   method.
+>>> for state in f.states():
+...     print state, f.final(state)
+0 infinity
+1 infinity
+2 3.5
+
+   the following function can be used to count the number of arcs and
+   states in an fst.
+
+>>> def num_arcs_and_states(f):
+...   return sum(1 + f.num_arcs(s) for s in f.states())
+
+fst mutation
+
+   mutable fsts can be modified by adding states (add_state), adding arcs
+   leaving existing states (add_arc), marking a existing state as the
+   start state (set_start), or giving a non-infinite final weight to an
+   existing state (set_final). optionally, the user can reserve states
+   before adding them using the reserve_states instance method, and
+   reserve arcs leaving an existing state using the reserve_arcs method.
+   the following snippet creates an acceptor which, when its arc labels
+   are interpreted as bytes, accepts the well-known "sheep language"
+   /baa+/.
+
+>>> f = fst.fst()
+>>> f.reserve_states(3)  # optional.
+>>> s = f.add_state()
+>>> f.set_start(s)
+>>> n = f.add_state()
+>>> f.reserve_arcs(s, 1)  # optional.
+>>> f.add_arc(s, fst.arc(98, 98, fst.weight.one(f.weight_type), n))
+>>> s = n
+>>> n = f.add_state()
+>>> f.reserve_arcs(s, 1)  # optional.
+>>> f.add_arc(s, fst.arc(97, 97, fst.weight.one(f.weight_type), n))
+>>> s = n
+>>> n = f.add_state()
+>>> f.reserve_arcs(s, 1)  # optional.
+>>> f.add_arc(s, fst.arc(97, 97, fst.weight.one(f.weight_type), n))
+>>> f.reserve_arcs(n, 1)  # optional.
+>>> f.add_arc(n, fst.arc(97, 97, fst.weight.one(f.weight_type), n))
+>>> f.set_final(n, fst.weight.one(f.weight_type))
+>>> f.verify()  # checks fst's sanity.
+true
+>>> print f
+0       1       98      98
+1       2       97      97
+2       3       97      97
+3       3       97      97
+3
+
+   while it is possible to add arcs whose destination state has not yet
+   been added, any other references to states not yet created (by
+   add_state) is forbidden and will raise an fstindexerror.
+
+   existing arcs and states can also be deleted using delete_states, and
+   arcs leaving an existing state can be deleted using delete_arcs. for
+   example, the following function can be used to remove all arcs and
+   states from an fst.
+
+>>> def clear(f):
+...   for state in f.states():
+...       f.delete_arcs(state)
+...   f.delete_states()
+
+fst visualization
+
+   the instance method text returns a string representing the fst as an
+   arc-list using the same format and options as the fstprint binary. if f
+   is an fst, then print f is an alias for print f.text().
+
+>>> print f
+0       1       98      98
+1       2       97      97
+2       3       97      97
+3       3       97      97
+3
+
+   fsts can also be written to a [25]graphviz file using the draw instance
+   method.
+
+>>> f.draw("f.gv")
+
+fst operations
+
+   all fsts support constructive operations such as [26]composition
+   (compose), [27]intersection (intersect), and [28]reversal (reverse),
+   storing the result in a vector fst.
+>>> cv = fst.compose(c, v)
+
+   fsts also support tests for [29]equality (equal), [30]equivalence
+   (equivalent), [31]stochastic equivalence (randequivalent), and
+   [32]isomorphism (isomorphic).
+>>> fst.isomorphic(c, v)
+true
+
+   fsts which are [33]mutable (e.g., vector fsts) also support destructive
+   operations such as [34]arc-sorting (arcsort), [35]inversion (invert),
+   [36]projection (project), and [37]union (union). these operations work
+   in place, mutating the instance they are called on and returning
+   nothing. these instance methods are not available for immutable fst
+   types (e.g., const fsts).
+>>> v.arcsort(sort_type="olabel")
+>>> v.invert()
+>>> v.project()
+
+   a few operations (e.g., weight-pushing, epsilon-removal) are available
+   in both constructive and destructive forms, albeit with slightly
+   different options.
+
+   to read documentation on individual fst operations, use python's
+   built-in help function.
+>>> help(fst.equal)
+help on built-in function equal in module pywrapfst:
+
+equal(...)
+    equal(ifst1, ifst2, delta=fst.kdelta)
+
+are two fsts equal?
+
+    this function tests whether two fsts have the same states with the same
+    numbering and the same transitions with the same labels and weights in the
+    same order.
+
+    args:
+      ifst1: the first input fst.
+      ifst2: the second input fst.
+      delta: comparison/quantization delta.
+
+    returns:
+      true if the two fsts satisfy the above conditions, otherwise false.
+
+    see also: `equivalent`, `isomorphic`, `randequivalent`.
+
+fst output
+
+   fsts can be written to disk using the write instance method.
+>>> f.write("f.fst")
+
+   they also can be written into fars using the farwriter object. once
+   created, an fst can be written to the farwriter object using
+   dictionary-style assignment.
+>>> writer = fst.farwriter.create("lattice.far")
+>>> writer["1best"] = 1best
+>>> writer["2best] = 2best
+
+   note that the far itself is not guaranteed to be flushed to disk until
+   the farwriter is garbage-collected. under normal circumstances, calling
+   del on the farwriter variable will decrement the reference count to
+   zero and trigger garbage collection on the next cycle.
+>>> del writer
+
+worked example
+
+   putting it all together, the following example, based on [38]mohri et
+   al. 2002, 2008, shows the construction of an asr recognition transducer
+   from a pronunciation lexicon l, grammar g, a transducer from
+   context-dependent phones to context-independent phones c, and an id48
+   set h (where we assume that the components are all determinizable and,
+   preferably, in the log semiring).
+>>> reader = fst.farreader.open("hclg.far")
+>>> lg = fst.determinize(fst.compose(reader["l"], reader["g"]))
+>>> clg = fst.determinize(fst.compose(reader["c"], lg))
+>>> hclg = fst.determinize(fst.compose(reader["h"], clg))
+>>> hclg.minimize()
+>>> hclg.write("hclg.fst")
+
+   [39]edit | [40]attach | [del: watch :del]  | [41]print
+   version | [42]history:
+   r18 [43]< [44]r17 [45]< [46]r16 [47]< [48]r15 [49]< [50]r14 | [51]backl
+   inks | [52]raw view | [53]wysiwyg | [54]more topic actions
+   topic revision: r18 - 2016-12-07 [55]- [56]kylegorman
+     * [57]web background fst
+
+     * [58]log in or [59]register
+
+     * [60]home fst web
+     * [61]new topic create new topic
+     * [62]index index
+     * [63]search topic search
+     * [64]changes changes
+     * [65]notify notifications
+     * [66]statistics statistics
+     * [67]wrench, tools preferences
+     __________________________________________________________________
+
+     * webs
+     * [68] contrib
+     * [69] fst
+     * [70] forum
+     * [71] grm
+     * [72] kernel
+     * [73] main
+     * [74] sandbox
+     * [75] twiki
+     * [76] main
+
+
+     * __________________  jump
+     * __________________   search
+     *
+
+   [77]this site is powered by the twiki collaboration platform
+   [78]powered by perl copyright    2008-2019 by the contributing authors.
+   all material on this collaboration platform is the property of the
+   contributing authors.
+   ideas, requests, problems regarding twiki? [79]send feedback
+
+references
+
+   visible links
+   1. http://www.openfst.org/twiki/bin/edit/fst/pythonextension?t=1554491324
+   2. http://www.openfst.org/twiki/bin/view/fst/webrss
+   3. http://www.openfst.org/twiki/bin/view/main/webhome
+   4. http://www.openfst.org/twiki/bin/view/fst/webhome
+   5. http://www.openfst.org/twiki/bin/view/fst/fstextensions
+   6. http://www.openfst.org/twiki/bin/view/fst/pythonextension
+   7. http://www.openfst.org/twiki/bin/view/main/kylegorman
+   8. http://www.openfst.org/twiki/bin/edit/fst/pythonextension?t=1554491325;nowysiwyg=1
+   9. http://www.openfst.org/twiki/bin/attach/fst/pythonextension
+  10. http://www.openfst.org/twiki/bin/edit/fst/openfst?topicparent=fst.pythonextension;nowysiwyg=1
+  11. http://www.openfst.org/twiki/bin/edit/fst/openfst?topicparent=fst.pythonextension;nowysiwyg=1
+  12. http://www.openfst.org/twiki/bin/view/fst/fstadvancedusage#fstscript
+  13. https://www.python.org/
+  14. http://www.openfst.org/twiki/bin/view/fst/fstadvancedusage#fstarcs
+  15. http://www.openfst.org/twiki/bin/edit/fst/openfst?topicparent=fst.pythonextension;nowysiwyg=1
+  16. http://pyfst.github.io/
+  17. http://www.openfst.org/twiki/bin/edit/fst/openfst?topicparent=fst.pythonextension;nowysiwyg=1
+  18. http://www.openfst.org/twiki/bin/edit/fst/openfst?topicparent=fst.pythonextension;nowysiwyg=1
+  19. https://pypi.python.org/pypi/openfst
+  20. https://pip.pypa.io/en/stable/
+  21. http://www.openfst.org/twiki/bin/view/fst/fstquicktour#creatingshellfsts
+  22. http://www.openfst.org/twiki/bin/view/fst/fstadvancedusage#fst_types
+  23. http://www.openfst.org/twiki/bin/view/fst/pythonextension#fstmutation
+  24. http://www.openfst.org/twiki/bin/view/fst/fstextensions#fstarchives
+  25. http://graphviz.org/
+  26. http://www.openfst.org/twiki/bin/view/fst/composedoc
+  27. http://www.openfst.org/twiki/bin/view/fst/intersectdoc
+  28. http://www.openfst.org/twiki/bin/view/fst/reversedoc
+  29. http://www.openfst.org/twiki/bin/view/fst/equaldoc
+  30. http://www.openfst.org/twiki/bin/view/fst/equivalentdoc
+  31. http://www.openfst.org/twiki/bin/view/fst/randequivalentdoc
+  32. http://www.openfst.org/twiki/bin/view/fst/isomorphicdoc
+  33. http://www.openfst.org/twiki/bin/view/fst/fstadvancedusage#fst_types
+  34. http://www.openfst.org/twiki/bin/view/fst/arcsortdoc
+  35. http://www.openfst.org/twiki/bin/view/fst/invertdoc
+  36. http://www.openfst.org/twiki/bin/view/fst/projectdoc
+  37. http://www.openfst.org/twiki/bin/view/fst/uniondoc
+  38. http://www.openfst.org/twiki/bin/view/fst/fstbackground
+  39. http://www.openfst.org/twiki/bin/edit/fst/pythonextension?t=1554491325;nowysiwyg=1
+  40. http://www.openfst.org/twiki/bin/attach/fst/pythonextension
+  41. http://www.openfst.org/twiki/bin/view/fst/pythonextension?cover=print
+  42. http://www.openfst.org/twiki/bin/rdiff/fst/pythonextension?type=history
+  43. http://www.openfst.org/twiki/bin/rdiff/fst/pythonextension?rev1=18;rev2=17
+  44. http://www.openfst.org/twiki/bin/view/fst/pythonextension?rev=17
+  45. http://www.openfst.org/twiki/bin/rdiff/fst/pythonextension?rev1=17;rev2=16
+  46. http://www.openfst.org/twiki/bin/view/fst/pythonextension?rev=16
+  47. http://www.openfst.org/twiki/bin/rdiff/fst/pythonextension?rev1=16;rev2=15
+  48. http://www.openfst.org/twiki/bin/view/fst/pythonextension?rev=15
+  49. http://www.openfst.org/twiki/bin/rdiff/fst/pythonextension?rev1=15;rev2=14
+  50. http://www.openfst.org/twiki/bin/view/fst/pythonextension?rev=14
+  51. http://www.openfst.org/twiki/bin/oops/fst/pythonextension?template=backlinksweb
+  52. http://www.openfst.org/twiki/bin/view/fst/pythonextension?raw=on
+  53. http://www.openfst.org/twiki/bin/edit/fst/pythonextension?t=1554491325;nowysiwyg=0
+  54. http://www.openfst.org/twiki/bin/oops/fst/pythonextension?template=oopsmore&param1=18&param2=18
+  55. http://www.openfst.org/twiki/bin/edit/fst/pythonextension?t=1554491325;nowysiwyg=1
+  56. http://www.openfst.org/twiki/bin/view/main/kylegorman
+  57. http://www.openfst.org/twiki/bin/view/fst/webhome
+  58. http://www.openfst.org/twiki/bin/login/fst/pythonextension?origurl=/twiki/bin/view/fst/pythonextension
+  59. http://www.openfst.org/twiki/bin/view/twiki/twikiregistration
+  60. http://www.openfst.org/twiki/bin/view/fst/webhome
+  61. http://www.openfst.org/twiki/bin/view/fst/webtopiccreator?parent=pythonextension
+  62. http://www.openfst.org/twiki/bin/view/fst/webtopiclist
+  63. http://www.openfst.org/twiki/bin/view/fst/websearch
+  64. http://www.openfst.org/twiki/bin/view/fst/webchanges
+  65. http://www.openfst.org/twiki/bin/view/fst/webnotify
+  66. http://www.openfst.org/twiki/bin/view/fst/webstatistics
+  67. http://www.openfst.org/twiki/bin/view/fst/webpreferences
+  68. http://www.openfst.org/twiki/bin/view/contrib/webhome
+  69. http://www.openfst.org/twiki/bin/view/fst/webhome
+  70. http://www.openfst.org/twiki/bin/view/forum/webhome
+  71. http://www.openfst.org/twiki/bin/view/grm/webhome
+  72. http://www.openfst.org/twiki/bin/view/kernel/webhome
+  73. http://www.openfst.org/twiki/bin/view/main/webhome
+  74. http://www.openfst.org/twiki/bin/view/sandbox/webhome
+  75. http://www.openfst.org/twiki/bin/view/twiki/webhome
+  76. http://www.openfst.org/twiki/bin/view/tmp/main/webhome
+  77. http://twiki.org/
+  78. http://www.perl.org/
+  79. mailto:fst@openfst.org?subject=twiki feedback on fst.pythonextension
+
+   hidden links:
+  81. http://www.openfst.org/twiki/bin/view/fst/pythonextension

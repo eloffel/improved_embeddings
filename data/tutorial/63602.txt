@@ -1,0 +1,553 @@
+   #[1]byte tank
+
+                                  [2]byte tank
+
+pedro lopes blog
+
+     * [3][cn_twitter_19.png]
+     * [4][cn_github_19.png]
+     * [5][cn_rss_19.png]
+
+     * [6]posts
+     * [7]archive
+
+deep id23: playing a racing game
+
+   oct 6th, 2016
+
+   iframe: [8]https://www.youtube.com/embed/spzyvhogkba
+
+   agent playing out run, session 201609171218_175eps
+   no time limit, no traffic, 2x time lapse
+
+   above is the built [9]deep q-network (id25) agent playing [10]out run,
+   trained for a total of 1.8 million frames on a amazon web services
+   g2.2xlarge (gpu enabled) instance. the agent was built using python and
+   tensorflow. the out run game emulator is a modified version of
+   [11]cannonball. all source code for this project is [12]available on
+   github.
+
+   the agent learnt how to play by being rewarded for high speeds and
+   penalized for crashing or going off road. it fetched the game   s
+   screens, car speed, number of off-road wheels and collision state from
+   the emulator and issued actions to it such as pressing the left, right,
+   accelerate or brake virtual button.
+
+   agent trainer implements the deep id24 algorithm used by
+   [13]google   s deepmind team to play various atari 2600 games. it uses a
+   reward function and hyperparameters that fit best for out run, but
+   could potentially be used to [14]play other games or solve other
+   problems.
+
+   there is a wealth of [15]good information about this reinforcement
+   learning algorithm, but i found some topics difficult to grasp or
+   contextualize solely from the information available online. i will
+   attempt to add my humble contribution by tackling these and also
+   provide details about the project   s implementation, results and how it
+   can be used/modified/deployed.
+
+   let   s start by one of its main gears: id24
+
+concepts
+
+id24
+
+   at the heart of deep id24 lies id24, a popular and
+   effective [16]model-free algorithm for learning from delayed
+   reinforcement.
+
+   jacob schrum has made available a terse and accessible [17]explanation
+   which takes around 45 minutes to watch and serves as a great starting
+   point for the paragraphs below. let   s take the canonical reinforcement
+   learning example presented by jacob (grid world):
+
+   [gridworld.png]
+
+   to implement this algorithm, we need to build the q-function ([18]one
+   of the forms of the [19]bell-equation) by using the q-value iteration
+   update:
+
+   [q_value_iteration_update.svg]
+
+   in the above grid, there are 9 actionable states, 2 terminal states and
+   4 possible actions (left, right, up, down), resulting in 36 (9
+   actionable states x 4 possible actions) q-values.
+
+   this project aims to train an agent to play out run via its game
+   screens, so for the sake of argument, let  s consider that each game
+   screen is transformed into a 80x80 greyscale image (each pixel value
+   ranging from 0 to 255), and that each transformed image represents a
+   state. 6400 pixels (80x80) and 256 possible values per pixel translate
+   to 256^6400 possible states. this value alone is a good indicator of
+   how inflated the number of possible q-values will be.
+
+   multiplying [20]9 possible actions by 256^6400 possible states results
+   in 256^6400 x 9 possible q-values. if we use multiple and/or colored
+   images for state representation, then this value will be even higher.
+   quite unwieldy if we want to store these values in a table or similar
+   structure.
+
+enter deep neural networks
+
+   deep neural networks work quite well for inferring the mapping implied
+   by data, giving them the ability to predict an approximated output from
+   an input that they never saw before. no longer do we need to store all
+   state/action pair   s q-values, we can now model these mappings in a more
+   general, less redundant way. these networks also automatically learn a
+   set of internal features which are useful in complex non-linear mapping
+   domains, such as image processing, releasing us from laborious feature
+   handcrafting tasks.
+
+   this is perfect. we can now use a deep neural network to approximate
+   the q-function: the network would accept a state/action combination as
+   input and would output the corresponding q-value. training-wise, we
+   would need the network   s q-value output for a given state/action combo
+   (obtained through a forward pass) and the target q-value, which is
+   calculated through the expression: . with these two values, we can
+   perform a gradient step on the squared difference between the target
+   q-value and the network   s output.
+
+   this is perfect, but there is still room for improvement. imagine we
+   have 5 possible actions for any given state: when calculating the
+   target q-value, to get the optimal future value estimate (consequent
+   state   s maximum q-value) we need to ask (forward pass) our neural
+   network for a q-value 5 times per learning step.
+
+   another approach (used in [21]deepmind   s [22]network) would be to feed
+   in the game   s screens and have the network output the q-value for each
+   possible action. this way, a single forward pass would output all the
+   q-values for a given state, translating into one forward pass per
+   optimal future value estimate.
+
+                      [23][q_network_formulations.png]
+
+   image courtesy of tambet matiisen   s [24]demystifying deep reinforcement
+   learning - left: naive formulation of deep q-network. right: more
+   optimized architecture of deep q-network, used in deepmind papers.
+
+   id24 and deep neural networks are the center pieces of a deep
+   q-network id23 agent and i think that by
+   understanding them and how they fit together, it can be easier to
+   picture how the algorithm works as a whole.
+
+implementation
+
+   above is an overall representation of how the different components
+   relate during a play evaluation, centered around the deep q-network for
+   playing^[25]1, the main decision component.
+
+   each game screen is resized to a desaturated 80x80 pixels image
+   (opposed to 84x84 on deepmind   s papers), and if you might be wondering
+   why each state is a sequence of four game screens instead of one, that
+   is because the agent   s history is used for better motion perception.
+   achieving this requires a sequence of preprocessed images to be stacked
+   in channels (like you would stack rgb channels on a colored image) and
+   fed to the network. note that rgb channels and agent history could be
+   used simultaneously for state representation. for example, with three
+   channels per (rgb) image and an agent history length of four, the
+   network would be fed twelve channels per input state.
+
+   the [26]network   s architecture is essentially the same used by
+   deepmind, except for the first convolutional neural network   s input
+   (80x80x4 instead of 84x84x4, to account for the different input sizes)
+   and the linear layer   s output (9 instead of 18, to account for the
+   different number of actions available)
+
+   the algorithm used to train this network is well described [27]here
+   (page 7) and [28]here, but i would like to present it graphically, to
+   hopefully provide some further intuition.
+
+   below is [29]agent trainer  s implementation of the aforementioned
+   algorithm. it adds some new concepts which were not approached by this
+   article:
+     * experience replay mechanism sported by replay memories: randomly
+       samples previous transitions, thereby smoothing the training
+       distribution over many past behaviors
+     * separate training network, cloned at fixed intervals to the target
+       playing network, making the algorithm more stable when compared
+       with standard online id24
+     *   -greedy policy to balance exploitation/exploration
+
+reward function
+
+   the reward function   s definition is crucial for good learning
+   performance and determines the goal in a id23
+   problem. april yu et al. have an interesting paper on [30]simulated
+   autonomous vehicle control which details a id25 agent used to drive a
+   game that strongly resembles out run ([31]javascript racer). based on
+   their reward function experiments, i   ve built a [32]function which
+   rewards logarithmically based on speed and penalizes when the car is
+   off-road, crashed or stopped.
+
+                       [33][reward_function_plot.png]
+
+   reward values for when the car is not crashed or off-road
+
+deployment
+
+   run the trainer and emulator on your local machine by following the
+   guide available on [34]agent-trainer   s readme.
+
+   it is also possible to deploy the agent to an aws ec2 instance or
+   generic linux remote machine by using a set of bash scripts offered by
+   [35]agent-trainer-deployer.
+
+aws ec2
+
+   amazon allows you to bid on spare ec2 computing capacity via [36]spot
+   instances. these can cost a fraction of on-demand ones, and for this
+   reason were chosen as the prime method for training in this project,
+   leading to the need for mid-training instance termination resilience.
+
+   to accommodate this scenario, the deployment scripts and agent-trainer
+   are designed to support train session resumes. to persist results and
+   decrease boot up time between sessions, a long-lived ebs volume is
+   attached to the live instance. the volume contains the training
+   results, agent-trainer  s source code, cannonball   s source code,
+   dockerfiles and their respective docker images.
+
+                         [37][deployed-diagram.png]
+
+   relationship between components when deploying agent-trainer to an aws
+   ec2 instance
+
+results
+
+   the hyperparameters used on all sessions mimic the ones used on
+   deepmind   s [38]human-level control through deep id23
+   paper, except for the number of frames skipped between actions, which
+   are spaced apart by 450ms (equivalent to 13 frames) on agent-trainer.
+
+   the out run game, as you would play it in an arcade, clutters the road
+   with various cars in order to make the game more challenging. in-game
+   traffic was disabled for both training and evaluation plays, rendering
+   a more achievable starting point for these experiments. training with
+   random traffic could be an interesting posterior experiment.
+
+   some experiments were made by increasing the discount factor up its
+   final value during training, as proposed on [39]   how to discount deep
+   id23: towards new dynamic strategies   , but did not
+   achieve better stability or rewards when compared to a fixed 0.99
+   discount factor. the aforementioned paper also proposes decaying the
+   learning rate during training, which increased stability and
+   performance significantly. decaying the learning rate without minimum
+   value clipping yielded the best results.
+
+   another improvement was to train the game without a time limit, meaning
+   that the training episode would only finish when the car reached the
+   last stage   s end. this allowed for a broader replay memory training
+   set, since the agent traversed a wide range of different tracks and
+   settings.
+
+   play evaluation was the same between all experiments, this is, the
+   agent was evaluated by playing on the default 80 second, easy mode.
+
+   here is a summary of the most relevant training sessions (you can find
+   their models, metrics and visualizations on [40]agent-trainer-results):
+   session m training
+   game mode learning rate decay
+   201609040550_5010eps a) timed; easy without learning rate decay
+   201609111241_2700eps b) timed; easy unclipped learning rate decay
+   201609111241_7300eps b) timed; easy unclipped learning rate decay
+   201609160922_54eps b) unlimited time without learning rate decay
+   201609171218_175eps b) unlimited time unclipped learning rate decay
+
+   [41]training sessions summary: session names are formed by <session
+   id>_<number of episodes trained>
+   (m)achine used: a) amd athlon(tm) ii x2 250 processor @ 3ghz; 2gb ram
+   ddr3-1333 sdram; ssd 500 gb: samsung 850 evo (cpu only training); b)
+   aws ec2 g2.2xlarge (gpu enabled instance), 200 gb general purpose ssd
+   (gp2)
+
+   iframe: [42]https://www.youtube.com/embed/1gpl9xc-e8m
+
+   agent playing out run (timed easy mode, no traffic)
+   session 201609111241_2700eps
+
+   iframe: [43]https://www.youtube.com/embed/6f3ecocw57e
+
+   agent playing out run (timed easy mode, no traffic)
+   session 201609171218_175eps
+
+   notice on the videos above how the timed mode trained session
+   201609111241_2700eps reaches the first checkpoint about five seconds
+   earlier than the unlimited time mode trained session
+   201609171218_175eps, but proceeds to drive off-road two turns after.
+   its stability gets increasingly compromised as more episodes are
+   trained, which can be observed by the rampant loss increase before 7300
+   episodes are reached (201609111241_7300eps):
+
+                         [44][metrics_in_train.png]
+
+   training metrics for session 201609111241_7300eps
+
+                       [45][metrics_trained_play.png]
+
+   play id74 for session 201609111241_7300eps: using   =0.0;
+   evaluation made at the end of every 20 training episodes
+
+                         [46][metrics_in_train.png]
+
+   training metrics for session 201609171218_175eps
+
+                       [47][metrics_trained_play.png]
+
+   play id74 201609171218_175eps: using   =0.0; evaluation
+   made at the end of every training episode
+
+   both 201609111241_2700eps and 201609111241_7300eps timed trained
+   sessions mostly drive off-road and stall after the first stage, whereas
+   the unlimited time mode trained session 201609171218_175eps can race
+   through all the stages crashing only three times (as shown on the
+   article   s first video) and is able to match the performance of a timed
+   trained session when evaluated on the default easy timed mode.
+
+   below is the loss plot for 201609160922_54eps and 201609171218_175eps,
+   both trained using the game   s unlimited time mode, difference being
+   that 201609160922_54eps keeps a fixed learning rate and
+   201609171218_175eps decays it every 50100 steps:
+
+                  [48][loss_201609171218_201609160922.png]
+
+   loss comparison between sessions     201609160922_54eps and    
+   201609171218_175eps, as viewed on [49]tensorboard
+
+   other representative visualizations:
+
+                       [50][id167_timed_easy_mode.png]
+
+   id167 visualization, generated by letting the agent play one game on
+   timed easy mode. agent is using the network trained on session
+   201609171218_175eps
+
+                        [51][id167_no_time_mode.png]
+
+   id167 visualization, generated by letting the agent play one game on
+   unlimited time mode. agent is using the network trained on session
+   201609171218_175eps
+
+                         [52][conv_net_filters.png]
+
+   visualization of the first convolutional network layer   s filters. these
+   can be viewed via [53]tensorboard
+
+final notes
+
+plugging other problems and games
+
+   agent-trainer was not built from the get-go to train games or problems
+   other than out run, but i think it would be interesting to perform a
+   thought exercise on what would be necessary to do so.
+
+   there are three main areas in which [54]agent-trainer has domain
+   knowledge about out run:
+     * [55]game package, which contains
+          + [56]action enumeration: describes all the possible actions in
+            the game.
+          + [57]cannonball_wrapper module: only this module has access to
+            the cannonball emulator. it translates the aforementioned
+            actions into game actions and is accessed by methods such as
+            start_game(), reset() and speed().
+     * [58]rewardcalculator class: contains the reward function. instead
+       of using a generic reward function like deepmind, it was chosen to
+       have a tailor-made reward function for out run, which takes into
+       account the car   s speed and its off-road and crash status.
+     * [59]metrics module: aware of the speed metric, which is out run
+       specific, and score, which is game specific domain knowledge.
+
+   training another game would require the creation of a new wrapper with
+   the same interface as cannonball_wrapper, a new action enumerator
+   specific to the game, a new [60]rewardcalculator with a different
+   reward function and the removal/replacement of the speed metric.
+
+   apart from the previously mentioned steps, solving generic problems
+   would require the preprocessor to be changed/replaced if images were
+   not to be used for state representation. an option would be to create a
+   new preprocessor class with a [61]process(input) method, tweak the
+   hyperparameters as required (so that the network knows which dimensions
+   to expect on its input), and finally inject the newly created class in
+   [62]episoderunner, replacing the old preprocessor class.
+
+further references
+
+   i am not a machine learning expert, but from my learner   s point of
+   view, if you are interested in getting your feet wet, andrew ng   s
+   machine learning course is as a great starting point. it is freely
+   available on the [63]coursera online learning platform. this was my
+   first solid contact with the subject and served as a major stepping
+   stone for related topics such as id23.
+
+   [64]udacity google deep learning: this free course tackles some of the
+   popular deep learning techniques, all the while using tensorflow. i did
+   this right after andrew ng   s course and found it to leave the student
+   with less support during lessons - less hand-holding if you will - and
+   as result i spent a good amount of time dabbling to reach a solution
+   for the assignments.
+
+   as a side note, i started building this project by the end of the deep
+   learning course, mostly because i wanted to apply and consolidate the
+   concepts i learnt into something more practical and to share this
+   knowledge further, so it could hopefully help more people who are
+   interested in this.
+
+   other useful resources:
+     * deepmind   s [65]human-level control through deep reinforcement
+       learning paper and its respective [66]source code
+     * [67]playing atari with deep id23
+     * [68]deep id23 for simulated autonomous vehicle
+       control
+     * [69]demystifying deep id23
+     * [70]udacity id23 by georgia tech
+     * [71]deep learning lecture by nando de freitas
+     * [72]learning id23 (with code, exercises and
+       solutions)
+     * [73]openai gym: quoting the project   s page:    a toolkit for
+       developing and comparing id23 algorithms. it
+       supports teaching agents everything from walking to playing games
+       like pong or go   
+     * [74]tensorflow implementation of human-level control through deep
+       id23, by devsisters corp.
+
+source code
+
+   all source code is available on github:
+     * [75]agent trainer: the core python+tensorflow application
+     * [76]cannonball: custom cannonball (out run game emulator) fork
+       which contains the changes needed to access the emulator externally
+     * [77]agent trainer deployer: bash scripts to deploy agent-trainer to
+       a generic remote machine or aws ec2 instance
+     * [78]agent trainer docker: dockerfiles used when deploying
+       agent-trainer to a remote machine
+     * [79]agent trainer results: collection of training sessions, each
+       containing their resulting network, metrics and visualizations
+
+    1.    deep q-network for playing    in this project is equivalent to
+       deepmind   s    target network $\hat q$    and    deep q-network for
+       training    is equivalent to deepmind   s    network q   [80]   
+
+   posted by pedro lopes oct 6th, 2016 (revised on dec. 5th, 2016: broken
+   link fix; more neural network concepts details) [81]machine learning
+
+   [82]   compressed deque in python [83]react native offscreen toolbar   
+
+comments
+
+   please enable javascript to view the [84]comments powered by disqus.
+
+recent posts
+
+     * [85]survival ball: making the game
+     * [86]unity: dynamic multi target camera
+     * [87]arxiv papers: react native android app
+     * [88]react native offscreen toolbar
+     * [89]deep id23: playing a racing game
+
+github repos
+
+     * status updating...
+
+   [90]@lopespm on github
+
+   copyright    2019 - pedro lopes - powered by [91]octopress. theme based
+   on [92]whitespace. subscribe via [93]rss feed
+
+references
+
+   visible links
+   1. https://lopespm.github.io/atom.xml
+   2. https://lopespm.github.io/
+   3. https://twitter.com/lopes_pm
+   4. https://github.com/lopespm
+   5. https://lopespm.github.io/atom.xml
+   6. https://lopespm.github.io/
+   7. https://lopespm.github.io/blog/archives
+   8. https://www.youtube.com/embed/spzyvhogkba
+   9. https://deepmind.com/research/id25/
+  10. https://en.wikipedia.org/wiki/out_run
+  11. https://github.com/lopespm/cannonball
+  12. https://lopespm.github.io/machine_learning/2016/10/06/deep-reinforcement-learning-racing-game.html#source-code
+  13. http://www.readcube.com/articles/10.1038/nature14236?shared_access_token=lo_2hfdw4muqecf3cvbzm9rgn0jajwel9jnr3zotv0p5kedccnjz3fj2fhqcgxkapor3zssjaldp-tw3iwgtsernlpac9xqq-vta2z5ji9lg16_wvcy4saogpk5xxa6ecqo8d8j7l4ejsdjwai53gqkt-7juiog0r3iv67mqiro74l6ixvmcvnkbgowimgi8u0izjstlpmqp6vmi_8lw_a==
+  14. https://lopespm.github.io/machine_learning/2016/10/06/deep-reinforcement-learning-racing-game.html#plugging-other-problems-and-games
+  15. https://lopespm.github.io/machine_learning/2016/10/06/deep-reinforcement-learning-racing-game.html#further-references
+  16. https://www.youtube.com/watch?time_continue=258&v=bfpohraopoq
+  17. https://www.youtube.com/playlist?list=pl4uslez-et3xllkpvegw9bn4z8mbp-sqc
+  18. https://www.youtube.com/watch?v=xlkw_wgjoyq
+  19. https://en.wikipedia.org/wiki/bellman_equation
+  20. https://github.com/lopespm/agent-trainer/blob/master/agent/game/action.py
+  21. https://www.cs.toronto.edu/~vmnih/docs/id25.pdf
+  22. http://www.readcube.com/articles/10.1038/nature14236?shared_access_token=lo_2hfdw4muqecf3cvbzm9rgn0jajwel9jnr3zotv0p5kedccnjz3fj2fhqcgxkapor3zssjaldp-tw3iwgtsernlpac9xqq-vta2z5ji9lg16_wvcy4saogpk5xxa6ecqo8d8j7l4ejsdjwai53gqkt-7juiog0r3iv67mqiro74l6ixvmcvnkbgowimgi8u0izjstlpmqp6vmi_8lw_a==
+  23. https://lopespm.github.io/files/id25_outrun/q_network_formulations.png
+  24. https://www.nervanasys.com/demystifying-deep-reinforcement-learning
+  25. https://lopespm.github.io/machine_learning/2016/10/06/deep-reinforcement-learning-racing-game.html#fn:1
+  26. https://github.com/lopespm/agent-trainer/blob/master/agent/trainer/q_network.py#l121
+  27. http://www.readcube.com/articles/10.1038/nature14236?shared_access_token=lo_2hfdw4muqecf3cvbzm9rgn0jajwel9jnr3zotv0p5kedccnjz3fj2fhqcgxkapor3zssjaldp-tw3iwgtsernlpac9xqq-vta2z5ji9lg16_wvcy4saogpk5xxa6ecqo8d8j7l4ejsdjwai53gqkt-7juiog0r3iv67mqiro74l6ixvmcvnkbgowimgi8u0izjstlpmqp6vmi_8lw_a==
+  28. https://www.nervanasys.com/demystifying-deep-reinforcement-learning/
+  29. https://github.com/lopespm/agent-trainer
+  30. http://cs231n.stanford.edu/reports2016/112_report.pdf
+  31. http://codeincomplete.com/games/racer/v4-final/
+  32. https://github.com/lopespm/agent-trainer/blob/master/agent/trainer/episode.py#l60
+  33. https://lopespm.github.io/files/id25_outrun/reward_function_plot.png
+  34. https://github.com/lopespm/agent-trainer/blob/master/readme.md
+  35. https://github.com/lopespm/agent-trainer-deployer
+  36. https://aws.amazon.com/ec2/spot/
+  37. https://lopespm.github.io/files/id25_outrun/deployed-diagram.png
+  38. http://www.readcube.com/articles/10.1038/nature14236?shared_access_token=lo_2hfdw4muqecf3cvbzm9rgn0jajwel9jnr3zotv0p5kedccnjz3fj2fhqcgxkapor3zssjaldp-tw3iwgtsernlpac9xqq-vta2z5ji9lg16_wvcy4saogpk5xxa6ecqo8d8j7l4ejsdjwai53gqkt-7juiog0r3iv67mqiro74l6ixvmcvnkbgowimgi8u0izjstlpmqp6vmi_8lw_a==
+  39. https://arxiv.org/abs/1512.02011
+  40. https://github.com/lopespm/agent-trainer-results
+  41. https://github.com/lopespm/agent-trainer-results
+  42. https://www.youtube.com/embed/1gpl9xc-e8m
+  43. https://www.youtube.com/embed/6f3ecocw57e
+  44. https://lopespm.github.io/files/id25_outrun/201609111241_7300eps/metrics_in_train.png
+  45. https://lopespm.github.io/files/id25_outrun/201609111241_7300eps/metrics_trained_play.png
+  46. https://lopespm.github.io/files/id25_outrun/201609171218_175eps/metrics_in_train.png
+  47. https://lopespm.github.io/files/id25_outrun/201609171218_175eps/metrics_trained_play.png
+  48. https://lopespm.github.io/files/id25_outrun/loss_201609171218_201609160922.png
+  49. https://github.com/lopespm/agent-trainer-results
+  50. https://lopespm.github.io/files/id25_outrun/201609171218_175eps/id167_timed_easy_mode.png
+  51. https://lopespm.github.io/files/id25_outrun/201609171218_175eps/id167_no_time_mode.png
+  52. https://lopespm.github.io/files/id25_outrun/conv_net_filters.png
+  53. https://github.com/lopespm/agent-trainer-results
+  54. https://github.com/lopespm/agent-trainer
+  55. https://github.com/lopespm/agent-trainer/tree/master/agent/game
+  56. https://github.com/lopespm/agent-trainer/blob/master/agent/game/action.py
+  57. https://github.com/lopespm/agent-trainer/blob/master/agent/game/cannonball_wrapper.py
+  58. https://github.com/lopespm/agent-trainer/blob/master/agent/trainer/episode.py#l56
+  59. https://github.com/lopespm/agent-trainer/blob/master/agent/trainer/visualization/metrics.py
+  60. https://github.com/lopespm/agent-trainer/blob/master/agent/trainer/episode.py#l56
+  61. https://github.com/lopespm/agent-trainer/blob/master/agent/trainer/image_preprocessor.py#l13
+  62. https://github.com/lopespm/agent-preprocessor/blob/master/agent/trainer/episode.py#l300
+  63. https://www.coursera.org/learn/machine-learning
+  64. https://www.udacity.com/course/deep-learning--ud730
+  65. http://www.readcube.com/articles/10.1038/nature14236?shared_access_token=lo_2hfdw4muqecf3cvbzm9rgn0jajwel9jnr3zotv0p5kedccnjz3fj2fhqcgxkapor3zssjaldp-tw3iwgtsernlpac9xqq-vta2z5ji9lg16_wvcy4saogpk5xxa6ecqo8d8j7l4ejsdjwai53gqkt-7juiog0r3iv67mqiro74l6ixvmcvnkbgowimgi8u0izjstlpmqp6vmi_8lw_a==
+  66. https://sites.google.com/a/deepmind.com/id25/
+  67. https://www.cs.toronto.edu/~vmnih/docs/id25.pdf
+  68. http://cs231n.stanford.edu/reports2016/112_report.pdf
+  69. https://www.nervanasys.com/demystifying-deep-reinforcement-learning/
+  70. https://www.udacity.com/course/reinforcement-learning--ud600
+  71. https://www.youtube.com/watch?v=dv80naleins
+  72. http://www.wildml.com/2016/10/learning-reinforcement-learning/
+  73. https://gym.openai.com/
+  74. https://github.com/devsisters/id25-tensorflow
+  75. https://github.com/lopespm/agent-trainer
+  76. https://github.com/lopespm/cannonball
+  77. https://github.com/lopespm/agent-trainer-deployer
+  78. https://github.com/lopespm/agent-trainer-docker
+  79. https://github.com/lopespm/agent-trainer-results
+  80. https://lopespm.github.io/machine_learning/2016/10/06/deep-reinforcement-learning-racing-game.html#fnref:1
+  81. https://lopespm.github.io/blog/tags/machine-learning/
+  82. https://lopespm.github.io/libraries/2016/08/27/compressed-deque.html
+  83. https://lopespm.github.io/libraries/2018/01/25/react-native-offscreen-toolbar.html
+  84. http://disqus.com/?ref_noscript
+  85. https://lopespm.github.io/2019/02/06/survival-ball-making-the-game.html
+  86. https://lopespm.github.io/libraries/games/2018/12/27/camera-multi-target.html
+  87. https://lopespm.github.io/apps/2018/03/12/arxiv-papers.html
+  88. https://lopespm.github.io/libraries/2018/01/25/react-native-offscreen-toolbar.html
+  89. https://lopespm.github.io/machine_learning/2016/10/06/deep-reinforcement-learning-racing-game.html
+  90. https://github.com/lopespm
+  91. http://octopress.org/
+  92. https://github.com/lucaslew/whitespace
+  93. https://lopespm.github.io/atom.xml
+
+   hidden links:
+  95. https://lopespm.github.io/files/id25_outrun/overall_view_play.png
+  96. https://lopespm.github.io/files/id25_outrun/overall_view_train_merged.png

@@ -1,0 +1,672 @@
+   #[1]sebastian ruder
+
+   [2]sebastian ruder
+     * [3]about
+     * [4]tags
+     * [5]papers
+     * [6]talks
+     * [7]news
+     * [8]faq
+     * [9]nlp news
+     * [10]nlp progress
+     * [11]contact
+
+   16 april 2018 / [12]tensorflow
+
+text classification with tensorflow estimators
+
+   text classification with tensorflow estimators
+
+   this post is a tutorial on how to use tensorflow estimators for text
+   classification.
+
+   note: this post was written together with the awesome [13]julian
+   eisenschlos and was originally published on the [14]tensorflow blog.
+
+   hello there! throughout this post we will show you how to classify text
+   using estimators in tensorflow. here   s the outline of what we   ll cover:
+     * loading data using datasets.
+     * building baselines using pre-canned estimators.
+     * using id27s.
+     * building custom estimators with convolution and lstm layers.
+     * loading pre-trained word vectors.
+     * evaluating and comparing models using tensorboard.
+     __________________________________________________________________
+
+   welcome to part 4 of a blog series that introduces tensorflow datasets
+   and estimators. you don   t need to read all of the previous material,
+   but take a look if you want to refresh any of the following concepts.
+   [15]part 1 focused on pre-made estimators, [16]part 2 discussed feature
+   columns, and [17]part 3 how to create custom estimators.
+
+   here in part 4, we will build on top of all the above to tackle a
+   different family of problems in natural language processing (nlp). in
+   particular, this article demonstrates how to solve a text
+   classification task using custom tensorflow estimators, embeddings, and
+   the [18]tf.layers module. along the way, we   ll learn about id97 and
+   id21 as a technique to bootstrap model performance when
+   labeled data is a scarce resource.
+
+   we will show you relevant code snippets. [19]here   s the complete
+   jupyter notebook that you can run locally or on [20]google
+   colaboratory. the plain .py source file is also available [21]here.
+   note that the code was written to demonstrate how estimators work
+   functionally and was not optimized for maximum performance.
+
+the task
+
+   the dataset we will be using is the imdb [22]large movie review
+   dataset, which consists of
+   [math: <semantics><mrow><mn>2</mn><mn>5</mn><mo
+   separator="true">,</mo><mn>0</mn><mn>0</mn><mn>0</mn></mrow><annotation
+   encoding="application/x-tex">25,000</annotation></semantics> :math]
+   25,000 highly polar movie reviews for training, and
+   [math: <semantics><mrow><mn>2</mn><mn>5</mn><mo
+   separator="true">,</mo><mn>0</mn><mn>0</mn><mn>0</mn></mrow><annotation
+   encoding="application/x-tex">25,000</annotation></semantics> :math]
+   25,000 for testing. we will use this dataset to train a binary
+   classification model, able to predict whether a review is positive or
+   negative.
+
+   for illustration, here   s a piece of a negative review (with
+   [math: <semantics><mrow><mn>2</mn></mrow><annotation
+   encoding="application/x-tex">2</annotation></semantics> :math]
+   2 stars) in the dataset:
+
+     now, i love italian horror films. the cheesier they are, the better.
+     however, this is not cheesy italian. this is week-old spaghetti
+     sauce with rotting meatballs. it is amateur hour on every level.
+     there is no suspense, no horror, with just a few drops of blood
+     scattered around to remind you that you are in fact watching a
+     horror film.
+
+   keras provides a convenient handler for importing the dataset which is
+   also available as a serialized numpy array .npz file to download
+   [23]here. for text classification, it is standard to limit the size of
+   the vocabulary to prevent the dataset from becoming too sparse and high
+   dimensional, causing potential overfitting. for this reason, each
+   review consists of a series of word indexes that go from
+   [math: <semantics><mrow><mn>4</mn></mrow><annotation
+   encoding="application/x-tex">4</annotation></semantics> :math]
+   4 (the most frequent word in the dataset the) to
+   [math:
+   <semantics><mrow><mn>4</mn><mn>9</mn><mn>9</mn><mn>9</mn></mrow><annota
+   tion encoding="application/x-tex">4999</annotation></semantics> :math]
+   4999, which corresponds to orange. index
+   [math: <semantics><mrow><mn>1</mn></mrow><annotation
+   encoding="application/x-tex">1</annotation></semantics> :math]
+   1 represents the beginning of the sentence and the index
+   [math: <semantics><mrow><mn>2</mn></mrow><annotation
+   encoding="application/x-tex">2</annotation></semantics> :math]
+   2 is assigned to all unknown (also known as out-of-vocabulary or oov)
+   tokens. these indexes have been obtained by pre-processing the text
+   data in a pipeline that cleans, normalizes and tokenizes each sentence
+   first and then builds a dictionary indexing each of the tokens by
+   frequency.
+
+   after we   ve loaded the data in memory we pad each of the sentences with
+   $0$ so that we have two $25000 \times 200$ arrays for training and
+   testing respectively.
+vocab_size = 5000
+sentence_size = 200
+(x_train_variable, y_train), (x_test_variable, y_test) = imdb.load_data(num_word
+s=vocab_size)
+x_train = sequence.pad_sequences(
+    x_train_variable,
+    maxlen=sentence_size,
+    padding='post',
+    value=0)
+x_test = sequence.pad_sequences(
+    x_test_variable,
+    maxlen=sentence_size,
+    padding='post',
+    value=0)
+
+input functions
+
+   the estimator framework uses input functions to split the data pipeline
+   from the model itself. several helper methods are available to create
+   them, whether your data is in a .csv file, or in a pandas.dataframe,
+   whether it fits in memory or not. in our case, we can use
+   dataset.from_tensor_slices for both the train and test sets.
+x_len_train = np.array([min(len(x), sentence_size) for x in x_train_variable])
+x_len_test = np.array([min(len(x), sentence_size) for x in x_test_variable])
+
+def parser(x, length, y):
+    features = {"x": x, "len": length}
+    return features, y
+
+def train_input_fn():
+    dataset = tf.data.dataset.from_tensor_slices((x_train, x_len_train, y_train)
+)
+    dataset = dataset.shuffle(buffer_size=len(x_train_variable))
+    dataset = dataset.batch(100)
+    dataset = dataset.map(parser)
+    dataset = dataset.repeat()
+    iterator = dataset.make_one_shot_iterator()
+    return iterator.get_next()
+
+def eval_input_fn():
+    dataset = tf.data.dataset.from_tensor_slices((x_test, x_len_test, y_test))
+    dataset = dataset.batch(100)
+    dataset = dataset.map(parser)
+    iterator = dataset.make_one_shot_iterator()
+    return iterator.get_next()
+
+   we shuffle the training data and do not predefine the number of epochs
+   we want to train, while we only need one epoch of the test data for
+   evaluation. we also add an additional "len" key that captures the
+   length of the original, unpadded sequence, which we will use later.
+
+building a baseline
+
+   it   s good practice to start any machine learning project trying basic
+   baselines. the simpler the better as having a simple and robust
+   baseline is key to understanding exactly how much we are gaining in
+   terms of performance by adding extra complexity. it may very well be
+   the case that a simple solution is good enough for our requirements.
+
+   with that in mind, let us start by trying out one of the simplest
+   models for text classification. that would be a sparse linear model
+   that gives a weight to each token and adds up all of the results,
+   regardless of the order. as this model does not care about the order of
+   words in a sentence, we normally refer to it as a bag-of-words
+   approach. let   s see how we can implement this model using an estimator.
+
+   we start out by defining the feature column that is used as input to
+   our classifier. as we have seen in [24]part 2,
+   categorical_column_with_identity is the right choice for this
+   pre-processed text input. if we were feeding raw text tokens other
+   feature_columns could do a lot of the pre-processing for us. we can now
+   use the pre-made linearclassifier.
+column = tf.feature_column.categorical_column_with_identity('x', vocab_size)
+classifier = tf.estimator.linearclassifier(
+    feature_columns=[column],
+    model_dir=os.path.join(model_dir, 'bow_sparse'))
+
+   finally, we create a simple function that trains the classifier and
+   additionally creates a precision-recall curve. as we do not aim to
+   maximize performance in this blog post, we only train our models for
+   25,000 steps.
+def train_and_evaluate(classifier):
+    classifier.train(input_fn=train_input_fn, steps=25000)
+    eval_results = classifier.evaluate(input_fn=eval_input_fn)
+    predictions = np.array([p['logistic'][0] for p in classifier.predict(input_f
+n=eval_input_fn)])
+    tf.reset_default_graph()
+    # add a pr summary in addition to the summaries that the classifier writes
+    pr = summary_lib.pr_curve('precision_recall', predictions=predictions, label
+s=y_test.astype(bool), num_thresholds=21)
+    with tf.session() as sess:
+        writer = tf.summary.filewriter(os.path.join(classifier.model_dir, 'eval'
+), sess.graph)
+        writer.add_summary(sess.run(pr), global_step=0)
+        writer.close()
+train_and_evaluate(classifier)
+
+   one of the benefits of choosing a simple model is that it is much more
+   interpretable. the more complex a model, the harder it is to inspect
+   and the more it tends to work like a black box. in this example, we can
+   load the weights from our model   s last checkpoint and take a look at
+   what tokens correspond to the biggest weights in absolute value. the
+   results look like what we would expect.
+# load the tensor with the model weights
+weights = classifier.get_variable_value('linear/linear_model/x/weights').flatten
+()
+# find biggest weights in absolute value
+extremes = np.concatenate((sorted_indexes[-8:], sorted_indexes[:8]))
+# word_inverted_index is a dictionary that maps from indexes back to tokens
+extreme_weights = sorted(
+    [(weights[i], word_inverted_index[i - index_offset]) for i in extremes])
+# create plot
+y_pos = np.arange(len(extreme_weights))
+plt.bar(y_pos, [pair[0] for pair in extreme_weights], align='center', alpha=0.5)
+plt.xticks(y_pos, [pair[1] for pair in extreme_weights], rotation=45, ha='right'
+)
+plt.ylabel('weight')
+plt.title('most significant tokens')
+plt.show()
+
+   model weights
+
+   as we can see, tokens with the most positive weight such as
+      refreshing    are clearly associated with positive sentiment, while
+   tokens that have a large negative weight unarguably evoke negative
+   emotions. a simple but powerful modification that one can do to improve
+   this model is weighting the tokens by their [25]tf-idf scores.
+
+embeddings
+
+   the next step of complexity we can add are id27s. embeddings
+   are a dense low-dimensional representation of sparse high-dimensional
+   data. this allows our model to learn a more meaningful representation
+   of each token, rather than just an index. while an individual dimension
+   is not meaningful, the low-dimensional space   when learned from a large
+   enough corpus   has been shown to capture relations such as tense,
+   plural, gender, thematic relatedness, and many more. we can add word
+   embeddings by converting our existing feature column into an
+   embedding_column. the representation seen by the model is the mean of
+   the embeddings for each token (see the combiner argument in the
+   [26]docs). we can plug in the embedded features into a pre-canned
+   dnnclassifier.
+
+   a note for the keen observer: an embedding_column is just an efficient
+   way of applying a fully connected layer to the sparse binary feature
+   vector of tokens, which is multiplied by a constant depending of the
+   chosen combiner. a direct consequence of this is that it wouldn   t make
+   sense to use an embedding_column directly in a linearclassifier because
+   two consecutive linear layers without non-linearities in between add no
+   prediction power to the model, unless of course the embeddings are
+   pre-trained.
+embedding_size = 50
+word_embedding_column = tf.feature_column.embedding_column(
+    column, dimension=embedding_size)
+classifier = tf.estimator.dnnclassifier(
+    hidden_units=[100],
+    feature_columns=[word_embedding_column],
+    model_dir=os.path.join(model_dir, 'bow_embeddings'))
+train_and_evaluate(classifier)
+
+   we can use tensorboard to visualize our $50$ dimensional word vectors
+   projected into $\mathbb{r}^3$ using [27]id167. we expect similar words
+   to be close to each other. this can be a useful way to inspect our
+   model weights and find unexpected behaviours.
+
+   embeddings
+
+convolutions
+
+   at this point one possible approach would be to go deeper, further
+   adding more fully connected layers and playing around with layer sizes
+   and training functions. however, by doing that we would add extra
+   complexity and ignore important structure in our sentences. words do
+   not live in a vacuum and meaning is compositional, formed by words and
+   its neighbors.
+
+   convolutions are one way to take advantage of this structure, similar
+   to how we can model salient clusters of pixels for [28]image
+   classification. the intuition is that certain sequences of words, or
+   id165s, usually have the same meaning regardless of their overall
+   position in the sentence. introducing a structural prior via the
+   convolution operation allows us to model the interaction between
+   neighboring words and consequently gives us a better way to represent
+   such meaning.
+
+   the following image shows how a filter matrix $f \in
+   \mathbb{r}^{d\times m}$ tri-gram window of tokens to build a new
+   feature map. afterwards a pooling layer is usually applied to combine
+   adjacent results.
+
+   text convolution
+
+    source: [29]learning to rank short text pairs with convolutional deep
+                  neural networks by severyn et al. [2015]
+
+   let us look at the full model architecture. the use of dropout layers
+   is a id173 technique that makes the model less likely to
+   overfit.
+   embedding layer
+   dropout
+   convolution1d
+   globalmaxpooling1d
+   hidden dense layer
+   dropout
+   output layer
+
+creating a custom estimator
+
+   as seen in previous blog posts, the tf.estimator framework provides a
+   high-level api for training machine learning models, defining train(),
+   evaluate() and predict() operations, handling checkpointing, loading,
+   initializing, serving, building the graph and the session out of the
+   box. there is a small family of pre-made estimators, like the ones we
+   used earlier, but it   s most likely that you will need to [30]build your
+   own.
+
+   writing a custom estimator means writing a model_fn(features, labels,
+   mode, params) that returns an estimatorspec. the first step will be
+   mapping the features into our embedding layer:
+input_layer = tf.contrib.layers.embed_sequence(
+    features['x'],
+    vocab_size,
+    embedding_size,
+    initializer=params['embedding_initializer'])
+
+   then we use tf.layers to process each output sequentially.
+training = (mode == tf.estimator.modekeys.train)
+dropout_emb = tf.layers.dropout(inputs=input_layer,
+                                rate=0.2,
+                                training=training)
+conv = tf.layers.conv1d(
+    inputs=dropout_emb,
+    filters=32,
+    kernel_size=3,
+    padding="same",
+    activation=tf.nn.relu)
+pool = tf.reduce_max(input_tensor=conv, axis=1)
+hidden = tf.layers.dense(inputs=pool, units=250, activation=tf.nn.relu)
+dropout = tf.layers.dropout(inputs=hidden, rate=0.2, training=training)
+logits = tf.layers.dense(inputs=dropout_hidden, units=1)
+
+   finally, we will use a head to simplify the writing of our last part of
+   the model_fn. the head already knows how to compute predictions, loss,
+   train_op, metrics and export outputs, and can be reused across models.
+   this is also used in the pre-made estimators and provides us with the
+   benefit of a uniform evaluation function across all of our models. we
+   will use binary_classification_head, which is a head for single label
+   binary classification that uses sigmoid_cross_id178_with_logits as
+   the id168 under the hood.
+head = tf.contrib.estimator.binary_classification_head()
+optimizer = tf.train.adamoptimizer()
+def _train_op_fn(loss):
+    tf.summary.scalar('loss', loss)
+    return optimizer.minimize(
+        loss=loss,
+        global_step=tf.train.get_global_step())
+
+return head.create_estimator_spec(
+    features=features,
+    labels=labels,
+    mode=mode,
+    logits=logits,
+    train_op_fn=_train_op_fn)
+
+   running this model is just as easy as before:
+initializer = tf.random_uniform([vocab_size, embedding_size], -1.0, 1.0))
+params = {'embedding_initializer': initializer}
+id98_classifier = tf.estimator.estimator(model_fn=model_fn,
+                                        model_dir=os.path.join(model_dir, 'id98')
+,
+                                        params=params)
+train_and_evaluate(id98_classifier)
+
+id137
+
+   using the estimator api and the same model head, we can also create a
+   classifier that uses a long short-term memory (lstm) cell instead of
+   convolutions. recurrent models such as this are some of the most
+   successful building blocks for nlp applications. an lstm processes the
+   entire document sequentially, recursing over the sequence with its cell
+   while storing the current state of the sequence in its memory.
+
+   one of the drawbacks of recurrent models compared to id98s is that,
+   because of the nature of recursion, models turn out deeper and more
+   complex, which usually produces slower training time and worse
+   convergence. lstms (and id56s in general) can suffer convergence issues
+   like vanishing or exploding gradients, that said, with sufficient
+   tuning they can obtain state-of-the-art results for many problems. as a
+   rule of thumb id98s are good at feature extraction, while id56s excel at
+   tasks that depend on the meaning of the whole sentence, like question
+   answering or machine translation.
+
+   each cell processes one token embedding at a time updating its internal
+   state based on a differentiable computation that depends on both the
+   embedding vector $x_t$ and the previous state $h_{t-1}$. in order to
+   get a better understanding of how lstms work, you can refer to chris
+   olah   s [31]blog post.
+
+   lstm architecture
+
+            source: [32]understanding id137 by chris olah
+
+   the complete lstm model can be expressed by the following simple
+   flowchart:
+
+   lstm_flow_chart
+
+   in the beginning of this post, we padded all documents up to
+   [math:
+   <semantics><mrow><mn>2</mn><mn>0</mn><mn>0</mn></mrow><annotation
+   encoding="application/x-tex">200</annotation></semantics> :math]
+   200 tokens, which is necessary to build a proper tensor. however, when
+   a document contains fewer than
+   [math:
+   <semantics><mrow><mn>2</mn><mn>0</mn><mn>0</mn></mrow><annotation
+   encoding="application/x-tex">200</annotation></semantics> :math]
+   200 words, we don   t want the lstm to continue processing padding tokens
+   as it does not add information and degrades performance. for this
+   reason, we additionally want to provide our network with the length of
+   the original sequence before it was padded. internally, the model then
+   copies the last state through to the sequence   s end. we can do this by
+   using the "len" feature in our input functions. we can now use the same
+   logic as above and simply replace the convolutional, pooling, and
+   flatten layers with our lstm cell.
+lstm_cell = tf.nn.id56_cell.basiclstmcell(100)
+_, final_states = tf.nn.dynamic_id56(
+        lstm_cell, inputs, sequence_length=features['len'], dtype=tf.float32)
+logits = tf.layers.dense(inputs=final_states.h, units=1)
+
+pre-trained vectors
+
+   most of the models that we have shown before rely on id27s as
+   a first layer. so far, we have initialized this embedding layer
+   randomly. however, [33]much [34]previous [35]work has shown that using
+   embeddings pre-trained on a large unlabeled corpus as initialization is
+   beneficial, particularly when training on only a small number of
+   labeled examples. the most popular pre-trained embedding is
+   [36]id97. leveraging knowledge from unlabeled data via pre-trained
+   embeddings is an instance of [37]id21.
+
+   to this end, we will show you how to use them in an estimator. we will
+   use the pre-trained vectors from another popular model, [38]glove.
+embeddings = {}
+with open('glove.6b.50d.txt', 'r', encoding='utf-8') as f:
+    for line in f:
+        values = line.strip().split()
+        w = values[0]
+        vectors = np.asarray(values[1:], dtype='float32')
+        embeddings[w] = vectors
+
+   after loading the vectors into memory from a file we store them as a
+   numpy.array using the same indexes as our vocabulary. the created array
+   is of shape (5000, 50). at every row index, it contains the
+   50-dimensional vector representing the word at the same index in our
+   vocabulary.
+embedding_matrix = np.random.uniform(-1, 1, size=(vocab_size, embedding_size))
+for w, i in word_index.items():
+    v = embeddings.get(w)
+    if v is not none and i < vocab_size:
+        embedding_matrix[i] = v
+
+   finally, we can use a custom initializer function and pass it in the
+   params object to our id98_model_fn , without any modifications.
+def my_initializer(shape=none, dtype=tf.float32, partition_info=none):
+    assert dtype is tf.float32
+    return embedding_matrix
+params = {'embedding_initializer': my_initializer}
+id98_pretrained_classifier = tf.estimator.estimator(
+    model_fn=id98_model_fn,
+    model_dir=os.path.join(model_dir, 'id98_pretrained'),
+    params=params)
+train_and_evaluate(id98_pretrained_classifier)
+
+running tensorboard
+
+   now we can launch tensorboard and see how the different models we   ve
+   trained compare against each other in terms of training time and
+   performance.
+
+   in a terminal, we run
+> tensorboard --logdir={model_dir}
+
+   we can visualize many metrics collected while training and testing,
+   including the id168 values of each model at each training step,
+   and the precision-recall curves. this is of course most useful to
+   select which model works best for our use-case as well as how to choose
+   classification thresholds.
+
+   pr curve
+
+   loss
+
+getting predictions
+
+   to obtain predictions on new sentences we can use the predict method in
+   the estimator instances, which will load the latest checkpoint for each
+   model and evaluate on the unseen examples. but before passing the data
+   into the model we have to clean up, tokenize and map each token to the
+   corresponding index as we see below.
+def text_to_index(sentence):
+    # remove punctuation characters except for the apostrophe
+    translator = str.maketrans('', '', string.punctuation.replace("'", ''))
+    tokens = sentence.translate(translator).lower().split()
+    return np.array([1] + [word_index[t] + index_offset if t in word_index else
+2 for t in tokens])
+
+def print_predictions(sentences, classifier):
+    indexes = [text_to_index(sentence) for sentence in sentences]
+    x = sequence.pad_sequences(indexes,
+                               maxlen=sentence_size,
+                               padding='post',
+                               value=-1)
+    length = np.array([min(len(x), sentence_size) for x in indexes])
+    predict_input_fn = tf.estimator.inputs.numpy_input_fn(x={"x": x, "len": leng
+th}, shuffle=false)
+    predictions = [p['logistic'][0] for p in classifier.predict(input_fn=predict
+_input_fn)]
+    print(predictions)
+
+   it is worth noting that the checkpoint itself is not sufficient to make
+   predictions; the actual code used to build the estimator is necessary
+   as well in order to map the saved weights to the corresponding tensors.
+   it   s a good practice to associate saved checkpoints with the branch of
+   code with which they were created.
+
+   if you are interested in exporting the models to disk in a fully
+   recoverable way, you might want to look into the [39]savedmodel class,
+   which is especially useful for serving your model through an api using
+   [40]tensorflow serving.
+
+summary
+
+   in this blog post, we explored how to use estimators for text
+   classification, in particular for the imdb reviews dataset. we trained
+   and visualized our own embeddings, as well as loaded pre-trained ones.
+   we started from a simple baseline and made our way to convolutional
+   neural networks and lstms.
+
+   for more details, be sure to check out:
+     * a [41]jupyter notebook that can run locally, or on colaboratory.
+     * the complete [42]source code for this blog post.
+     * the tensorflow [43]embedding guide.
+     * the tensorflow [44]vector representation of words tutorial.
+     * the nltk [45]processing raw text chapter on how to design language
+       pipelines.
+
+   thanks for reading!
+
+   sebastian ruder
+
+[46]sebastian ruder
+
+   read [47]more posts by this author.
+   [48]read more
+
+   [49]an overview of proxy-label approaches for semi-supervised learning
+
+   semi-supervised learning
+
+an overview of proxy-label approaches for semi-supervised learning
+
+   while unsupervised learning is still elusive, researchers have made a
+   lot of progress in semi-supervised learning. this post focuses on a
+   particular promising category of semi-supervised learning methods that
+   assign proxy labels to unlabelled data, which are used as targets for
+   learning.
+
+     * sebastian ruder
+       [50]sebastian ruder
+
+   [51]requests for research
+
+   id21
+
+requests for research
+
+   it can be hard to find compelling topics to work on and know what
+   questions to ask when you are just starting as a researcher. this post
+   aims to provide inspiration and ideas for research directions to junior
+   researchers and those trying to get into research.
+
+     * sebastian ruder
+       [52]sebastian ruder
+
+   [53]sebastian ruder
+      
+   text classification with tensorflow estimators
+   share this
+   please enable javascript to view the [54]comments powered by disqus.
+
+   [55]sebastian ruder    2019
+
+   [56]latest posts [57]twitter [58]ghost
+
+references
+
+   visible links
+   1. http://ruder.io/rss/
+   2. http://ruder.io/
+   3. http://ruder.io/about/
+   4. http://ruder.io/tags/
+   5. http://ruder.io/publications/
+   6. http://ruder.io/talks/
+   7. http://ruder.io/news/
+   8. http://ruder.io/faq/
+   9. http://ruder.io/nlp-news/
+  10. https://nlpprogress.com/
+  11. http://ruder.io/contact/
+  12. http://ruder.io/tag/tensorflow/index.html
+  13. https://twitter.com/eisenjulian
+  14. https://medium.com/tensorflow/classifying-text-with-tensorflow-estimators-a99603033fbe
+  15. https://developers.googleblog.com/2017/09/introducing-tensorflow-datasets.html
+  16. https://developers.googleblog.com/2017/11/introducing-tensorflow-feature-columns.html
+  17. https://developers.googleblog.com/2017/12/creating-custom-estimators-in-tensorflow.html
+  18. https://www.tensorflow.org/api_docs/python/tf/layers
+  19. https://github.com/eisenjulian/nlp_estimator_tutorial/blob/master/nlp_estimators.ipynb
+  20. https://colab.research.google.com/drive/1oxjnysj3vsrvasxn4clmtsvegpw_cx_c?hl=en#forceedit=true&offline=true&sandboxmode=true
+  21. https://github.com/eisenjulian/nlp_estimator_tutorial/blob/master/nlp_estimators.py
+  22. http://ai.stanford.edu/~amaas/data/sentiment/
+  23. https://s3.amazonaws.com/text-datasets/imdb.npz
+  24. https://developers.googleblog.com/2017/11/introducing-tensorflow-feature-columns.html
+  25. https://en.wikipedia.org/wiki/tf   idf
+  26. https://www.tensorflow.org/api_docs/python/tf/feature_column/embedding_column
+  27. https://en.wikipedia.org/wiki/t-distributed_stochastic_neighbor_embedding
+  28. https://www.tensorflow.org/tutorials/layers
+  29. https://www.semanticscholar.org/paper/learning-to-rank-short-text-pairs-with-convolution-severyn-moschitti/452f7411af7d471dd3ba84c2b06b2aaffc38cdb9
+  30. https://www.tensorflow.org/extend/estimators
+  31. https://colah.github.io/posts/2015-08-understanding-lstms/
+  32. https://colah.github.io/posts/2015-08-understanding-lstms/
+  33. https://arxiv.org/abs/1607.01759
+  34. https://arxiv.org/abs/1301.3781
+  35. https://arxiv.org/abs/1103.0398
+  36. https://www.tensorflow.org/tutorials/id97
+  37. http://ruder.io/transfer-learning/
+  38. https://nlp.stanford.edu/projects/glove/
+  39. https://www.tensorflow.org/programmers_guide/saved_model#using_savedmodel_with_estimators
+  40. https://github.com/tensorflow/serving
+  41. https://github.com/eisenjulian/nlp_estimator_tutorial/blob/master/nlp_estimators.ipynb
+  42. https://github.com/eisenjulian/nlp_estimator_tutorial/blob/master/nlp_estimators.py
+  43. https://www.tensorflow.org/programmers_guide/embedding
+  44. https://www.tensorflow.org/tutorials/id97
+  45. http://www.nltk.org/book/ch03.html
+  46. http://ruder.io/author/sebastian/index.html
+  47. http://ruder.io/author/sebastian/index.html
+  48. http://ruder.io/author/sebastian/index.html
+  49. http://ruder.io/index.html
+  50. http://ruder.io/author/sebastian/index.html
+  51. http://ruder.io/index.html
+  52. http://ruder.io/author/sebastian/index.html
+  53. http://ruder.io/
+  54. https://disqus.com/?ref_noscript
+  55. http://ruder.io/
+  56. http://ruder.io/
+  57. https://twitter.com/seb_ruder
+  58. https://ghost.org/
+
+   hidden links:
+  60. https://twitter.com/seb_ruder
+  61. http://ruder.io/rss/index.rss
+  62. http://ruder.io/index.html
+  63. http://ruder.io/index.html
+  64. https://twitter.com/share?text=text%20classification%20with%20tensorflow%20estimators&url=http://ruder.io/text-classification-tensorflow-estimators/
+  65. https://www.facebook.com/sharer/sharer.php?u=http://ruder.io/text-classification-tensorflow-estimators/

@@ -1,0 +1,546 @@
+   #[1]alternate
+
+   [2]home [3]subscribe
+
+                       learning math with lstms and keras
+
+   09 aug 2017 on machine-learning
+
+   updated 8 dec 2017: improved the model and rewrote some parts
+
+   since ancient times, it has been known that machines excel at math
+   while humans are pretty good at detecting cats in pictures. but with
+   the advent of deep learning, the boundaries have started to blur   
+
+   today we want to teach the machines to do math - again! but instead of
+   feeding them with optimized, known representations of numbers and
+   calling hard-wired operations on them, we will feed in strings
+   representing math formulas along with strings representing their
+   results, character by character, and have the machine figure out how to
+   interpret them and arrive at the results on its own.
+
+   the resulting model is much more human: not all results are exact, but
+   they are close. it   s more of an approximation than an exact
+   calculation. as a 100% human myself, i surely can relate to
+   almost-correct math, if anything.
+
+   today   s post will be much more practical than usual, so if you want to
+   build this at home, get your long-neglected pythons out of their cages!
+   you can find the complete code with lots of improvements [4]here.
+
+  recurrent neural networks and long-short-term-memory
+
+   as in my previous post, we   re going to use recurrent neural networks,
+   or id56 for short. more specifically, a kind of id56 known under the
+   fancy name of long-short-term-memory, or lstm. if you need a primer on
+   these, i can recommend [5]christopher olah   s    understanding lstms    and
+   again [6]andrej karpathy   s    the unreasonable effectiveness of recurrent
+   neural networks   . but to summarize: id56s are essentially building
+   blocks of neural networks that not only look at the current input, but
+   also remember the input before. lstms especially have a complex memory
+   mechanism that can learn which parts of the data are important to
+   remember, which can be ignored, and which can be forgotten.
+
+  sequence to sequence learning
+
+   sequence to sequence learning deals with problems in which a source
+   sequence of inputs has to be mapped to a target sequence of outputs
+   where each output is not necessarily directly dependent on a single
+   input. the classical example is translation. how do you learn that a
+   chinese input phrase                                      equals    she is on her way.    in
+   english?
+
+   even with id56s it   s not directly obvious how to do this. well, it
+   wasn   t until google published their paper [7]   sequence to sequence
+   learning with neural networks    (id195) in 2014. the idea is to train
+   a joint encoder-decoder model. first, an encoder based on id56s learns
+   an abstract representation. then a decoder also based on id56s learns to
+   decode it to another language, generating a new sequence from the
+   encoding as output.
+
+  bidirectional id56s
+
+   it turns out id56s work much better if we let them look into the future
+   as well. for this purpose, so-called bi-directional id56s were invented.
+   each bi-directional id56 consists of two id56s: one that looks at the
+   sequence from start to end, and one that looks at it in reverse. at
+   each part of the sequence we thus have information about what came
+   before and what will come after. that way, a id56s can better learn
+   about the context of each segment.
+
+  the setup
+
+   for most problems, data is hard to come by. labeled data even more so.
+   but math equations are cheap: they can be easily generated, and python
+   gives us their result simply by calling eval(equation_string). starting
+   with simple addition of small, natural numbers, we can easily generate
+   a lot of equations along with their results and train a id195 model
+   on it.
+
+   for example, a typical datapoint for addition could look like this:
+
+input: '31 + 87'
+output: '118'
+
+   since we   re learning on just a fraction of all possible formulas, the
+   model can   t just learn the results by heart. instead, in order to
+   generalize to all other equations, it really needs to    understand    what
+   addition    means   . this could include, among others:
+     * an equation consists of numbers and operations
+     * two numbers are added up digit-by-digit
+     * if two digits add up to a value higher than 9, they carry over to
+       the next
+     * commutativity: a + b = b + a
+     * adding zero does not actually do anything: a + 0 = a
+     * etc.
+
+   and this just for additions! if we add more operations, or mix them,
+   the network needs to grog even more rules like this.
+
+  setting up your environment
+
+   if you   re doing this from scratch, you will want to work in a new
+   virtualenv. i also recommend using python 3, because it   s really time
+   we got over python 2    if you don   t know how virtualenv works, i really
+   recommend looking into them. you can find a short tutorial [8]here. to
+   get a virtualenv with python 3, try virtualenv -p python3 venv.
+
+   once your virtualenv is activated, install these requirements:
+
+pip install numpy tensorflow keras
+
+   if you run into trouble with tensorflow, follow [9]their guide.
+
+   great! you can paste the code below into a python shell, or store it in
+   a file, it   s up to you.
+
+  generating math formulas as strings
+
+   for now, let   s build some equations! we   re going to go real simple here
+   and just work with easy-peasy addition of two natural numbers. once we
+   get that to work, we can build more funky stuff later on. see the
+   [10]full code to find out how to build more complex equations.
+
+   to make sure we build each possible equation only once, we   re going to
+   use a generator. with the handy itertools python standard package, we
+   can generate all possible permutations of two numbers and then create a
+   formula for each pair. here   s our basic code. note that i   m referencing
+   some global variables (in all caps), we will define them later.
+import itertools
+import random
+
+def generate_equations(shuffle=true, max_count=none):
+    """
+    generates all possible math equations given the global configuration.
+    if max_count is given, returns that many at most. if shuffle is true,
+    the equation will be generated in random order.
+    """
+    # generate all possible unique sets of numbers
+    number_permutations = itertools.permutations(
+        range(min_number, max_number + 1), 2
+    )
+
+    # shuffle if required. the downside is we need to convert to list first
+    if shuffle:
+        number_permutations = list(number_permutations)
+        random.shuffle(number_permutations)
+
+    # if a max_count is given, use itertools to only look at that many items
+    if max_count is not none:
+        number_permutations = itertools.islice(number_permutations, max_count)
+
+    # build an equation string for each and yield to caller
+    for x, y in number_permutations:
+        yield '{} + {}'.format(x, y)
+
+   assuming global config values min_number = 0 and max_number = 999, this
+   code will generate us equations like these:
+
+'89 + 7'
+'316 + 189'
+'240 + 935'
+
+   for any of these equation strings, we can easily get the result in
+   python using eval(equation).
+
+   that was easy, right?
+
+  encoding strings for neural networks
+
+   remember we want to look at the strings as sequences. the id56 will not
+   see the input string as a whole, but one character after the other. it
+   will then have to learn to remember the important parts in its internal
+   state. that means we need to convert each input and output string into
+   vectors first. let   s also add an    end    character to each sequence so
+   the neural network can learn when a sequence is finished. i   m using the
+   (invisible)    \0    character here.
+
+   we do this by encoding each character as a one-hot vector. each string
+   is then simply a matrix of these character-vectors. the way we encode
+   is quite arbitrary, as long as we decode it the same way later on.
+   here   s some code i used for this:
+import numpy as np
+
+chars = [str(n) for n in range(10)] + ['+', ' ', '\0']
+char_to_index = {i: c for c, i in enumerate(chars)}
+index_to_char = {c: i for c, i in enumerate(chars)}
+
+def one_hot_to_index(vector):
+    if not np.any(vector):
+        return -1
+
+    return np.argmax(vector)
+
+def one_hot_to_char(vector):
+    index = one_hot_to_index(vector)
+    if index == -1:
+        return ''
+
+    return index_to_char[index]
+
+def one_hot_to_string(matrix):
+    return ''.join(one_hot_to_char(vector) for vector in matrix)
+
+   with these helper functions, it is quite easy to generate the dataset:
+def equations_to_x_y(equations, n):
+    """
+    given a list of equations, converts them to one-hot vectors to build
+    two data matrixes x and y.
+    """
+    x = np.zeros(
+        (n, max_equation_length, n_features), dtype=np.bool
+    )
+    y = np.zeros(
+        (n, max_result_length, n_features), dtype=np.bool
+    )
+
+    # get the first n_test equations and convert to test vectors
+    for i, equation in enumerate(itertools.islice(equations, n)):
+        result = str(eval(equation))
+
+        # pad the result with spaces
+        result = ' ' * (max_result_length - 1 - len(result)) + result
+
+        # we end each sequence in a sequence-end-character:
+        equation += '\0'
+        result += '\0'
+
+        for t, char in enumerate(equation):
+            x[i, t, char_to_index[char]] = 1
+
+        for t, char in enumerate(result):
+            y[i, t, char_to_index[char]] = 1
+
+    return x, y
+
+
+def build_dataset():
+    """
+    generates equations based on global config, splits them into train and test
+    sets, and returns (x_test, y_test, x_train, y_train).
+    """
+    generator = generate_equations(max_count=n_examples)
+
+    # split into training and test set based on split:
+    n_test = round(split * n_examples)
+    n_train = n_examples - n_test
+
+    x_test, y_test = equations_to_x_y(generator, n_test)
+    x_train, y_train = equations_to_x_y(generator, n_train)
+
+    return x_test, y_test, x_train, y_train
+
+   and later to print out some examples along with their targets:
+from __future__ import print_function
+
+def print_example_predictions(count, model, x_test, y_test):
+    """
+    print some example predictions along with their target from the test set.
+    """
+    print('examples:')
+
+    # pick some random indices from the test set
+    prediction_indices = np.random.choice(
+        x_test.shape[0], size=count, replace=false
+    )
+    # get a prediction of each
+    predictions = model.predict(x_test[prediction_indices, :])
+
+    for i in range(count):
+        print('{} = {}   (expected: {})'.format(
+            one_hot_to_string(x_test[prediction_indices[i]]),
+            one_hot_to_string(predictions[i]),
+            one_hot_to_string(y_test[prediction_indices[i]]),
+        ))
+
+   it is important to note here that the training data uses a max length
+   for the input and output sequences only for numerical reasons. the
+   model is not limited by that length and could look at or output longer
+   sequences after this training.
+
+  building the model in keras
+
+   now, let   s build the model. thanks to keras, this is quite
+   straightforward.
+
+   first, we need to decide what the shape of our inputs is supposed to
+   be. since it   s a matrix with a one-hot-vector for each position in the
+   equation string, this is simply (max_equation_length, n_features).
+   we   ll pass that input to a first layer consisting of 20 (bidirectional)
+   lstm cells. each will look at the input, character by character, and
+   output a single value.
+
+   there are several ways to build a id195 model. the simplest way is to
+   simply collect all information about the input sequence in a fixed
+   vector, then have the decoder generate a sequence from that. to make
+   this possible, we use repeatvector to feed the decoder network with the
+   representation in each time step. for a more detailed discussion about
+   id195 models in keras, see [11]here.
+
+   so after we repeat the encoded vector n times with n being the
+   (maximum) length of our output sequences, we run this repeat-sequence
+   through the decoder: a (bidirectional) lstm layer that will output
+   sequences of vectors. finally, we want to combine each lstm cell   s
+   output at each point in the sequence to a single output vector. this is
+   done using keras    timedistributed wrapper around a simple dense layer.
+
+   since we expect something like a one-hot vector for each output
+   character, we still need to apply softmax as usual in classification
+   problems. this essentially yields us a id203 distribution over
+   the character classes.
+
+   note that from what i gathered, this way of building id195 models in
+   keras is not optimal and not exactly equivalent to what is proposed in
+   the paper. it works nonetheless. for a more correct implementation, try
+   out [12]fariz rahman   s id195 package.
+
+   either way, here is our code:
+from keras.models import sequential
+from keras.layers import lstm, repeatvector, dense, activation
+from keras.layers.wrappers import timedistributed, bidirectional
+from keras.layers.id172 import batchid172
+from keras.optimizers import adam
+
+def build_model():
+    """
+    builds and returns the model based on the global config.
+    """
+    input_shape = (max_equation_length, n_features)
+
+    model = sequential()
+
+    # encoder:
+    model.add(bidirectional(lstm(20), input_shape=input_shape))
+    model.add(batchid172())
+
+    # the repeatvector-layer repeats the input n times
+    model.add(repeatvector(max_result_length))
+
+    # decoder:
+    model.add(bidirectional(lstm(20, return_sequences=true)))
+    model.add(batchid172())
+
+    model.add(timedistributed(dense(n_features)))
+    model.add(activation('softmax'))
+
+    model.compile(
+        loss='categorical_crossid178',
+        optimizer=adam(lr=0.01),
+        metrics=['accuracy'],
+    )
+
+    return model
+
+  training
+
+   training is easy. we just call the fit function of the model, passing
+   handy callbacks like the modelcheckpoint, which stores the best model
+   after each epoch. here   s the main function of our code:
+from keras.callbacks import modelcheckpoint
+
+def main():
+    model = build_model()
+
+    model.summary()
+    print()
+
+    x_test, y_test, x_train, y_train = build_dataset()
+
+    # let's print some predictions now to get a feeling for the equations
+    print()
+    print_example_predictions(5, model, x_test, y_test)
+    print()
+
+    try:
+        model.fit(
+            x_train, y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_data=(x_test, y_test),
+            callbacks=[
+                modelcheckpoint(
+                    'model.h5',
+                    save_best_only=true,
+                ),
+            ]
+        )
+    except keyboardinterrupt:
+        print('\ncaught sigint\n')
+
+    # load weights achieving best val_loss from training:
+    model.load_weights('model.h5')
+
+    print_example_predictions(20, model, x_test, y_test)
+
+
+if __name__ == '__main__':
+    main()
+
+   finally, we need to fill in some of the global variables we used
+   throughout the code. with equations using two numbers from 0 to 999,
+   there   s 998k possible data points. let   s use 30k of those for our
+   dataset, and validate on 10% of that, meaning we   ll train on about 2.7%
+   of possible equations and expect it to generalize to the remaining
+   97.3%. that may sound impressive, but deep learning is actually used to
+   facing much more dire odds.
+
+   here   s my complete config:
+min_number = 0
+max_number = 999
+
+max_n_examples = (max_number - min_number) ** 2
+n_examples = 30000
+n_features = len(chars)
+max_number_length_left_side = len(str(max_number))
+max_number_length_right_side = max_number_length_left_side + 1
+max_equation_length = (max_number_length_left_side * 2) + 4
+max_result_length = max_number_length_right_side + 1
+
+split = .1
+epochs = 200
+batch_size = 256
+
+   finally, we can start training. either call main() from the shell, or
+   store everything in a file training.py and run it via python
+   training.py.
+
+  results
+
+   running the code as it is described here, with some patience i get to a
+   test accuracy of 1.0 on the test set after about 120 epochs. yes that   s
+   right, it seems we   re making zero mistakes on our test set of 3000
+   equations. here   s a graph showing how accuracy developed during
+   training. as you can see, overfitting is not a problem for us. the
+   capacity of the network is just way too small to be learning examples
+   by heart.
+
+   plot showing convergence of accuracy over training time
+
+   that   s great, but running it on some more, unseen example equations,
+   the model still makes the occasional mistake! why is that? did our
+   model not generalize to all areas of the problem space?
+
+  analyzing the mistakes
+
+   let   s look at some of the examples where the model failed to give the
+   right answer. i tried 20k new equations, and out of those, only 10 were
+   incorrect, for example:
+
+47 + 58   = 115  (should have been 105)
+94 + 909  = 1903 (should have been 1003)
+2 + 7     = 19   (should have been 9)
+989 + 811 = 1890 (should have been 1800)
+22 + 78   =  00  (should have been 100)
+
+   we notice:
+    1. most, but not all errors are in the space of smaller numbers, i.e.
+       where at least one number is less than 100.
+    2. all errors seem to be in one single digit only, while the rest of
+       the digits are correct.
+
+   error #1 is easy to understand: in the lower number range, the rules of
+   addition change a little bit (the first digit no longer counts the
+   100s). at the same time, this problematic space has seen less training
+   examples than the easier parts. in the whole equation space, there are
+   ~800k points where both numbers have three digits, and only about 80
+   where both numbers are below 10.
+
+   number two is a bit harder to follow. it seems to be an utterly
+   un-human thing to do. a human would make mistakes in the space of
+   numbers, not in the space of strings. it   s perfectly alright to get the
+   last digit wrong, but to report    1903    instead of    1003    is
+   unacceptable! what happened?
+
+   in the case of    1903    vs    1003   , it looks like part of the decoder
+   thought the result would be above 1003, so correctly spit out a    1   ,
+   while the next output thought    nope, definitely below 1000    and output
+   a    9    as in nine-hundred-something. does each position in the output
+   sequence follow its own stubborn logic, not really caring if the number
+   as a whole makes any sense? this could probably be improved by using a
+   better vector representation or coming up with a better id168.
+   or it might be a general weakness in this kind of id195 model.
+
+   anyway, since our input space has only two factors of variation (the
+   two numbers that go into building the equation), we can plot the
+   equation space in a 2d pane. i went ahead and created a scatter plot
+   with green dots marking correct predictions and red dots marking
+   incorrect ones. find the code for that [13]here.
+
+   scatter plot of errors in problem space
+
+   the red dots are hard to see, but they are there!
+
+  further experiments
+
+   there   s lots to do! you can get creative about getting over this
+   lower-number problem. we can also increase the complexity of the
+   equations. i was able to get quite far on ones as complex as 131 + 83 -
+   744 * 33 (= -24338), but haven   t really gotten it to work with
+   division.
+
+   feel free to pass on hints, ideas for improvement, or your own results
+   in the comments or as issues on my [14]repository.
+
+   [15]max schumacher's picture
+
+    max schumacher
+
+   hi, this is max, a guy who likes learning. i've worked around the world
+   with a bunch of startups at various stages. currently i'm freelancing
+   as a machine learning and full-stack web engineer based in germany.
+
+    share this post
+
+   [16]twitter [17]facebook [18]google+
+
+   please enable javascript to view the [19]comments powered by disqus.
+   [20]comments powered by disqus
+
+   [21]culture ex machina    2018     all rights reserved.
+
+   made with jekyll using [22]kasper theme
+
+references
+
+   1. https://cpury.github.io/feed.xml
+   2. https://cpury.github.io/
+   3. https://cpury.github.io/feed.xml
+   4. https://github.com/cpury/lstm-math
+   5. http://colah.github.io/posts/2015-08-understanding-lstms/
+   6. http://karpathy.github.io/2015/05/21/id56-effectiveness/
+   7. https://arxiv.org/abs/1409.3215
+   8. http://docs.python-guide.org/en/latest/dev/virtualenvs/
+   9. https://www.tensorflow.org/install/
+  10. https://github.com/cpury/lstm-math
+  11. https://github.com/fchollet/keras/issues/5203
+  12. https://github.com/farizrahman4u/id195
+  13. https://github.com/cpury/lstm-math/blob/master/plot.py
+  14. https://github.com/cpury/lstm-math
+  15. https://cpury.github.io/
+  16. http://twitter.com/share?text=learning math with lstms and keras&url=https://cpury.github.io/learning-math/
+  17. https://www.facebook.com/sharer/sharer.php?u=https://cpury.github.io/learning-math/
+  18. https://plus.google.com/share?url=https://cpury.github.io/learning-math/
+  19. http://disqus.com/?ref_noscript
+  20. http://disqus.com/
+  21. https://cpury.github.io/
+  22. http://github.com/rosario/kasper

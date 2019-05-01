@@ -1,0 +1,740 @@
+   #[1]andrej karpathy blog posts
+
+   [2][rssicon.svg]
+   [3]andrej karpathy blog
+
+   [4]about [5]hacker's guide to neural networks
+
+deep id23: pong from pixels
+
+   may 31, 2016
+
+   this is a long overdue blog post on id23 (rl). rl is
+   hot! you may have noticed that computers can now automatically [6]learn
+   to play atari games (from raw game pixels!), they are beating world
+   champions at [7]go, simulated quadrupeds are learning to [8]run and
+   leap, and robots are learning how to perform [9]complex manipulation
+   tasks that defy explicit programming. it turns out that all of these
+   advances fall under the umbrella of rl research. i also became
+   interested in rl myself over the last ~year: i worked [10]through
+   richard sutton   s book, read through [11]david silver   s course, watched
+   [12]john schulmann   s lectures, wrote an [13]rl library in javascript,
+   over the summer interned at deepmind working in the deeprl group, and
+   most recently pitched in a little with the design/development of
+   [14]openai gym, a new rl benchmarking toolkit. so i   ve certainly been
+   on this funwagon for at least a year but until now i haven   t gotten
+   around to writing up a short post on why rl is a big deal, what it   s
+   about, how it all developed and where it might be going.
+   [preview.jpeg]
+   examples of rl in the wild. from left to right: deep id24 network
+   playing atari, alphago, berkeley robot stacking legos,
+   physically-simulated quadruped leaping over terrain.
+
+   it   s interesting to reflect on the nature of recent progress in rl. i
+   broadly like to think about four separate factors that hold back ai:
+    1. compute (the obvious one: moore   s law, gpus, asics),
+    2. data (in a nice form, not just out there somewhere on the internet
+       - e.g. id163),
+    3. algorithms (research and ideas, e.g. backprop, id98, lstm), and
+    4. infrastructure (software under you - linux, tcp/ip, git, ros, pr2,
+       aws, amt, tensorflow, etc.).
+
+   similar to what happened in id161, the progress in rl is not
+   driven as much as you might reasonably assume by new amazing ideas. in
+   id161, the 2012 alexnet was mostly a scaled up (deeper and
+   wider) version of 1990   s convnets. similarly, the atari deep id24
+   paper from 2013 is an implementation of a standard algorithm (q
+   learning with function approximation, which you can find in the
+   standard rl book of sutton 1998), where the function approximator
+   happened to be a convnet. alphago uses policy gradients with monte
+   carlo tree search (mcts) - these are also standard components. of
+   course, it takes a lot of skill and patience to get it to work, and
+   multiple clever tweaks on top of old algorithms have been developed,
+   but to a first-order approximation the main driver of recent progress
+   is not the algorithms but (similar to id161)
+   compute/data/infrastructure.
+
+   now back to rl. whenever there is a disconnect between how magical
+   something seems and how simple it is under the hood i get all antsy and
+   really want to write a blog post. in this case i   ve seen many people
+   who can   t believe that we can automatically learn to play most atari
+   games at human level, with one algorithm, from pixels, and from scratch
+   - and it is amazing, and i   ve been there myself! but at the core the
+   approach we use is also really quite profoundly dumb (though i
+   understand it   s easy to make such claims in retrospect). anyway, i   d
+   like to walk you through policy gradients (pg), our favorite default
+   choice for attacking rl problems at the moment. if you   re from outside
+   of rl you might be curious why i   m not presenting id25 instead, which is
+   an alternative and better-known rl algorithm, widely popularized by the
+   [15]atari game playing paper. it turns out that id24 is not a
+   great algorithm (you could say that id25 is so 2013 (okay i   m 50%
+   joking)). in fact most people prefer to use policy gradients, including
+   the authors of the original id25 paper who have [16]shown policy
+   gradients to work better than id24 when tuned well. pg is
+   preferred because it is end-to-end: there   s an explicit policy and a
+   principled approach that directly optimizes the expected reward.
+   anyway, as a running example we   ll learn to play an atari game (pong!)
+   with pg, from scratch, from pixels, with a deep neural network, and the
+   whole thing is 130 lines of python only using numpy as a dependency
+   ([17]gist link). lets get to it.
+
+pong from pixels
+
+   [pong.gif]
+   [mdp.png]
+   left: the game of pong. right: pong is a special case of a [18]markov
+   decision process (mdp): a graph where each node is a particular game
+   state and each edge is a possible (in general probabilistic)
+   transition. each edge also gives a reward, and the goal is to compute
+   the optimal way of acting in any state to maximize rewards.
+
+   the game of pong is an excellent example of a simple rl task. in the
+   atari 2600 version we   ll use you play as one of the paddles (the other
+   is controlled by a decent ai) and you have to bounce the ball past the
+   other player (i don   t really have to explain pong, right?). on the low
+   level the game works as follows: we receive an image frame (a 210x160x3
+   byte array (integers from 0 to 255 giving pixel values)) and we get to
+   decide if we want to move the paddle up or down (i.e. a binary choice).
+   after every single choice the game simulator executes the action and
+   gives us a reward: either a +1 reward if the ball went past the
+   opponent, a -1 reward if we missed the ball, or 0 otherwise. and of
+   course, our goal is to move the paddle so that we get lots of reward.
+
+   as we go through the solution keep in mind that we   ll try to make very
+   few assumptions about pong because we secretly don   t really care about
+   pong; we care about complex, high-dimensional problems like robot
+   manipulation, assembly and navigation. pong is just a fun toy test
+   case, something we play with while we figure out how to write very
+   general ai systems that can one day do arbitrary useful tasks.
+
+   policy network. first, we   re going to define a policy network that
+   implements our player (or    agent   ). this network will take the state of
+   the game and decide what we should do (move up or down). as our
+   favorite simple block of compute we   ll use a 2-layer neural network
+   that takes the raw image pixels (100,800 numbers total (210*160*3)),
+   and produces a single number indicating the id203 of going up.
+   note that it is standard to use a stochastic policy, meaning that we
+   only produce a id203 of moving up. every iteration we will sample
+   from this distribution (i.e. toss a biased coin) to get the actual
+   move. the reason for this will become more clear once we talk about
+   training.
+   [policy.png]
+   our policy network is a 2-layer fully-connected net.
+
+   and to make things concrete here is how you might implement this policy
+   network in python/numpy. suppose we   re given a vector x that holds the
+   (preprocessed) pixel information. we would compute:
+h = np.dot(w1, x) # compute hidden layer neuron activations
+h[h<0] = 0 # relu nonlinearity: threshold at zero
+logp = np.dot(w2, h) # compute log id203 of going up
+p = 1.0 / (1.0 + np.exp(-logp)) # sigmoid function (gives id203 of going u
+p)
+
+   where in this snippet w1 and w2 are two matrices that we initialize
+   randomly. we   re not using biases because meh. notice that we use the
+   sigmoid non-linearity at the end, which squashes the output id203
+   to the range [0,1]. intuitively, the neurons in the hidden layer (which
+   have their weights arranged along the rows of w1) can detect various
+   game scenarios (e.g. the ball is in the top, and our paddle is in the
+   middle), and the weights in w2 can then decide if in each case we
+   should be going up or down. now, the initial random w1 and w2 will of
+   course cause the player to spasm on spot. so the only problem now is to
+   find w1 and w2 that lead to expert play of pong!
+
+   fine print: preprocessing. ideally you   d want to feed at least 2 frames
+   to the policy network so that it can detect motion. to make things a
+   bit simpler (i did these experiments on my macbook) i   ll do a tiny bit
+   of preprocessing, e.g. we   ll actually feed difference frames to the
+   network (i.e. subtraction of current and last frame).
+
+   it sounds kind of impossible. at this point i   d like you to appreciate
+   just how difficult the rl problem is. we get 100,800 numbers
+   (210*160*3) and forward our policy network (which easily involves on
+   order of a million parameters in w1 and w2). suppose that we decide to
+   go up. the game might respond that we get 0 reward this time step and
+   gives us another 100,800 numbers for the next frame. we could repeat
+   this process for hundred timesteps before we get any non-zero reward!
+   e.g. suppose we finally get a +1. that   s great, but how can we tell
+   what made that happen? was it something we did just now? or maybe 76
+   frames ago? or maybe it had something to do with frame 10 and then
+   frame 90? and how do we figure out which of the million knobs to change
+   and how, in order to do better in the future? we call this the credit
+   assignment problem. in the specific case of pong we know that we get a
+   +1 if the ball makes it past the opponent. the true cause is that we
+   happened to bounce the ball on a good trajectory, but in fact we did so
+   many frames ago - e.g. maybe about 20 in case of pong, and every single
+   action we did afterwards had zero effect on whether or not we end up
+   getting the reward. in other words we   re faced with a very difficult
+   problem and things are looking quite bleak.
+
+   supervised learning. before we dive into the policy gradients solution
+   i   d like to remind you briefly about supervised learning because, as
+   we   ll see, rl is very similar. refer to the diagram below. in ordinary
+   supervised learning we would feed an image to the network and get some
+   probabilities, e.g. for two classes up and down. i   m showing log
+   probabilities (-1.2, -0.36) for up and down instead of the raw
+   probabilities (30% and 70% in this case) because we always optimize the
+   log id203 of the correct label (this makes math nicer, and is
+   equivalent to optimizing the raw id203 because log is monotonic).
+   now, in supervised learning we would have access to a label. for
+   example, we might be told that the correct thing to do right now is to
+   go up (label 0). in an implementation we would enter gradient of 1.0 on
+   the log id203 of up and run backprop to compute the gradient
+   vector \(\nabla_{w} \log p(y=up \mid x) \). this gradient would tell us
+   how we should change every one of our million parameters to make the
+   network slightly more likely to predict up. for example, one of the
+   million parameters in the network might have a gradient of -2.1, which
+   means that if we were to increase that parameter by a small positive
+   amount (e.g. 0.001), the log id203 of up would decrease by 2.1 *
+   0.001 (decrease due to the negative sign). if we then did a parameter
+   update then, yay, our network would now be slightly more likely to
+   predict up when it sees a very similar image in the future.
+   [sl.png]
+
+   policy gradients. okay, but what do we do if we do not have the correct
+   label in the id23 setting? here is the policy
+   gradients solution (again refer to diagram below). our policy network
+   calculated id203 of going up as 30% (logprob -1.2) and down as
+   70% (logprob -0.36). we will now sample an action from this
+   distribution; e.g. suppose we sample down, and we will execute it in
+   the game. at this point notice one interesting fact: we could
+   immediately fill in a gradient of 1.0 for down as we did in supervised
+   learning, and find the gradient vector that would encourage the network
+   to be slightly more likely to do the down action in the future. so we
+   can immediately evaluate this gradient and that   s great, but the
+   problem is that at least for now we do not yet know if going down is
+   good. but the critical point is that that   s okay, because we can simply
+   wait a bit and see! for example in pong we could wait until the end of
+   the game, then take the reward we get (either +1 if we won or -1 if we
+   lost), and enter that scalar as the gradient for the action we have
+   taken (down in this case). in the example below, going down ended up to
+   us losing the game (-1 reward). so if we fill in -1 for log id203
+   of down and do backprop we will find a gradient that discourages the
+   network to take the down action for that input in the future (and
+   rightly so, since taking that action led to us losing the game).
+   [rl.png]
+
+   and that   s it: we have a stochastic policy that samples actions and
+   then actions that happen to eventually lead to good outcomes get
+   encouraged in the future, and actions taken that lead to bad outcomes
+   get discouraged. also, the reward does not even need to be +1 or -1 if
+   we win the game eventually. it can be an arbitrary measure of some kind
+   of eventual quality. for example if things turn out really well it
+   could be 10.0, which we would then enter as the gradient instead of -1
+   to start off backprop. that   s the beauty of neural nets; using them can
+   feel like cheating: you   re allowed to have 1 million parameters
+   embedded in 1 teraflop of compute and you can make it do arbitrary
+   things with sgd. it shouldn   t work, but amusingly we live in a universe
+   where it does.
+
+   training protocol. so here is how the training will work in detail. we
+   will initialize the policy network with some w1, w2 and play 100 games
+   of pong (we call these policy    rollouts   ). lets assume that each game
+   is made up of 200 frames so in total we   ve made 20,000 decisions for
+   going up or down and for each one of these we know the parameter
+   gradient, which tells us how we should change the parameters if we
+   wanted to encourage that decision in that state in the future. all that
+   remains now is to label every decision we   ve made as good or bad. for
+   example suppose we won 12 games and lost 88. we   ll take all 200*12 =
+   2400 decisions we made in the winning games and do a positive update
+   (filling in a +1.0 in the gradient for the sampled action, doing
+   backprop, and parameter update encouraging the actions we picked in all
+   those states). and we   ll take the other 200*88 = 17600 decisions we
+   made in the losing games and do a negative update (discouraging
+   whatever we did). and    that   s it. the network will now become slightly
+   more likely to repeat actions that worked, and slightly less likely to
+   repeat actions that didn   t work. now we play another 100 games with our
+   new, slightly improved policy and rinse and repeat.
+
+     policy gradients: run a policy for a while. see what actions led to
+     high rewards. increase their id203.
+
+   [episodes.png]
+   cartoon diagram of 4 games. each black circle is some game state (three
+   example states are visualized on the bottom), and each arrow is a
+   transition, annotated with the action that was sampled. in this case we
+   won 2 games and lost 2 games. with policy gradients we would take the
+   two games we won and slightly encourage every single action we made in
+   that episode. conversely, we would also take the two games we lost and
+   slightly discourage every single action we made in that episode.
+
+   if you think through this process you   ll start to find a few funny
+   properties. for example what if we made a good action in frame 50
+   (bouncing the ball back correctly), but then missed the ball in frame
+   150? if every single action is now labeled as bad (because we lost),
+   wouldn   t that discourage the correct bounce on frame 50? you   re right -
+   it would. however, when you consider the process over
+   thousands/millions of games, then doing the first bounce correctly
+   makes you slightly more likely to win down the road, so on average
+   you   ll see more positive than negative updates for the correct bounce
+   and your policy will end up doing the right thing.
+
+   update: december 9, 2016 - alternative view. in my explanation above i
+   use the terms such as    fill in the gradient and backprop   , which i
+   realize is a special kind of thinking if you   re used to writing your
+   own backprop code, or using torch where the gradients are explicit and
+   open for tinkering. however, if you   re used to theano or tensorflow you
+   might be a little perplexed because the code is oranized around
+   specifying a id168 and the backprop is fully automatic and hard
+   to tinker with. in this case, the following alternative view might be
+   more intuitive. in vanilla supervised learning the objective is to
+   maximize \( \sum_i \log p(y_i \mid x_i) \) where \(x_i, y_i \) are
+   training examples (such as images and their labels). policy gradients
+   is exactly the same as supervised learning with two minor differences:
+   1) we don   t have the correct labels \(y_i\) so as a    fake label    we
+   substitute the action we happened to sample from the policy when it saw
+   \(x_i\), and 2) we modulate the loss for each example multiplicatively
+   based on the eventual outcome, since we want to increase the log
+   id203 for actions that worked and decrease it for those that
+   didn   t. so in summary our loss now looks like \( \sum_i a_i \log p(y_i
+   \mid x_i) \), where \(y_i\) is the action we happened to sample and
+   \(a_i\) is a number that we call an advantage. in the case of pong, for
+   example, \(a_i\) could be 1.0 if we eventually won in the episode that
+   contained \(x_i\) and -1.0 if we lost. this will ensure that we
+   maximize the log id203 of actions that led to good outcome and
+   minimize the log id203 of those that didn   t. so reinforcement
+   learning is exactly like supervised learning, but on a continuously
+   changing dataset (the episodes), scaled by the advantage, and we only
+   want to do one (or very few) updates based on each sampled dataset.
+
+   more general advantage functions. i also promised a bit more discussion
+   of the returns. so far we have judged the goodness of every individual
+   action based on whether or not we win the game. in a more general rl
+   setting we would receive some reward \(r_t\) at every time step. one
+   common choice is to use a discounted reward, so the    eventual reward   
+   in the diagram above would become \( r_t = \sum_{k=0}^{\infty} \gamma^k
+   r_{t+k} \), where \(\gamma\) is a number between 0 and 1 called a
+   discount factor (e.g. 0.99). the expression states that the strength
+   with which we encourage a sampled action is the weighted sum of all
+   rewards afterwards, but later rewards are exponentially less important.
+   in practice it can can also be important to normalize these. for
+   example, suppose we compute \(r_t\) for all of the 20,000 actions in
+   the batch of 100 pong game rollouts above. one good idea is to
+      standardize    these returns (e.g. subtract mean, divide by standard
+   deviation) before we plug them into backprop. this way we   re always
+   encouraging and discouraging roughly half of the performed actions.
+   mathematically you can also interpret these tricks as a way of
+   controlling the variance of the policy gradient estimator. a more
+   in-depth exploration can be found [19]here.
+
+   deriving policy gradients. i   d like to also give a sketch of where
+   policy gradients come from mathematically. policy gradients are a
+   special case of a more general score function gradient estimator. the
+   general case is that when we have an expression of the form \(e_{x \sim
+   p(x \mid \theta)} [f(x)] \) - i.e. the expectation of some scalar
+   valued score function \(f(x)\) under some id203 distribution
+   \(p(x;\theta)\) parameterized by some \(\theta\). hint hint, \(f(x)\)
+   will become our reward function (or advantage function more generally)
+   and \(p(x)\) will be our policy network, which is really a model for
+   \(p(a \mid i)\), giving a distribution over actions for any image
+   \(i\). then we are interested in finding how we should shift the
+   distribution (through its parameters \(\theta\)) to increase the scores
+   of its samples, as judged by \(f\) (i.e. how do we change the network   s
+   parameters so that action samples get higher rewards). we have that:
+
+   to put this in english, we have some distribution \(p(x;\theta)\) (i
+   used shorthand \(p(x)\) to reduce clutter) that we can sample from
+   (e.g. this could be a gaussian). for each sample we can also evaluate
+   the score function \(f\) which takes the sample and gives us some
+   scalar-valued score. this equation is telling us how we should shift
+   the distribution (through its parameters \(\theta\)) if we wanted its
+   samples to achieve higher scores, as judged by \(f\). in particular, it
+   says that look: draw some samples \(x\), evaluate their scores
+   \(f(x)\), and for each \(x\) also evaluate the second term \(
+   \nabla_{\theta} \log p(x;\theta) \). what is this second term? it   s a
+   vector - the gradient that   s giving us the direction in the parameter
+   space that would lead to increase of the id203 assigned to an
+   \(x\). in other words if we were to nudge \(\theta\) in the direction
+   of \( \nabla_{\theta} \log p(x;\theta) \) we would see the new
+   id203 assigned to some \(x\) slightly increase. if you look back
+   at the formula, it   s telling us that we should take this direction and
+   multiply onto it the scalar-valued score \(f(x)\). this will make it so
+   that samples that have a higher score will    tug    on the id203
+   density stronger than the samples that have lower score, so if we were
+   to do an update based on several samples from \(p\) the id203
+   density would shift around in the direction of higher scores, making
+   highly-scoring samples more likely.
+   [pg.png]
+   a visualization of the score function gradient estimator. left: a
+   gaussian distribution and a few samples from it (blue dots). on each
+   blue dot we also plot the gradient of the log id203 with respect
+   to the gaussian's mean parameter. the arrow indicates the direction in
+   which the mean of the distribution should be nudged to increase the
+   id203 of that sample. middle: overlay of some score function
+   giving -1 everywhere except +1 in some small regions (note this can be
+   an arbitrary and not necessarily differentiable scalar-valued
+   function). the arrows are now color coded because due to the
+   multiplication in the update we are going to average up all the green
+   arrows, and the negative of the red arrows. right: after parameter
+   update, the green arrows and the reversed red arrows nudge us to left
+   and towards the bottom. samples from this distribution will now have a
+   higher expected score, as desired.
+
+   i hope the connection to rl is clear. our policy network gives us
+   samples of actions, and some of them work better than others (as judged
+   by the advantage function). this little piece of math is telling us
+   that the way to change the policy   s parameters is to do some rollouts,
+   take the gradient of the sampled actions, multiply it by the score and
+   add everything, which is what we   ve done above. for a more thorough
+   derivation and discussion i recommend [20]john schulman   s lecture.
+
+   learning. alright, we   ve developed the intuition for policy gradients
+   and saw a sketch of their derivation. i implemented the whole approach
+   in a [21]130-line python script, which uses [22]openai gym   s atari 2600
+   pong. i trained a 2-layer policy network with 200 hidden layer units
+   using rmsprop on batches of 10 episodes (each episode is a few dozen
+   games, because the games go up to score of 21 for either player). i did
+   not tune the hyperparameters too much and ran the experiment on my
+   (slow) macbook, but after training for 3 nights i ended up with a
+   policy that is slightly better than the ai player. the total number of
+   episodes was approximately 8,000 so the algorithm played roughly
+   200,000 pong games (quite a lot isn   t it!) and made a total of ~800
+   updates. i   m told by friends that if you train on gpu with convnets for
+   a few days you can beat the ai player more often, and if you also
+   optimize hyperparameters carefully you can also consistently dominate
+   the ai player (i.e. win every single game). however, i didn   t spend too
+   much time computing or tweaking, so instead we end up with a pong ai
+   that illustrates the main ideas and works quite well:
+
+   iframe:
+   [23]https://www.youtube.com/embed/yow8m2ygtrg?autoplay=1&loop=1&rel=0&s
+   howinfo=0&playlist=yow8m2ygtrg
+
+   the learned agent (in green, right) facing off with the hard-coded ai
+   opponent (left).
+
+   learned weights. we can also take a look at the learned weights. due to
+   preprocessing every one of our inputs is an 80x80 difference image
+   (current frame minus last frame). we can now take every row of w1,
+   stretch them out to 80x80 and visualize. below is a collection of 40
+   (out of 200) neurons in a grid. white pixels are positive weights and
+   black pixels are negative weights. notice that several neurons are
+   tuned to particular traces of bouncing ball, encoded with alternating
+   black and white along the line. the ball can only be at a single spot,
+   so these neurons are multitasking and will    fire    for multiple
+   locations of the ball along that line. the alternating black and white
+   is interesting because as the ball travels along the trace, the
+   neuron   s activity will fluctuate as a sine wave and due to the relu it
+   would    fire    at discrete, separated positions along the trace. there   s
+   a bit of noise in the images, which i assume would have been mitigated
+   if i used l2 id173.
+   [weights.png]
+
+what isn   t happening
+
+   so there you have it - we learned to play pong from from raw pixels
+   with policy gradients and it works quite well. the approach is a fancy
+   form of guess-and-check, where the    guess    refers to sampling rollouts
+   from our current policy, and the    check    refers to encouraging actions
+   that lead to good outcomes. modulo some details, this represents the
+   state of the art in how we currently approach id23
+   problems. its impressive that we can learn these behaviors, but if you
+   understood the algorithm intuitively and you know how it works you
+   should be at least a bit disappointed. in particular, how does it not
+   work?
+
+   compare that to how a human might learn to play pong. you show them the
+   game and say something along the lines of    you   re in control of a
+   paddle and you can move it up and down, and your task is to bounce the
+   ball past the other player controlled by ai   , and you   re set and ready
+   to go. notice some of the differences:
+     * in practical settings we usually communicate the task in some
+       manner (e.g. english above), but in a standard rl problem you
+       assume an arbitrary reward function that you have to discover
+       through environment interactions. it can be argued that if a human
+       went into game of pong but without knowing anything about the
+       reward function (indeed, especially if the reward function was some
+       static but random function), the human would have a lot of
+       difficulty learning what to do but policy gradients would be
+       indifferent, and likely work much better. similarly, if we took the
+       frames and permuted the pixels randomly then humans would likely
+       fail, but our policy gradient solution could not even tell the
+       difference (if it   s using a fully connected network as done here).
+     * a human brings in a huge amount of prior knowledge, such as
+       intuitive physics (the ball bounces, it   s unlikely to teleport,
+       it   s unlikely to suddenly stop, it maintains a constant velocity,
+       etc.), and intuitive psychology (the ai opponent    wants    to win, is
+       likely following an obvious strategy of moving towards the ball,
+       etc.). you also understand the concept of being    in control    of a
+       paddle, and that it responds to your up/down key commands. in
+       contrast, our algorithms start from scratch which is simultaneously
+       impressive (because it works) and depressing (because we lack
+       concrete ideas for how not to).
+     * policy gradients are a brute force solution, where the correct
+       actions are eventually discovered and internalized into a policy.
+       humans build a rich, abstract model and plan within it. in pong, i
+       can reason that the opponent is quite slow so it might be a good
+       strategy to bounce the ball with high vertical velocity, which
+       would cause the opponent to not catch it in time. however, it also
+       feels as though we also eventually    internalize    good solutions
+       into what feels more like a reactive muscle memory policy. for
+       example if you   re learning a new motor task (e.g. driving a car
+       with stick shift?) you often feel yourself thinking a lot in the
+       beginning but eventually the task becomes automatic and mindless.
+     * policy gradients have to actually experience a positive reward, and
+       experience it very often in order to eventually and slowly shift
+       the policy parameters towards repeating moves that give high
+       rewards. with our abstract model, humans can figure out what is
+       likely to give rewards without ever actually experiencing the
+       rewarding or unrewarding transition. i don   t have to actually
+       experience crashing my car into a wall a few hundred times before i
+       slowly start avoiding to do so.
+
+   [montezuma.png]
+   [frostbite.jpg]
+   left: montezuma's revenge: a difficult game for our rl algorithms. the
+   player must jump down, climb up, get the key, and open the door. a
+   human understands that acquiring a key is useful. the computer samples
+   billions of random moves and 99% of the time falls to its death or gets
+   killed by the monster. in other words it's hard to "stumble into" the
+   rewarding situation. right: another difficult game called frostbite,
+   where a human understands that things move, some things are good to
+   touch, some things are bad to touch, and the goal is to build the igloo
+   brick by brick. a good analysis of this game and a discussion of
+   differences between the human and computer approach can be found in
+   [24]building machines that learn and think like people.
+
+   i   d like to also emphasize the point that, conversely, there are many
+   games where policy gradients would quite easily defeat a human. in
+   particular, anything with frequent reward signals that requires precise
+   play, fast reflexes, and not too much long-term planning would be
+   ideal, as these short-term correlations between rewards and actions can
+   be easily    noticed    by the approach, and the execution meticulously
+   perfected by the policy. you can see hints of this already happening in
+   our pong agent: it develops a strategy where it waits for the ball and
+   then rapidly dashes to catch it just at the edge, which launches it
+   quickly and with high vertical velocity. the agent scores several
+   points in a row repeating this strategy. there are many atari games
+   where deep id24 destroys human baseline performance in this
+   fashion - e.g. pinball, breakout, etc.
+
+   in conclusion, once you understand the    trick    by which these
+   algorithms work you can reason through their strengths and weaknesses.
+   in particular, we are nowhere near humans in building abstract, rich
+   representations of games that we can plan within and use for rapid
+   learning. one day a computer will look at an array of pixels and notice
+   a key, a door, and think to itself that it is probably a good idea to
+   pick up the key and reach the door. for now there is nothing anywhere
+   close to this, and trying to get there is an active area of research.
+
+non-differentiable computation in neural networks
+
+   i   d like to mention one more interesting application of policy
+   gradients unrelated to games: it allows us to design and train neural
+   networks with components that perform (or interact with)
+   non-differentiable computation. the idea was first introduced in
+   [25]williams 1992 and more recently popularized by [26]recurrent models
+   of visual attention under the name    hard attention   , in the context of
+   a model that processed an image with a sequence of low-resolution
+   foveal glances (inspired by our own human eyes). in particular, at
+   every iteration an id56 would receive a small piece of the image and
+   sample a location to look at next. for example the id56 might look at
+   position (5,30), receive a small piece of the image, then decide to
+   look at (24, 50), etc. the problem with this idea is that there a piece
+   of network that produces a distribution of where to look next and then
+   samples from it. unfortunately, this operation is non-differentiable
+   because, intuitively, we don   t know what would have happened if we
+   sampled a different location. more generally, consider a neural network
+   from some inputs to outputs:
+   [nondiff1.png]
+
+   notice that most arrows (in blue) are differentiable as normal, but
+   some of the representation transformations could optionally also
+   include a non-differentiable sampling operation (in red). we can
+   backprop through the blue arrows just fine, but the red arrow
+   represents a dependency that we cannot backprop through.
+
+   policy gradients to the rescue! we   ll think about the part of the
+   network that does the sampling as a small stochastic policy embedded in
+   the wider network. therefore, during training we will produce several
+   samples (indicated by the branches below), and then we   ll encourage
+   samples that eventually led to good outcomes (in this case for example
+   measured by the loss at the end). in other words we will train the
+   parameters involved in the blue arrows with backprop as usual, but the
+   parameters involved with the red arrow will now be updated
+   independently of the backward pass using policy gradients, encouraging
+   samples that led to low loss. this idea was also recently formalized
+   nicely in [27]gradient estimation using stochastic computation graphs.
+   [nondiff2.png]
+
+   trainable memory i/o. you   ll also find this idea in many other papers.
+   for example, a [28]id63 has a memory tape that they it
+   read and write from. to do a write operation one would like to execute
+   something like m[i] = x, where i and x are predicted by an id56
+   controller network. however, this operation is non-differentiable
+   because there is no signal telling us what would have happened to the
+   loss if we were to write to a different location j != i. therefore, the
+   ntm has to do soft read and write operations. it predicts an attention
+   distribution a (with elements between 0 and 1 and summing to 1, and
+   peaky around the index we   d like to write to), and then doing for all
+   i: m[i] = a[i]*x. this is now differentiable, but we have to pay a
+   heavy computational price because we have to touch every single memory
+   cell just to write to one position. imagine if every assignment in our
+   computers had to touch the entire ram!
+
+   however, we can use policy gradients to circumvent this problem (in
+   theory), as done in [29]rl-ntm. we still predict an attention
+   distribution a, but instead of doing the soft write we sample locations
+   to write to: i = sample(a); m[i] = x. during training we would do this
+   for a small batch of i, and in the end make whatever branch worked best
+   more likely. the large computational advantage is that we now only have
+   to read/write at a single location at test time. however, as pointed
+   out in the paper this strategy is very difficult to get working because
+   one must accidentally stumble by working algorithms through sampling.
+   the current consensus is that pg works well only in settings where
+   there are a few discrete choices so that one is not hopelessly sampling
+   through huge search spaces.
+
+   however, with policy gradients and in cases where a lot of data/compute
+   is available we can in principle dream big - for instance we can design
+   neural networks that learn to interact with large, non-differentiable
+   modules such as latex compilers (e.g. if you   d like char-id56 to
+   generate latex that compiles), or a slam system, or lqr solvers, or
+   something. or, for example, a superintelligence might want to learn to
+   interact with the internet over tcp/ip (which is sadly
+   non-differentiable) to access vital information needed to take over the
+   world. that   s a great example.
+
+conclusions
+
+   we saw that policy gradients are a powerful, general algorithm and as
+   an example we trained an atari pong agent from raw pixels, from
+   scratch, in [30]130 lines of python. more generally the same algorithm
+   can be used to train agents for arbitrary games and one day hopefully
+   on many valuable real-world control problems. i wanted to add a few
+   more notes in closing:
+
+   on advancing ai. we saw that the algorithm works through a brute-force
+   search where you jitter around randomly at first and must accidentally
+   stumble into rewarding situations at least once, and ideally often and
+   repeatedly before the policy distribution shifts its parameters to
+   repeat the responsible actions. we also saw that humans approach these
+   problems very differently, in what feels more like rapid abstract model
+   building - something we have barely even scratched the surface of in
+   research (although many people are trying). since these abstract models
+   are very difficult (if not impossible) to explicitly annotate, this is
+   also why there is so much interest recently in (unsupervised)
+   generative models and program induction.
+
+   on use in complex robotics settings. the algorithm does not scale
+   naively to settings where huge amounts of exploration are difficult to
+   obtain. for instance, in robotic settings one might have a single (or
+   few) robots, interacting with the world in real time. this prohibits
+   naive applications of the algorithm as i presented it in this post. one
+   related line of work intended to mitigate this problem is
+   [31]deterministic policy gradients - instead of requiring samples from
+   a stochastic policy and encouraging the ones that get higher scores,
+   the approach uses a deterministic policy and gets the gradient
+   information directly from a second network (called a critic) that
+   models the score function. this approach can in principle be much more
+   efficient in settings with very high-dimensional actions where sampling
+   actions provides poor coverage, but so far seems empirically slightly
+   finicky to get working. another related approach is to scale up
+   robotics, as we   re starting to see with [32]google   s robot arm farm, or
+   perhaps even [33]tesla   s model s + autopilot.
+
+   there is also a line of work that tries to make the search process less
+   hopeless by adding additional supervision. in many practical cases, for
+   instance, one can obtain expert trajectories from a human. for example
+   [34]alphago first uses supervised learning to predict human moves from
+   expert go games and the resulting human mimicking policy is later
+   finetuned with policy gradients on the    real    objective of winning the
+   game. in some cases one might have fewer expert trajectories (e.g. from
+   [35]robot teleoperation) and there are techniques for taking advantage
+   of this data under the umbrella of [36]apprenticeship learning.
+   finally, if no supervised data is provided by humans it can also be in
+   some cases computed with expensive optimization techniques, e.g. by
+   [37]trajectory optimization in a known dynamics model (such as \(f=ma\)
+   in a physical simulator), or in cases where one learns an approximate
+   local dynamics model (as seen in very promising framework of [38]guided
+   policy search).
+
+   on using pg in practice. as a last note, i   d like to do something i
+   wish i had done in my id56 blog post. i think i may have given the
+   impression that id56s are magic and automatically do arbitrary
+   sequential problems. the truth is that getting these models to work can
+   be tricky, requires care and expertise, and in many cases could also be
+   an overkill, where simpler methods could get you 90%+ of the way there.
+   the same goes for policy gradients. they are not automatic: you need a
+   lot of samples, it trains forever, it is difficult to debug when it
+   doesn   t work. one should always try a bb gun before reaching for the
+   bazooka. in the case of id23 for example, one strong
+   baseline that should always be tried first is the [39]cross-id178
+   method (cem), a simple stochastic hill-climbing    guess and check   
+   approach inspired loosely by evolution. and if you insist on trying out
+   policy gradients for your problem make sure you pay close attention to
+   the tricks section in papers, start simple first, and use a variation
+   of pg called [40]trpo, which almost always works better and more
+   consistently than vanilla pg [41]in practice. the core idea is to avoid
+   parameter updates that change your policy too much, as enforced by a
+   constraint on the kl divergence between the distributions predicted by
+   the old and the new policy on a batch of data (instead of conjugate
+   gradients the simplest instantiation of this idea could be implemented
+   by doing a line search and checking the kl along the way).
+
+   and that   s it! i hope i gave you a sense of where we are with
+   id23, what the challenges are, and if you   re eager to
+   help advance rl i invite you to do so within our [42]openai gym :)
+   until next time!
+   please enable javascript to view the [43]comments powered by disqus.
+   [44]comments powered by disqus
+
+     * andrej karpathy blog
+
+     * [45]karpathy
+     * [46]karpathy
+
+   musings of a computer scientist.
+
+references
+
+   visible links
+   1. https://karpathy.github.io/feed.xml
+   2. https://karpathy.github.io/feed.xml
+   3. https://karpathy.github.io/
+   4. https://karpathy.github.io/about/
+   5. https://karpathy.github.io/neuralnets/
+   6. http://www.nature.com/nature/journal/v518/n7540/abs/nature14236.html
+   7. http://googleresearch.blogspot.com/2016/01/alphago-mastering-ancient-game-of-go.html
+   8. https://www.cs.ubc.ca/~van/papers/2016-tog-deeprl/index.html
+   9. http://www.bloomberg.com/features/2015-preschool-for-robots/
+  10. https://webdocs.cs.ualberta.ca/~sutton/book/the-book.html
+  11. http://www0.cs.ucl.ac.uk/staff/d.silver/web/teaching.html
+  12. https://www.youtube.com/watch?v=opgvsobonlm
+  13. http://cs.stanford.edu/people/karpathy/reinforcejs/
+  14. https://gym.openai.com/
+  15. http://www.nature.com/nature/journal/v518/n7540/abs/nature14236.html
+  16. http://arxiv.org/abs/1602.01783
+  17. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  18. https://en.wikipedia.org/wiki/markov_decision_process
+  19. http://arxiv.org/abs/1506.02438
+  20. https://www.youtube.com/watch?v=opgvsobonlm
+  21. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  22. https://gym.openai.com/
+  23. https://www.youtube.com/embed/yow8m2ygtrg?autoplay=1&loop=1&rel=0&showinfo=0&playlist=yow8m2ygtrg
+  24. https://arxiv.org/abs/1604.00289
+  25. http://www-anw.cs.umass.edu/~barto/courses/cs687/williams92simple.pdf
+  26. http://arxiv.org/abs/1406.6247
+  27. http://arxiv.org/abs/1506.05254
+  28. https://arxiv.org/abs/1410.5401
+  29. http://arxiv.org/abs/1505.00521
+  30. https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
+  31. http://jmlr.org/proceedings/papers/v32/silver14.pdf
+  32. http://googleresearch.blogspot.com/2016/03/deep-learning-for-robots-learning-from.html
+  33. http://qz.com/694520/tesla-has-780-million-miles-of-driving-data-and-adds-another-million-every-10-hours/
+  34. https://deepmind.com/alpha-go
+  35. https://www.youtube.com/watch?v=kzlg0qvkkqq
+  36. http://ai.stanford.edu/~pabbeel//thesis/thesis.pdf
+  37. http://people.eecs.berkeley.edu/~igor.mordatch/policy/index.html
+  38. http://arxiv.org/abs/1504.00702
+  39. https://en.wikipedia.org/wiki/cross-id178_method
+  40. https://arxiv.org/abs/1502.05477
+  41. http://arxiv.org/abs/1604.06778
+  42. https://gym.openai.com/
+  43. http://disqus.com/?ref_noscript
+  44. http://disqus.com/
+  45. https://github.com/karpathy
+  46. https://twitter.com/karpathy
+
+   hidden links:
+  48. https://karpathy.github.io/2016/05/31/rl/

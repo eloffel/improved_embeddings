@@ -1,0 +1,446 @@
+   [1]
+
+   smerity.com
+
+peeking into the neural network architecture used for google's neural machine
+translation
+
+november 17, 2016
+
+   the [2]google id4 paper (gid4) describes an
+   interesting approach towards deep learning in production. the paper and
+   architecture are non-standard, in many cases deviating far from what
+   you might expect from an architecture you'd find in an academic paper.
+   emphasis is placed on ensuring the system remains practical rather than
+   chasing the state of the art through typical but computationally
+   intensive tweaks.
+
+the architecture
+
+   to understand the model used in gid4 we'll start with a traditional
+   encoder decoder machine translation model and keep evolving it until it
+   matches gid4. the gid4 evolution seems primarily motivated by improving
+   accuracy while maintaining practical production speeds for both
+   training and prediction.
+
+v1: encoder-decoder
+
+   the encoder decoder architecture started the recent neural machine
+   translation trend. i'd refer to it as old school if it were more than a
+   few years old. shockingly, as the name implies, there are two
+   components - an encoder and a decoder.
+
+   for a word level encoder-decoder machine translation system, such as
+   the depiction below:
+     * take an recurrent neural network (id56) - usually an lstm - and
+       encode a sentence written in language a (english).
+     * the id56 spits out a hidden state, which we refer to as s.
+     * this hidden state hopefully represents all the content of the
+       sentence.
+     * this hidden state s is then supplied to the decoder, which
+       generates the sentence in language b (german) word by word.
+
+   [gid4_arch_1_enc_dec.svg]
+
+   the encoder decoder showcased the potential that neural based machine
+   translation may provide. even with modern complex neural machine
+   translation architectures, the majority of them can still be decomposed
+   in terms of the encoder-decoder architecture.
+
+   there are two primary drawbacks to this architecture, both related to
+   length. first, as with humans, this architecture has very limited
+   memory. that final hidden state of the lstm, which we call s, is where
+   you're trying to cram the entirety of the sentence you have to
+   translate. s is usually only a few hundred units (read: floating point
+   numbers) long - the more you try to force into this fixed
+   dimensionality vector, the more lossy the neural network is forced to
+   be. thinking of neural networks in terms of the "lossy compression"
+   they're required to perform is sometimes quite useful.
+
+   second, as a general rule of thumb, the deeper a neural network is, the
+   harder it is to train. for recurrent neural networks, the longer the
+   sequence is, the deeper the neural network is along the time dimension.
+   this results in vanishing gradients, where the gradient signal from the
+   objective that the recurrent neural network learns from disappears as
+   it travels backwards. even with id56s specifically made to help prevent
+   vanishing gradients, such as the lstm, this is still a fundamental
+   problem.
+
+   [bahdanau_no_attn.png]
+
+   caption: image from bahdanau et al.'s [3]"id4 by
+   jointly learning to align and translate" (2014) showing the impact on
+   translation scores (in the form of id7 scores) as sentences get
+   longer.
+
+   while it may work for our relatively short example above, it's likely
+   to begin failing as the sentence gets longer. one obvious solution for
+   the memory problem would be increasing the hidden size of the lstm.
+   unfortunately, training rapidly becomes impractical if we do this. as
+   you increase the hidden size h of the lstm, the number of parameters
+   increases quadratically! you'll either start running out of memory on
+   your gpu or have training take an eternity. this also doesn't solve the
+   vanishing gradient problem...
+
+v2: attention based encoder-decoder
+
+   how do we solve these problems? we might try turning to a technique
+   humans naturally perform - iterative attention to relevant parts of the
+   source sentence. if you were translating a long sentence, you'd likely
+   glance back at the source sentence to ensure you're capturing all the
+   details. we can allow neural networks to do exactly the same. by
+   storing and referring to the previous outputs of the lstm we can
+   increase the storage of our neural network without changing the
+   operation of the lstm. additionally, if we know we're interested in a
+   particular part of the sentence, the attention mechanism acts as a
+   "shortcut" so we can provide a supervision signal that doesn't have to
+   traverse the large number of timesteps that would result in a vanishing
+   gradient. this is akin to how a human might answer a question after
+   having just finished reading all of lord of the rings. if i was to ask
+   a specific question about the start of the story, at bag end, a human
+   would know where to flick open the first book and retrieve the answer
+   from. the length of the book series doesn't impair your ability to
+   perform that lookup.
+
+   [gid4_arch_attn.svg]
+
+   briefly (as attention mechanisms are already well covered elsewhere)
+   the idea is, once you have the lstm outputs from the encoder stored,
+   you query each output asking how relevant they are to the current
+   computation on the decoder side. each output from the encoder then gets
+   a score of relevance which we can turn into a id203 distribution
+   that sums up to one via the softmax activation. we can then extract a
+   context vector that's a weighted summation of the encoder outputs
+   depending on how relevant we think they are.
+
+   a drawback to the attention mechanism is that we now have to perform a
+   calculation over all of the encoded source sentence for each and every
+   output of the decoder. while this is likely fine for translating
+   between sentences, it can become problematic for long inputs. in
+   computing terminology, if your source sentence is of length \(n\) and
+   your target sentence of length \(m\), we've just take the decoder from
+   \(o(m)\) in the encoder-decoder architecture to \(o(mn)\) in the
+   attention architecture. while not optimal the advantages of the
+   attention mechanism far outweigh the disadvantages, at least for this
+   task.
+
+   note: you may notice that the direct connection between the encoder and
+   decoder (s in our previous architecture) has disappeared. while many
+   standard encoder-decoder architectures maintain this direct connection,
+   the gid4 architecture decides to remove it. the gid4 architectures
+   decides to make the attention mechanism the only way that information
+   can be shifted from the encoder side to the decoder side.
+
+   [bahdanau_attn.png]
+
+   caption: image from bahdanau et al.'s [4]"id4 by
+   jointly learning to align and translate" (2014) showing the impact on
+   translation scores (in the form of id7 scores) when using attention.
+   id56search is the architecture with attention and the number afterwards
+   indicates how long the training examples were.
+
+v3: bi-directional encoder layer
+
+   while the attention mechanism allows for retrieving different parts of
+   the sentence depending on the decoding context, there's still an issue.
+   the attention mechanism is essentially asking the stored outputs of the
+   encoder "are you relevant to this?" and using that to determine what
+   information to extract. if the encoder outputs don't have sufficient
+   context themselves, they're unlikely able to provide a good answer.
+
+   adding information about future words, such that the encoder output is
+   determined by words on both the left and the right, is clearly
+   beneficial. if a full sentence is available, humans would almost
+   certainly use the full context to determine the meaning and context of
+   a word. why would we force computers, who are already at a substantial
+   handicap, to not use all available information?
+
+   [gid4_arch_1_biid56.svg]
+
+   the easiest way to add this bi-directionality is to run two id56s - one
+   that goes forward over the sentence and another that goes backwards.
+   then, for each word, we can either concatenate or add the resulting
+   vector outputs, producing a vector with context from both sides. a
+   bi-directional encoder becomes even more important if you're
+   translating to or from a language that has a different ordering (i.e.
+   right-to-left). the gid4 architecture concatenates them - potentially
+   advantageous as that results in the both the forward and backward id56
+   being only half the size. given that the bi-directional layer ends up
+   being a bottleneck in gid4, and the number of parameters in an id56
+   scale quadratically, this is not an insignificant saving.
+
+v4: "the deep is for deep learning"
+
+   for many architectures in id4, increased depth
+   is a key component in accurate models. the gid4 architecture trends
+   this direction too by adding a large number of layers. a pretty darn
+   crazy large number of layers - 8 on the encoder and 8 on the decoder
+   for 16 total. many state of the art machine translation systems use far
+   less than this.
+
+   for the encoder, their model has one bi-directional id56 layer followed
+   by seven uni-directional id56 layers. the decoder has eight
+   uni-directional id56 layers.
+
+   in most papers i'd have instead expected all of the layers to be
+   bi-directional for improved accuracy. a model with all bi-directional
+   layers would be expected to get the same or higher results. the next
+   section explains why the gid4 model variant strayed away from this.
+
+   [gid4_arch_deep.svg]
+
+   recurrent neural networks of this depth are highly problematic to
+   train. indeed, standard neural networks of this depth are not trivial
+   to train either, and those are relatively simple compared to what
+   happens over the many timesteps. we'll look to solve this problem in a
+   later variant.
+
+v5: parallelization
+
+   a primary motivator for the gid4 architecture was practicality. this
+   forces some limitations and odd choices when compared to standard
+   encoder-decoder architectures. for launching a system like gid4 into
+   production, being parallelizable is a requirement. it makes not only
+   training faster, allowing more experiments, but also makes production
+   deployments faster too.
+
+   the graph we've been looking at represents not only the architecture of
+   the machine translation model but also a dependency graph. to begin
+   computation at one of the nodes, all of the nodes pointing toward you
+   must already have been computed. even if you had an infinite amount of
+   computation, you still need to follow the flow of the dependency graph.
+   as such, you want to minimize any dependencies that may take far more
+   computation than others at a similar level.
+
+   [gid4_arch_deep_partial.svg]
+
+   note: unshaded nodes have not yet been completed and nodes shaded white
+   have finished their computation. layers shaded blue are in the process
+   of being computed or have finished being computed.
+
+   this is the reason that only a single bi-directional id56 layer is used.
+   a bi-directional layer has to run two id56s - one from left to right and
+   the other from right to left. this means to compute the first output
+   you have to wait for n computations from the far right hand side to
+   reach you (where n is the length of sequence).
+
+   if all layers were bi-directional, the entirety of that layer would
+   have to finish before any later dependencies could start computing. if
+   we use uni-directional layers however, our computations can be more
+   flexible and more parallel. in the example above, focusing just on the
+   encoding side, the first four layers are all computing nodes at the
+   same time. this is only possible as the layer above doesn't rely on all
+   of the nodes in the layer below, only those directly below it. this
+   would not be possible if these were bi-directional layers.
+
+   [gid4_arch_deep.svg]
+
+   parallelization (decoder side): due to the attention mechanism using
+   all the outputs of the encoder side, the decoder side must wait until
+   all of the encoder has finished running. when the encoder has finished
+   however, the decoder can perform its operations in the same parallel
+   way as the encoder side. usually the attention mechanism would use the
+   top most output of the decoder to query the attention mechanism but the
+   gid4 architecture uses the lowest decoder layer for querying the
+   attention mechanism to minimize the dependency graph and allow for
+   maximal parallelization. in the example above, if we used the topmost
+   decoder layer for attention, we would not have been able to start
+   computing the second output of the decoder yet, as the first output of
+   the decoder is still in progress.
+
+   side note (teacher forcing and training vs production): during
+   training, we already known what the english sentence should translate
+   to. this allows us to have higher levels of parallelism than at
+   prediction time. as we already have all of the correct words (the
+   "known" translation at the bottom right), we can use it in teacher
+   forcing. teacher forcing is where you give the neural network the
+   correct answer for the next word even if it would have actually guessed
+   the wrong word. this makes sense as training will keep forcing the
+   network towards outputting the correct word, so eventually our
+   assumption should hopefully be correct. this allows you to "cheat" and
+   be computing the second output word while still in the process of
+   computing the first output word. in the real word, we need to wait to
+   produce each word one by one, as there's no "known" translation.
+
+   side note (multiple gpus): this parallelization really only strongly
+   makes sense with multiple gpus. in the gid4 paper, their diagrams
+   actually label each of the layers according to the gpu they use. for
+   the encoder and decoder, they use eight gpus - essentially one for each
+   layer. why doesn't this make as much sense for a single gpu? generally
+   a gpu should be hitting high utilization when computing a given layer,
+   assuming you're able to set reasonable batch sizes, network sizes, and
+   sequence lengths. this work is primarily about re-ordering dependencies
+   such that more computation can be done at once, allowing for better
+   utilization of more devices. you're hopefully already fully utilizing
+   your single gpu well, so being able to compute more at the same time
+   won't help you if you don't have that computation spare. if the
+   production deployment was on cpus, this re-ordering may still be quite
+   beneficial.
+
+v6: residuals are the new hotness
+
+   eight layers is pretty darn deep - at least for recurrent neural
+   networks. returning to our general rule of thumb - barring some
+   exceptions or specific constructions - the deeper a network is, the
+   harder it is to train. while this is for a variety of reasons, the most
+   intuitive is that the further a gradient has to travel, the more it
+   risks vanishing or exploding. luckily there are many potential ways to
+   tackle this problem.
+
+   one solution for vanishing gradients is residual networks, which has
+   been applied most famously to id98s such that training neural networks
+   hundreds of layers deep remains feasible. the idea is relatively
+   simple. by default, we like the idea of a layer computing an identity
+   function. this makes sense. if you do well with one layer, you don't
+   expect a two or three to do worse. at worst, the second and third layer
+   should just learn to "copy" the output of the first layer - no
+   modifications. hence, they just need to learn an identity function.
+
+   unfortunately, learning the identity function seems non-trivial for
+   most networks. even worse, later layers confuse training of earlier
+   layers as the supervision signal - the direction it's meant to go -
+   keeps shifting. as such, the first layer may fail to train well at all
+   if there are more layers below it. to solve this, we bias the
+   architecture of each of these layers towards performing the identity
+   function.
+
+   [gid4_arch_res.svg]
+
+   we can do this by only allowing the later layers to add deltas
+   (updates) to the existing vector. now, if the next layer is lazy and
+   outputs nothing but zeroes, that's fine, as you'll still have the
+   original vector.
+
+   $$ \text{starting by processing } x \\ h_1 = f_1(x) + x \\ h_2 =
+   f_2(h_1) + h_1 = f_2(h_1) + f_1(x) + x \\ h_3 = f_3(h_2) + h_2 =
+   f_3(h_2) + f_2(h_1) + h_1 = f_3(h_2) + f_2(h_1) + f_1(x) + x \\ h_3 = x
+   + \delta_1 + \delta_2 + \delta_3 \\ \text{(if all values for
+   }\delta\text{ are zero, we still end up with } x \text{)} $$
+
+the gid4 monster in its full glory (more or less)
+
+   all of these changes build upon their previous iteration to result in
+   the full architecture described in the gid4 paper. notice that, while
+   far more complex, it still has the same components of the original
+   encoder-decoder architecture. it may look scary, but each change is
+   motivated by a relatively simple idea.
+
+   [gid4_arch_deep_residuals.svg]
+
+conclusion
+
+   the google id4 architecture is an interesting
+   beast. while there's nothing tremendously novel in it, the real
+   innovation is the care to which the architecture has been engineered.
+   if this was a boat, it'd be a chrome speed boat that slices through
+   rough waters with near zero drag. we're already seeing the architecture
+   used in a variety of contexts, both in translating and generating
+   natural language, likely due to the ability to scale to computationally
+   large and intensive tasks cleanly. for that reason, i expect to see it
+   pop up in far more places.
+
+   this article also contains only a small portion of the paper. not
+   discussed here is what id7 is, how wordpiece level granularity
+   improves translation over word level, advantages/disadvantages of id7,
+   quantization of models for faster models during deployment, or jumping
+   between optimization algorithms for better convergence, or that their
+   datasets are so large they don't use dropout! all of this without
+   mentioning the zero-shot gid4 paper or using the gid4 architecture for
+   conversation models...
+
+   gosh there's a lot to write about!
+     __________________________________________________________________
+
+   if you like this content, i share similar things on twitter a few
+   hundred characters at a time ;)
+
+   [5]follow @smerity
+     __________________________________________________________________
+
+   my sincere thanks to:
+     * [6]james bradbury, who implemented the world's second best neural
+       machine translation system for english to german while only an
+       intern at metamind, and who happily induldges me when i harass him
+       for details :)
+     * [7]denny britz, who was happy to clarify some questions i had
+       regarding my reading of the gid4 architecture paper and gave early
+       feedback on the article itself - check out his articles at
+       [8]wildml!
+     * [9]jonathan k. kummerfeld for his read through and suggestions.
+       among other things, turns out my brain thinks "direction
+       connection" should be amalgamated to "direction" ;)
+
+popular articles
+
+     * [10]it's ml, not magic: machine learning can be prejudiced
+     * [11]it's ml, not magic: the rise of ai-prefix investing
+     * [12]in deep learning, architecture engineering is the new feature
+       engineering
+     * [13]how google sparsehash achieves two bits of overhead per entry
+       using sparsetable
+     * [14]where did all the http referrers go?
+
+   interested in saying hi? ^_^
+   [15]follow @smerity
+
+   i'm stephen merity, better known in most places as smerity.
+
+   salesforce research:
+   senior research scientist
+   (deep learning)
+
+   part of metamind:
+   acquired by salesforce
+
+   harvard university:
+   [16]ms in cse
+
+   sydney university:
+   [17]bit (university medal + first class honours)
+
+   [18]full about me
+   you reached the bottom! reading can be challenging, so i think you
+   deserve a reward. i'd offer you [19]cake, but after [20]a certain
+   robot-human conflict started due to cake it may not be a wise choice.
+   so here:
+
+                               [mini_coin.png]
+
+   take a coin. no, not a bitcoin. do you know how expensive those are?
+      _   
+
+references
+
+   visible links
+   1. http://smerity.com/
+   2. https://arxiv.org/abs/1609.08144
+   3. https://arxiv.org/abs/1409.0473
+   4. https://arxiv.org/abs/1409.0473
+   5. https://twitter.com/smerity
+   6. https://twitter.com/jekbradbury
+   7. https://twitter.com/dennybritz
+   8. http://www.wildml.com/
+   9. http://www.jkk.name/
+  10. http://smerity.com/articles/2016/algorithms_can_be_prejudiced.html
+  11. http://smerity.com/articles/2016/ml_not_magic.html
+  12. http://smerity.com/articles/2016/architectures_are_the_new_feature_engineering.html
+  13. http://smerity.com/articles/2015/google_sparsehash.html
+  14. http://smerity.com/articles/2013/where_did_all_the_http_referrers_go.html
+  15. https://twitter.com/smerity
+  16. http://www.seas.harvard.edu/programs/graduate/computational-science-and-engineering/master-of-science-in-cse
+  17. http://sydney.edu.au/engineering/it/current_students/undergrad/bit.shtml
+  18. http://smerity.com/abme.html
+  19. http://www.minecraftwiki.net/wiki/cake
+  20. http://en.wikipedia.org/wiki/portal_(video_game)
+
+   hidden links:
+  22. https://www.twitter.com/smerity/
+  23. https://facebook.com/smerity
+  24. https://github.com/smerity/
+  25. http://au.linkedin.com/in/smerity
+  26. mailto:smerity@smerity.com
+  27. https://www.twitter.com/smerity/
+  28. https://facebook.com/smerity
+  29. https://github.com/smerity/
+  30. http://au.linkedin.com/in/smerity
+  31. mailto:smerity@smerity.com

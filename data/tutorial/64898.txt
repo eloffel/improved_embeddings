@@ -1,0 +1,528 @@
+   [1]sebastianraschka
+
+   [2]about [3]blog [4]books [5]elsewhere [6]resources [7]publications
+   [8]teaching [9]software
+
+     [10]
+   [rss]
+
+principal component analysis
+
+in 3 simple steps
+
+   jan 27, 2015
+   by sebastian raschka
+
+   principal component analysis (pca) is a simple yet popular and useful
+   linear transformation technique that is used in numerous applications,
+   such as stock market predictions, the analysis of gene expression data,
+   and many more. in this tutorial, we will see that pca is not just a
+      black box   , and we are going to unravel its internals in 3 basic
+   steps.
+
+   this article just got a complete overhaul, the original version is
+   still available at [11]principal_component_analysis_old.ipynb.
+     __________________________________________________________________
+
+sections
+
+     * [12]sections
+     * [13]introduction
+          + [14]pca vs. lda
+          + [15]pca and id84
+          + [16]a summary of the pca approach
+     * [17]preparing the iris dataset
+          + [18]about iris
+          + [19]loading the dataset
+          + [20]exploratory visualization
+          + [21]standardizing
+     * [22]1 - eigendecomposition - computing eigenvectors and eigenvalues
+          + [23]covariance matrix
+          + [24]correlation matrix
+          + [25]singular vector decomposition
+     * [26]2 - selecting principal components
+          + [27]sorting eigenpairs
+          + [28]explained variance
+          + [29]projection matrix
+     * [30]3 - projection onto the new feature space
+     * [31]shortcut - pca in scikit-learn
+     __________________________________________________________________
+
+introduction
+
+   the sheer size of data in the modern age is not only a challenge for
+   computer hardware but also a main bottleneck for the performance of
+   many machine learning algorithms. the main goal of a pca analysis is to
+   identify patterns in data; pca aims to detect the correlation between
+   variables. if a strong correlation between variables exists, the
+   attempt to reduce the dimensionality only makes sense. in a nutshell,
+   this is what pca is all about: finding the directions of maximum
+   variance in high-dimensional data and project it onto a smaller
+   dimensional subspace while retaining most of the information.
+
+pca vs. lda
+
+   both id156 (lda) and pca are linear
+   transformation methods. pca yields the directions (principal
+   components) that maximize the variance of the data, whereas lda also
+   aims to find the directions that maximize the separation (or
+   discrimination) between different classes, which can be useful in
+   pattern classification problem (pca    ignores    class labels).
+   in other words, pca projects the entire dataset onto a different
+   feature (sub)space, and lda tries to determine a suitable feature
+   (sub)space in order to distinguish between patterns that belong to
+   different classes.
+
+pca and id84
+
+   often, the desired goal is to reduce the dimensions of a -dimensional
+   dataset by projecting it onto a -dimensional subspace (where ) in order
+   to increase the computational efficiency while retaining most of the
+   information. an important question is    what is the size of that
+   represents the data    well   ?   
+
+   later, we will compute eigenvectors (the principal components) of a
+   dataset and collect them in a projection matrix. each of those
+   eigenvectors is associated with an eigenvalue which can be interpreted
+   as the    length    or    magnitude    of the corresponding eigenvector. if
+   some eigenvalues have a significantly larger magnitude than others,
+   then the reduction of the dataset via pca onto a smaller dimensional
+   subspace by dropping the    less informative    eigenpairs is reasonable.
+
+a summary of the pca approach
+
+     * standardize the data.
+     * obtain the eigenvectors and eigenvalues from the covariance matrix
+       or correlation matrix, or perform singular vector decomposition.
+     * sort eigenvalues in descending order and choose the eigenvectors
+       that correspond to the largest eigenvalues where is the number of
+       dimensions of the new feature subspace ().
+     * construct the projection matrix from the selected eigenvectors.
+     * transform the original dataset via to obtain a -dimensional feature
+       subspace .
+
+preparing the iris dataset
+
+about iris
+
+   for the following tutorial, we will be working with the famous    iris   
+   dataset that has been deposited on the uci machine learning repository
+   ([32]https://archive.ics.uci.edu/ml/datasets/iris).
+
+   the iris dataset contains measurements for 150 iris flowers from three
+   different species.
+
+   the three classes in the iris dataset are:
+    1. iris-setosa (n=50)
+    2. iris-versicolor (n=50)
+    3. iris-virginica (n=50)
+
+   and the four features of in iris dataset are:
+    1. sepal length in cm
+    2. sepal width in cm
+    3. petal length in cm
+    4. petal width in cm
+
+loading the dataset
+
+   in order to load the iris data directly from the uci repository, we are
+   going to use the superb [33]pandas library. if you haven   t used pandas
+   yet, i want encourage you to check out the [34]pandas tutorials. if i
+   had to name one python library that makes working with data a
+   wonderfully simple task, this would definitely be pandas!
+import pandas as pd
+
+df = pd.read_csv(
+    filepath_or_buffer='https://archive.ics.uci.edu/ml/machine-learning-database
+s/iris/iris.data',
+    header=none,
+    sep=',')
+
+df.columns=['sepal_len', 'sepal_wid', 'petal_len', 'petal_wid', 'class']
+df.dropna(how="all", inplace=true) # drops the empty line at file-end
+
+df.tail()
+
+       sepal_len sepal_wid petal_len petal_wid     class
+   145 6.7       3.0       5.2       2.3       iris-virginica
+   146 6.3       2.5       5.0       1.9       iris-virginica
+   147 6.5       3.0       5.2       2.0       iris-virginica
+   148 6.2       3.4       5.4       2.3       iris-virginica
+   149 5.9       3.0       5.1       1.8       iris-virginica
+# split data table into data x and class labels y
+
+x = df.ix[:,0:4].values
+y = df.ix[:,4].values
+
+   our iris dataset is now stored in form of a matrix where the columns
+   are the different features, and every row represents a separate flower
+   sample. each sample row can be pictured as a 4-dimensional vector
+
+exploratory visualization
+
+   to get a feeling for how the 3 different flower classes are distributes
+   along the 4 different features, let us visualize them via histograms.
+from matplotlib import pyplot as plt
+import numpy as np
+import math
+
+label_dict = {1: 'iris-setosa',
+              2: 'iris-versicolor',
+              3: 'iris-virgnica'}
+
+feature_dict = {0: 'sepal length [cm]',
+                1: 'sepal width [cm]',
+                2: 'petal length [cm]',
+                3: 'petal width [cm]'}
+
+with plt.style.context('seaborn-whitegrid'):
+    plt.figure(figsize=(8, 6))
+    for cnt in range(4):
+        plt.subplot(2, 2, cnt+1)
+        for lab in ('iris-setosa', 'iris-versicolor', 'iris-virginica'):
+            plt.hist(x[y==lab, cnt],
+                     label=lab,
+                     bins=10,
+                     alpha=0.3,)
+        plt.xlabel(feature_dict[cnt])
+    plt.legend(loc='upper right', fancybox=true, fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+   png
+
+standardizing
+
+   whether to standardize the data prior to a pca on the covariance matrix
+   depends on the measurement scales of the original features. since pca
+   yields a feature subspace that maximizes the variance along the axes,
+   it makes sense to standardize the data, especially, if it was measured
+   on different scales. although, all features in the iris dataset were
+   measured in centimeters, let us continue with the transformation of the
+   data onto unit scale (mean=0 and variance=1), which is a requirement
+   for the optimal performance of many machine learning algorithms.
+from sklearn.preprocessing import standardscaler
+x_std = standardscaler().fit_transform(x)
+
+1 - eigendecomposition - computing eigenvectors and eigenvalues
+
+   the eigenvectors and eigenvalues of a covariance (or correlation)
+   matrix represent the    core    of a pca: the eigenvectors (principal
+   components) determine the directions of the new feature space, and the
+   eigenvalues determine their magnitude. in other words, the eigenvalues
+   explain the variance of the data along the new feature axes.
+
+covariance matrix
+
+   the classic approach to pca is to perform the eigendecomposition on the
+   covariance matrix , which is a matrix where each element represents the
+   covariance between two features. the covariance between two features is
+   calculated as follows:
+
+   we can summarize the calculation of the covariance matrix via the
+   following matrix equation:
+   where is the mean vector
+   the mean vector is a -dimensional vector where each value in this
+   vector represents the sample mean of a feature column in the dataset.
+import numpy as np
+mean_vec = np.mean(x_std, axis=0)
+cov_mat = (x_std - mean_vec).t.dot((x_std - mean_vec)) / (x_std.shape[0]-1)
+print('covariance matrix \n%s' %cov_mat)
+
+covariance matrix
+[[ 1.00671141 -0.11010327  0.87760486  0.82344326]
+ [-0.11010327  1.00671141 -0.42333835 -0.358937  ]
+ [ 0.87760486 -0.42333835  1.00671141  0.96921855]
+ [ 0.82344326 -0.358937    0.96921855  1.00671141]]
+
+   the more verbose way above was simply used for demonstration purposes,
+   equivalently, we could have used the numpy cov function:
+print('numpy covariance matrix: \n%s' %np.cov(x_std.t))
+
+numpy covariance matrix:
+[[ 1.00671141 -0.11010327  0.87760486  0.82344326]
+ [-0.11010327  1.00671141 -0.42333835 -0.358937  ]
+ [ 0.87760486 -0.42333835  1.00671141  0.96921855]
+ [ 0.82344326 -0.358937    0.96921855  1.00671141]]
+
+   next, we perform an eigendecomposition on the covariance matrix:
+cov_mat = np.cov(x_std.t)
+
+eig_vals, eig_vecs = np.linalg.eig(cov_mat)
+
+print('eigenvectors \n%s' %eig_vecs)
+print('\neigenvalues \n%s' %eig_vals)
+
+eigenvectors
+[[ 0.52237162 -0.37231836 -0.72101681  0.26199559]
+ [-0.26335492 -0.92555649  0.24203288 -0.12413481]
+ [ 0.58125401 -0.02109478  0.14089226 -0.80115427]
+ [ 0.56561105 -0.06541577  0.6338014   0.52354627]]
+
+eigenvalues
+[ 2.93035378  0.92740362  0.14834223  0.02074601]
+
+correlation matrix
+
+   especially, in the field of    finance,    the correlation matrix typically
+   used instead of the covariance matrix. however, the eigendecomposition
+   of the covariance matrix (if the input data was standardized) yields
+   the same results as a eigendecomposition on the correlation matrix,
+   since the correlation matrix can be understood as the normalized
+   covariance matrix.
+
+   eigendecomposition of the standardized data based on the correlation
+   matrix:
+cor_mat1 = np.corrcoef(x_std.t)
+
+eig_vals, eig_vecs = np.linalg.eig(cor_mat1)
+
+print('eigenvectors \n%s' %eig_vecs)
+print('\neigenvalues \n%s' %eig_vals)
+
+eigenvectors
+[[ 0.52237162 -0.37231836 -0.72101681  0.26199559]
+ [-0.26335492 -0.92555649  0.24203288 -0.12413481]
+ [ 0.58125401 -0.02109478  0.14089226 -0.80115427]
+ [ 0.56561105 -0.06541577  0.6338014   0.52354627]]
+
+eigenvalues
+[ 2.91081808  0.92122093  0.14735328  0.02060771]
+
+   eigendecomposition of the raw data based on the correlation matrix:
+cor_mat2 = np.corrcoef(x.t)
+
+eig_vals, eig_vecs = np.linalg.eig(cor_mat2)
+
+print('eigenvectors \n%s' %eig_vecs)
+print('\neigenvalues \n%s' %eig_vals)
+
+eigenvectors
+[[ 0.52237162 -0.37231836 -0.72101681  0.26199559]
+ [-0.26335492 -0.92555649  0.24203288 -0.12413481]
+ [ 0.58125401 -0.02109478  0.14089226 -0.80115427]
+ [ 0.56561105 -0.06541577  0.6338014   0.52354627]]
+
+eigenvalues
+[ 2.91081808  0.92122093  0.14735328  0.02060771]
+
+   we can clearly see that all three approaches yield the same
+   eigenvectors and eigenvalue pairs:
+     * eigendecomposition of the covariance matrix after standardizing the
+       data.
+     * eigendecomposition of the correlation matrix.
+     * eigendecomposition of the correlation matrix after standardizing
+       the data.
+
+singular vector decomposition
+
+   while the eigendecomposition of the covariance or correlation matrix
+   may be more intuitiuve, most pca implementations perform a singular
+   vector decomposition (svd) to improve the computational efficiency. so,
+   let us perform an svd to confirm that the result are indeed the same:
+u,s,v = np.linalg.svd(x_std.t)
+u
+
+array([[-0.52237162, -0.37231836,  0.72101681,  0.26199559],
+       [ 0.26335492, -0.92555649, -0.24203288, -0.12413481],
+       [-0.58125401, -0.02109478, -0.14089226, -0.80115427],
+       [-0.56561105, -0.06541577, -0.6338014 ,  0.52354627]])
+
+2 - selecting principal components
+
+sorting eigenpairs
+
+   the typical goal of a pca is to reduce the dimensionality of the
+   original feature space by projecting it onto a smaller subspace, where
+   the eigenvectors will form the axes. however, the eigenvectors only
+   define the directions of the new axis, since they have all the same
+   unit length 1, which can confirmed by the following two lines of code:
+for ev in eig_vecs.t:
+    np.testing.assert_array_almost_equal(1.0, np.linalg.norm(ev))
+print('everything ok!')
+
+everything ok!
+
+   in order to decide which eigenvector(s) can dropped without losing too
+   much information for the construction of lower-dimensional subspace, we
+   need to inspect the corresponding eigenvalues: the eigenvectors with
+   the lowest eigenvalues bear the least information about the
+   distribution of the data; those are the ones can be dropped.
+   in order to do so, the common approach is to rank the eigenvalues from
+   highest to lowest in order choose the top eigenvectors.
+# make a list of (eigenvalue, eigenvector) tuples
+eig_pairs = [(np.abs(eig_vals[i]), eig_vecs[:,i]) for i in range(len(eig_vals))]
+
+# sort the (eigenvalue, eigenvector) tuples from high to low
+eig_pairs.sort(key=lambda x: x[0], reverse=true)
+
+# visually confirm that the list is correctly sorted by decreasing eigenvalues
+print('eigenvalues in descending order:')
+for i in eig_pairs:
+    print(i[0])
+
+eigenvalues in descending order:
+2.91081808375
+0.921220930707
+0.147353278305
+0.0206077072356
+
+explained variance
+
+   after sorting the eigenpairs, the next question is    how many principal
+   components are we going to choose for our new feature subspace?    a
+   useful measure is the so-called    explained variance,    which can be
+   calculated from the eigenvalues. the explained variance tells us how
+   much information (variance) can be attributed to each of the principal
+   components.
+tot = sum(eig_vals)
+var_exp = [(i / tot)*100 for i in sorted(eig_vals, reverse=true)]
+cum_var_exp = np.cumsum(var_exp)
+
+with plt.style.context('seaborn-whitegrid'):
+    plt.figure(figsize=(6, 4))
+
+    plt.bar(range(4), var_exp, alpha=0.5, align='center',
+            label='individual explained variance')
+    plt.step(range(4), cum_var_exp, where='mid',
+             label='cumulative explained variance')
+    plt.ylabel('explained variance ratio')
+    plt.xlabel('principal components')
+    plt.legend(loc='best')
+    plt.tight_layout()
+
+   png
+
+   the plot above clearly shows that most of the variance (72.77% of the
+   variance to be precise) can be explained by the first principal
+   component alone. the second principal component still bears some
+   information (23.03%) while the third and fourth principal components
+   can safely be dropped without losing to much information. together, the
+   first two principal components contain 95.8% of the information.
+
+projection matrix
+
+   it   s about time to get to the really interesting part: the construction
+   of the projection matrix that will be used to transform the iris data
+   onto the new feature subspace. although, the name    projection matrix   
+   has a nice ring to it, it is basically just a matrix of our
+   concatenated top k eigenvectors.
+
+   here, we are reducing the 4-dimensional feature space to a
+   2-dimensional feature subspace, by choosing the    top 2    eigenvectors
+   with the highest eigenvalues to construct our -dimensional eigenvector
+   matrix .
+matrix_w = np.hstack((eig_pairs[0][1].reshape(4,1),
+                      eig_pairs[1][1].reshape(4,1)))
+
+print('matrix w:\n', matrix_w)
+
+matrix w:
+ [[ 0.52237162 -0.37231836]
+ [-0.26335492 -0.92555649]
+ [ 0.58125401 -0.02109478]
+ [ 0.56561105 -0.06541577]]
+
+3 - projection onto the new feature space
+
+   in this last step we will use the -dimensional projection matrix to
+   transform our samples onto the new subspace via the equation
+   , where is a matrix of our transformed samples.
+y = x_std.dot(matrix_w)
+
+with plt.style.context('seaborn-whitegrid'):
+    plt.figure(figsize=(6, 4))
+    for lab, col in zip(('iris-setosa', 'iris-versicolor', 'iris-virginica'),
+                        ('blue', 'red', 'green')):
+        plt.scatter(y[y==lab, 0],
+                    y[y==lab, 1],
+                    label=lab,
+                    c=col)
+    plt.xlabel('principal component 1')
+    plt.ylabel('principal component 2')
+    plt.legend(loc='lower center')
+    plt.tight_layout()
+    plt.show()
+
+   png
+
+   now, what we got after applying the linear pca transformation is a
+   lower dimensional subspace (from 3d to 2d in this case), where the
+   samples are    most spread    along the new feature axes.
+
+shortcut - pca in scikit-learn
+
+   for educational purposes, we went a long way to apply the pca to the
+   iris dataset. but luckily, there is already implementation in
+   scikit-learn.
+from sklearn.decomposition import pca as sklearnpca
+sklearn_pca = sklearnpca(n_components=2)
+y_sklearn = sklearn_pca.fit_transform(x_std)
+
+with plt.style.context('seaborn-whitegrid'):
+    plt.figure(figsize=(6, 4))
+    for lab, col in zip(('iris-setosa', 'iris-versicolor', 'iris-virginica'),
+                        ('blue', 'red', 'green')):
+        plt.scatter(y_sklearn[y==lab, 0],
+                    y_sklearn[y==lab, 1],
+                    label=lab,
+                    c=col)
+    plt.xlabel('principal component 1')
+    plt.ylabel('principal component 2')
+    plt.legend(loc='lower center')
+    plt.tight_layout()
+    plt.show()
+
+   png
+
+   [35]q
+
+      2013-2019 sebastian raschka
+
+references
+
+   visible links
+   1. http://sebastianraschka.com/
+   2. https://sebastianraschka.com/about.html
+   3. http://sebastianraschka.com/blog/index.html
+   4. https://sebastianraschka.com/books.html
+   5. https://sebastianraschka.com/elsewhere.html
+   6. https://sebastianraschka.com/resources.html
+   7. http://stat.wisc.edu/~sraschka/publications/
+   8. http://stat.wisc.edu/~sraschka/teaching
+   9. http://stat.wisc.edu/~sraschka/software
+  10. http://sebastianraschka.com/rss_feed.xml
+  11. http://nbviewer.ipython.org/github/rasbt/pattern_classification/blob/master/dimensionality_reduction/projection/principal_component_analysis.ipynb
+  12. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#sections
+  13. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#introduction
+  14. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#pca-vs-lda
+  15. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#pca-and-dimensionality-reduction
+  16. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#a-summary-of-the-pca-approach
+  17. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#preparing-the-iris-dataset
+  18. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#about-iris
+  19. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#loading-the-dataset
+  20. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#exploratory-visualization
+  21. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#standardizing
+  22. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#1---eigendecomposition---computing-eigenvectors-and-eigenvalues
+  23. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#covariance-matrix
+  24. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#correlation-matrix
+  25. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#singular-vector-decomposition
+  26. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#2---selecting-principal-components
+  27. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#sorting-eigenpairs
+  28. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#explained-variance
+  29. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#projection-matrix
+  30. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#3---projection-onto-the-new-feature-space
+  31. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html#shortcut---pca-in-scikit-learn
+  32. https://archive.ics.uci.edu/ml/datasets/iris
+  33. http://pandas.pydata.org/
+  34. http://pandas.pydata.org/pandas-docs/stable/tutorials.html
+  35. https://www.quora.com/profile/sebastian-raschka-1
+
+   hidden links:
+  37. http://sebastianraschka.com/articles/2015_pca_in_3_steps.html
+  38. http://sebastianraschka.com/email.html
+  39. https://twitter.com/rasbt
+  40. https://github.com/rasbt
+  41. https://scholar.google.com/citations?user=x4rcc0iaaaaj&hl=enrasbt
+  42. https://linkedin.com/in/sebastianraschka

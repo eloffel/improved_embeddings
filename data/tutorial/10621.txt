@@ -1,0 +1,1477 @@
+sequence-to-sequence learning
+as beam-search optimization
+
+sam wiseman and alexander m. rush
+school of engineering and applied sciences
+
+harvard university
+
+cambridge, ma, usa
+
+{swiseman,srush}@seas.harvard.edu
+
+6
+1
+0
+2
+
+ 
+
+v
+o
+n
+0
+1
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+2
+v
+0
+6
+9
+2
+0
+
+.
+
+6
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+sequence-to-sequence (id195) modeling
+has rapidly become an important general-
+purpose nlp tool that has proven effective for
+many text-generation and sequence-labeling
+tasks. id195 builds on deep neural language
+modeling and inherits its remarkable accuracy
+in estimating local, next-word distributions. in
+this work, we introduce a model and beam-
+search training scheme, based on the work
+of daum  e iii and marcu (2005), that extends
+id195 to learn global sequence scores. this
+structured approach avoids classical biases as-
+sociated with local training and uni   es the
+training loss with the test-time usage, while
+preserving the proven model architecture of
+id195 and its ef   cient training approach. we
+show that our system outperforms a highly-
+optimized attention-based id195 system and
+other baselines on three different sequence to
+sequence tasks: word ordering, parsing, and
+machine translation.
+
+1
+
+introduction
+
+sequence-to-sequence learning with deep neural
+networks (herein, id195) (sutskever et al., 2011;
+sutskever et al., 2014) has rapidly become a very
+useful and surprisingly general-purpose tool for nat-
+ural language processing.
+in addition to demon-
+strating impressive results for machine translation
+(bahdanau et al., 2015), roughly the same model
+and training have also proven to be useful for sen-
+tence compression (filippova et al., 2015), parsing
+(vinyals et al., 2015), and dialogue systems (ser-
+ban et al., 2016), and they additionally underlie other
+
+text generation applications, such as image or video
+captioning (venugopalan et al., 2015; xu et al.,
+2015).
+
+the dominant approach to training a id195 sys-
+tem is as a conditional language model, with training
+maximizing the likelihood of each successive tar-
+get word conditioned on the input sequence and the
+gold history of target words. thus, training uses a
+strictly word-level loss, usually cross-id178 over
+the target vocabulary. this approach has proven to
+be very effective and ef   cient for training neural lan-
+guage models, and id195 models similarly obtain
+impressive perplexities for word-generation tasks.
+
+notably, however, id195 models are not used as
+conditional language models at test-time; they must
+instead generate fully-formed word sequences.
+in
+practice, generation is accomplished by searching
+over output sequences greedily or with id125.
+in this context, ranzato et al. (2016) note that the
+combination of the training and generation scheme
+just described leads to at least two major issues:
+
+1. exposure bias: the model is never exposed to
+its own errors during training, and so the in-
+ferred histories at test-time do not resemble the
+gold training histories.
+
+2. loss-evaluation mismatch:
+
+training uses a
+word-level loss, while at test-time we target
+improving sequence-level id74,
+such as id7 (papineni et al., 2002).
+
+we might additionally add the concern of label
+bias (lafferty et al., 2001) to the list, since word-
+probabilities at each time-step are locally normal-
+ized, guaranteeing that successors of incorrect his-
+
+tories receive the same mass as do the successors of
+the true history.
+
+in this work we develop a non-probabilistic vari-
+ant of the id195 model that can assign a score
+to any possible target sequence, and we propose
+a training procedure, inspired by the learning as
+search optimization (laso) framework of daum  e
+iii and marcu (2005), that de   nes a id168
+in terms of errors made during id125. fur-
+thermore, we provide an ef   cient algorithm to back-
+propagate through the beam-search procedure dur-
+ing id195 training.
+
+this approach offers a possible solution to each
+of the three aforementioned issues, while largely
+maintaining the model architecture and training ef-
+   ciency of standard seq2seid24. moreover,
+by scoring sequences rather than words, our ap-
+proach also allows for enforcing hard-constraints on
+sequence generation at training time. to test out the
+effectiveness of the proposed approach, we develop
+a general-purpose id195 system with id125
+optimization. we run experiments on three very dif-
+ferent problems: word ordering, syntactic parsing,
+and machine translation, and compare to a highly-
+tuned id195 system with attention (luong et al.,
+2015). the version with id125 optimization
+shows signi   cant improvements on all three tasks,
+and particular improvements on tasks that require
+dif   cult search.
+
+2 related work
+
+the issues of exposure bias and label bias have re-
+ceived much attention from authors in the structured
+prediction community, and we brie   y review some
+of this work here. one prominent approach to com-
+bating exposure bias is that of searn (daum  e iii
+et al., 2009), a meta-training algorithm that learns a
+search policy in the form of a cost-sensitive classi   er
+trained on examples generated from an interpolation
+of an oracle policy and the model   s current (learned)
+policy. thus, searn explicitly targets the mis-
+match between oracular training and non-oracular
+(often greedy) test-time id136 by training on the
+output of the model   s own policy. dagger (ross
+et al., 2011) is a similar approach, which differs in
+terms of how training examples are generated and
+aggregated, and there have additionally been impor-
+
+tant re   nements to this style of training over the past
+several years (chang et al., 2015). when it comes
+to training id56s, searn/dagger has been applied
+under the name    scheduled sampling    (bengio et al.,
+2015), which involves training an id56 to generate
+the t + 1   st token in a target sequence after consum-
+ing either the true t   th token, or, with id203 that
+increases throughout training, the predicted t   th to-
+ken.
+
+it
+
+though technically possible,
+
+is uncom-
+mon to use id125 when training with
+searn/dagger. the early-update (collins and
+roark, 2004) and laso (daum  e iii and marcu,
+2005) training strategies, however, explicitly ac-
+count for id125, and describe strategies for
+updating parameters when the gold structure be-
+comes unreachable during search. early update and
+laso differ primarily in that the former discards a
+training example after the    rst search error, whereas
+laso resumes searching after an error from a state
+that includes the gold partial structure. in the con-
+text of feed-forward neural network training, early
+update training has been recently explored in a feed-
+forward setting by zhou et al. (2015) and andor
+et al. (2016). our work differs in that we adopt
+a laso-like paradigm (with some minor modi   ca-
+tions), and apply it to the training of id195 id56s
+(rather than feed-forward networks). we also note
+that watanabe and sumita (2015) apply maximum-
+violation training (huang et al., 2012), which is sim-
+ilar to early-update, to a parsing model with recur-
+rent components, and that yazdani and henderson
+(2015) use beam-search in training a discriminative,
+locally normalized dependency parser with recurrent
+components.
+
+recently authors have also proposed alleviating
+exposure bias using techniques from reinforcement
+learning. ranzato et al. (2016) follow this ap-
+proach to train id56 decoders in a id195 model,
+and they obtain consistent improvements in perfor-
+mance, even over models trained with scheduled
+sampling. as daum  e iii and marcu (2005) note,
+laso is similar to id23, except
+it does not require    exploration    in the same way.
+such exploration may be unnecessary in supervised
+text-generation, since we typically know the gold
+partial sequences at each time-step. shen et al.
+(2016) use minimum risk training (approximated by
+
+sampling) to address the issues of exposure bias and
+loss-evaluation mismatch for id195 mt, and show
+impressive performance gains.
+
+whereas exposure bias results from training in
+a certain way, label bias results from properties of
+the model itself.
+in particular, label bias is likely
+to affect structured models that make sub-structure
+predictions using locally-normalized scores. be-
+cause the neural and non-neural literature on this
+point has recently been reviewed by andor et al.
+(2016), we simply note here that id56 models are
+typically locally normalized, and we are unaware of
+any speci   cally id195 work with id56s that does
+not use locally-normalized scores. the model we
+introduce here, however, is not locally normalized,
+and so should not suffer from label bias. we also
+note that there are some (non-id195) exceptions
+to the trend of locally normalized id56s, such as
+the work of sak et al. (2014) and voigtlaender et al.
+(2015), who train lstms in the context of id48s
+for id103 using sequence-level objec-
+tives; their work does not consider search, however.
+
+3 background and notation
+
+in the simplest id195 scenario, we are given a col-
+lection of source-target sequence pairs and tasked
+with learning to generate target sequences from
+source sequences. for instance, we might view ma-
+chine translation in this way, where in particular we
+attempt to generate english sentences from (corre-
+sponding) french sentences. id195 models are
+part of the broader class of    encoder-decoder    mod-
+els (cho et al., 2014), which    rst use an encoding
+model to transform a source object into an encoded
+representation x. many different sequential (and
+non-sequential) encoders have proven to be effec-
+tive for different source domains. in this work we
+are agnostic to the form of the encoding model, and
+simply assume an abstract source representation x.
+once the input sequence is encoded, id195
+models generate a target sequence using a decoder.
+the decoder is tasked with generating a target se-
+quence of words from a target vocabulary v.
+in
+particular, words are generated sequentially by con-
+ditioning on the input representation x and on the
+previously generated words or history. we use the
+notation w1:t to refer to an arbitrary word sequence
+
+of length t , and the notation y1:t to refer to the gold
+(i.e., correct) target word sequence for an input x.
+
+most id195 systems utilize a recurrent neural
+network (id56) for the decoder model. formally,
+a recurrent neural network is a parameterized non-
+linear function id56 that recursively maps a se-
+quence of vectors to a sequence of hidden states. let
+m1, . . . , mt be a sequence of t vectors, and let h0
+be some initial state vector. applying an id56 to
+any such sequence yields hidden states ht at each
+time-step t, as follows:
+
+ht     id56(mt, ht   1;   ),
+
+where    is the set of model parameters, which are
+shared over time.
+in this work, the vectors mt
+will always correspond to the embeddings of a tar-
+get word sequence w1:t , and so we will also write
+ht     id56(wt, ht   1;   ), with wt standing in for
+its embedding.
+
+id56 decoders are typically trained to act as con-
+ditional language models. that is, one attempts to
+model the id203 of the t   th target word con-
+ditioned on x and the target history by stipulating
+that p(wt|w1:t   1, x) = g(wt, ht   1, x), for some pa-
+rameterized function g typically computed with an
+af   ne layer followed by a softmax.
+in computing
+these probabilities, the state ht   1 represents the tar-
+get history, and h0 is typically set to be some func-
+tion of x. the complete model (including encoder)
+is trained, analogously to a neural language model,
+to minimize the cross-id178 loss at each time-step
+while conditioning on the gold history in the train-
+ing data. that is, the model is trained to minimize
+
+    ln(cid:81)t
+
+trained,
+
+once the decoder
+
+discrete se-
+quence generation can be performed by approx-
+(cid:81)t
+imately maximizing the id203 of the tar-
+get sequence under the conditional distribution,
+t=1 p(wt|w1:t   1, x), where
+  y1:t = argbeamw1:t
+we use the notation argbeam to emphasize that the
+decoding process requires heuristic search, since the
+id56 model is non-markovian. in practice, a simple
+id125 procedure that explores k prospective
+histories at each time-step has proven to be an effec-
+tive decoding approach. however, as noted above,
+decoding in this manner after conditional language-
+model style training potentially suffers from the is-
+
+t=1 p(yt|y1:t   1, x).
+is
+
+sues of exposure bias and label bias, which moti-
+vates the work of this paper.
+
+4 id125 optimization
+
+we begin by making one small change to the
+id195 modeling framework. instead of predicting
+the id203 of the next word, we instead learn
+to produce (non-probabilistic) scores for ranking se-
+quences. de   ne the score of a sequence consisting
+of history w1:t   1 followed by a single word wt as
+f (wt, ht   1, x), where f is a parameterized function
+examining the current hidden-state of the relevant
+id56 at time t    1 as well as the input representa-
+tion x. in experiments, our f will have an identi-
+cal form to g but without the    nal softmax transfor-
+mation (which transforms unnormalized scores into
+probabilities), thereby allowing the model to avoid
+issues associated with the label bias problem.
+
+more importantly, we also modify how this model
+is trained.
+ideally we would train by comparing
+the gold sequence to the highest-scoring complete
+sequence. however, because    nding the argmax
+sequence according to this model is intractable,
+we propose to adopt a laso-like (daum  e iii and
+marcu, 2005) scheme to train, which we will re-
+fer to as id125 optimization (bso). in par-
+ticular, we de   ne a loss that penalizes the gold se-
+quence falling off the beam during training.1 the
+proposed training approach is a simple way to ex-
+pose the model to incorrect histories and to match
+the training procedure to test generation. further-
+more we show that it can be implemented ef   ciently
+without changing the asymptotic run-time of train-
+ing, beyond a factor of the beam size k.
+
+4.1 search-based loss
+we now formalize this notion of a search-based loss
+for id56 training. assume we have a set st of k
+candidate sequences of length t. we can calculate a
+score for each sequence in st using a scoring func-
+tion f parameterized with an id56, as above, and we
+1:t     st to be the k   th ranked
+de   ne the sequence   y(k)
+1using a non-probabilistic model further allows us to incur
+no loss (and thus require no update to parameters) when the gold
+sequence is on the beam; this contrasts with models based on a
+crf loss, such as those of andor et al. (2016) and zhou et al.
+(2015), though in training those models are simply not updated
+when the gold sequence remains on the beam.
+
+(cid:105)
+
+t(cid:88)
+
+(cid:104)
+
+sequence in st according to f. that is, assuming
+distinct scores,
+|{  y(k)
+
+t   1)}| = k     1,
+
+1:t     st | f (  y(k)
+
+t   1) > f (  y(k)
+
+,   h
+
+,   h
+
+(k)
+
+(k)
+
+t
+
+t
+
+t
+
+is the t   th token in   y(k)
+
+(k)
+where   y(k)
+t   1 is the id56
+state corresponding to its t    1   st step, and where we
+have omitted the x argument to f for brevity.
+
+1:t ,   h
+
+we now de   ne a id168 that gives loss each
+time the score of the gold pre   x y1:t does not exceed
+that of   y(k)
+l(f ) =
+
+1:t by a margin:
+
+   (  y(k)
+1:t )
+
+1     f (yt, ht   1) + f (  y(k)
+
+t
+
+,   h
+
+(k)
+t   1)
+
+.
+
+t=1
+
+above, the    (  y(k)
+1:t ) term denotes a mistake-speci   c
+cost-function, which allows us to scale the loss de-
+pending on the severity of erroneously predicting
+  y(k)
+1:t ; it is assumed to return 0 when the margin re-
+quirement is satis   ed, and a positive number other-
+wise. it is this term that allows us to use sequence-
+rather than word-level costs in training (addressing
+the 2nd issue in the introduction). for instance,
+when training a id195 model for machine trans-
+lation, it may be desirable to have    (  y(k)
+1:t ) be in-
+versely related to the partial sentence-level id7
+score of   y(k)
+1:t with y1:t; we experiment along these
+lines in section 5.3.
+
+finally, because we want the full gold sequence to
+be at the top of the beam at the end of search, when
+t = t we modify the loss to require the score of y1:t
+to exceed the score of the highest ranked incorrect
+prediction by a margin.
+we can optimize the loss l using a two-step pro-
+cess: (1) in a forward pass, we compute candidate
+sets st and record margin violations (sequences with
+non-zero loss); (2) in a backward pass, we back-
+propagate the errors through the id195 id56s. un-
+like standard id195 training, the    rst-step requires
+running search (in our case id125) to    nd
+margin violations. the second step can be done
+by adapting back-propagation through time (bptt).
+we next discuss the details of this process.
+
+4.2 forward: find violations
+in order to minimize this loss, we need to specify a
+procedure for constructing candidate sequences   y(k)
+1:t
+
+at each time step t so that we    nd margin viola-
+tions. we follow laso (rather than early-update 2;
+see section 2) and build candidates in a recursive
+if there was no margin violation at t   1,
+manner.
+then st is constructed using a standard id125
+update. if there was a margin violation, st is con-
+structed as the k best sequences assuming the gold
+history y1:t   1 through time-step t   1.
+formally, assume the function succ maps a se-
+quence w1:t   1    v t   1 to the set of all valid se-
+quences of length t that can be formed by appending
+to it a valid word w    v.
+in the simplest, uncon-
+strained case, we will have
+
+succ(w1:t   1) = {w1:t   1, w | w     v}.
+
+as an important aside, note that for some prob-
+lems it may be preferable to de   ne a succ func-
+tion which imposes hard constraints on successor
+sequences. for instance, if we would like to use
+id195 models for parsing (by emitting a con-
+stituency or dependency structure encoded into a se-
+quence in some way), we will have hard constraints
+on the sequences the model can output, namely, that
+they represent valid parses. while hard constraints
+such as these would be dif   cult to add to standard
+id195 at training time, in our framework they can
+naturally be added to the succ function, allowing us
+to train with hard constraints; we experiment along
+these lines in section 5.3, where we refer to a model
+trained with constrained id125 as conbso.
+
+having de   ned an appropriate succ function, we
+
+specify the candidate set as:
+
+st = topk
+
+succ(y1:t   1)
+
+violation at t   1
+
+k=1 succ(  y(k)
+
+1:t   1) otherwise,
+
+t   1 ,   h
+
+where we have a margin violation at t   1 iff
+(k)
+f (yt   1, ht   2) < f (  y(k)
+t   2) + 1, and where
+topk considers the scores given by f. this search
+procedure is illustrated in the top portion of figure 1.
+in the forward pass of our training algorithm,
+shown as the    rst part of algorithm 1, we run this
+version of id125 and collect all sequences and
+their hidden states that lead to losses.
+
+2we found that training with early-update rather than (de-
+layed) laso did not work well, even after pre-training. given
+the success of early-update in many nlp tasks this was some-
+what surprising. we leave this question to future work.
+
+(cid:40)
+(cid:83)k
+
+figure 1: top: possible   y(k)
+1:t formed in training with a
+beam of size k = 3 and with gold sequence y1:6 =    a
+red dog runs quickly today   . the gold sequence is high-
+lighted in yellow, and the predicted pre   xes involved in
+margin violations (at t = 4 and t = 6) are in gray. note
+that time-step t = 6 uses a different loss criterion. bot-
+tom: pre   xes that actually participate in the loss, ar-
+ranged to illustrate the back-propagation process.
+
+4.3 backward: merge sequences
+once we have collected margin violations we can
+run id26 to compute parameter updates.
+assume a margin violation occurs at time-step t be-
+tween the predicted history   y(k)
+1:t and the gold his-
+tory y1:t. as in standard id195 training we must
+back-propagate this error through the gold history;
+however, unlike id195 we also have a gradient for
+the wrongly predicted history.
+
+recall that to back-propagate errors through an
+id56 we run a recursive backward procedure    
+denoted below by bid56     at each time-step t,
+which accumulates the gradients of next-step and fu-
+ture losses with respect to ht. we have:
+
+   htl     bid56(   htlt+1,   ht+1l),
+
+where lt+1 is the loss at step t + 1, deriving, for
+instance, from the score f (yt+1, ht). running this
+bid56 procedure from t = t     1 to t = 0 is known
+as back-propagation through time (bptt).
+
+in determining the total computational cost of
+back-propagation here,    rst note that in the worst
+case there is one violation at each time-step, which
+leads to t independent, incorrect sequences. since
+we need to call bid56 o(t ) times for each se-
+quence, a naive strategy of running bptt for each
+incorrect sequence would lead to an o(t 2) back-
+ward pass, rather than the o(t ) time required for
+the standard id195 approach.
+
+fortunately, our combination of search-strategy
+and loss make it possible to ef   ciently share
+bid56 operations. this shared structure comes
+
+areddogsmellshometodaythedogdogbarksquicklyfridayredbluecatbarksstraightnowrunstodayareddogrunsquicklytodaybluedogbarkshometodaynaturally from the laso update, which resets the
+beam in a convenient way.
+
+we informally illustrate the process in figure 1.
+the top of the diagram shows a possible sequence
+of   y(k)
+1:t formed during search with a beam of size 3
+for the target sequence y =    a red dog runs quickly
+today.    when the gold sequence falls off the beam
+at t = 4, search resumes with s5 = succ(y1:4), and
+so all subsequent predicted sequences have y1:4 as a
+pre   x and are thus functions of h4. moreover, be-
+cause our id168 only involves the scores of
+the gold pre   x and the violating pre   x, we end up
+with the relatively simple computation tree shown
+at the bottom of figure 1. it is evident that we can
+backpropagate in a single pass, accumulating gradi-
+ents from sequences that diverge from the gold at the
+time-step that precedes their divergence. the second
+half of algorithm 1 shows this explicitly for a single
+sequence, though it is straightforward to extend the
+algorithm to operate in batch.3
+
+5 data and methods
+
+we run experiments on three different tasks, com-
+paring our approach to the id195 baseline, and to
+other relevant baselines.
+
+5.1 model
+while the method we describe applies to id195
+id56s in general, for all experiments we use the
+global attention model of luong et al. (2015)
+    which consists of an lstm (hochreiter and
+schmidhuber, 1997) encoder and an lstm decoder
+with a global attention model     as both the base-
+line id195 model (i.e., as the model that computes
+the g in section 3) and as the model that computes
+our sequence-scores f (wt, ht   1, x). as in luong
+et al. (2015), we also use    input feeding,    which
+involves feeding the attention distribution from the
+previous time-step into the decoder at the current
+step. this model architecture has been found to
+be highly performant for id4
+and other id195 tasks.
+
+3we also note that because we do not update the parameters
+until after the t    th search step, our training procedure differs
+slightly from laso (which is online), and in this aspect is essen-
+tially equivalent to the    delayed laso update    of bj  orkelund
+and kuhn (2014).
+
+algorithm 1 id195 beam-search optimization
+1: procedure bso(x, ktr, succ)
+2:
+3:
+4:
+5:
+6:
+
+/*forward*/
+init empty storage   y1:t and   h1:t ; init s1
+r     0; violations     {0}
+for t = 1, . . . , t do
+
+f (  y(k)
+
+,   h
+
+t
+
+k = ktr if t(cid:54)= t else arg max
+1:t (cid:54)=y1:t
+(k)
+,   h
+
+if f (yt, ht   1) < f (  y(k)
+
+k:  y
+
+(k)
+
+t
+
+t   1) + 1 then
+
+(k)
+t   1)
+
+7:
+
+8:
+9:
+10:
+11:
+12:
+13:
+14:
+15:
+16:
+17:
+18:
+19:
+20:
+21:
+22:
+
+(k)
+r:t   1
+
+  hr:t   1       h
+  yr+1:t       y(k)
+add t to violations
+r     t
+st+1     topk(succ(y1:t))
+
+r+1:t
+
+else
+
+1:t ))
+
+k=1 succ(  y(k)
+
+/*backward*/
+for t = t     1, . . . , 1 do
+
+st+1     topk((cid:83)k
+grad ht     0; grad (cid:98)ht     0
+grad (cid:98)ht     bid56(   (cid:98)ht
+lt+1, grad (cid:98)ht+1)
+grad ht     bid56(   htlt+1, grad ht+1)
+grad ht     grad ht + grad (cid:98)ht
+if t    1     violations then
+grad (cid:98)ht     0
+
+to distinguish the models we refer to our system
+as bso (id125 optimization) and to the base-
+line as id195. when we apply constrained training
+(as discussed in section 4.2), we refer to the model
+as conbso. in providing results we also distinguish
+between the beam size ktr with which the model
+is trained, and the beam size kte which is used at
+test-time. in general, if we plan on evaluating with a
+beam of size kte it makes sense to train with a beam
+of size ktr = kte + 1, since our objective requires
+the gold sequence to be scored higher than the last
+sequence on the beam.
+
+5.2 methodology
+here we detail additional techniques we found nec-
+essary to ensure the model learned effectively. first,
+we found that the model failed to learn when trained
+from a random initialization.4 we therefore found
+it necessary to pre-train the model using a standard,
+word-level cross-id178 loss as described in sec-
+
+4this may be because there is relatively little signal in the
+sparse, sequence-level gradient, but this point requires further
+investigation.
+
+tion 3. the necessity of pre-training in this instance
+is consistent with the    ndings of other authors who
+train non-local neural models (kingsbury, 2009; sak
+et al., 2014; andor et al., 2016; ranzato et al.,
+2016).5
+
+similarly, it is clear that the smaller the beam used
+in training is, the less room the model has to make
+erroneous predictions without running afoul of the
+margin loss. accordingly, we also found it use-
+ful to use a    curriculum beam    strategy in training,
+whereby the size of the beam is increased gradually
+during training. in particular, given a desired train-
+ing beam size ktr, we began training with a beam
+of size 2, and increased it by 1 every 2 epochs until
+reaching ktr.
+
+finally, it has been established that dropout (sri-
+vastava et al., 2014) id173 improves the per-
+formance of lstms (pham et al., 2014; zaremba
+et al., 2014), and in our experiments we run beam
+search under dropout.6
+
+for all experiments, we trained both id195 and
+bso models with mini-batch adagrad (duchi et al.,
+2011) (using batches of size 64), and we renormal-
+ized all gradients so they did not exceed 5 before
+updating parameters. we did not extensively tune
+learning-rates, but we found initial rates of 0.02
+for the encoder and decoder lstms, and a rate of
+0.1 or 0.2 for the    nal linear layer (i.e., the layer
+tasked with making word-predictions at each time-
+step) to work well across all the tasks we consid-
+ered. code implementing the experiments described
+below can be found at https://github.com/
+harvardnlp/bso.7
+
+5.3 tasks and results
+our experiments are primarily intended to evaluate
+the effectiveness of id125 optimization over
+standard id195 training. as such, we run exper-
+iments with the same model across three very dif-
+
+5andor et al. (2016) found, however, that pre-training only
+increased convergence-speed, but was not necessary for obtain-
+ing good results.
+
+6however, it is important to ensure that the same mask ap-
+plied at each time-step of the forward search is also applied at
+the corresponding step of the backward pass. we accomplish
+this by pre-computing masks for each time-step, and sharing
+them between the partial sequence lstms.
+
+7our code is based on yoon kim   s id195 code, https:
+
+//github.com/harvardnlp/id195-attn.
+
+ferent problems: word ordering, dependency pars-
+ing, and machine translation. while we do not in-
+clude all the features and extensions necessary to
+reach state-of-the-art performance, even the baseline
+id195 model is generally quite performant.
+
+word ordering the task of correctly ordering the
+words in a shuf   ed sentence has recently gained
+some attention as a way to test the (syntactic) capa-
+bilities of text-generation systems (zhang and clark,
+2011; zhang and clark, 2015; liu et al., 2015;
+schmaltz et al., 2016). we cast this task as id195
+problem by viewing a shuf   ed sentence as a source
+sentence, and the correctly ordered sentence as the
+target. while word ordering is a somewhat synthetic
+task, it has two interesting properties for our pur-
+poses. first, it is a task which plausibly requires
+search (due to the exponentially many possible or-
+derings), and, second, there is a clear hard constraint
+on output sequences, namely, that they be a permu-
+tation of the source sequence. for both the baseline
+and bso models we enforce this constraint at test-
+time. however, we also experiment with constrain-
+ing the bso model during training, as described in
+section 4.2, by de   ning the succ function to only al-
+low successor sequences containing un-used words
+in the source sentence.
+
+for experiments, we use the same ptb dataset
+(with the standard training, development, and test
+splits) and evaluation procedure as in zhang and
+clark (2015) and later work, with performance re-
+ported in terms of id7 score with the correctly or-
+dered sentences. for all word-ordering experiments
+we use 2-layer encoder and decoder lstms, each
+with 256 hidden units, and dropout with a rate of 0.2
+between lstm layers. we use simple 0/1 costs in
+de   ning the     function.
+
+we show our test-set results in table 1. we see
+that on this task there is a large improvement at each
+beam size from switching to bso, and a further im-
+provement from using the constrained model.
+
+inspired by a similar analysis in daum  e iii and
+marcu (2005), we further examine the relationship
+between ktr and kte when training with conbso
+in table 2. we see that larger ktr hurt greedy in-
+ference, but that results continue to improve, at least
+initially, when using a kte that is (somewhat) bigger
+than ktr     1.
+
+word ordering (id7)
+
+kte = 1 kte = 5 kte = 10
+
+25.2
+id195
+28.0
+bso
+28.6
+conbso
+lstm-lm 15.4
+
+29.8
+33.2
+34.3
+
+-
+
+31.0
+34.3
+34.5
+26.8
+
+table 1: word ordering. id7 scores of id195, bso,
+constrained bso, and a vanilla lstm language model
+(from schmaltz et al, 2016). all experiments above have
+ktr = 6.
+
+kte = 10
+
+word ordering beam size (id7)
+kte = 1 kte = 5
+30.59
+31.23
+34.22
+28.20
+34.42
+26.88
+26.11
+30.20
+
+30.26
+34.67
+34.88
+31.04
+
+ktr = 2
+ktr = 6
+ktr = 11
+id195
+
+table 2: beam-size experiments on word ordering devel-
+opment set. all numbers re   ect training with constraints
+(conbso).
+
+id33 we next apply our model
+to id33, which also has hard con-
+straints and plausibly bene   ts from search. we
+treat id33 with arc-standard transi-
+tions as a id195 task by attempting to map from
+a source sentence to a target sequence of source
+sentence words interleaved with the arc-standard,
+reduce-actions in its parse. for example, we attempt
+to map the source sentence
+
+but it was the quotron problems that ...
+
+to the target sequence
+
+but it was @l sbj @l dep the quotron
+problems @l nmod @l nmod that ...
+
+we use the standard id32 dataset splits
+with stanford dependency labels, and the standard
+uas/las evaluation metric (excluding punctua-
+tion) following chen and manning (2014). all
+models thus see only the words in the source and,
+when decoding, the actions it has emitted so far;
+no other features are used. we use 2-layer encoder
+and decoder lstms with 300 hidden units per layer
+
+id33 (uas/las)
+
+kte = 1
+
+kte = 5
+
+kte = 10
+88.66/84.33
+91.17/87.41
+91.57/87.26
+
+88.53/84.16
+91.00/87.18
+91.25/86.92
+
+id195 87.33/82.26
+bso
+86.91/82.11
+conbso 85.11/79.32
+andor
+93.17/91.18
+table 3: id33. uas/las of id195,
+bso, conbso and baselines on ptb test set. andor is
+the current state-of-the-art model for this data set (andor
+et al. 2016), and we note that with a beam of size 32 they
+obtain 94.41/92.55. all experiments above have ktr = 6.
+
+-
+
+-
+
+and dropout with a rate of 0.3 between lstm lay-
+ers. we replace singleton words in the training set
+with an unk token, normalize digits to a single
+symbol, and initialize id27s for both
+source and target words from the publicly available
+id97 (mikolov et al., 2013) embeddings. we
+use simple 0/1 costs in de   ning the     function.
+
+as in the word-ordering case, we also experiment
+with modifying the succ function in order to train
+under hard constraints, namely, that the emitted tar-
+get sequence be a valid parse. in particular, we con-
+strain the output at each time-step to obey the stack
+constraint, and we ensure words in the source are
+emitted in order.
+
+we show results on the test-set in table 3. bso
+and conbso both show signi   cant improvements
+over id195, with conbso improving most on
+uas, and bso improving most on las. we achieve
+a reasonable    nal score of 91.57 uas, which lags
+behind the state-of-the-art, but is promising for a
+general-purpose, word-only model.
+translation we    nally evaluate our model on a
+small machine translation dataset, which allows us
+to experiment with a cost function that is not 0/1,
+and to consider other baselines that attempt to mit-
+igate exposure bias in the id195 setting. we use
+the dataset from the work of ranzato et al. (2016),
+which uses data from the german-to-english por-
+tion of the iwslt 2014 machine translation eval-
+uation campaign (cettolo et al., 2014). the data
+comes from translated ted talks, and the dataset
+contains roughly 153k training sentences, 7k devel-
+opment sentences, and 7k test sentences. we use the
+same preprocessing and dataset splits as ranzato et
+
+machine translation (id7)
+kte = 1 kte = 5 kte = 10
+id195
+22.53
+bso, sb-    23.83
+17.74
+xent
+20.12
+dad
+mixer
+20.73
+
+23.87
+25.48
+20.28
+22.40
+21.83
+
+24.03
+26.36
+20.10
+22.25
+21.81
+
+table 4: machine translation experiments on test set; re-
+sults below middle line are from mixer model of ran-
+zato et al. (2016). sb-    indicates sentence id7 costs
+are used in de   ning    . xent is similar to our id195
+model but with a convolutional encoder and simpler at-
+tention. dad trains id195 with scheduled sampling
+(bengio et al., 2015). bso, sb-    experiments above
+have ktr = 6.
+
+al. (2016), and like them we also use a single-layer
+lstm decoder with 256 units. we also use dropout
+with a rate of 0.2 between each lstm layer. we em-
+phasize, however, that while our decoder lstm is of
+the same size as that of ranzato et al. (2016), our re-
+sults are not directly comparable, because we use an
+lstm encoder (rather than a convolutional encoder
+as they do), a slightly different attention mechanism,
+and input feeding (luong et al., 2015).
+
+for our main mt results, we set    (  y(k)
+
+1:t ) to
+1    sb(  y(k)
+r+1:t, yr+1:t), where r is the last margin
+violation and sb denotes smoothed, sentence-level
+id7 (chen and cherry, 2014). this setting of    
+should act to penalize erroneous predictions with a
+relatively low sentence-level id7 score more than
+those with a relatively high sentence-level id7
+score. in table 4 we show our    nal results and those
+from ranzato et al. (2016).8 while we start with an
+improved baseline, we see similarly large increases
+in accuracy as those obtained by dad and mixer,
+in particular when kte > 1.
+
+we further
+
+investigate the utility of
+
+these
+sequence-level costs in table 5, which compares us-
+ing sentence-level id7 costs in de   ning     with
+using 0/1 costs. we see that the more sophisti-
+cated sequence-level costs have a moderate effect on
+id7 score.
+
+8some results from personal communication.
+
+machine translation (id7)
+kte = 1 kte = 5 kte = 10
+
+0/1-    25.73
+sb-    25.99
+
+28.21
+28.45
+
+27.43
+27.58
+
+table 5: id7 scores obtained on the machine trans-
+lation development data when training with    (  y(k)
+1:t ) = 1
+(top) and    (  y(k)
+r+1:t, yr+1:t) (bottom), and
+ktr = 6.
+
+1:t ) = 1    sb(  y(k)
+
+timing given algorithm 1, we would expect
+training time to increase linearly with the size of
+the beam. on the above mt task, our highly tuned
+id195 baseline processes an average of 13,038 to-
+kens/second (including both source and target to-
+kens) on a gtx 970 gpu. for beams of size ktr
+= 2, 3, 4, 5, and 6, our implementation processes
+on average 1,985, 1,768, 1,709, 1,521, and 1,458 to-
+kens/second, respectively. thus, we appear to pay
+an initial constant factor of     3.3 due to the more
+complicated forward and backward passes, and then
+training scales with the size of the beam. because
+we batch beam predictions on a gpu, however, we
+   nd that in practice training time scales sub-linearly
+with the beam-size.
+
+6 conclusion
+
+we have introduced a variant of id195 and an as-
+sociated id125 training scheme, which ad-
+dresses exposure bias as well as label bias, and
+moreover allows for both training with sequence-
+level cost functions as well as with hard constraints.
+future work will examine scaling this approach to
+much larger datasets.
+
+acknowledgments
+
+we thank yoon kim for helpful discussions and for
+providing the initial id195 code on which our im-
+plementations are based. we thank allen schmaltz
+for help with the word ordering experiments. we
+also gratefully acknowledge the support of a google
+research award.
+
+references
+[andor et al.2016] daniel andor, chris alberti, david
+weiss, aliaksei severyn, alessandro presta, kuzman
+
+ganchev, slav petrov, and michael collins. 2016.
+globally normalized transition-based neural networks.
+acl.
+
+[bahdanau et al.2015] dzmitry bahdanau, kyunghyun
+2015. neural machine
+cho, and yoshua bengio.
+translation by jointly learning to align and translate.
+in iclr.
+
+[bahdanau et al.2016] dzmitry bahdanau,
+
+philemon
+brakel, kelvin xu, anirudh goyal, ryan lowe, joelle
+pineau, aaron courville, and yoshua bengio. 2016.
+an actor-critic algorithm for sequence prediction.
+corr, abs/1607.07086.
+
+[bengio et al.2015] samy bengio,
+
+oriol vinyals,
+navdeep jaitly, and noam shazeer. 2015. scheduled
+sampling for sequence prediction with recurrent
+neural networks. in advances in neural information
+processing systems, pages 1171   1179.
+
+[bj  orkelund and kuhn2014] anders bj  orkelund
+
+and
+jonas kuhn. 2014. learning structured id88s
+for coreference resolution with latent antecedents
+and non-local features. acl, baltimore, md, usa,
+june.
+
+[cettolo et al.2014] mauro cettolo, jan niehues, sebas-
+tian st  uker, luisa bentivogli, and marcello federico.
+2014. report on the 11th iwslt evaluation campaign.
+in proceedings of iwslt, 20014.
+
+[chang et al.2015] kai-wei chang, hal daum  e iii, john
+langford, and stephane ross. 2015. ef   cient pro-
+grammable learning to search. in arxiv.
+
+[chen and cherry2014] boxing chen and colin cherry.
+2014. a systematic comparison of smoothing tech-
+niques for sentence-level id7. acl 2014, page 362.
+
+[chen and manning2014] danqi chen and christopher d
+manning.
+2014. a fast and accurate dependency
+parser using neural networks. in emnlp, pages 740   
+750.
+
+[cho et al.2014] kyunghyun cho, bart van merrienboer,
+dzmitry bahdanau, and yoshua bengio. 2014. on
+the properties of id4: encoder-
+decoder approaches. eighth workshop on syntax, se-
+mantics and structure in statistical translation.
+
+[collins and roark2004] michael collins
+
+and brian
+roark. 2004. incremental parsing with the id88
+algorithm. in proceedings of the 42nd annual meet-
+ing on association for computational linguistics,
+page 111. association for computational linguistics.
+[daum  e iii and marcu2005] hal daum  e iii and daniel
+marcu. 2005. learning as search optimization: ap-
+proximate large margin methods for structured predic-
+in proceedings of the twenty-second interna-
+tion.
+tional conference on machine learning (icml 2005),
+pages 169   176.
+
+[daum  e iii et al.2009] hal daum  e iii, john langford,
+and daniel marcu. 2009. search-based structured pre-
+diction. machine learning, 75(3):297   325.
+
+[duchi et al.2011] john duchi, elad hazan, and yoram
+singer. 2011. adaptive subgradient methods for on-
+line learning and stochastic optimization. the jour-
+nal of machine learning research, 12:2121   2159.
+
+[filippova et al.2015] katja filippova, enrique alfon-
+seca, carlos a colmenares, lukasz kaiser, and oriol
+vinyals. 2015. sentence compression by deletion
+with lstms. in proceedings of the 2015 conference on
+empirical methods in natural language processing,
+pages 360   368.
+
+[hochreiter and schmidhuber1997] sepp hochreiter and
+j  urgen schmidhuber. 1997. long short-term memory.
+neural comput., 9:1735   1780.
+
+[huang et al.2012] liang huang, suphan fayong, and
+yang guo. 2012. structured id88 with inexact
+search. in proceedings of the 2012 conference of the
+north american chapter of the association for com-
+putational linguistics: human language technolo-
+gies, pages 142   151. association for computational
+linguistics.
+
+[kingsbury2009] brian kingsbury. 2009. lattice-based
+optimization of sequence classi   cation criteria for
+in acoustics,
+neural-network acoustic modeling.
+speech and signal processing, 2009. icassp 2009.
+ieee international conference on, pages 3761   3764.
+ieee.
+
+[lafferty et al.2001] john d. lafferty, andrew mccal-
+lum, and fernando c. n. pereira.
+2001. condi-
+tional random    elds: probabilistic models for seg-
+menting and labeling sequence data. in proceedings of
+the eighteenth international conference on machine
+learning (icml 2001), pages 282   289.
+
+[liu et al.2015] yijia liu, yue zhang, wanxiang che, and
+bing qin. 2015. transition-based syntactic lineariza-
+tion. in proceedings of naacl.
+
+[luong et al.2015] thang luong, hieu pham,
+
+and
+christopher d. manning. 2015. effective approaches
+to attention-based id4.
+in
+proceedings of the 2015 conference on empirical
+methods in natural language processing, emnlp
+2015, pages 1412   1421.
+
+[mikolov et al.2013] tomas mikolov, ilya sutskever, kai
+chen, greg s corrado, and jeff dean. 2013. dis-
+tributed representations of words and phrases and their
+compositionality. in advances in neural information
+processing systems, pages 3111   3119.
+
+[papineni et al.2002] kishore papineni, salim roukos,
+todd ward, and wei-jing zhu. 2002. id7: a method
+for automatic evaluation of machine translation.
+in
+proceedings of the 40th annual meeting on association
+
+for computational linguistics, pages 311   318. associ-
+ation for computational linguistics.
+
+[pham et al.2014] vu pham, th  eodore bluche, christo-
+pher kermorvant, and j  er  ome louradour.
+2014.
+dropout improves recurrent neural networks for hand-
+in frontiers in handwriting
+writing recognition.
+recognition (icfhr), 2014 14th international con-
+ference on, pages 285   290. ieee.
+
+[ranzato et al.2016] marc   aurelio
+
+sumit
+chopra, michael auli,
+and wojciech zaremba.
+2016. sequence level training with recurrent neural
+networks. iclr.
+
+ranzato,
+
+[ross et al.2011] st  ephane ross, geoffrey j. gordon, and
+drew bagnell. 2011. a reduction of imitation learn-
+ing and id170 to no-regret online learn-
+in proceedings of the fourteenth international
+ing.
+conference on arti   cial intelligence and statistics,
+pages 627   635.
+
+[sak et al.2014] hasim sak, oriol vinyals, georg
+heigold, andrew w. senior, erik mcdermott, rajat
+monga, and mark z. mao. 2014. sequence discrimi-
+native distributed training of long short-term memory
+in interspeech 2014,
+recurrent neural networks.
+pages 1209   1213.
+
+[schmaltz et al.2016] allen schmaltz, alexander m
+rush, and stuart m shieber. 2016. word ordering
+without syntax. arxiv preprint arxiv:1604.08633.
+
+[serban et al.2016] iulian vlad serban, alessandro sor-
+doni, yoshua bengio, aaron c. courville, and joelle
+pineau. 2016. building end-to-end dialogue systems
+using generative hierarchical neural network models.
+in proceedings of the thirtieth aaai conference on
+arti   cial intelligence, pages 3776   3784.
+
+[shen et al.2016] shiqi shen, yong cheng, zhongjun he,
+wei he, hua wu, maosong sun, and yang liu. 2016.
+minimum risk training for id4.
+in proceedings of the 54th annual meeting of the as-
+sociation for computational linguistics, acl 2016.
+
+[srivastava et al.2014] nitish srivastava, geoffrey hin-
+ton, alex krizhevsky, ilya sutskever, and ruslan
+salakhutdinov. 2014. dropout: a simple way to pre-
+vent neural networks from over   tting. the journal of
+machine learning research, 15(1):1929   1958.
+
+[sutskever et al.2011] ilya sutskever, james martens, and
+geoffrey e hinton. 2011. generating text with recur-
+rent neural networks. in proceedings of the 28th in-
+ternational conference on machine learning (icml),
+pages 1017   1024.
+
+[sutskever et al.2014] ilya sutskever, oriol vinyals, and
+quoc vv le. 2014. sequence to sequence learning
+with neural networks. in advances in neural informa-
+tion processing systems (nips), pages 3104   3112.
+
+[venugopalan et al.2015] subhashini venugopalan, mar-
+cus rohrbach, jeffrey donahue, raymond j. mooney,
+
+trevor darrell, and kate saenko. 2015. sequence to
+sequence - video to text. in iccv, pages 4534   4542.
+[vinyals et al.2015] oriol vinyals,   ukasz kaiser, terry
+koo, slav petrov, ilya sutskever, and geoffrey hinton.
+2015. grammar as a foreign language. in advances in
+neural information processing systems, pages 2755   
+2763.
+
+[voigtlaender et al.2015] paul voigtlaender,
+
+patrick
+doetsch, simon wiesler, ralf schluter, and hermann
+sequence-discriminative training of
+ney.
+in acoustics, speech and
+recurrent neural networks.
+signal processing (icassp), 2015 ieee international
+conference on, pages 2100   2104. ieee.
+
+2015.
+
+[watanabe and sumita2015] taro watanabe and eiichiro
+sumita. 2015. transition-based neural constituent
+parsing. proceedings of acl-ijcnlp.
+
+[xu et al.2015] kelvin xu,
+
+jimmy ba, ryan kiros,
+kyunghyun cho, aaron c. courville, ruslan
+salakhutdinov, richard s. zemel, and yoshua bengio.
+2015. show, attend and tell: neural image caption
+in icml, pages
+generation with visual attention.
+2048   2057.
+
+[yazdani and henderson2015] majid yazdani and james
+henderson. 2015.
+incremental recurrent neural net-
+work dependency parser with search-based discrimi-
+in proceedings of the 19th confer-
+native training.
+ence on computational natural language learning,
+(conll 2015), pages 142   152.
+
+[zaremba et al.2014] wojciech zaremba, ilya sutskever,
+and oriol vinyals. 2014. recurrent neural network
+id173. corr, abs/1409.2329.
+
+[zhang and clark2011] yue zhang and stephen clark.
+2011. syntax-based grammaticality improvement us-
+ing id35 and guided search. in proceedings of the con-
+ference on empirical methods in natural language
+processing, pages 1147   1157. association for com-
+putational linguistics.
+
+[zhang and clark2015] yue zhang and stephen clark.
+2015.
+discriminative syntax-based word order-
+ing for text generation. computational linguistics,
+41(3):503   538.
+
+[zhou et al.2015] hao zhou, yue zhang, and jiajun chen.
+2015. a neural probabilistic structured-prediction
+model for transition-based id33.
+in
+proceedings of the 53rd annual meeting of the as-
+sociation for computational linguistics, pages 1213   
+1222.
+
+

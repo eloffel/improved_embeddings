@@ -1,0 +1,352 @@
+   #[1]rss
+
+     * [2]about
+     * [3]software
+     * [4]demos
+     * [5]blog
+
+   [supervised-similarity-siamese-id98.jpg]    [6]kemal   anl  
+
+supervised similarity: learning symmetric relations from duplicate question
+data
+
+   march 1, 2017    by matthew honnibal
+
+   supervised models for text-pair classification let you create software
+   that assigns a label to two texts, based on some relationship between
+   them. when the relationship is symmetric, it can be useful to
+   incorporate this constraint into the model. this post shows how a
+   siamese convolutional neural network performs on two duplicate question
+   data sets.
+
+   the task of detecting duplicate content occurs on many different
+   platforms. we see it all the time on the [7]spacy issue tracker, where
+   we're always trying to figure out which threads can be merged.
+   duplicate detection is also relevant to most discussion forums, where
+   the same questions are asked repeatedly. fortunately, there are now
+   labelled data sets from two large community id53 sites:
+   the recently-released [8]quora data set and the [9]stackexchange corpus
+   compiled by researchers from melbourne university.
+   [supervised-similarity-siamese-id98_demo.jpg]
+
+update (november 7, 2017)
+
+   this post previously linked to an online demo of the similarity model.
+   following the release of [10]spacy v2.0, we're currently working on a
+   new version of the model that will hopefully achieve much better
+   accuracy than the previous one. in the meantime, we've replaced the
+   [11]similarity demo with a version showing spacy's doc.similarity()
+   method.
+
+   for comparison, we've also included an unsupervised baseline in the
+   demo, which computes a simple word vector average, using vectors from
+   the [12]glove common crawl model. the superised models learn a very
+   different similarity definition from this unsupervised baseline, which
+   roughly represents the overlap in topics between the documents.
+   supervision is often discussed as a disadvantage, because it makes you
+   use labelled data. however, it's also a crucial advantage: it lets you
+   use labelled data, to customize the relationships being classified.
+   without supervision, you're stuck with whatever default relationship
+   the unsupervised algorithm happens to recover.
+
+[13]siamese networks for symmetric classification
+
+   the quora and stackexchange data sets are labelled according to whether
+   two questions are duplicates. this relationship should be both
+   commutative and transitive. we don't want to compute different results
+   for is_dup(a, b) and is_dup(b, a)     this is the same question, and the
+   model should treat it as such. similarly, if we know is_dup(a, b) and
+   is_dup(b, c), it should hold that is_dup(a, c).
+
+   we can learn a function that obeys these constraints by using a
+   "siamese" architecture (for the record, i hate this name). the
+   difference in architecture from the asymmetric model i've discussed
+   previously is fairly small. as before, we first encode the sentences
+   separately, but instead of an arbitrary non-linearity, we use a
+   distance function to produce the prediction. here's a sketch of how the
+   model is put together:
+siamese network outlinedef siamese(text2vec, similarity_metric):
+    def forward(text1, text2):
+        vec1, bp_vec1 = text2vec(text1)
+        vec2, bp_vec2 = text2vec(text2)
+        # if we were doing an asymmetric model, we'd have:
+        # sim, bp_sim = multi_layer_id88(concatenate(vec1, vec2))
+        # cat(vec1, vec2) differs from cat(vec2, vec1) -- hence the asymmetry.
+        sim, bp_sim = similarity_metric(vec1, vec2)
+
+        def backward(d_sim, optimize):
+            d_vec1, d_vec2 = bp_sim(d_sim, optimize)
+            d_text1 = bp_vec1(d_vec1, optimize)
+            d_text2 = bp_vec2(d_vec2, optimize)
+            return d_text1, d_text2
+        return sim, backward
+    return forward
+
+   the siamese function above takes two functions, text2vec and
+   similarity_metric. it uses the text2vec function to separately encode
+   each text in the input, and then uses similarity_metric to compare
+   them. each function is assumed to return a callback to complete its
+   backward pass. given this, the id26 logic of the siamese
+   network is very simple. each callback returns the gradient with respect
+   to the original function's inputs, given the gradient of the original
+   function's output. for the similarity metric, i've been using a
+   distance function taken from [14]chen (2013), which he terms cauchy
+   similarity:
+cauchy similaritydef chencauchy(length):
+    '''create a trainable similarity function, that will return the similarity
+    and a callback to compute the backward pass given the gradient.
+
+    an optimizer can be passed to the callback to update the weights, e.g.
+    adam, sgd momentum, etc.
+    '''
+    weights = numpy.ones((1, length,))
+
+    def forward(x1, x2):
+        diff = x1-x2
+        dist_vec = diff**2
+        weighted_dist = weights.dot(l1_vector)
+        weighted_dist *= weighted_dist > 0
+        sim = 1. / (1+weighted_dist)
+
+        def backward(d_sim, optimize):
+            d_weighted_dist = d_sim * (-1 / (weighted_dist+1)**2)
+            d_weighted_dist *= weighted_dist > 0
+            d_weights  = d_weighted_dist * dist_vec
+            d_dist_vec = d_weighted_dist * weights
+            d_diff = 2 * d_dist_vec * diff
+            d_x1 = d_diff
+            d_x2 = -d_diff
+            optimize(weights, d_weights)
+            return d_x1, d_x2
+        return sim, backward
+    return forward
+
+   recommended readingi recommend chen's [15]discussion of the siamese
+   network. because it's a master's thesis, the document takes the time to
+   discuss the considerations carefully, and goes through everything
+   step-by-step. it's a nice change from publications in competitive
+   venues, which are written quickly and have an interest in presenting
+   their ideas as novel and exciting.
+
+   for the text2vec function, i've been using the convolutional layer i
+   introduced in the previous post, maxout window encoding. the mwe layer
+   has the same aim as the bilstm: extract better word features. it
+   rewrites the vector for each word based on the surrounding context.
+   this is useful, because it gets around a major limitation of word
+   vectors. we know that a word like "duck" can have multiple meanings,
+   and we'd like a vector that reflects the meaning in context.
+   hover over the vectors to see which words were used to compute them.
+   hover over the words to see the vectors they influenced.why maxout?for
+   the mwe unit to work, it needs to learn a non-linear mapping from the
+   trigram down to a shorter vector. you could use any non-linearity here,
+   but i've found maxout to work quite well. the logic is that adding
+   capacity to the layer by increasing the width m is quite expensive,
+   because our weights layers will be (m, 3*m). the maxout unit instead
+   lets us add capacity by adding another dimension instead. i usually use
+   two or three pieces.
+
+   the figure above shows how a single mwe block rewrites the vector for
+   each word given evidence for the two words immediately surrounding it.
+   you can think of the output as trigram vectors     they're built on the
+   information from a three-word window. by simply adding another layer,
+   we'll get vectors computed from 5-grams     the receptive field widens
+   with each layer we go deeper. here's the full model definition, using
+   [16]thinc, the library i've been developing for [17]spacy 2.0's neural
+   network models:
+model definitiondef build_siamese_network(width, depth):
+    embed = staticvectors('en', width)
+    pooling = concatenate(mean_pool, max_pool)
+    mwe_encode = chain(extractwindow(nw=1), maxout(width))
+
+    # define a little dsl for block, for convenience.
+    with model.define_operators({'>>': chain, '**': clone}):
+        sent2vec = (
+            get_word_ids(model.ops)
+            >> flatten_add_lengths
+            >> with_getitem(0, embed >> mwe_encode ** depth)
+            >> pooling
+        )
+    model = siamese(sent2vec, cauchysimilarity(model.ops, width*2))
+    return model
+
+   after the mwe layer, we have two matrices, one for each text. the
+   matrices may be of different lengths, and we need to output a single
+   similarity score. the next step is the weakest part of the model: to
+   compare these matrices, we reduce them to two vectors, by taking their
+   elementwise mean and their elementwise max. of the two operations, the
+   max tends to be more informative     but using both tends to be slightly
+   better than just using the max.
+
+[18]results and notable examples
+
+   the table below shows development set accuracies on the quora and
+   stackexchange data. since neither corpus comes with a designated
+   train/dev/test split, i've been using a random 10% and a random 30%
+   partition. all results are still preliminary, and the models'
+   hyper-parameters have not been tuned successfully.methodologyi'm using
+   the adam optimizer with averaged parameters and no learning rate decay.
+   batch size increases from 1 to 128 by 0.01% each iteration. width is
+   set to 128, and 3 pieces are used for the maxout units. no dropout is
+   applied. an l2 penalty of 1e-6 is used. static [19]glove common crawl
+   embeddings are used, with a trained affine projection to width 128.
+   to train the model on the [20]stackexchange corpus, we compiled all
+   train pairs from the subforums android, gis, mathematica, programmers,
+   stats, text, unix, webmasters and wordpress. we then extracted all
+   duplicates and two subsequent negative examples.
+                        symmetric              asymmetric
+                 mwe depth 0 mwe depth 2 mwe depth 0 mwe depth 2
+   quora         82.4        84.7        82.9        83.6
+   stackexchange 80.2        78.0        74.9        75.2
+
+   despite these caveats, the improvement in accuracy from the symmetric
+   network has been quite consistent. on the quora data, accuracy improves
+   by 2.3%     a bigger improvement than i've seen from anything else i've
+   been trying. the maxout window encoding layers also seem to help,
+   although the inconsistency of the results makes it difficult to be
+   sure.
+
+   it's interesting to compare the outputs of the two models, especially
+   in comparison to a simple unweighted mean of the [21]glove vector
+   assigned to each word. take a look at the following examples:
+   text 1 text 2 baseline quora stackexchange
+   how to manage success dependency between unit tests how to structure
+   tests where one test is another test's setup? 86% 12% 47%
+   design pattern for overlapping actions and animations? how do you
+   handle multiple users editing the same piece of data in a webapp? 79%
+   8% 15%
+   how can i get really good at web development? what should i do to
+   become an amazing programmer? 93% 64% 100%
+   where can i find a place to eat pizza? what's the closest italian
+   restaurant? 84% 6% 46%
+   which companies pay the best in nebraska? which companies pay the best
+   in montana? 98% 8% 69%
+
+   the default similarity model, which takes a simple vector average,
+   skewed high on most of the examples we tried. much of the difference in
+   output of the quora and stackexchange models can be explained by the
+   different domains of the text they were trained on. you can also see
+   the effect of the moderation policy, as this controls the definition of
+   duplicates. for instance, questions which differ in details, such as
+   place, are never regarded as duplicates in the quora data, so the model
+   learns to pay attention to single named entities.
+
+   none of these models are doing a better or worse job at uncovering the
+   "true" similarity of the text pairs they're classifying     there's no
+   such thing. because meaning is so multi-dimensional, pieces of text are
+   always similar in some respects and different in others. the labelling
+   you need will therefore always depend on which relationships are
+   important to your application.
+
+   if what you're trying to get out of a similarity score is an intent
+   label, you probably want to regard two sentences with the same verb but
+   different object as similar     they will both trigger the same function.
+   alternatively, if you're trying to cluster opinions in product reviews,
+   the object is probably the decisive dimension. there's no way for the
+   algorithm to guess what you want, unless you tell it     with example
+   data. that's why supervised methods are so useful.
+
+   matthew honnibal
+   about the author
+
+matthew honnibal
+
+   matthew is a leading expert in ai technology, known for his research,
+   software and writings. he completed his phd in 2009, and spent a
+   further 5 years publishing research on state-of-the-art natural
+   language understanding systems. anticipating the ai boom, he left
+   academia in 2014 to develop spacy, an open-source library for
+   industrial-strength nlp.
+
+read more
+
+[22]introducing spacy v2.1
+
+[23]explosion ai in 2017: our year in review
+
+[24]introducing custom pipelines and extensions for spacy v2.0
+
+[25]pseudo-rehearsal: a simple solution to catastrophic forgetting for nlp
+
+[26]prodigy: a new tool for radically efficient machine teaching
+
+[27]supervised learning is great     it   s data collection that   s broken
+
+    about us
+
+   explosion ai is a digital studio specialising in artificial
+   intelligence and natural language processing. we   re the makers of
+   spacy, the leading open-source nlp library.
+
+    navigation
+
+     * [28]home
+     * [29]about
+     * [30]software
+     * [31]demos
+     * [32]blog
+     * [33]legal / imprint
+
+    our software
+
+     * [34]spacy
+       industrial-strength nlp
+     * [35]prodigy
+       radically efficient machine teaching
+
+   [36]see more    
+
+references
+
+   visible links
+   1. https://explosion.ai/feed.xml
+   2. https://explosion.ai/about
+   3. https://explosion.ai/software
+   4. https://explosion.ai/demos
+   5. https://explosion.ai/blog
+   6. https://dribbble.com/kemal
+   7. https://github.com/explosion/spacy/issues
+   8. https://data.quora.com/first-quora-dataset-release-question-pairs
+   9. http://nlp.cis.unimelb.edu.au/resources/cqadupstack/
+  10. https://spacy.io/
+  11. https://demos.explosion.ai/similarity
+  12. http://nlp.stanford.edu/projects/glove/
+  14. https://tspace.library.utoronto.ca/bitstream/1807/43097/3/liu_chen_201311_masc_thesis.pdf
+  15. https://tspace.library.utoronto.ca/bitstream/1807/43097/3/liu_chen_201311_masc_thesis.pdf
+  16. https://github.com/explosion/thinc
+  17. https://spacy.io/
+  19. http://nlp.stanford.edu/projects/glove/
+  20. http://nlp.cis.unimelb.edu.au/resources/cqadupstack/
+  21. http://nlp.stanford.edu/projects/glove/
+  22. https://explosion.ai/blog/spacy-v2-1
+  23. https://explosion.ai/blog/year-in-review-2017
+  24. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  25. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  26. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  27. https://explosion.ai/blog/supervised-learning-data-collection
+  28. https://explosion.ai/
+  29. https://explosion.ai/about
+  30. https://explosion.ai/software
+  31. https://explosion.ai/demos
+  32. https://explosion.ai/blog
+  33. https://explosion.ai/legal
+  34. https://spacy.io/
+  35. https://prodi.gy/
+  36. https://explosion.ai/software
+
+   hidden links:
+  38. https://explosion.ai/
+  39. mailto:matt@explosion.ai
+  40. https://twitter.com/honnibal
+  41. https://github.com/honnibal
+  42. https://www.semanticscholar.org/search?q=matthew%20honnibal
+  43. https://explosion.ai/blog/spacy-v2-1
+  44. https://explosion.ai/blog/year-in-review-2017
+  45. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  46. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  47. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  48. https://explosion.ai/blog/supervised-learning-data-collection
+  49. mailto:contact@explosion.ai
+  50. https://twitter.com/explosion_ai
+  51. https://github.com/explosion
+  52. https://youtube.com/c/explosionai
+  53. https://explosion.ai/feed

@@ -1,0 +1,351 @@
+   #[1]rss
+
+     * [2]about
+     * [3]software
+     * [4]demos
+     * [5]blog
+
+   [spacy-deep-learning.jpg]    [6]kemal   anl   & freepik
+
+spacy v1.0: deep learning with custom pipelines and keras
+
+   october 19, 2016    by matthew honnibal
+
+   i'm pleased to announce the [7]1.0 release of spacy, the fastest nlp
+   library in the world. by far the best part of the 1.0 release is a new
+   system for integrating custom models into spacy. this post introduces
+   you to the changes, and shows you how to use the new custom pipeline
+   functionality to add a [8]keras-powered lstm id31 model
+   into a spacy pipeline.
+
+   the [9]spacy user survey has been full of great feedback about the
+   library. the clearest finding has been the need for more tutorials.
+   we're currently working on a new and improved tutorials section for the
+   site. we're also prioritising tutorials for the new 1.0 functionality    
+   like the new rule-based, entity-aware [10]matcher, the [11]model
+   training apis and the [12]custom pipelines.spacy user surveythanks to
+   all of you who have filled out the survey so far! if you're a spacy
+   user and you haven't seen the survey yet, you can help improve the
+   library by [13]giving your feedback.
+
+   the custom pipelines are particularly exciting, because they let you
+   hook your own deep learning models into spacy. so, without further ado,
+   here's how to use keras to train an lstm id31 model and
+   use the resulting annotations with spacy.
+
+[14]how to add id31 to spacy with an lstm model using keras
+
+   there are lots of great open-source libraries for researching, training
+   and evaluating neural networks. however, the concerns of these
+   libraries usually end at the point where you have an evaluation score
+   and a model file. spacy has always been designed to orchestrate
+   multiple textual annotation models and help you use them together in
+   your application. spacy 1.0 now makes it much easier to calculate those
+   annotations using your own custom models.
+
+   in this tutorial, we'll be using [15]keras, as it's the most popular
+   deep learning library for python. let's assume you've written a custom
+   id31 model that predicts whether a document is positive
+   or negative. now you want to find which entities are commonly
+   associated with positive or negative documents. here's a quick example
+   of how that can look at runtime.what's keras?[16]keras gives you a
+   high-level, declarative interface to define neural networks. models are
+   trained using google's [17]tensorflow by default. [18]theano is also
+   supported.
+runtime usagedef count_entity_sentiment(nlp, texts):
+    '''compute the net document sentiment for each entity in the texts.'''
+    entity_sentiments = collections.counter(float)
+    for doc in nlp.pipe(texts, batch_size=1000, n_threads=4):
+        for ent in doc.ents:
+            entity_sentiments[ent.text] += doc.sentiment
+    return entity_sentiments
+
+def load_nlp(lstm_path, lang_id='en'):
+    def create_pipeline(nlp):
+        return [nlp.tagger, nlp.entity, sentimentanalyser.load(lstm_path, nlp)]
+    return spacy.load(lang_id, create_pipeline=create_pipeline)
+
+   all you have to do is pass a create_pipeline callback function to
+   spacy.load(). the function should take a spacy.language.language object
+   as its only argument, and return a sequence of callables. each callable
+   should accept a doc object, modify it in place, and return none.
+
+   of course, operating on single documents is inefficient, especially for
+   deep learning models. usually we want to annotate many texts, and we
+   want to process them in parallel. you should therefore ensure that your
+   model component also supports a .pipe() method. the .pipe() method
+   should be a well-behaved generator function that operates on
+   arbitrarily large sequences. it should consume a small buffer of
+   documents, work on them in parallel, and yield them one-by-one.
+custom annotator classclass sentimentanalyser(object):
+    @classmethod
+    def load(cls, path, nlp):
+        with (path / 'config.json').open() as file_:
+            model = model_from_json(file_.read())
+        with (path / 'model').open('rb') as file_:
+            lstm_weights = pickle.load(file_)
+        embeddings = get_embeddings(nlp.vocab)
+        model.set_weights([embeddings] + lstm_weights)
+        return cls(model)
+
+    def __init__(self, model):
+        self._model = model
+
+    def __call__(self, doc):
+        x = get_features([doc], self.max_length)
+        y = self._model.predict(x)
+        self.set_sentiment(doc, y)
+
+    def pipe(self, docs, batch_size=1000, n_threads=2):
+        for minibatch in cytoolz.partition_all(batch_size, docs):
+            xs = get_features(minibatch)
+            ys = self._model.predict(x)
+            for i, doc in enumerate(minibatch):
+                doc.sentiment = ys[i]
+
+    def set_sentiment(self, doc, y):
+        doc.sentiment = float(y[0])
+        # sentiment has a native slot for a single float.
+        # for arbitrary data storage, there's:
+        # doc.user_data['my_data'] = y
+
+def get_features(docs, max_length):
+    xs = numpy.zeros((len(docs), max_length), dtype='int32')
+    for i, doc in enumerate(minibatch):
+        for j, token in enumerate(doc[:max_length]):
+            xs[i, j] = token.rank if token.has_vector else 0
+    return xs
+
+   by default, spacy 1.0 downloads and uses the 300-dimensional [19]glove
+   common crawl vectors. it's also easy to replace these vectors with ones
+   you've trained yourself, or to disable the word vectors entirely. if
+   you've installed your word vectors into spacy's vocab object, here's
+   how to use them in a keras model:
+training with kerasdef train(train_texts, train_labels, dev_texts, dev_labels,
+        lstm_shape, lstm_settings, lstm_optimizer, batch_size=100, nb_epoch=5):
+    nlp = spacy.load('en', parser=false, tagger=false, entity=false)
+    embeddings = get_embeddings(nlp.vocab)
+    model = compile_lstm(embeddings, lstm_shape, lstm_settings)
+    train_x = get_features(nlp.pipe(train_texts))
+    dev_x = get_features(nlp.pipe(dev_texts))
+    model.fit(train_x, train_labels, validation_data=(dev_x, dev_labels),
+              nb_epoch=nb_epoch, batch_size=batch_size)
+    return model
+
+def compile_lstm(embeddings, shape, settings):
+    model = sequential()
+    model.add(
+        embedding(
+            embeddings.shape[1],
+            embeddings.shape[0],
+            input_length=shape['max_length'],
+            trainable=false,
+            weights=[embeddings]
+        )
+    )
+    model.add(bidirectional(lstm(shape['nr_hidden'])))
+    model.add(dropout(settings['dropout']))
+    model.add(dense(shape['nr_class'], activation='sigmoid'))
+    model.compile(optimizer=adam(lr=settings['lr']), loss='binary_crossid178',
+                  metrics=['accuracy'])
+
+    return model
+
+def get_embeddings(vocab):
+    max_rank = max(lex.rank for lex in vocab if lex.has_vector)
+    vectors = numpy.ndarray((max_rank+1, vocab.vectors_length), dtype='float32')
+    for lex in vocab:
+        if lex.has_vector:
+            vectors[lex.rank] = lex.vector
+    return vectors
+
+def get_features(docs, max_length):
+    xs = numpy.zeros(len(list(docs)), max_length, dtype='int32')
+    for i, doc in enumerate(docs):
+        for j, token in enumerate(doc[:max_length]):
+            xs[i, j] = token.rank if token.has_vector else 0
+    return xs
+
+
+   for most applications, i recommend using pre-trained id27s
+   without "fine-tuning". this means that you'll use the same embeddings
+   across different models, and avoid learning adjustments to them on your
+   training data. the embeddings table is large, and the values provided
+   by the pre-trained vectors are already pretty good. fine-tuning the
+   embeddings table is therefore a waste of your "parameter budget". it's
+   usually better to make your network larger some other way, e.g. by
+   adding another lstm layer, using attention mechanism, using character
+   features, etc.
+
+[20]attribute hooks (experimental)
+
+   earlier, we saw how to store data in the new generic user_data dict.
+   this generalises well, but it's not terribly satisfying. ideally, we
+   want to let the custom data drive more "native" behaviours. for
+   instance, consider the .similarity() methods provided by spacy's doc,
+   token and span objects:
+polymorphic similarity examplespan.similarity(doc)
+token.similarity(span)
+doc1.similarity(doc2)
+
+   by default, this just averages the vectors for each document, and
+   computes their cosine. obviously, spacy should make it easy for you to
+   install your own similarity model. this introduces a tricky design
+   challenge. the current solution is to add three more dicts to the doc
+   object:implementation notethe hooks live on the doc object because the
+   span and token objects are created lazily, and don't own any data. they
+   just proxy to their parent doc. this turns out to be convenient here    
+   we only have to worry about installing hooks in one place.
+   name description
+   user_hooks customise behaviour of doc.vector, doc.has_vector,
+   doc.vector_norm or doc.sents
+   user_token_hooks customise behaviour of token.similarity, token.vector,
+   token.has_vector, token.vector_norm or token.conjuncts
+   user_span_hooks customise behaviour of span.similarity, span.vector,
+   span.has_vector, span.vector_norm or span.root
+
+   to sum up, here's an example of hooking in custom .similarity()
+   methods:
+add custom similarity hooksclass similaritymodel(object):
+    def __init__(self, model):
+        self._model = model
+
+    def __call__(self, doc):
+        doc.user_hooks['similarity'] = self.similarity
+        doc.user_span_hooks['similarity'] = self.similarity
+        doc.user_token_hooks['similarity'] = self.similarity
+
+    def similarity(self, obj1, obj2):
+        y = self._model([obj1.vector, obj2.vector])
+        return float(y[0])
+
+[21]what's next?
+
+   the attribute hooks are likely to evolve slightly, and will certainly
+   need a little bit of tweaking to get fully consistent. i'm also looking
+   forward to shipping improved models for the tagger, parser and entity
+   recogniser. over the last twelve months, research has shown that
+   bidirectional lstm models are a simple and effective approach for these
+   tasks. the resulting models should also be significantly smaller in
+   memory.
+
+[22]resources
+
+resources
+
+     * you can find more papers describing bidirectional lstm-based models
+       on [23]semantic scholar.
+     * [24]tutorial code: full code on github.
+     * [25]spacy v1.0 release notes
+     * [26]spacy documentation
+     * [27]keras documentation
+
+   matthew honnibal
+   about the author
+
+matthew honnibal
+
+   matthew is a leading expert in ai technology, known for his research,
+   software and writings. he completed his phd in 2009, and spent a
+   further 5 years publishing research on state-of-the-art natural
+   language understanding systems. anticipating the ai boom, he left
+   academia in 2014 to develop spacy, an open-source library for
+   industrial-strength nlp.
+
+read more
+
+[28]introducing spacy v2.1
+
+[29]explosion ai in 2017: our year in review
+
+[30]introducing custom pipelines and extensions for spacy v2.0
+
+[31]pseudo-rehearsal: a simple solution to catastrophic forgetting for nlp
+
+[32]prodigy: a new tool for radically efficient machine teaching
+
+[33]supervised learning is great     it   s data collection that   s broken
+
+    about us
+
+   explosion ai is a digital studio specialising in artificial
+   intelligence and natural language processing. we   re the makers of
+   spacy, the leading open-source nlp library.
+
+    navigation
+
+     * [34]home
+     * [35]about
+     * [36]software
+     * [37]demos
+     * [38]blog
+     * [39]legal / imprint
+
+    our software
+
+     * [40]spacy
+       industrial-strength nlp
+     * [41]prodigy
+       radically efficient machine teaching
+
+   [42]see more    
+
+references
+
+   visible links
+   1. https://explosion.ai/feed.xml
+   2. https://explosion.ai/about
+   3. https://explosion.ai/software
+   4. https://explosion.ai/demos
+   5. https://explosion.ai/blog
+   6. http://www.freepik.com/free-vector/technology-background-in-black-color_795518.htm
+   7. https://github.com/explosion/spacy/releases
+   8. https://keras.io/
+   9. https://survey.spacy.io/
+  10. https://spacy.io/docs/tutorials/rule-based-matcher
+  11. https://spacy.io/docs/tutorials/training
+  12. https://spacy.io/docs/tutorials/custom-pipelines
+  13. https://survey.spacy.io/
+  15. https://keras.io/
+  16. https://keras.io/
+  17. https://www.tensorflow.org/
+  18. http://deeplearning.net/software/theano/
+  19. http://nlp.stanford.edu/projects/glove/
+  23. https://www.semanticscholar.org/search?q=bidirectional lstm&sort=relevance&ae=false
+  24. https://github.com/explosion/spacy/blob/master/examples/deep_learning_keras.py
+  25. https://github.com/explosion/spacy/releases
+  26. https://spacy.io/
+  27. https://keras.io/
+  28. https://explosion.ai/blog/spacy-v2-1
+  29. https://explosion.ai/blog/year-in-review-2017
+  30. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  31. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  32. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  33. https://explosion.ai/blog/supervised-learning-data-collection
+  34. https://explosion.ai/
+  35. https://explosion.ai/about
+  36. https://explosion.ai/software
+  37. https://explosion.ai/demos
+  38. https://explosion.ai/blog
+  39. https://explosion.ai/legal
+  40. https://spacy.io/
+  41. https://prodi.gy/
+  42. https://explosion.ai/software
+
+   hidden links:
+  44. https://explosion.ai/
+  45. mailto:matt@explosion.ai
+  46. https://twitter.com/honnibal
+  47. https://github.com/honnibal
+  48. https://www.semanticscholar.org/search?q=matthew%20honnibal
+  49. https://explosion.ai/blog/spacy-v2-1
+  50. https://explosion.ai/blog/year-in-review-2017
+  51. https://explosion.ai/blog/spacy-v2-pipelines-extensions
+  52. https://explosion.ai/blog/pseudo-rehearsal-catastrophic-forgetting
+  53. https://explosion.ai/blog/prodigy-annotation-tool-active-learning
+  54. https://explosion.ai/blog/supervised-learning-data-collection
+  55. mailto:contact@explosion.ai
+  56. https://twitter.com/explosion_ai
+  57. https://github.com/explosion
+  58. https://youtube.com/c/explosionai
+  59. https://explosion.ai/feed

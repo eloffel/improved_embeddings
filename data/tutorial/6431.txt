@@ -1,0 +1,456 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]insight data
+     * [9]about insight
+     * [10]data science
+     * [11]data engineering
+     * [12]health data
+     * [13]ai
+     * [14]data pm
+     * [15]devops
+     __________________________________________________________________
+
+heart disease diagnosis with deep learning
+
+state-of-the-art results with 60x fewer parameters
+
+   [16]go to the profile of chuck-hou yee
+   [17]chuck-hou yee (button) blockedunblock (button) followfollowing
+   sep 12, 2017
+   [1*-oy5t4gg5dgez0f-bzfe6q.png]
+
+   [18]chuck-hou yee holds a phd in physics. at insight, he built deep
+   learning models that achieved state of the art medical segmentation
+   with 60   less parameters. this work was made possible by [19]paperspace
+   gpus, and resulted in an open research contribution to the [20]ai open
+   network.
+
+   want to learn applied artificial intelligence from top professionals in
+   silicon valley or new york? learn more about the [21]artificial
+   intelligence program.
+     __________________________________________________________________
+
+   a human heart is an astounding machine that is designed to continually
+   function for up to a century without failure. one of the key ways to
+   measure how well your heart is functioning is to compute its
+   [22]ejection fraction: after your heart relaxes at its diastole to
+   fully fill with blood, what percentage does it pump out upon
+   contracting to its systole? the first step of getting at this metric
+   relies on segmenting (delineating the area of) the ventricles from
+   cardiac images.
+
+   during my time at the [23]insight ai program in nyc, i decided to
+   tackle the [24]right ventricle segmentation challenge from the calls
+   for research hosted by the [25]ai open network. i managed to achieve
+   state of the art results with over an order of magnitude less
+   parameters; below is a brief account of how.
+
+problem description
+
+   from the call for research:
+
+     develop a system capable of automatic segmentation of the right
+     ventricle in images from cardiac magnetic resonance imaging (mri)
+     datasets. until now, this has been mostly handled by classical image
+     processing methods. modern deep learning techniques have the
+     potential to provide a more reliable, fully-automated solution.
+
+   all three winners of the [26]left ventricle segmentation challenge
+   sponsored by kaggle in 2016 were deep learning solutions. however,
+   segmenting the right ventricle (rv) is more challenging, because of:
+
+     [the] presence of trabeculations in the cavity with signal
+     intensities similar to that of the myocardium; the complex crescent
+     shape of the rv, which varies from the base to the apex; difficulty
+     in segmenting the apical image slices; considerable variability in
+     shape and intensity of the chamber among subjects, notably in
+     pathological cases, etc.
+
+   medical jargon aside, it   s simply more difficult to identify the rv.
+   the left ventricle is a thick-walled circle while the right ventricle
+   is an irregularly shaped object with thin walls that sometimes blends
+   in with the surrounding tissue. here are the manually drawn contours
+   for the inner and outer walls (endocardium and epicardium) of the right
+   ventricle in an mri snapshot:
+   [1*d0e5idrx7f5wkwbck_ewla.png]
+
+   that was an easy example. this one is more difficult:
+   [1*kv3yk9zmj3i3zo9dag3pxg.png]
+
+   and this one is downright challenging to the untrained eye:
+   [1*sxrhzqvx3m0rjjujfb4epg.png]
+
+   human physicians in fact take twice as long to determine the rv volume
+   and produce results that have 2   3 times the variability as compared to
+   the left ventricle [[27]1]. the goal of this work is to build a deep
+   learning model that automates right ventricle segmentation with high
+   accuracy. the output of the model is a segmentation mask, a
+   pixel-by-pixel mask that indicates whether each pixel is part of the
+   right ventricle or the background.
+
+the dataset
+
+   the biggest challenge facing a deep learning approach to this problem
+   is the small size of the dataset. the dataset (accessible [28]here)
+   contains only 243 physician-segmented images like those shown above
+   drawn from the mris of 16 patients. there are 3697 additional unlabeled
+   images, which may be useful for unsupervised or semi-supervised
+   techniques, but i set those aside in this work since this was a
+   supervised learning problem. the images are 216  256 pixels in size.
+
+   given the small dataset, one would suspect generalization to unseen
+   images would be hopeless! this unfortunately is the typical situation
+   in medical settings where labeled data is expensive and hard to come
+   by. the standard procedure is to apply affine transformations to the
+   data: random rotations, translations, zooms and shears. in addition, i
+   implemented elastic deformations, which locally stretch and compress
+   the image [[29]2].
+   [1*uhebkvzc6ysoqb2mphaxea.png]
+
+   the goal of such augmentations is to prevent the network from
+   memorizing just the training examples, and to force it to learn that
+   the rv is a solid, crescent-shaped object that can appear in a variety
+   of orientations. in my training framework, i apply the transformations
+   on the fly so the network sees new random transformations during each
+   epoch.
+
+   as is also common, there is a large class imbalance since most of the
+   pixels are background. normalizing the pixel intensities to lie between
+   0 and 1, we see that across the entire dataset, only 5% of the pixels
+   are part of the rv cavity.
+   [1*rmgc3ms1vcxtu0yje4ncba.png]
+
+   in constructing the id168s, i experimented with reweighting
+   schemes to balance the class distributions, but ultimately found that
+   the unweighted average performed best.
+
+   during training, 20% of the images were split out as a validation set.
+   the organizers of the rv segmentation challenge have a separate test
+   set consisting of another 514 mri images derived from a separate set of
+   32 patients, for which i submitted predicted contours for final
+   evaluation.
+
+   also needed is a way to quantify model performance on the dataset. the
+   organizers of the segmentation challenge chose to use the [30]dice
+   coefficient. the model will output a mask x delineating what it thinks
+   is the rv, and the dice coefficient compares it to the mask y produced
+   by a physician via:
+   [1*36egqgefjgkfds7zwm_njq.png]
+   [1*1r4sbci0opd1cgexna9j3q.png]
+
+   the metric is (twice) the ratio of the intersection over the sum of
+   areas. it is 0 for disjoint areas, and 1 for perfect agreement. for
+   example, model performance is written as 0.82 (0.23), where the
+   parentheses contain the standard deviation.
+
+   let   s look at model architectures.
+
+u-net: the baseline model
+
+   since we only had a 4 week timeframe to complete our projects at
+   insight, i wanted to get a baseline model up and running as quickly as
+   possible. i chose to implement a u-net model, proposed by ronneberger,
+   fischer and brox [[31]3], since it had been quite successful in
+   biomedical segmentation tasks. u-net models are promising, as the
+   authors were able to train their network with only 30 images by using
+   aggressive image augmentation combined with pixel-wise reweighting.
+   (interested readers: here are reviews for id98 [[32]4] and conventional
+   [[33]5] approaches.)
+
+   the u-net architecture consists of a contracting path, which collapses
+   an image down into a set of high level features, followed by an
+   expanding path which uses the feature information to construct a
+   pixel-wise segmentation mask. the unique aspect of the u-net are its
+      copy and concatenate    connections which pass information from early
+   feature maps to the later portions of the network tasked with
+   constructing the segmentation mask. the authors propose that these
+   connections allow the network to incorporate high level features and
+   pixel-wise detail simultaneously.
+
+   the architecture we used is shown here:
+   [1*t_duvw_skocyhbgdgckgkg.png]
+
+   we adapted the u-net to our purposes by reducing the number of
+   downsampling layers in the original model from four to three, since our
+   images were roughly half the size as those considered by the u-net
+   authors. we also zero pad our convolutions (as opposed to unpadded) to
+   keep the images the same size. the model was implemented in keras.
+
+   without image augmentation, the u-net reaches a dice coefficient of
+   0.99 (0.01) on the training dataset, which means the model has
+   sufficient capacity to capture the complexity of the rv segmentation
+   problem. however, the validation dice score is 0.79 (0.24), so the
+   u-net is overfitting pretty strongly. image augmentation improves
+   generalization and raises the validation accuracy to 0.82 (0.23), at
+   the cost of decreasing the training accuracy to 0.91 (0.06).
+
+   how can we further reduce the training-validation gap? as andrew ng
+   describes in this excellent [34]talk, we can get more data (not
+   possible), regularize (dropout and batch id172 did not help),
+   or try a new model architecture.
+
+dilated u-nets: global receptive fields
+
+   segmenting organs requires some knowledge of the global context of how
+   organs are arranged relative to one another. it turned out that the
+   neurons in even the deepest part of the u-net only had receptive fields
+   that spanned 68  68 pixels. no part of the network could    see    the
+   entire image and integrate global context in producing the segmentation
+   mask. the reasoning is that the network would have no understanding
+   that there is only one right ventricle in a human. for example, it
+   misclassifies the blob marked with an arrow in the following image:
+   [1*nhmwkp1gufxvmekuh-ewtg.png]
+
+   rather than adding two more downsampling layers at the cost of a huge
+   increase in network parameters, i used dilated convolutions [[35]6] to
+   increase the receptive fields of the network.
+   [1*4p9tcmsmibnjwc3rir-6zw.png]
+
+   dilated convolutions space out the pixels summed over in the
+   convolution by a dilation factor. in the diagram above, the
+   convolutions in the bottom layer are regular 3  3 convolutions. the next
+   layer up, we have dilated the convolutions by a factor of 2, so their
+   effective receptive field in the original image is 7  7. the top layer
+   convolutions are dilated by 4, producing 15  15 receptive fields.
+   dilated convolutions produce exponentially expanding receptive fields
+   with depth, in contrast to linear expansion for stacked conventional
+   convolutions.
+   [1*opsf7mis33hinyjd7yyvhq.png]
+
+   schematically, the convolutional layers producing the feature maps
+   marked in yellow are replaced with dilated convolutions in the u-net.
+   the innermost neurons now have receptive fields spanning the entire
+   input image. i call this a    dilated u-net   .
+
+   quantitatively, the dilated u-net does improve performance, reaching a
+   validation dice score of 0.85 (0.19), while maintaining training
+   performance at 0.92 (0.08)!
+
+dilated densenets: multiple scales at once
+
+   loosely inspired by [36]tensor networks used in physics, i decided to
+   experiment with a novel architecture for image segmentation, which i
+   will call a    dilated densenet   . it combines two ideas, dilated
+   convolutions and densenets [[37]7], to drastically reduce network depth
+   and parameters.
+
+   for segmentation tasks, we need both global context and information
+   from multiple scales to produce the pixel-wise mask. what if we relied
+   entirely on dilated convolutions to generate global context, rather
+   than downsampling to    smash    the image down to a small height and
+   width? now that the convolutional layers all have the same size, we can
+   apply the key idea of the densenet architecture and use    copy and
+   concatenate    connections between all the layers. the result is a
+   dilated densenet:
+   [1*vryndhaefk6pwmebrkzltg.png]
+
+   in densenets, the output of the first convolutional layer is fed as
+   input into all subsequent layers, and similarly with the second, third,
+   and so forth. the authors show that densenets have several advantages:
+
+     they alleviate the vanishing-gradient problem, strengthen feature
+     propagation, encourage feature reuse, and substantially reduce the
+     number of parameters.
+
+   at publication, densenets had surpassed the state of the art on the
+   cifar and id163 classification benchmarks. however, densenets have a
+   serious drawback: they are extremely memory intensive since the number
+   of feature maps grow quadratically with network depth. the authors used
+      transition layers    to cut down on the number of feature maps midway
+   through the network in order to train their 40, 100 and 250 layer
+   densenets.
+
+   dilated convolutions eliminates the need for such deep networks: the
+   exponentially expanding receptive fields means only 8 layers are needed
+   to    see    an entire 256  256 image. in the final convolutional layer of a
+   dilated densenet, the neurons have access to global context as well as
+   features produced at every prior scale in the network. in our work, we
+   use an 8-layer dilated densenet and a growth rate 24. here   s the
+   astounding aspect: the dilated densenet is extremely parameter
+   efficient. our final model uses only 190k parameters, a point we   ll
+   come back to when discussing results.
+
+   the dilated densenets do well, achieving a dice score of 0.87 (0.15) on
+   the validation set, with a training accuracy of 0.91 (0.10), while
+   remaining extremely parameter efficient!
+
+results
+
+   having an estimate of human performance provides a roadmap for how to
+   evaluate model performance. researchers estimated that humans achieve
+   dice scores of 0.90 (0.10) on rv segmentation tasks (we write the
+   standard deviation in parentheses) [[38]8]. the leading published model
+   is a fully convolutional network (fcn) by tran [[39]9] with 0.84 (0.21)
+   accuracy on the test set.
+
+   the models i developed had surpassed state of the art on the validation
+   set, and was approaching human performance! however, the real benchmark
+   was an evaluation of their performance on the held out test set. also,
+   the numbers quoted above were for the endocardium         what would be the
+   performance on the epicardium? i trained a separate model on the
+   epicardium, submitted my segmentation contours to the organizers and
+   hoped for the best.
+
+   here are the results, first for the endocardium (bolded numbers are
+   state of the art):
+   [1*cwpwsrjdij8vdq_jdgcgta.png]
+
+   and for the epicardium:
+   [1*ny2dxvlqtno-qfzwqhimew.png]
+
+   the dilated u-net matches the state of the art on the endocardium, and
+   exceeds it on the epicardium. the dilated densenet is close behind,
+   with only 190k parameters. that   s a 60   reduction in model size from
+   the published benchmark!
+
+   interested readers can find the details of the training methodology,
+   learning curves, analysis of edge cases, as well as the id168s,
+   id173 schemes and hyperparameters considered, in the original
+   post located [40]here.
+
+summary and future directions
+
+   the performance of deep learning models can sometimes seem magical, but
+   they are the result of careful engineering. even in regimes with small
+   datasets, well-selected data augmentation schemes allow deep learning
+   models to generalize well. reasoning through how data flows through a
+   model leads to architectures well-matched to the problem domain.
+
+   following these ideas, i was able to create models that achieve state
+   of the art for segmenting the right ventricle in cardiac mris. i   m
+   especially excited to see how dilated densenets will perform on other
+   image segmentation benchmarks and explore permutations of its
+   architecture.
+
+   i   ll end with some thoughts for the future:
+     * reweight the dataset to emphasize the difficult-to-segment apical
+       slices.
+     * explore multistep (localization, registration, segmentation)
+       pipelines.
+     * optimize for the ejection fraction, the final figure of merit, in a
+       production system.
+     * memory-efficient dilated densenets: densely connected networks are
+       notorious for requiring immense amounts of memory. the tensorflow
+       implementation is particularly egregious, limiting us to 8 layers
+       with a batch size of 3 images on a 16gb gpu. switching to the
+       recently-proposed memory efficient implementation [[41]10], would
+       allow for deeper architectures.
+     __________________________________________________________________
+
+   this work was made possible by [42]paperspace gpus and the code is
+   located at the github repository [43]here.
+
+   want to learn applied artificial intelligence from top professionals in
+   silicon valley or new york? learn more about the [44]artificial
+   intelligence program.
+
+   are you a company working in ai and would like to get involved in the
+   insight ai fellows program? feel free to [45]email us.
+
+   thanks to [46]emmanuel ameisen and [47]ross fadely.
+     * [48]artificial intelligence
+     * [49]machine learning
+     * [50]deep learning
+     * [51]health technology
+     * [52]insight ai
+
+   (button)
+   (button)
+   (button) 2.5k claps
+   (button) (button) (button) 9 (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [53]go to the profile of chuck-hou yee
+
+[54]chuck-hou yee
+
+     (button) follow
+   [55]insight data
+
+[56]insight data
+
+   insight fellows program - your bridge to a thriving career
+
+     * (button)
+       (button) 2.5k
+     * (button)
+     *
+     *
+
+   [57]insight data
+   never miss a story from insight data, when you sign up for medium.
+   [58]learn more
+   never miss a story from insight data
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://blog.insightdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/c2d92c27e730
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://blog.insightdatascience.com/heart-disease-diagnosis-with-deep-learning-c2d92c27e730&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://blog.insightdatascience.com/heart-disease-diagnosis-with-deep-learning-c2d92c27e730&source=--------------------------nav_reg&operation=register
+   8. https://blog.insightdatascience.com/?source=logo-lo_ohzn7xeh1erw---d02e65779d7b
+   9. https://blog.insightdatascience.com/tagged/about-insight
+  10. https://blog.insightdatascience.com/tagged/insight-data-science
+  11. https://blog.insightdatascience.com/tagged/insight-data-engineering
+  12. https://blog.insightdatascience.com/tagged/insight-health-data
+  13. https://blog.insightdatascience.com/tagged/insight-ai
+  14. https://blog.insightdatascience.com/tagged/insight-data-pm
+  15. https://blog.insightdatascience.com/tagged/insight-devops
+  16. https://blog.insightdatascience.com/@chuckyee?source=post_header_lockup
+  17. https://blog.insightdatascience.com/@chuckyee
+  18. http://chuckyee.github.io/
+  19. https://www.paperspace.com/
+  20. http://ai-on.org/projects/cardiac-mri-segmentation.html
+  21. http://insightdata.ai/?utm_source=heartseg&utm_medium=blog&utm_content=top
+  22. https://en.wikipedia.org/wiki/ejection_fraction
+  23. http://insightdata.ai/
+  24. http://ai-on.org/projects/cardiac-mri-segmentation.html
+  25. http://ai-on.org/
+  26. https://www.kaggle.com/c/second-annual-data-science-bowl
+  27. https://dx.doi.org/10.1007/s00330-011-2152-0
+  28. http://www.litislab.fr/?sub_project=how-to-download-the-data
+  29. https://www.microsoft.com/en-us/research/publication/best-practices-for-convolutional-neural-networks-applied-to-visual-document-analysis/
+  30. https://en.wikipedia.org/wiki/s  rensen   dice_coefficient
+  31. https://link.springer.com/chapter/10.1007/978-3-319-24574-4_28
+  32. https://arxiv.org/abs/1701.03056
+  33. https://link.springer.com/article/10.1007/s10334-015-0521-4
+  34. https://youtu.be/f1ka6a13s9i?t=22m44s
+  35. https://arxiv.org/abs/1511.07122
+  36. https://journals.aps.org/prl/abstract/10.1103/physrevlett.101.110501
+  37. https://arxiv.org/abs/1608.06993
+  38. http://www.sciencedirect.com/science/article/pii/s1361841514001509
+  39. https://arxiv.org/abs/1604.00494
+  40. https://chuckyee.github.io/cardiac-segmentation/
+  41. https://arxiv.org/abs/1707.06990
+  42. https://www.paperspace.com/
+  43. https://github.com/chuckyee/cardiac-segmentation
+  44. http://insightdata.ai/?utm_source=heartseg&utm_medium=blog&utm_content=bottom
+  45. mailto:info@insightdata.ai
+  46. https://medium.com/@emmanuelameisen?source=post_page
+  47. https://medium.com/@rossfadely?source=post_page
+  48. https://blog.insightdatascience.com/tagged/artificial-intelligence?source=post
+  49. https://blog.insightdatascience.com/tagged/machine-learning?source=post
+  50. https://blog.insightdatascience.com/tagged/deep-learning?source=post
+  51. https://blog.insightdatascience.com/tagged/health-technology?source=post
+  52. https://blog.insightdatascience.com/tagged/insight-ai?source=post
+  53. https://blog.insightdatascience.com/@chuckyee?source=footer_card
+  54. https://blog.insightdatascience.com/@chuckyee
+  55. https://blog.insightdatascience.com/?source=footer_card
+  56. https://blog.insightdatascience.com/?source=footer_card
+  57. https://blog.insightdatascience.com/
+  58. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  60. https://medium.com/p/c2d92c27e730/share/twitter
+  61. https://medium.com/p/c2d92c27e730/share/facebook
+  62. https://medium.com/p/c2d92c27e730/share/twitter
+  63. https://medium.com/p/c2d92c27e730/share/facebook

@@ -1,0 +1,2125 @@
+published as a conference paper at iclr 2017
+
+query-reduction networks
+for id53
+
+minjoon seo1
+university of washington1, seoul national university2, allen institute for arti   cial intelligence3
+{minjoon, ali, hannaneh}@cs.washington.edu, shmsw25@snu.ac.kr
+
+hannaneh hajishirzi1
+
+ali farhadi1,3
+
+sewon min2
+
+7
+1
+0
+2
+
+ 
+
+b
+e
+f
+4
+2
+
+ 
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+6
+v
+2
+8
+5
+4
+0
+
+.
+
+6
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+in this paper, we study the problem of id53 when reasoning over
+multiple facts is required. we propose query-reduction network (qrn), a variant
+of recurrent neural network (id56) that effectively handles both short-term (local)
+and long-term (global) sequential dependencies to reason over multiple facts. qrn
+considers the context sentences as a sequence of state-changing triggers, and
+reduces the original query to a more informed query as it observes each trigger
+(context sentence) through time. our experiments show that qrn produces the
+state-of-the-art results in babi qa and dialog tasks, and in a real goal-oriented
+dialog dataset. in addition, qrn formulation allows parallelization on id56   s time
+axis, saving an order of magnitude in time complexity for training and id136.
+
+1
+
+introduction
+
+in this paper, we address the problem of id53 (qa) when reasoning over multiple
+facts is required. for example, consider we know that frogs eat insects and flies are
+insects. then answering do frogs eat flies? requires reasoning over both of the above
+facts. id53, more speci   cally context-based qa, has been extensively studied in
+machine comprehension tasks (richardson et al., 2013; hermann et al., 2015; hill et al., 2016;
+rajpurkar et al., 2016). however, most of the datasets are primarily focused on lexical and syntactic
+understanding, and hardly concentrate on id136 over multiple facts. recently, several datasets
+aimed for testing multi-hop reasoning have emerged; among them are story-based qa (weston et al.,
+2016) and the dialog task (bordes and weston, 2016).
+recurrent neural network (id56) and its variants, such as long short-term memory
+(lstm) (hochreiter and schmidhuber, 1997) and gated recurrent unit (gru) (cho et al., 2014),
+are popular choices for modeling natural language. however, when used for multi-hop reasoning in
+id53, purely id56-based models have shown to perform poorly (weston et al., 2016).
+this is largely due to the fact that id56   s internal memory is inherently unstable over a long term. for
+this reason, most recent approaches in the literature have mainly relied on global attention mechanism
+and shared external memory (sukhbaatar et al., 2015; peng et al., 2015; xiong et al., 2016; graves
+et al., 2016). the attention mechanism allows these models to focus on a single sentence in each layer.
+they can sequentially read multiple relevant sentences from the memory with multiple layers to
+perform multi-hop reasoning. however, one major drawback of these standard attention mechanisms
+is that they are insensitive to the time step (memory address) of the sentences when accessing them.
+our proposed model, query-reduction network1(qrn), is a single recurrent unit that addresses
+the long-term dependency problem of most id56-based models by simplifying the recurrent update,
+while taking the advantage of id56   s capability to model sequential data (figure 1). qrn considers
+the context sentences as a sequence of state-changing triggers, and transforms (reduces) the original
+query to a more informed query as it observes each trigger through time. for instance in figure 1b, the
+original question, where is the apple?, cannot be directly answered by any single sentence
+from the story. after observing the    rst sentence, sandra got the apple there, qrn
+transforms the original question to a reduced query where is sandra?, which is presumably
+
+1code is publicly available at: seominjoon.github.io/qrn/
+
+1
+
+published as a conference paper at iclr 2017
+
+(a) qrn unit
+
+(b) 2-layer qrn
+
+(c) overview
+
+figure 1: (1a) qrn unit, (1b) 2-layer qrn on 5-sentence story, and (1c) entire qa system (qrn and
+input / output modules). x, q,   y are the story, question and predicted answer in natural language, respectively.
+x = (cid:104)x1, . . . , xt(cid:105), q,   y are their corresponding vector representations (upright font).    and    are update gate
+and reduce functions, respectively.   y is assigned to be h2
+5, the local query at the last time step in the last layer.
+also, red-colored text is the inferred meanings of the vectors (see    interpretations    of section 5.3).
+
+easier to answer than the original question given the context provided by the    rst sentence.2 unlike
+id56-based models, qrn   s candidate state (  ht in figure 1a) does not depend on the previous hidden
+state (ht   1). compared to memory-based approaches (weston et al., 2015; sukhbaatar et al., 2015;
+peng et al., 2015; kumar et al., 2016; xiong et al., 2016), qrn can better encodes locality information
+because it does not use a global memory access controller (circle nodes in figure 2), and the query
+updates are performed locally.
+in short, the main contribution of qrn is threefold. first, qrn is a simple variant of id56 that
+reduces the query given the context sentences in a differentiable manner. second, qrn is situated
+between the attention mechanism and id56, effectively handling time dependency and long-term
+dependency problems of each technique, respectively. hence it is well-suited for sequential data with
+both local and global interactions (note that qrn is not the replacement of id56, which is arguably
+better for modeling complex local interactions). third, unlike most id56-based models, qrn can be
+parallelized over time by computing candidate reduced queries (  ht) directly from local input queries
+(qt) and context sentence vectors (xt). in fact, the parallelizability of qrn implies that qrn does
+not suffer from the vanishing gradient problem of id56, hence effectively addressing the long-term
+dependency. we experimentally demonstrate these contributions by achieving the state-of-the-art
+results on story-based qa and interactive dialog datasets.
+
+2 model
+
+in story-based qa (or dialog dataset), the input is the context as a sequence of sentences (story or
+past conversations) and a question in natural language (equivalent to the user   s last utterance in the
+dialog). the output is the predicted answer to the question in natural language (the system   s next
+utterance in the dialog). the only supervision provided during training is the answer to the question.
+in this paper we particularly focus on end-to-end solutions, i.e., the only supervision comes from
+questions and answers, and we restrain from using manually de   ned rules or external language
+resources, such as lexicon or dependency parser. let (cid:104)x1, . . . , xt(cid:105) denote the sequence of sentences,
+where t is the number of sentences in the story, and let q denote the question. let   y denote the
+predicted answer, and y denote the true answer. our proposed system for end-to-end qa task is
+divided into three modules (figure 1c): input module, qrn layers, and output module.
+
+input module.
+input module maps each sentence xt and the question q to d-dimensional vector
+space, xt     rd and qt     rd. we adopt a previous solution for the input module (details in section 5).
+
+2this mechanism is akin to logic regression in situation calculus (reiter, 2001).
+
+2
+
+        1       +                           1                         sandra	got	the	apple	there.    "    "    ""    "$    ""    "$where issandra?sandradropped	theapple    $    $    $"    $$    ""    $$daniel	tookthe	applethere.    &    &    &"    &$    ""    &$where isdaniel?sandrawent	tothe	hallway.                     "       $    ""       $where isdaniel?danieljourneyed	tothe	garden.    (    (    ("    ($    ""    ($       +where isdaniel?where	isthe	apple?    gardenwhere issandra?            input	moduleoutput	moduleqrn    "                    (published as a conference paper at iclr 2017
+
+qrn layers. qrn layers use the sentence vectors and the question vector from the input module to
+obtain the predicted answer in vector space,   y     rd. a qrn layer refers to the recurrent application
+of a qrn unit, which can be considered as a variant of id56 with two inputs, two outputs, and a
+hidden state (reduced query), all of which operate in vector space. the details of the qrn module is
+explained throughout this section (2.1, 2.2).
+
+output module. output module maps   y obtained from qrn to a natural language answer   y.
+similar to the input module, we adopt a standard solution for the output module (details in section 5).
+we    rst formally de   ne the base model of a qrn unit, and then we explain how we connect the input
+and output modules to it (section 2.1). we also present a few extensions to the network that can
+improve qrn   s performance (section 2.2). finally, we show that qrn can be parallelized over time,
+giving computational advantage over most id56-based models by one order of magnitude (section 3).
+
+2.1 qrn unit
+
+as an id56-based model, qrn is a single recurrent unit that updates its hidden state (reduced query)
+through time and layers. figure 1a depicts the schematic structure of a qrn unit, and figure 1b
+demonstrates how layers are stacked. a qrn unit accepts two inputs (local query vector qt     rd
+and sentence vector xt     rd), and two outputs (reduced query vector ht     rd, which is similar
+to the hidden state in id56, and the sentence vector xt from the input without modi   cation). the
+local query vector is not necessarily identical to the original query (question) vector q. in order
+to compute the outputs, we use update gate function    : rd    rd     [0, 1] and reduce function
+   : rd    rd     rd. intuitively, the update gate function measures the relevance between the sentence
+and the local query and is used to update the hidden state. the reduce function transforms the local
+query input to a candidate state which is a new reduced (easier) query given the sentence. the outputs
+are calculated with the following equations:
+
+zt =   (xt, qt) =   (w(z)(xt     qt) + b(z))
+  ht =   (xt, qt) = tanh(w(h)[xt; qt] + b(h))
+ht = zt
+
+  ht + (1     zt)ht   1
+
+(1)
+(2)
+(3)
+
+where zt is the scalar update gate,   ht is the candidate reduced query, and ht is the    nal reduced
+query at time step t,   (  ) is sigmoid activation, tanh(  ) is hyperboolic tangent activation (applied
+element-wise), w(z)     r1  d, w(h)     rd  2d are weight matrices, b(z)     r, b(h)     rd are bias
+terms,     is element-wise vector multiplication, and [; ] is vector concatenation along the row. as
+a base case, h0 = 0. here we have explicitly de   ned    and   , but they can be any reasonable
+differentiable functions.
+the update gate is similar to the global attention mechanism (sukhbaatar et al., 2015; xiong et al.,
+2016) in that it measures the similarity between the sentence (a memory slot) and the query. however,
+a signi   cant difference is that the update gate is computed using sigmoid (  ) function on the current
+memory slot only (hence internally embedded within the unit), whereas the global attention is
+computed using softmax function over the entire memory (hence globally de   ned). the update gate
+can be rather considered as local sigmoid attention.
+
+stacking layers we just showed the single-layer case of qrn, but qrn with multiple layers is
+able to perform reasoning over multiple facts more effectively, as shown in the example of figure 1b.
+in order to stack several layers of qrn, the outputs of the current layer are used as the inputs to
+the next layer. that is, using superscript k to denote the current layer   s index (assuming 1-based
+indexing), we let qk+1
+t . note that xt is passed to the next layer without any modi   cation, so
+we do not put a layer index on it.
+
+t = hk
+
+bi-direction. so far we have assumed that qrn only needs to look at past sentences, whereas
+often times, query answers can depend on future sentences. for instance, consider a sentence    john
+dropped the football.    at time t. then, even if there is no mention about the    football    in the past
+(at time i < t), it can be implied that    john    has the    football    at the current time t. in order to
+      
+h t in both forward and backward directions,
+incorporate the future dependency, we obtain
+
+      
+h t and
+
+3
+
+published as a conference paper at iclr 2017
+
+respectively, using equation 3. we then add them together to get qt for the next layer. that is,
+
+(4)
+for layer indices 1     k     k     1. note that the variables w(z), b(z), w(h), b(h) are shared between
+the two directions.
+
+t =
+
+qk+1
+
+t +
+
+      
+h k
+
+      
+h k
+t
+
+connecting input and output modules. figure 1c depicts how qrn is connected with the input
+and output modules. in the    rst layer of qrn, q1
+t = q for all t, where q is obtained from the input
+module by processing the natural language question input q. xt is also obtained from xt by the same
+input module. the output at the last time step in the last layer is passed to the output module. that is,
+t where k represent the number of layers in the network. then the output module gives the
+  y = hk
+predicted answer   y in natural language.
+
+2.2 extensions
+
+here we introduce a few extensions of qrn, and later in our experiments, we test qrn   s performance
+with and without each of these extensions.
+
+reset gate.
+inspired by gru (cho et al., 2014), we found that it is useful to allow the qrn unit
+to reset (nullify) the candidate reduced query (i.e.,   ht) when necessary. for this we use a reset gate
+function    : rd    rd     [0, 1], which can be de   ned similarly to the update gate function:
+
+rt =   (xt, qt) =   (w(r)(xt     qt) + b(r))
+
+where w(r)     r1  d is a weight matrix, and b(r)     r is a bias term. equation 3 is rewritten as
+
+note that we do not use the reset gate in the last layer.
+
+ht = ztrt
+
+  ht + (1     zt)ht   1.
+
+(5)
+
+(6)
+
+vector gates. as in lstm and gru, update and reset gates can be vectors instead of scalar values
+for    ne-controlled gating. for vector gates, we modify the row dimension of weights and biases in
+equation 1 and 5 from 1 to d. then we obtain zt, rt     rd (instead of zt, rt     r), and these can be
+element-wise multiplied (   ) instead of being broadcasted in equation 3 and 6.
+
+3 parallelization
+
+an important advantage of qrn is that the recurrent updates in equation 3 and 5 can be computed in
+parallel across time. this is in contrast with most id56-based models that cannot be parallelized,
+where computing the candidate hidden state at time t explicitly requires the previous hidden state.
+in qrn, the    nal reduced queries (ht) can be decomposed into computing over candidate reduced
+queries (  ht), without looking at the previous reduced query. here we primarily show that the
+query update in equation 3 can be parallelized by rewriting the equation with matrix operations.
+the extension to equation 5 is straightforward. the proof for qrn with vector gates is shown in
+appendix b. the recursive de   nition of equation 3 can be explicitly written as
+
+       zi
+
+t(cid:88)
+
+i=1
+
+          t(cid:88)
+
+j=i+1
+
+ht =
+
+1     zj
+
+  hi =
+
+exp
+
+log (1     zj)
+
+  hi.
+
+let bi = log(1     zi) for brevity. then we can rewrite equation 7 as the following equation:
+
+          zi
+                                       
+                     
+                     
+                     
+
+                     
+
+2
+
+1
+
+  h(cid:62)
+  h(cid:62)
+  h(cid:62)
+...
+  h(cid:62)
+
+3
+
+t
+
+z1
+z2
+z3
+
+zt
+
+(7)
+
+(8)
+
+j=i+1
+
+i=1
+
+t(cid:88)
+
+       t(cid:89)
+                                       
+                     
+                     exp
+
+                      =
+
+                     
+
+2
+
+1
+
+h(cid:62)
+h(cid:62)
+h(cid:62)
+...
+h(cid:62)
+
+3
+
+t
+
+b2 + b3
+
+0
+b2
+...
+j=2 bj
+
+(cid:80)t
+
+       . . .       
+       . . .       
+. . .       
+0
+...
+...
+...
+. . .
+j=4 bj
+
+0
+
+(cid:80)t
+
+      
+0
+b3
+...
+j=3 bj
+
+(cid:80)t
+
+4
+
+published as a conference paper at iclr 2017
+
+(a) qrn
+
+(b) n2n (sukhbaatar et al., 2015)
+
+(c) dmn+ (xiong et al., 2016)
+
+figure 2: the schematics of qrn and the two state-of-the-art models, end-to-end memory networks (n2n)
+and improved dynamic memory networks (dmn+), simpli   ed to emphasize the differences among the models.
+agru is a variant of gru where the update gate is replaced with soft attention, proposed by kumar et al. (2016).
+for qrn and dmn+, only forward direction arrows are shown.
+
+1 ; . . . ; h(cid:62)
+
+t ] be a t -by-d matrix where the transposes ((cid:62)) of the column vectors ht
+let h = [h(cid:62)
+are concatenated across row. we similarly de   ne   h from   ht. also, let z = [z1; . . . ; zt ] and
+b = [0; b2; . . . ; bt ] be column vectors (note that we use 0 instead of b1). then equation 8 is:
+
+h = [l     exp (l [b     l(cid:48)])]
+
+z       h
+
+(9)
+where l, l(cid:48)     rt  t are lower and strictly lower triangular matrices of 1   s, respectively,     is element-
+wise multiplication, and b is a matrix where t b   s are tiled across the column, i.e. b = [b, . . . , b]    
+rt  t , and similarly z = [z, . . . , z]     rt  d. all implicit operations are id127s.
+with reasonable n (batch size), d and t (e.g. n, d, t = 100), matrix operations in equation 9 can
+be comfortably computed in most modern gpus.
+
+(cid:104)
+
+(cid:105)
+
+4 related work
+
+qrn is inspired by id56-based models with gating mechanism, such as lstm (hochreiter and
+schmidhuber, 1997) and gru (cho et al., 2014). while gru and lstm use the previous hidden
+state and the current input to obtain the candidate hidden state, qrn only uses the current two inputs
+to obtain the candidate reduced query (equivalent to candidate hidden state). we conjecture that
+this not only gives computational advantage via parallelization, but also makes training easier, i.e.,
+avoiding vanishing gradient (which is critical for long-term dependency), over   tting (by simplifying
+the model), and converging to local minima.
+the idea of structurally simplifying (constraining) id56s for learning longer-term patterns has been
+explored in recent previous work, such as structurally constrained recurrent network (mikolov
+et al., 2015) and strongly-typed recurrent neural network (stid56) (balduzzi and ghifary, 2016).
+qrn is similar to stid56 in that both architectures use gating mechanism, and the gates and the
+candidate hidden states do not depend on the previous hidden states, which simpli   es the recurrent
+relation. however, qrn can be distinguished from stid56 in three ways. first, qrn   s update
+gate simulates attention mechanism, measuring the relevance between the input sentence and query.
+on the other hand, the gates in stid56 can be considered as the simpli   cation of lstm/gru
+by removing their dependency on previous hidden state. second, qrn is an id56 that is natively
+compatible with context-based qa tasks, where the qrn unit accepts two inputs, i.e. each context
+sentence and query. this is distinct from stid56 which has only one input. third, we show that
+qrn is timewise-parallelizable on gpus. our parallelization algorithm is also applicable to stid56.
+end-to-end memory network (n2n) (sukhbaatar et al., 2015) uses external memory with multi-layer
+attention mechanism to focus on sentences that are relevant to the question. there are two key
+differences between n2n and our qrn. first, n2n summarizes the entire memory in each layer
+to control the attention in the next layer (circle nodes in figure 2b). instead, qrn does not have
+any controller node (figure 2a) and is able to focus on relevant sentences through the update gate
+that is internally embodied within its unit. second, n2n adds time-dependent trainable weights
+to the sentence representations to model the time dependency of the sentences (as discussed in
+section 1). qrn does not need such additional weights as its inherent id56 architecture allows qrn
+
+5
+
+    "    #    $q       "    #    $qrn       $#=    )    ""    #"    $"    "#    ""    #"    ##qrnqrnqrnqrnqrn    "    #    $    =    (    "    #    $       "    +=    #           "    #    $    =    (agruagruagrugru       "    #    $agruagruagrugru       "    +=    #published as a conference paper at iclr 2017
+
+to effectively model the time dependency. neural reasoner (peng et al., 2015) and gated end-to-
+end memory network (perez and liu, 2016)) are variants of memn2n that share its fundamental
+characteristics.
+improved dynamic memory network (dmn+) (xiong et al., 2016) uses the hybrid of the attention
+mechanism and the id56 architecture to model the sequence of sentences. it consists of two distinct
+grus, one for the time axis (rectangle nodes in figure 2c) and one for the layer axis (circle nodes in
+figure 2c). note that the update gate of the gru for the time axis is replaced with external softmax
+attention weights. dmn+ uses the time-axis gru to summarizes the entire memory in each layer,
+and then the layer-axis gru controls the attention weights in each layer. in contrast, qrn is simply
+a single recurrent unit without any controller node.
+
+5 experiments
+
+5.1 data
+
+babi story-based qa dataset
+babi story-based qa dataset (weston et al., 2016) is composed of
+20 different tasks (appendix a), each of which has 1,000 (1k) synthetically-generated story-question
+pair. a story can be as short as two sentences and as long as 200+ sentences. a system is evaluated
+on the accuracy of getting the correct answers to the questions. the answers are single words or
+lists (e.g.    football, apple   ). answering questions in each task requires selecting a set of relevant
+sentences and applying different kinds of logical reasoning over them. the dataset also includes 10k
+training data (for each task), which allows training more complex models. note that dmn+ (xiong
+et al., 2016) only reports on the 10k dataset.
+
+babi dialog dataset babi dialog dataset (bordes and weston, 2016) consists of 5 different tasks
+(table 3), each of which has 1k synthetically-generated goal-oriented dialogs between a user and the
+system in the domain of restaurant reservation. each dialog is as long as 96 utterances and comes with
+external knowledge base (kb) providing information of each restaurant. the authors also provide
+out-of-vocabulary (oov) version of the dataset, where many of the words and kb keywords in
+test data are not seen during training. a system is evaluated on the accuracy of its response to each
+utterance of the user, choosing from up to 2500 possible candidate responses. a system is required
+not only to understand the user   s request but also refer to previous conversations in order to obtain
+the context information of the current conversation.
+
+dstc2 (task 6) dialog dataset bordes and weston (2016) transformed the second dialog state
+tracking challenge (dstc2) dataset (henderson et al., 2014) into the same format as the babi
+dialog dataset, for the measurement of performance on a real dataset. each dialog can be as long
+as 800+ utterances, and a system needs to choose from 2407 possible candidate responses for each
+utterance of the user. note that the evaluation metric of the original dstc2 is different from that of
+the transformed dstc2, so previous work on the original dstc2 should not be directly compared to
+our work. we will refer to this transformed dstc2 dataset by    task 6    of dialog dataset.
+
+5.2 model details
+
+input module.
+in the input module, we are given sentences (previous conversations in dialog) xt
+and a question (most recent user utterance) q, and we want to obtain their vector representations,
+xt, q     rd. we use a trainable embedding matrix a     rd  v to encode the one-hot vector of each
+word xtj in each sentence xt into a d-dimensional vector xtj     rd. then the sentence representation
+xt is obtained by position encoder (weston et al., 2015). the same encoder with the same embedding
+matrix is also used to obtain the question vector q from q.
+
+output module for story-based qa.
+in the output module, we are given the vector representation
+of the predicted answer   y and we want to obtain the natural language form of the answer,   y.
+we use a v -way single-layer softmax classi   er to map   y to a v -dimensional sparse vector,   v =
+
+softmax(cid:0)w(y)   y(cid:1)     rv , where w(y)     rv   d is a weight matrix. then the    nal answer   y is
+
+simply the argmax word in   v. to handle questions with multiple-word answers, we consider each
+
+6
+
+published as a conference paper at iclr 2017
+
+of them as a single word that contains punctuations such as space and comma, and put it in the
+vocabulary.
+
+output module for dialog. we use a    xed number single-layer softmax classi   ers, each of which
+is similar to that of the sotry-based qa model, to sequentially output each word of the system   s
+response. while it is similar in spirit to the id56 decoder (cho et al., 2014), our output module does
+not have a recurrent hidden state or gating mechanism. instead, it solely uses the    nal ouptut of the
+qrn,   y, and the current word output to in   uence the prediction of the next word among possible
+candidates.
+
+   
+
+training. we withhold 10% of the training for development. we use the hidden state size of 50 by
+deafult. batch sizes of 32 for babi story-based qa 1k, babi dialog and dstc2 dialog, and 128 for
+babi qa 10k are used. the weights in the input and output modules are initialized with zero mean
+and the standard deviation of 1/
+d. weights in the qrn unit are initialized using techniques by
+glorot and bengio (2010), and are tied across the layers. forget bias of 2.5 is used for update gates
+(no bias for reset gates). l2 weight decay of 0.001 (0.0005 for qa 10k) is used for all weights. the
+id168 is the cross id178 between   v and the one-hot vector of the true answer. the loss is
+minimized by stochastic id119 for maximally 500 epochs, but training is early stopped if
+the loss on the development data does not decrease for 50 epochs. the learning rate is controlled by
+adagrad (duchi et al., 2011) with the initial learning rate of 0.5 (0.1 for qa 10k). since the model
+is sensitive to the weight initialization, we repeat each training procedure 10 times (50 times for 10k)
+with the new random initialization of the weights and report the result on the test data with the lowest
+loss on the development data.
+
+5.3 results.
+
+we compare our model with baselines and previous state-of-the-art models on story-based and dialog
+tasks (table 1). these include lstm (hochreiter and schmidhuber, 1997), end-to-end memory
+networks (n2n) (sukhbaatar et al., 2015), dynamic memory networks (dmn+) (xiong et al., 2016),
+gated end-to-end memory networks (gmemn2n) (perez and liu, 2016), and differentiable neural
+computer (dnc) (graves et al., 2016).
+
+story-based qa. table 1(top) reports the summary of results of our model (qrn) and previous
+work on babi qa (task-wise results are shown in table 2 in appendix). in 1k data, qrn   s    2r    (2
+layers + reset gate + d = 50) outperforms all other models by a large margin (2.8+%). in 10k dataset,
+the average accuracy of qrn   s    6r200    (6 layers + reset gate + d = 200) model outperforms all
+previous models by a large margin (2.5+%), achieving a nearly perfect score of 99.7%.
+
+dialog. table 1(bottom) reports the summary of the results of our model (qrn) and previous work
+on babi dialog and task 6 dialog (task-wise results are shown in table 3 in appendix). as done in
+previous work (bordes and weston, 2016; perez and liu, 2016), we also report results when we use
+   match    for dialogs.    match    is the extension to the model which additionally takes as input whether
+each answer candidate matches with context (more details on appendix). qrn outperforms previous
+work by a large margin (2.0+%) in every comparison.
+
+ablations. we test four types of ablations (also discussed in section 2.2): number of layers (1,
+2, 3, or 6), reset gate (r), and gate vectorization (v) and the dimension of the hidden vector (50,
+100). we show a subset of combinations of the ablations for babi qa in table 1 and table 2;
+other combinations performed poorly and/or did not give interesting observations. according to the
+ablation results, we infer that: (a) when the number of layers is only one, the model lacks reasoning
+capability. in the case of 1k dataset, when there are too many layers (6), it seems correctly training
+the model becomes increasingly dif   cult. in the case of 10k dataset, many layers (6) and hidden
+dimensions (200) helps reasoning, most notably in dif   cult task such as task 16. (b) adding the reset
+gate helps. (c) including vector gates hurts in 1k datasets, as the model either over   ts to the training
+data or converges to local minima. on the other hand, vector gates in babi story-based qa 10k
+dataset sometimes help. (d) increasing the dimension of the hidden state to 100 in the dialog   s task 6
+(dstc2) helps, while there is not much improvement in the dialog   s task 1-5. it can be hypothesized
+that a larger hidden state is required for real data.
+
+7
+
+published as a conference paper at iclr 2017
+
+task
+
+# failed
+average error rates
+
+task
+
+1k
+previous works
+
+lstm n2n dmn+    gmemn2n
+
+20
+51.3
+
+10
+15.2
+
+16
+33.2
+
+10
+12.7
+
+qrn
+3r
+5
+11.3
+
+2r
+7
+9.9
+plain
+
+babi dialog average error rates
+babi dialog (oov) average error rates
+dstc2 dialog average error rates
+
+previous works
+
+n2n gmemn2n
+13.9
+30.3
+58.9
+
+14.3
+27.9
+52.6
+
+qrn
+
+2r
+5.5
+11.1
+49.5
+
+2r100
+5.5
+11.1
+48.9
+
+6.7
+11.2
+59.0
+
+10k
+previous works
+
+qrn
+n2n dmn+ gmemn2n dnc 6r200
+
+3
+4.2
+
+1
+2.8
+
+with match
+
+previous works
+
+n2n+ gmemn2n+
+
+3
+3.7
+
+5.4
+10.3
+51.3
+
+0
+0.3
+
+2
+3.8
+
+qrn
+2r+
+1.5
+2.3
+49.3
+
+table 1: (top) babi qa dataset (weston et al., 2016): number of failed tasks and average error rates (%).
+    is obtained from github.com/therne/dmn-tensorflow. (bottom) babi dialog and dstc2 dialog
+dataset (bordes and weston, 2016) average error rates (%) of qrn and previous work (lstm, n2n, dmn+,
+gmemn2n, and dnc). for qrn, the    rst number (1, 2, 3) indicates the number of layers,    r    means the reset
+gate is used, and the last number (100, 200), if exists, indicates the dimension of the hidden state, where the
+default value is 50.    +    indicates that    match    (see appendix for details) is used. the task-wise results are shown
+in appendices: table 2 (babi qa) and table 3 (dialog datasets). see section 5.3 for details.
+
+task 2: two supporting facts
+sandra picked up the apple there.
+sandra dropped the apple.
+daniel grabbed the apple there.
+sandra travelled to the bathroom.
+daniel went to the hallway.
+where is the apple?
+
+task 3: displaying options
+resto-paris-expen-frech-8stars?
+do you have something else?
+sure let me    nd another option.
+resto-paris-expen-frech-5stars?
+no this does not work for me.
+sure let me    nd an other option.
+
+z1
+0.00
+0.41
+1.00
+0.00
+0.00
+1.00
+
+z1
+0.95
+0.83
+0.88
+0.01
+0.01
+
+layer 1
+      r 1       r 1
+0.98
+0.89
+0.92
+0.05
+0.98
+0.93
+0.63
+0.18
+0.24
+0.62
+hallway
+layer 1
+      r 1       r 1
+0.96
+1.00
+0.00
+0.99
+0.00
+0.00
+0.96
+1.00
+0.00
+0.14
+0.00
+0.00
+
+z2
+0.91
+0.00
+0.12
+0.91
+0.00
+0.12
+
+layer 2
+
+layer 2
+
+z2
+0.00
+0.01
+0.00
+0.02
+0.83
+
+task 15: deduction
+mice are afraid of wolves.
+gertrude is a mouse.
+cats are afraid of sheep.
+winona is a mouse.
+sheep are afraid of wolves.
+what is gertrude afraid of?
+
+z1
+0.11
+0.77
+0.01
+0.14
+0.02
+
+layer 1
+      r 1       r 1
+0.13
+0.99
+0.96
+0.99
+0.07
+0.99
+0.77
+0.85
+0.98
+0.27
+
+task 6: dstc2 dialog
+spanish food.
+you are lookng for a spanish restaurant right?
+yes.
+what part of town do you have in mind?
+i don   t care.
+what price range would you like?
+i don   t care.
+
+wolf
+layer 1
+      r 1       r 1
+0.00
+0.07
+0.49
+0.02
+0.33
+1.00
+0.41
+0.73
+1.00
+0.02
+0.52
+0.46
+
+z1
+0.84
+0.98
+0.01
+0.20
+0.00
+0.72
+
+layer 2
+
+z2
+0.78
+0.00
+0.03
+0.05
+0.05
+
+layer 2
+
+z2
+0.82
+0.75
+0.13
+0.11
+0.00
+0.72
+
+what do you think of this? resto-paris-expen-french-4stars
+
+api call spanish r-location r-price
+
+figure 3: (top) babi qa dataset (weston et al., 2016) visualization of update and reset gates in qrn    2r    model
+(bottom two) babi dialog and dstc2 dialog dataset (bordes and weston, 2016) visualization of update and
+reset gates in qrn    2r    model. note that the stories can have as many as 800+ sentences; we only show part of
+them here. more visualizations are shown in figure 4 (babi qa) and figure 5 (dialog datasets).
+
+parallelization. we implement qrn with and without parallelization in tensorflow (abadi et al.,
+2016) on a single titan x gpu to qunaitify the computational gain of the parallelization. for qrn
+without parallelization, we use the id56 library provided by tensorflow. qrn with parallelization
+gives 6.2 times faster training and id136 than qrn without parallelization on average. we expect
+that the speedup can be even higher for datasets with larger context.
+
+interpretations. an advantage of qrn is that the intermediate query updates are interpretable.
+figure 1 shows intermediate local queries (qk
+t ) interpreted in natural language, such as    where is
+sandra?   . in order to obtain these, we place a decoder on the input question embedding q and add
+its loss for recovering the question to the classi   cation loss (similarly to peng et al. (2015)). we
+then use the same decoder to decode the intermediate queries. this helps us understand the    ow of
+information in the networks. in figure 1, the question where is apple? is transformed into
+where is sandra? at t = 1. at t = 2, as sandra dropped the apple, the apple is no
+more relevant to sandra. we obtain where is daniel? at time t = 3, and it is propagated until
+t = 5, where we observe a sentence (fact) that can be used to answer the query.
+
+visualization. figure 3 shows vizualization of the (scalar) magnitudes of update and reset gates on
+story sentences and dialog utterances. more visualizations are shown in appendices: figure 4 and
+figure 5. in figure 3, we observe high values on facts that provide information to answer question
+(the system   s next utterance for dialog). in qa task 2 example (top left), we observe high update
+gate values in the    rst layer on facts that state who has the apple, and in the second layer, the high
+update gate values are on those that inform where that person went to. we also observe that the
+forward reset gate at t = 2 in the    rst layer (      r 1
+2) is low, which is signifying that apple no more
+
+8
+
+published as a conference paper at iclr 2017
+
+belongs to sandra. in dialog task 3 (bottom left), the model is able to infer that three restaurants
+are already recommended so that it can recommend another one. in dialog task 6 (bottom), the model
+focuses on the sentences containing spanish, and does not concentrate much on other facts such as
+i don   t care.
+
+6 conclusion
+in this paper, we introduce query-reduction network (qrn) to answer context-based questions
+and carry out conversations with users that require multi-hop reasoning. we show the state-of-the-
+art results in the three datasets of story-based qa and dialog. we model a story or a dialog as a
+sequence of state-changing triggers and compute the    nal answer to the question or the system   s next
+utterance by recurrently updating (or reducing) the query. qrn is situated between the attention
+mechanism and id56, effectively handling time dependency and long-term dependency problems
+of each technique, respectively. it addresses the long-term dependency problem of most id56s by
+simplifying the recurrent update, in which the candidate hidden state (reduced query) does not depend
+on the previous state. moreover, qrn can be parallelized and can address the well-known problem
+of id56   s vanishing gradients.
+
+acknowledgments
+
+this research was supported by the nsf (iis 1616112), allen institute for ai (66-9175), allen
+distinguished investigator award, google research faculty award, and samsung gro award. we
+thank the anonymous reviewers for their helpful comments.
+
+references
+mart  n abadi, ashish agarwal, paul barham, eugene brevdo, zhifeng chen, craig citro, greg s
+corrado, andy davis, jeffrey dean, matthieu devin, et al. tensor   ow: large-scale machine
+learning on heterogeneous distributed systems. arxiv preprint arxiv:1603.04467, 2016.
+
+david balduzzi and muhammad ghifary. strongly-typed recurrent neural networks. in icml, 2016.
+
+antoine bordes and jason weston. learning end-to-end goal-oriented dialog. arxiv preprint
+
+arxiv:1605.07683, 2016.
+
+kyunghyun cho, bart van merri  nboer, caglar gulcehre, dzmitry bahdanau, fethi bougares, holger
+schwenk, and yoshua bengio. learning phrase representations using id56 encoder-decoder for
+id151. in emnlp, 2014.
+
+john duchi, elad hazan, and yoram singer. adaptive subgradient methods for online learning and
+
+stochastic optimization. jmlr, 12, 2011.
+
+xavier glorot and yoshua bengio. understanding the dif   culty of training deep feedforward neural
+
+networks. in jmlr, 2010.
+
+alex graves, greg wayne, malcolm reynolds, tim harley, ivo danihelka, agnieszka grabska-
+barwi  nska, sergio g  mez colmenarejo, edward grefenstette, tiago ramalho, john agapiou, et al.
+hybrid computing using a neural network with dynamic external memory. nature, 2016.
+
+matthew henderson, blaise thomson, and jason williams. the second dialog state tracking challenge.
+
+in sigdial, 2014.
+
+karl moritz hermann, tomas kocisky, edward grefenstette, lasse espeholt, will kay, mustafa
+
+suleyman, and phil blunsom. teaching machines to read and comprehend. in nips, 2015.
+
+felix hill, antoine bordes, sumit chopra, and jason weston. the goldilocks principle: reading
+
+children   s books with explicit memory representations. in iclr, 2016.
+
+sepp hochreiter and j  rgen schmidhuber. long short-term memory. neural computation, 9(8):
+
+1735   1780, 1997.
+
+9
+
+published as a conference paper at iclr 2017
+
+ankit kumar, ozan irsoy, jonathan su, james bradbury, robert english, brian pierce, peter ondruska,
+ishaan gulrajani, and richard socher. ask me anything: dynamic memory networks for natural
+language processing. in icml, 2016.
+
+tomas mikolov, armand joulin, sumit chopra, michael mathieu, and marc   aurelio ranzato.
+
+learning longer memory in recurrent neural networks. in iclr 2015 workshop, 2015.
+
+baolin peng, zhengdong lu, hang li, and kam-fai wong. towards neural network-based reasoning.
+
+arxiv preprint arxiv:1508.05508, 2015.
+
+julien perez and fei liu. gated end-to-end memory networks. arxiv preprint arxiv:1610.04211,
+
+2016.
+
+pranav rajpurkar, jian zhang, konstantin lopyrev, and percy liang. squad: 100,000+ questions for
+
+machine comprehension of text. in emnlp, 2016.
+
+raymond reiter. knowledge in action. mit press, 1st edition, 2001.
+
+matthew richardson, christopher jc burges, and erin renshaw. mctest: a challenge dataset for the
+
+open-domain machine comprehension of text. in emnlp, 2013.
+
+sainbayar sukhbaatar, arthur szlam, jason weston, and rob fergus. end-to-end memory networks.
+
+in nips, 2015.
+
+jason weston, sumit chopra, and antoine bordes. memory networks. in iclr, 2015.
+
+jason weston, antoine bordes, sumit chopra, and tomas mikolov. towards ai-complete question
+
+answering: a set of prerequisite toy tasks. in iclr, 2016.
+
+caiming xiong, stephen merity, and richard socher. dynamic memory networks for visual and
+
+textual id53. in icml, 2016.
+
+10
+
+published as a conference paper at iclr 2017
+
+a task-wise results
+
+here we provide detailed per-task breakdown of our results in qa(table 2) and dialog datasets
+(table 3).
+
+task
+
+1: single supporting fact
+2: two supporting facts
+3: three supporting facts
+4: two arg relations
+5: three arg relations
+6: yes/no questions
+7: counting
+8: lists/sets
+9 : simple negation
+10: inde   nite knowledge
+11: basic coreference
+12: conjunction
+13: compound coreference
+14: time reasoning
+15: basic deduction
+16: basic induction
+17: positional reasoning
+18: size reasoning
+19: path    nding
+20: agents motivations
+# failed
+average error rates (%)
+
+previous works
+
+lstm n2n dmn+ gmemn2n
+50.0
+80.0
+80.0
+39.0
+30.0
+52.0
+51.0
+55.0
+36.0
+56.0
+38.0
+26.0
+6.0
+73.0
+79.0
+77.0
+49.0
+48.0
+92.0
+9.0
+20
+51.3
+
+0.1
+18.8
+31.7
+17.5
+12.9
+2.0
+10.1
+6.1
+1.5
+2.6
+3.3
+0.0
+0.5
+2.0
+1.8
+51.0
+42.6
+9.2
+90.6
+0.2
+10
+15.2
+
+1.3
+72.3
+73.3
+26.9
+25.6
+28.5
+21.9
+21.9
+42.9
+23.1
+4.3
+3.5
+7.8
+61.9
+47.6
+54.4
+44.1
+9.1
+90.8
+2.2
+16
+33.2
+
+0.0
+8.1
+38.7
+0.4
+1.0
+8.4
+17.8
+12.5
+10.7
+16.5
+0.0
+0.0
+0.0
+1.2
+0.0
+0.1
+41.7
+9.2
+88.5
+0.0
+10
+12.7
+
+1k
+
+1r
+0.0
+65.7
+68.2
+0.0
+1.0
+0.1
+10.9
+6.8
+0.0
+0.8
+11.3
+0.0
+5.3
+20.2
+39.4
+50.6
+40.6
+8.2
+88.8
+0.0
+12
+20.1
+
+qrn
+3r
+0.0
+0.5
+1.2
+0.7
+1.2
+1.2
+9.4
+3.7
+0.0
+0.0
+0.0
+0.0
+0.3
+3.8
+0.0
+53.4
+51.8
+8.8
+90.7
+0.3
+5
+11.3
+
+2r
+0.0
+0.7
+5.7
+0.0
+1.1
+0.9
+9.6
+5.6
+0.0
+0.0
+0.0
+0.0
+0.0
+0.8
+0.0
+53.0
+34.4
+7.9
+78.7
+0.2
+7
+9.9
+
+2
+0.0
+1.2
+17.5
+0.0
+1.1
+0.0
+11.1
+5.7
+0.6
+0.6
+0.5
+0.0
+5.5
+1.3
+0.0
+54.8
+36.5
+8.6
+89.8
+0.0
+8
+
+11.7
+
+6r
+0.0
+1.5
+15.3
+9.0
+1.3
+50.6
+13.1
+7.8
+32.7
+3.5
+0.9
+0.0
+8.9
+18.2
+0.1
+53.5
+52.0
+47.5
+88.6
+5.5
+13
+20.5
+
+6r200*
+13.1
+15.3
+13.8
+13.6
+12.5
+15.5
+15.3
+15.1
+13.0
+12.9
+14.7
+15.1
+13.7
+14.5
+14.7
+15.5
+13.0
+14.9
+13.6
+14.6
+20
+14.2
+
+10k
+
+previous works
+
+n2n dmn+ gmemn2n
+0.0
+0.3
+2.1
+0.0
+0.8
+0.1
+2.0
+0.9
+0.3
+0.0
+0.1
+0.0
+0.0
+0.1
+0.0
+51.8
+18.6
+5.3
+2.3
+0.0
+3
+4.2
+
+0.0
+0.3
+1.1
+0.0
+0.5
+0.0
+2.4
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+45.3
+4.2
+2.1
+0.0
+0.0
+1
+2.8
+
+0.0
+0.0
+4.5
+0.0
+0.2
+0.0
+1.8
+0.3
+0.0
+0.2
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+27.8
+8.5
+31.0
+0.0
+3
+3.7
+
+qrn
+3r
+0.0
+0.4
+0.0
+0.0
+0.3
+0.0
+0.7
+0.8
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+49.1
+5.8
+1.8
+27.9
+0.0
+3
+4.3
+
+2rv
+0.0
+0.8
+1.4
+0.0
+0.2
+0.0
+0.7
+0.6
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+50.4
+0.0
+8.4
+1.0
+0.0
+2
+3.2
+
+2r
+0.0
+0.4
+0.4
+0.0
+0.5
+0.0
+1.0
+1.4
+0.0
+0.0
+0.0
+0.0
+0.0
+0.2
+0.0
+49.4
+0.9
+1.6
+36.1
+0.0
+2
+4.6
+
+6r200
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.0
+0.4
+0.0
+0.0
+0.0
+0.0
+0.0
+0.1
+0.0
+0.0
+4.1
+0.7
+0.1
+0.0
+0
+0.3
+
+table 2: babi qa dataset (weston et al., 2016) error rates (%) of qrn and previous work: lstm (weston
+et al., 2016), end-to-end memory networks (n2n) (sukhbaatar et al., 2015), dynamic memory networks
+(dmn+) (xiong et al., 2016), gated end-to-end memory networks(gmemn2n) (perez and liu, 2016). results
+within each task of differentiable neural computer(dnc) were not provided in its paper graves et al. (2016)).
+for qrn, a number in the front (1, 2, 3, 6) indicates the number of layers. a number in the back (200) indicates
+the dimension of hidden vector, while the default value is 50.    r    indicates that the reset gate is used, and    v   
+indicates that the gates were vectorized.    *    indicates joint training.
+
+task
+
+1: issuing api calls
+2: updating api calls
+3: displaying options
+4: providing extra information
+5: conducting full dialogs
+average error rates (%)
+1 (oov): issuing api calls
+2 (oov): updating api calls
+3 (oov): displaying options
+4 (oov): providing extra information
+5 (oov): conducting full dialogs
+average error rates (%)
+6: dstc2 dialog
+
+previous works
+
+n2n gmemn2n
+0.1
+0.0
+25.1
+40.5
+3.9
+13.9
+27.7
+21.1
+25.6
+42.4
+34.5
+30.3
+58.9
+
+0.0
+0.0
+25.1
+42.8
+3.7
+14.3
+17.6
+21.1
+24.7
+43.0
+33.3
+27.9
+52.6
+
+plain
+
+1r
+0.02
+0.11
+12.6
+14.3
+9.4
+7.3
+6.6
+8.5
+12.4
+14.3
+19.5
+12.3
+49.9
+
+qrn
+
+2r
+0.0
+0.01
+12.6
+14.3
+0.6
+5.5
+6.6
+8.4
+12.4
+14.3
+14.0
+11.1
+49.5
+
+2r100
+0.0
+0.0
+12.6
+14.3
+0.7
+5.5
+6.6
+8.4
+12.4
+14.4
+13.71
+11.1
+48.9
+
+with match
+
+previous works
+
+n2n+ gmemn2n+
+0.0
+1.7
+25.1
+0.0
+6.6
+6.7
+3.5
+5.5
+24.8
+0.0
+22.3
+11.2
+59.0
+
+0.0
+0.0
+25.1
+0.0
+2.0
+5.4
+0.0
+5.8
+24.9
+0.0
+20.6
+10.3
+51.3
+
+qrn
+2r+
+0.0
+0.0
+7.6
+0.0
+0.0
+1.5
+0.0
+0.0
+7.7
+0.0
+4.0
+2.3
+49.3
+
+2rv
+0.0
+0.0
+12.6
+14.3
+0.9
+5.6
+6.6
+8.5
+12.5
+14.4
+13.6
+11.1
+53.8
+
+table 3: babi dialog and dstc2 dialog dataset (bordes and weston, 2016) average error rates (%) of qrn
+and previous work: end-to-end memory networks(n2n (bordes and weston, 2016)) and gated end-to-end
+memory networks(gmemn2n (perez and liu, 2016)). for qrn, a number in the front (1, 2, 3, 6) indicates the
+number of layers and a number in the back (100) indicates the dimension of hidden vector, while the default
+value is 50.    r    indicates that the reset gate is used,    v    indicates that the gates were vectorized, and    +    indicates
+that    match    was used.
+
+11
+
+published as a conference paper at iclr 2017
+
+b vector gate parallelization
+for vector gates, we have zt     rd instead of zt     r. therefore the following equation replaces
+equation 7:
+
+t(cid:88)
+
+i=1
+
+exp
+
+ht =
+
+                                 
+                  
+
+j=i+1 log(cid:0)1     zj
+(cid:80)t
+j=i+1 log(cid:0)1     zj
+(cid:80)t
+j=i+1 log(cid:0)1     zj
+(cid:80)t
+
+...
+
+1(cid:1)
+2(cid:1)
+d(cid:1)
+
+k is the k-th column vector of zj. let bij = log(1     zi
+
+j) for brevity. then, we can rewrite
+
+where zj
+equation 8 as following:
+
+j
+
+                     
+
+                     
+
+2
+
+1
+
+h(cid:62)
+h(cid:62)
+h(cid:62)
+...
+h(cid:62)
+
+                  exp
+
+                  
+
+                                 
+
+0
+b2j
+...
+k=2 bkj
+
+      
+0
+b3j
+...
+k=3 bkj
+
+      
+      
+0
+...
+k=4 bkj
+
+3
+
+t
+
+=
+
+b2j + b3j
+
+(cid:80)t
+
+(cid:80)t
+
+(cid:80)t
+t ] be a t -by-d matrix where the transposes ((cid:62)) of the column vectors ht are
+let h = [h(cid:62)
+concatenated across row. we similarly de   ne   h from   ht. also, let z = [z1; . . . ; zt ], and bd be a
+t -by-t matrix where t [0; b2d; . . . ; bt d]   s are tiled across the column.
+then equation 11 is:
+
+1 ; . . . ; h(cid:62)
+
+zt       h(cid:62)
+
+(11)
+
+...
+
+t
+
+3
+
+                     
+
+1
+
+z1       h(cid:62)
+z2       h(cid:62)
+z3       h(cid:62)
+
+2
+
+j
+
+                     
+
+                                      zi       hi
+                  
+                                 
+                  
+                  
+
+. . .       
+. . .       
+. . .       
+...
+...
+. . .
+
+0
+
+                           
+
+h =
+
+(cid:104)
+(cid:104)
+(cid:104)
+
+(cid:105)1
+(cid:105)2
+(cid:105)d
+
+                           
+
+[l     exp (l [b1     l(cid:48)])]
+[l     exp (l [b2     l(cid:48)])]
+
+z       h
+z       h
+
+...
+
+[l     exp (l [bd     l(cid:48)])]
+
+z       h
+
+(10)
+
+(12)
+
+where l, l(cid:48)     rt  t are lower and strictly lower triangular matrices of 1   s are tiled across the
+column. z = [z1, . . . , zd]     rt  d.
+
+c model details
+
+match. while similar in spirit, our    match    model is slightly different from previous work (bor-
+des and weston, 2016; perez and liu, 2016). we use answer candidate embedding matrix, and
+add 2 dimension of 0-1 matrix which expresses whether the answer candidate matches with
+any word in the paragraph and the question.
+in other words, the softmax is computed by
+able weight matrices, and m(y)     rv   2 is the 0-1 match matrix.
+
+  v = softmax(cid:0)w[w(y); m(y)]  y(cid:1)     rv , where w     rd  d and w(y)     rv   (d   2) are train-
+
+d visualizations
+
+visualization of story-based qa. figure 4 shows visualization of models for story-based qa
+tasks.
+in the task 3 (left), the model focuses on the facts that contain    football    in the    rst layer, and found
+out where mary journeyed to before the bathroom in the second layer. in task 7 (right), the model
+focuses on the facts that provide information about the location of sandra.
+
+12
+
+published as a conference paper at iclr 2017
+
+task 3: three supporting facts
+
+mary got the football there.
+
+john went back to the bedroom.
+mary journeyed to the of   ce.
+
+mary journeyed to the bathroom.
+
+mary dropped the football.
+
+layer 1
+      r 1       r 1
+0.0
+1.00
+0.72
+0.00
+0.06
+0.04
+0.89
+0.00
+0.01
+0.00
+
+z1
+0.82
+0.01
+0.01
+0.44
+0.62
+
+layer 2
+
+z2
+0.06
+0.57
+0.88
+0.05
+0.03
+
+where was the football before the bathroom?
+
+of   ce
+
+task 7: counting
+
+mary journeyed to the garden.
+mary journeyed to the of   ce.
+sandra grabbed the apple there.
+
+z1
+0.67
+0.91
+0.02
+0.26
+0.70
+how many objects is sandra carrying?
+
+sandra discarded the apple.
+daniel went to the bedroom.
+
+layer 1
+      r 1       r 1
+0.58
+0.08
+0.11
+0.44
+0.92
+0.34
+0.95
+0.61
+0.44
+0.99
+none
+
+layer 2
+
+z2
+0.12
+0.21
+0.89
+0.97
+0.03
+
+figure 4: visualization of update and reset gates in qrn    2r    model for on several tasks of babi qa
+(table 2). we do not put reset gate in the last layer. note that we only show some of recent sentences
+here, though the stories can have as many as 200+ sentences.
+
+task 1 issuing api calls
+
+good morning.
+
+hello what can i help you with today.
+
+can you book a table in rome with italian cuisine.
+
+i   m on it.
+
+how many people would you in your party.
+
+for four people please.
+
+which price range are you looking for.
+
+can you make a restaurant reservation for eight in a cheap price range in madrid
+
+task 1 issuing api calls
+
+i   m on it.
+
+any preference on a type of cuisine.
+
+i love british food.
+
+okay let me look into some options for you.
+
+<silence>
+
+api call british madrid eight cheap
+
+task 4 providing extra-information
+
+resto-paris-expen-spanish-8stars r-phone resto-paris-expen-spanish-8stars-phone
+resto-paris-expen-spanish-8stars r-address resto-paris-expen-spanish-8stars-address
+
+resto-paris-expen-spanish-8stars r-location paris
+resto-paris-expen-spanish-8stars r-number four
+
+resto-paris-expen-spanish-8stars r-price expensive
+
+resto-paris-expen-spanish-8stars r-rating 8
+
+what do you think of this option: resto-paris-expen-spanish-8stars
+
+let   s do it.
+
+great let me do the reservation.
+
+do you have its address.
+
+here it is: resto-paris-expen-spanish-8stars-address
+
+layer 1
+      r 1       r 1
+0.98
+0.34
+0.97
+0.12
+1.00
+0.87
+0.38
+0.97
+1.00
+0.00
+
+layer 1
+      r 1       r 1
+0.93
+1.00
+0.74
+1.00
+1.00
+0.11
+0.99
+0.99
+0.00
+0.00
+
+layer 1
+      r 1       r 1
+0.99
+0.84
+0.99
+1.00
+1.00
+0.01
+0.97
+0.95
+0.92
+0.05
+1.00
+0.91
+0.99
+0.93
+0.00
+1.00
+0.97
+0.99
+
+z1
+0.12
+0.97
+0.00
+0.73
+1.00
+
+z1
+0.00
+0.00
+0.00
+0.00
+1.00
+
+z1
+0.71
+1.00
+0.05
+0.02
+0.00
+0.38
+0.90
+0.00
+0.98
+
+layer 2
+
+z2
+0.20
+0.12
+1.00
+0.00
+0.41
+
+layer 2
+
+z2
+1.00
+0.00
+0.01
+0.57
+0.02
+
+layer 2
+
+z2
+0.36
+1.00
+0.00
+0.00
+0.00
+0.10
+1.00
+0.00
+0.00
+
+figure 5: visualization of update and reset gates in qrn    2r    model for on several tasks of babi dialog and
+dstc2 dialog (table 3). we do not put reset gate in the last layer. note that we only show some of recent
+sentences here, even the dialog has more sentences.
+
+visualization of dialog. figure 5 shows visualization of models for dialog tasks.
+in the    rst dialog of task 1, the model focuses on the user utterance that mentions the user   s desired
+cuisine and location, and the current query (user   s last utterance) informs the system of the number of
+people, so the system is able to learn that it now needs to ask the user about the desired price range.
+in the second dialog of task 1, the model focuses on the facts that provide information about the
+requests of the user. in task 4 (third), the model focuses on what restaurant a user is talking about and
+the information about the restaurant.
+
+13
+
+

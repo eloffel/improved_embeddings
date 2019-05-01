@@ -1,0 +1,1140 @@
+end-to-end lstm-based dialog control optimized with
+
+supervised and id23
+
+jason d. williams and geoffrey zweig
+
+microsoft research
+
+one microsoft way, redmond, wa 98052, usa
+
+6
+1
+0
+2
+
+ 
+
+n
+u
+j
+ 
+
+3
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+1
+v
+9
+6
+2
+1
+0
+
+.
+
+6
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+{jason.williams,gzweig}@microsoft.com
+
+abstract
+
+this paper presents a model for end-to-
+end learning of task-oriented dialog sys-
+tems. the main component of the model
+is a recurrent neural network (an lstm),
+which maps from raw dialog history di-
+rectly to a distribution over system actions.
+the lstm automatically infers a repre-
+sentation of dialog history, which relieves
+the system developer of much of the man-
+ual feature engineering of dialog state. in
+addition, the developer can provide soft-
+ware that expresses business rules and pro-
+vides access to programmatic apis, en-
+abling the lstm to take actions in the real
+world on behalf of the user. the lstm
+can be optimized using supervised learn-
+ing (sl), where a domain expert provides
+example dialogs which the lstm should
+imitate; or using id23
+(rl), where the system improves by in-
+teracting directly with end users. exper-
+iments show that sl and rl are comple-
+mentary: sl alone can derive a reasonable
+initial policy from a small number of train-
+ing dialogs; and starting rl optimization
+with a policy trained with sl substantially
+accelerates the learning rate of rl.
+
+introduction
+
+1
+consider how a person would teach another per-
+son to conduct a dialog in a particular domain.
+for example, how an experienced call center
+agent would help a new agent get started. first,
+the teacher would provide an orientation to what
+   agent controls    are available, such as how to
+look up a customer   s information, as well as a
+few business rules such as how to con   rm a cus-
+tomer   s identity, or a con   rmation message which
+
+must be read before performing a    nancial trans-
+action. second, the student would listen in to a
+few    good    dialogs from the teacher, with the goal
+of imitating them. third, the student would be-
+gin taking real calls, and the teacher would listen
+in, providing corrections where the student made
+mistakes. finally, the teacher would disengage,
+but the student would continue to improve on their
+own, through experience.
+
+in this paper, we provide a framework for build-
+ing and maintaining automated id71    
+or    bots        in a new domain that mirrors this pro-
+gression. first, a developer provides the set of ac-
+tions     both text actions and api calls     which a
+bot can invoke, and action masking code that indi-
+cates when an action is possible given the dialog
+so far. second, a domain expert     who need not
+be a developer or a machine learning expert     pro-
+vides a set of example dialogs, which a recurrent
+neural network learns to imitate. third, the bot
+conducts a few conversations, and the domain ex-
+pert makes corrections. finally, the bot interacts
+with users at scale, improving automatically based
+on a weak signal that indicates whether dialogs are
+successful.
+
+concretely, this paper presents a model of task-
+oriented dialog control which combines a trainable
+recurrent neural network with domain-speci   c
+software that encodes business rules and logic, and
+provides access to arbitrary apis for actions in the
+domain, such as ordering a taxi or reserving a table
+at a restaurant. the recurrent neural network maps
+directly from a sequence of user turns (represented
+by the raw words and extracted entities) to actions,
+and infers its own representation of state. as a
+result, minimal hand-crafting of state is required,
+and no design of a dialog act taxonomy is nec-
+essary. the neural network is trained both using
+supervised learning where    good    dialogs are pro-
+vided for the neural network to imitate, and using
+
+id23 where the bot tries new se-
+quences of actions, and improves based on a weak
+signal of whole-dialog success. the neural net-
+work can be re-trained in under one second, which
+means that corrections can be made on-line during
+a conversation, in real time.
+
+this paper is organized as follows. first, sec-
+tion 2 describes the model, and section 3 com-
+pares the model to related work. section 4 then
+presents an example application, which is opti-
+mized using supervised learning in section 5, and
+id23 in section 6. finally, sec-
+tion 7 concludes.
+
+2 model description
+
+the three components of our
+at a high level,
+model are a recurrent neural network;
+tar-
+geted and well-encapsulated software implement-
+ing domain-speci   c functions; and a language un-
+derstanding module. the software enables the de-
+veloper to express business logic by gating when
+actions are available; presents a coherent    sur-
+face    of apis available to the neural network, such
+as for placing a phone call; tracks entities which
+have been mentioned so far in the dialog; and pro-
+vides features to the neural network which the de-
+veloper feels may be useful for choosing actions.
+the recurrent neural network is responsible for
+choosing which action to take. the neural net-
+work chooses among action templates which ab-
+stract over entities, such as the text action    do
+you want to call <name>?   , or the api action
+placephonecall(<name>). because a re-
+current neural network has internal state, it can
+accumulate history suf   cient for choosing among
+action templates.
+
+the components and operational
+
+loop are
+shown in figure 1. the cycle begins when the user
+provides input (step 1). this input could be text
+typed in or text recognized from user speech. this
+text is passed to an entity extraction module (step
+2), which identi   es mentions of entities in user
+text     for example, identifying    jason williams   
+as a <name> entity. the    entity input    (step 3)
+is code provided by the developer which resolves
+entity mentions into grounded entities     in this ex-
+ample, it maps from the text    jason williams    to a
+speci   c row in a database (or a collection of rows
+in case there are multiple people with this name).
+the developer-provided code is stateful, which al-
+lows it to retain entities processed in step 3 for use
+
+later on in the dialog.
+
+in step 4, a feature vector is formed, which takes
+input from 4 sources. first, the entity extraction
+module (step 2) indicates which entity types were
+recognized. for example, the vector [1, 0] could
+indicate that a name has been recognized, but a
+type of phone (of   ce vs. mobile) has not. sec-
+ond, the entity input module can return arbitrary
+features speci   ed by the developer. in this exam-
+ple, this code returns features indicating that    ja-
+son williams    has matched one person, and that
+   jason williams    has two types of phones avail-
+able. the other two sources are described further
+below.
+
+step 5 is a recurrent neural network with a
+in our work, we chose a
+softmax output layer.
+long short-term memory (lstm) neural network
+(hochreiter and schmidhuber, 1997) because it
+has the ability to remember past observations ar-
+bitrarily long, and has been shown to yield supe-
+rior performance in many domains. the lstm
+takes the feature vector from step 4 as input, up-
+dates its internal state, and then outputs a dis-
+tribution over all template actions     i.e., actions
+with entity values replaced with entity names, as
+in    do you want to call <name>?   .
+in step 6,
+code from the developer outputs an action mask,
+indicating actions which are not permitted at the
+current timestep. for example, if a target phone
+number has not yet been identi   ed, the api action
+to place a phone call may be masked.1 in step 7,
+the mask is applied by clamping masked actions
+to a zero id203, and (linearly) re-normalizing
+the resulting vector into a id203 distribution
+(step 8).
+
+in step 9, an action is chosen from this proba-
+bility distribution. how the action is chosen de-
+pends on whether id23 (rl) is
+currently active. when rl is active, exploration is
+required, so in this case an action is sampled from
+the distribution. when rl is not active, the best
+action should be chosen, and so the action with
+the highest id203 is always selected.
+
+the identity of the template action selected is
+then used in 2 ways        rst, it is passed to the
+lstm in the next timestep; and second it is passed
+to the    entity output    developer code which substi-
+tutes in any template entities. in step 11, control
+branches depending on the type of the action: if it
+
+1the action mask is also provided as an input to the
+lstm, so it is aware of which actions are currently available;
+this is not shown in the diagram, for space.
+
+figure 1: operational loop. green trapezoids refer to programmatic code provided by the software
+developer. the blue boxes indicate the recurrent neural network, with trainable parameters. the orange
+box performs entity extraction. the vertical bars in steps 4 and 8 are a feature vector and a distribution
+over template actions, respectively. see text for a complete description.
+
+is an api text, the corresponding api call in the
+developer code is invoked (step 12), and any fea-
+tures it returns are passed to the lstm features in
+the next timestep. if the action is text, it is ren-
+dered to the user (step 13), and cycle then repeats.
+
+3 related work
+in comparing to past work, it is helpful to con-
+sider the two main problems that id71
+solve: state tracking, which refers to how informa-
+tion from the past is represented (whether human-
+interpretable or not), and action selection, which
+refers to how the mapping from state to action is
+constructed. we consider each of these in turn.
+
+3.1 state tracking
+in a task-oriented id71, state tracking
+typically consists of tracking the user   s goal such
+as the cuisine type and price range to use as search
+criteria for a restaurant, and the dialog history
+such as whether a slot has already been asked for
+or con   rmed, whether a restaurant has been of-
+fered already, or whether a user has a favorite cui-
+sine listed in their pro   le (williams and young,
+2007). most past work to building task-oriented
+id71 has used a hand-crafted state rep-
+resentation for both of these quantities     i.e., the
+set of possible values for the user   s goal and the
+dialog history are manually designed. for ex-
+ample, in the dialog state tracking challenge
+(dstc), the state consisted of a pre-speci   ed
+frame of name/value pairs that form the user   s
+goal (williams et al., 2016). many dstc entries
+learned from data how to update the state, using
+methods such as recurrent neural networks (hen-
+
+derson et al., 2014), but the schema of the state be-
+ing tracked was hand-crafted. manually designed
+frames are also used for tracking the user   s goal
+and dialog history in methods based on partially
+observable id100 (pomdps)
+(young et al., 2013), methods which learn from
+example dialogs (hurtado et al., 2005; lee et al.,
+2009), supervised learning/id23
+hybrid methods (henderson et al., 2005), and also
+in commercial and open source frameworks such
+as voicexml2 and aiml.3
+
+by contrast, our method automatically infers a
+representation of dialog history in the recurrent
+neural network which is optimal for predicting ac-
+tions to take at future timesteps. this is an im-
+portant contribution because designing an effec-
+tive state space can be quite labor intensive: omis-
+sions can cause aliasing, and spurious features can
+slow learning. worse, as learning progresses, the
+set of optimal history features may change. thus,
+the ability to automatically infer a dialog state
+representation in tandem with dialog policy opti-
+mization simpli   es developer work. on the other
+hand, like past work, the set of possible user goals
+in our method is hand-crafted     for many task-
+oriented systems, this seems desirable in order to
+support integration with back-end databases, such
+as a large table of restaurant names, price ranges,
+etc. therefore, our method delegates tracking of
+user goals to the developer-provided code.4
+
+2www.w3.org/tr/voicexml21
+3www.alicebot.org/aiml.html
+4when entity extraction is reliable     as it may be in text-
+based interfaces, which do not have id103 errors
+    a simple name/value store can track user goals, and this
+is the approach taken in our example application below. if
+
+> call jason williamsoffice or cellphone?> _entity extractionentity inputlstmrenormal-izationsample actionaction maskentity outputaction type?api call12345678910111213api calltextanother line of research has sought to predict
+the words of the next utterance directly from the
+history of the dialog, using a recurrent neural net-
+work trained on a large corpus of dialogs (lowe
+et al., 2015). this work does infer a representa-
+tion of state; however, our approach differs in sev-
+eral respects:    rst, in our work, entities are tracked
+separately     this allows generalization to entities
+which have not appeared in the training data; sec-
+ond, our approach includes    rst-class support for
+action masking and api calls, which allows the
+agent to encode business rules and take real-world
+actions on behalf of the system;    nally, in addition
+to supervised learning, we show how our method
+can also be trained using id23.
+
+3.2 action selection
+broadly speaking, three classes of methods for ac-
+tion selection have been explored in the literature:
+hand-crafting, supervised learning, and reinforce-
+ment learning.
+
+first, action selection may be hand-crafted,
+as
+in voicexml, aiml, or a number of
+long-standing research frameworks (larsson and
+traum, 2000; seneff and polifroni, 2000). one
+bene   t of hand-crafted action selection is that
+business rules can be easily encoded; however,
+hand-crafting action selection often requires spe-
+cialized rule engine skills, rules can be dif   cult
+to debug, and hand-crafted system don   t learn di-
+rectly from data.
+
+second, action selection may be learned from
+example dialogs using supervised learning (sl).
+for example, when a user input is received, a cor-
+pus of example dialogs can be searched for the
+most similar user input and dialog state, and the
+following system action can be output to the user
+(hurtado et al., 2005; lee et al., 2009; hori et
+al., 2009; lowe et al., 2015; hiraoka et al., 2016).
+the bene   t of this approach is that the policy can
+be improved at any time by adding more exam-
+ple dialogs, and in this respect it is rather easy to
+make corrections in sl-based systems. however,
+the system doesn   t learn directly from interaction
+with end users.
+
+finally, action selection may be learned through
+id23 (rl). in rl, the agent re-
+ceives a reward signal that indicates the quality of
+an entire dialog, but does not indicate what actions
+
+entity extraction errors are more prevalent, methods from the
+dialog state tracking literature for tracking user goals could
+be applied (williams et al., 2016).
+
+should have been taken. action selection via rl
+was originally framed as a markov decision pro-
+cess (levin et al., 2000), and later as a partially
+observable markov decision process (young et al.,
+2013). if the reward signal naturally occurs, such
+as whether the user successfully completed a task,
+then rl has the bene   t that it can learn directly
+from interaction with users, without additional la-
+beling. business rules can be incorporated, in a
+similar manner to our approach (williams, 2008).
+however, debugging an rl system is very dif   -
+cult     corrections are made via the reward signal,
+which many designers are unfamiliar with, and
+which can have non-obvious effects on the result-
+ing policy.
+in addition, in early stages of learn-
+ing, rl performance tends to be quite poor, requir-
+ing the use of practice users like crowd-workers or
+simulated users.
+
+in contrast to existing work, the neural network
+in our method can be optimized using both su-
+pervised learning and id23: the
+neural network is trained using id119,
+and optimizing with sl or rl simply requires a
+different gradient computation. to get started, the
+designer provides a set of training dialogs, and
+the recurrent neural network is trained to recon-
+struct these using supervised learning (section 5).
+this avoids poor out-of-the-box performance. the
+same neural network can then be optimized using
+a reward signal, via a policy gradient (section 6).
+as with sl-based approaches, if a bug is found,
+more training dialogs can be added to the train-
+ing set, so the system remains easy to debug. in
+addition, our implementation of rl ensures that
+the policy always reconstructs the provided train-
+ing set, so rl optimization will not contradict the
+training dialogs provided by the designer. finally,
+the action mask provided by the developer code
+allows business rules to be encoded.
+
+past work has explored an alternate way of
+combining supervised learning and reinforcement
+learning for learning dialog control (henderson et
+al., 2005). in that work, the goal was to learn from
+a    xed corpus with heterogeneous control policies
+    i.e., a corpus of dialogs from many different ex-
+perts. the reward function was augmented to pe-
+nalize policies that deviated from policies found in
+the corpus. our action selection differs in that we
+view the training corpus as being authoritative    
+our goal is to avoid any deviations from the train-
+ing corpus, and to use rl on-line to improve per-
+
+formance where the example dialogs provide in-
+suf   cient coverage.
+
+in summary, to our knowledge, this is the    rst
+end-to-end method for dialog control which can
+be trained with both supervised learning and re-
+inforcement learning, and which automatically in-
+fers a representation of dialog history while also
+explicitly tracking entities.
+
+4 example dialog task
+
+to test our approach, we created a dialog sys-
+tem for initiating phone calls to a contact in an
+address book, taken from the microsoft internal
+employee directory.
+in this system, a contact   s
+name may have synonyms (   michael    may also be
+called    mike   ), and a contact may have more than
+one phone number, such as    work   ,    mobile   , etc.
+these phone types have synonyms like    cell    for
+   mobile   .
+
+we started by de   ning entities. the user can say
+entities <name>, <phonetype>, and <yesno>. the
+system can also say these entities, plus three more:
+<canonicalname> and <canonicalphonetype> al-
+low the user to say a name as in    call hillary   
+and the system to respond with a canonical name
+as in    calling hillary clinton   ; and <phonetype-
+savail> which allows the system to say    which
+type of phone: mobile or work?   . for entity ex-
+traction, we trained a model using the language
+understanding intelligent service (williams et al.,
+2015).
+
+next we wrote the programmatic portion of the
+system. first, for tracking entities, we used a sim-
+ple approach where an entity is retained inde   -
+nitely after it is recognized, and replaced if a new
+value is observed. then we de   ned two api ac-
+tions: one api places a call, and the other commits
+to a phone type when a contact has only one phone
+type in the address book. we then de   ned fea-
+tures that the back-end can return to the lstm, in-
+cluding how many people match the most recently
+recognized name, and how many phone types that
+person has in the database. altogether, the dimen-
+sion of the lstm input was 112 (step 4, figure 1).
+finally, for the action mask, we allow any action
+for which the system has all entities     so    how
+can i help you?    is always available, but the lan-
+guage action    calling <name>, <phonetype>    is
+only available when the back-end is able to popu-
+late those two entities. altogether, the code com-
+prised 209 lines of python.
+
+how can i help you?
+call jason
+which type of phone: mobile or work?
+oh, actually call mike on his of   ce phone
+calling michael seltzer, work.
+placecall
+
+figure 2: one of the 21 example dialogs used for
+supervised learning training. for space, the entity
+tags that appear in the user and system sides of
+the dialogs have been removed     for example, call
+<name>jason</name> is shown as call jason.
+see appendix a for additional examples.
+
+we then wrote 21 example dialogs, covering
+scenarios such as when a spoken name has a sin-
+gle vs. multiple address book matches; when there
+are one vs. more than one phone types available;
+when the user speci   es a phone type and when not;
+when the user   s speci   ed phone type is not avail-
+able; etc. one example is given in figure 2, and
+several more are given in appendix a. the exam-
+ple dialogs had on average 7.0 turns; the longest
+was 11 turns and the shortest was 4 turns. there
+were 14 action templates (step 8, figure 1).
+
+in some of the experiments below, we make use
+of a hand-designed stochastic simulated user. at
+the start of a dialog, the simulated user randomly
+selected a name and phone type, including names
+and phone types not covered by the dialog sys-
+tem. when speaking, the simulated user can use
+the canonical name or a nickname; usually an-
+swers questions but can ignore the system; can
+provide additional information not requested; and
+can give up. the simulated user was parameter-
+ized by around 10 probabilities, and consisted of
+314 lines of python.
+
+for the lstm, we selected 32 hidden units,
+and initialized forget gates to zero, as suggested in
+(jozefowicz et al., 2015). the lstm was imple-
+mented using keras and theano (chollet, 2015;
+theano development team, 2016).
+
+5 optimizing with supervised learning
+
+5.1 prediction accuracy
+we    rst sought to measure whether the lstm
+trained with a small number of dialogs would suc-
+cessfully generalize, using a 21-fold leave-one-out
+cross validation experiment. in each folds, one di-
+
+set was reconstructed, or until the loss plateaued
+for 100 epochs. results are shown in table 1,
+which shows that the dnn was unable to recon-
+struct a training set with all 20 dialogs. upon in-
+vestigation, we found that some turns with differ-
+ent actions had identical local features, but differ-
+ent histories. since the dnn is unable to store
+history, these differences are indistinguishable to
+the dnn.5 the id56 also reconstructed the train-
+ing set; this suggests a line of future work to in-
+vestigate the relative bene   ts of different recurrent
+neural network architectures for this task.
+
+training dialogs dnn id56 lstm
+
+1
+10
+21
+
+(cid:88)
+(cid:88)
+  
+
+(cid:88)
+(cid:88)
+(cid:88)
+
+(cid:88)
+(cid:88)
+(cid:88)
+
+table 1: whether a dnn, id56 and lstm can
+reproduce a training set composed of 1, 10, and all
+21 training dialogs.
+
+5.3 active learning
+we next examined whether the model would be
+suitable for active learning (cohn et al., 1994).
+the goal of active learning is to reduce the number
+of labels required to reach a given level of perfor-
+mance. in active learning, the current model is run
+on (as yet) unlabeled instances, and the unlabeled
+instances for which the model is most uncertain
+are labeled next. the model is then re-built and
+the cycle repeats. for active learning to be effec-
+tive, the scores output by the model must be a good
+indicator of correctness. to assess this, we plotted
+a receiver operating characteristic (roc) curve, in
+figure 4. in this    gure, 20 dialogs were randomly
+assigned to a training set of 11 dialogs and a test
+set of 10 dialogs. the lstm was then estimated
+on the training set, and then applied to the test set,
+logging the highest scoring action and that action   s
+correctness. this whole process was repeated 10
+times, resulting in 590 correctly predicted actions
+and 107 incorrectly predicted actions.
+
+this    gure shows that the model scores are
+strong predictors of correctness.
+looking at
+the lowest scored actions, although incorrectly
+predicted actions make up just 15% of turns
+(107/(590+107)), 80% of the 20 actions with
+
+5of course it would be possible to hand-craft additional
+state features that encode the history, but our goal is to avoid
+hand-crafting the dialog state as much as possible.
+
+figure 3: average accuracy of leave-one-out
+cross-fold validation. the x axis shows the num-
+ber of training dialogs used to train the lstm. the
+y axis shows average accuracy on the one held-out
+dialog, where green bars show average accuracy
+measured per turn, and blue bars show average ac-
+curacy per dialog. a dialog is considered accurate
+if it contains zero prediction errors.
+
+alog was used as the test set, and four different
+training sets were formed consisting of 1, 2, 5, 10,
+and 20 dialogs. within each fold, a model was
+trained on each training set then evaluated on the
+held out test dialog.
+
+training was performed using categorical cross
+id178 as the loss, and with adadelta to smooth
+updates (zeiler, 2012). training was run until the
+training set was reconstructed.
+
+figure 3 shows per-turn accuracy and whole-
+dialog accuracy, averaged across all 21 folds. af-
+ter a single dialog, 70% of dialog turns are cor-
+rectly predicted. after 20 dialogs, this rises to
+over 90%, with nearly 50% of dialogs predicted
+completely correctly. while this is not suf   cient
+for deploying a    nal system, this shows that the
+lstm is generalizing well enough for preliminary
+testing after a small number of dialogs.
+
+5.2 bene   t of recurrency
+we next investigated whether the recurrency in the
+lstm was bene   cial, or whether a non-stateful
+deep neural network (dnn) would perform as
+well. we substituted the (stateful) lstm with a
+non-stateful dnn, with the same number of hid-
+den units as the lstm, id168, and gra-
+dient accumulator. we also ran the same exper-
+iment with a standard recurrent neural network
+(id56). training was run until either the training
+
+0%10%20%30%40%50%60%70%80%90%100%1251020accuracy on held-out dialogtraining dialogsturn-level accuracydialog-level accuracyent approach (williams, 1992). conceptually, in
+policy gradient-based rl, a model outputs a dis-
+tribution from which actions are sampled at each
+timestep. at the end of a dialog, the return for
+that dialog is computed, and the gradients of the
+probabilities of the actions taken with respect to
+the model weights are computed. the weights are
+then adjusted by taking a gradient step, weighted
+by the difference between the return of this dialog
+and the long-run average return. intuitively,    bet-
+ter    dialogs receive a positive gradient step, mak-
+ing the actions selected more likely; and    worse   
+dialogs receive a negative gradient step, making
+the actions selected less likely. policy gradient
+methods have been successfully applied to dialog
+systems (jur  c    cek et al., 2011), robotics (kohl and
+stone, 2004), and the board game go (silver et al.,
+2016).
+
+the weights w are updated as
+w     w +   (
+
+(cid:79)w log   (at|ht; w))(r    b) (1)
+
+(cid:88)
+
+t
+
+where    is a learning rate; at is the action taken at
+timestep t; ht is the dialog history at time t; r is
+the return of the dialog; (cid:79)xf denotes the jacobian
+of f with respect to x; b is a baseline described be-
+low; and   (a|h; w) is the lstm     i.e., a stochastic
+policy which outputs a distribution over a given
+a dialog history h, parameterized by weights w.
+the baseline b is an estimate of the average return
+of the current policy, estimated on the last 100 di-
+alogs using weighted importance sampling.6
+
+past work has applied the so-called natural gra-
+dient estimate (peters and schaal, 2008) to dia-
+log systems (jur  c    cek et al., 2011). the natu-
+ral gradient is a second-order gradient estimate
+which has often been shown to converge faster
+than the standard gradient. however, computing
+the natural gradient requires inverting a matrix of
+model weights, which we found to be intractable
+for the large numbers of weights found in neural
+networks.
+
+to the standard policy gradient update, we make
+three modi   cations. first, the effect of the action
+mask is to clamp some action probabilities to zero,
+which causes the logarithm term in the policy gra-
+dient update to be unde   ned. to solve this, we add
+a small constant to all action probabilities before
+
+6the choice of baseline does not affect the long-term
+convergence of the algorithm (i.e., the bias), but does dra-
+matically affect the speed of convergence (i.e., the variance)
+(williams, 1992).
+
+figure 4: roc plot of the scores of the actions
+selected by the lstm. false positive rate is the
+number of incorrectly predicted actions above a
+threshold r divided by the total number of incor-
+rectly predicted actions; true positive rate (tpr)
+is the number of correctly predicted actions above
+the threshold r divided by the total number of cor-
+rectly predicted actions.
+
+the lowest scores are incorrect, so labeling low-
+scoring actions will rapidly correct errors.
+
+finally, we note that re-training the lstm re-
+quires less than 1 second on a standard pc (with-
+out a gpu), which means the lstm could be
+retrained frequently. taken together, the model
+building speed combined with the ability to reli-
+ably identify actions which are errors suggests our
+approach will readily support active learning.
+
+6 optimizing with reinforcement
+
+learning
+
+in the previous sections, supervised learning (sl)
+was applied to train the lstm to mimic dialogs
+provided by the system developer. once a system
+operates at scale, interacting with a large number
+of users, it is desirable for the system to continue
+to learn autonomously using reinforcement learn-
+ing (rl). with rl, each turn receives a measure-
+ment of goodness called a reward; the agent ex-
+plores different sequences of actions in different
+situations, and makes adjustments so as to max-
+imize the expected discounted sum of rewards,
+which is called the return. we de   ned the reward
+as being 1 for successfully completing the task,
+and 0 otherwise. a discount of 0.95 was used to
+incentivize the system to complete dialogs faster
+rather than slower.
+
+for optimization, we selected a policy gradi-
+
+0%20%40%60%80%100%0%20%40%60%80%100%true positive ratefalse positive rate(a) tcr mean.
+
+(b) tcr standard deviation.
+
+figure 5: task completion rate (tcr) mean and standard deviation for a policy initially trained with
+n = (0, 1, 2, 5, 10) dialogs using supervised learning (sl), and then optimized with 0 to 10, 000 dialogs
+using id23 (rl). training and evaluation were done with the same stochastic simulated
+user. each line shows the average of 10 runs, where the dialogs used in the sl training in each run were
+randomly sampled from the 21 example dialogs.
+
+applying the update. second, it is well-known that
+neural network convergence can be improved us-
+ing some form of momentum     i.e., accumulation
+of gradient steps over multiple turns. in this prob-
+lem, we found that using adadelta sped up con-
+vergence substantially (zeiler, 2012). finally, in
+our setting, we want to ensure that the policy con-
+tinues to reconstruct the example dialogs provided
+by the developer. therefore, after each rl gra-
+dient step, we check whether the updated policy
+reconstructs the training set. if not, we run super-
+vised learning on the training set until the training
+set is reconstructed. note that this approach al-
+lows new training dialogs to be added at any time,
+whether rl optimization is underway or not.
+
+we evaluate rl optimization in two ways. first,
+we randomly initialize an lstm, and begin rl
+optimization. second, we initialize the lstm by
+   rst applying supervised learning on a training set,
+consisting of 1, 2, 5, or 10 dialogs, formed by ran-
+domly sampling from the 21 example dialogs. rl
+policy updates are made after each dialog. after
+10 rl updates, we freeze the policy, and run 500
+dialogs with the user simulation to measure task
+completion. we repeat all of this for 10 runs, and
+report average performance.
+
+results are shown in figure 5. rl alone (n =
+0) sometimes fails to discover a complete policy
+    in the    rst 10,000 dialogs, some runs of rl
+with fewer sl pre-training dialogs failed to dis-
+cover certain action sequences, resulting in lower
+
+average task completion     for the black line, note
+the low average in figure 5a and the high vari-
+ance in figure 5b. the dif   culty of discovering
+long action sequences with delayed rewards has
+been observed in other applications of rl to di-
+alog systems (williams, 2007). by contrast, the
+addition of a few dialogs and pre-training with sl
+both accelerates learning on average, and reduces
+the variability in performance of the resulting pol-
+icy.
+
+7 conclusion
+
+this paper has taken a    rst step toward end-to-
+end learning of task-oriented id71. our
+approach is based on a recurrent neural network
+which maps from raw dialog history to distribu-
+tions over actions. the lstm automatically infers
+a representation of dialog state, alleviating much
+of the work of hand-crafting a representation of di-
+alog state. code provided by the developer tracks
+entities, wraps api calls to external actuators, and
+can enforce business rules on the policy. exper-
+imental results have shown that training with su-
+pervised learning yields a reasonable policy from a
+small number of training dialogs, and that this ini-
+tial policy accelerates optimization with reinforce-
+ment learning substantially. to our knowledge,
+this is the    rst demonstration of end-to-end learn-
+ing of dialog control for task-oriented domains.
+
+0%10%20%30%40%50%60%70%80%task completion ratetraining dialogs1052100%5%10%15%20%25%30%task completion ratetraining dialogs105210references
+[chollet2015] fran  ois chollet.
+
+https://github.com/fchollet/keras.
+
+2015.
+
+keras.
+
+[cohn et al.1994] david cohn, les atlas, and richard
+ladner. 1994. improving generalization with active
+learning. machine learning, 15(2):201   221.
+
+[henderson et al.2005] james henderson,
+
+oliver
+lemon, and kalliroi georgila. 2005. hybrid rein-
+forcement/supervised learning for dialogue policies
+in proc workshop on
+from communicator data.
+knowledge and reasoning in practical dialogue
+systems, intl joint conf on arti   cial intelligence
+(ijcai), edinburgh, pages 68   75.
+
+[henderson et al.2014] matthew henderson, blaise
+thomson, and steve young. 2014. word-based
+dialog state tracking with recurrent neural net-
+works. in proc sigdial workshop on discourse and
+dialogue, philadelphia, usa.
+
+[hiraoka et al.2016] takuya hiraoka, graham neubig,
+koichiro yoshino, tomoki toda, and satoshi naka-
+mura. 2016. active learning for example-based di-
+alog systems. in proc intl workshop on spoken di-
+alog systems, saariselka, finland.
+
+[hochreiter and schmidhuber1997] sepp hochreiter
+and jurgen schmidhuber. 1997. long short-term
+memory. neural computation, 9(8):1735   u   1780.
+
+[hori et al.2009] chiori hori, kiyonori ohtake,
+teruhisa misu, hideki kashioka, and satoshi
+nakamura. 2009. statistical dialog management
+applied to wfst-based id71. in acous-
+tics, speech and signal processing, 2009. icassp
+2009. ieee international conference on, pages
+4793   4796, april.
+
+[hurtado et al.2005] lluis f. hurtado, david griol,
+emilio sanchis, and encarna segarra. 2005. a
+stochastic approach to dialog management. in proc
+ieee workshop on automatic id103
+and understanding (asru), san juan, puerto rico,
+usa.
+
+[jozefowicz et al.2015] rafal
+
+jozefowicz, wojciech
+zaremba, and ilya sutskever. 2015. an empirical
+exploration of recurrent network architectures.
+in
+proceedings of the 32nd international conference
+on machine learning (icml-15), pages 2342   2350.
+
+[jur  c    cek et al.2011] filip jur  c    cek, blaise thomson,
+and steve young.
+2011. natural actor and be-
+lief critic: reinforcement algorithm for learning pa-
+rameters of dialogue systems modelled as pomdps.
+acm transactions on speech and language pro-
+cessing (tslp), 7(3):6.
+
+[kohl and stone2004] nate kohl and peter stone.
+2004. policy gradient id23 for
+fast quadrupedal locomotion. in robotics and au-
+tomation, 2004. proceedings. icra   04. 2004 ieee
+international conference on, volume 3, pages 2619   
+2624. ieee.
+
+2000.
+
+[larsson and traum2000] staffan larsson and david
+traum.
+information state and dialogue
+management in the trindi dialogue move engine
+toolkit. natural language engineering, 5(3/4):323   
+340.
+
+[lee et al.2009] cheongjae lee,
+
+jung,
+sangkeun
+seokhwan kim, and gary geunbae lee.
+2009.
+example-based dialog modeling for practical multi-
+speech communication,
+domain dialog system.
+51(5):466   484.
+
+[levin et al.2000] esther levin, roberto pieraccini,
+and wieland eckert. 2000. a stochastic model
+of human-machine interaction for learning dialogue
+ieee trans on speech and audio pro-
+strategies.
+cessing, 8(1):11   23.
+
+[lowe et al.2015] ryan lowe, nissan pow, iulian ser-
+ban, and joelle pineau. 2015. the ubuntu dialogue
+corpus: a large dataset for research in unstructured
+multi-turn dialogue systems. in proc sigdial work-
+shop on discourse and dialogue, prague, czech re-
+public.
+
+[peters and schaal2008] jan peters and stefan schaal.
+neurocomputing,
+
+natural actor-critic.
+
+2008.
+71(7):1180   1190.
+
+seneff
+
+[seneff and polifroni2000] stephanie
+
+and
+2000. dialogue management
+joseph polifroni.
+in
+in the mercury    ight
+proceedings of
+the 2000 anlp/naacl work-
+shop on conversational systems - volume 3,
+pages
+anlp/naacl-convsyst
+11   16.
+association for computational linguistics.
+
+reservation system.
+
+   00,
+
+[silver et al.2016] david silver, aja huang, chris j.
+maddison, arthur guez, laurent sifre, george
+van den driessche, julian schrittwieser, ioannis
+antonoglou, veda panneershelvam, marc lanctot,
+et al.
+2016. mastering the game of go with
+deep neural networks and tree search. nature,
+529(7587):484   489.
+
+[theano development team2016] theano
+
+develop-
+ment team. 2016. theano: a python framework
+for fast computation of mathematical expressions.
+arxiv e-prints, abs/1605.02688, may.
+
+[williams and young2007] jason d. williams
+
+and
+steve young. 2007. partially observable markov
+decision processes for spoken id71.
+computer speech and language, 21(2):393   422.
+
+[williams et al.2015] jason d. williams, eslam kamal,
+mokhtar ashour, hani amr, jessica miller, and ge-
+off zweig.
+fast and easy language un-
+derstanding for id71 with microsoft lan-
+guage understanding intelligent service (luis).
+in
+proc sigdial workshop on discourse and dialogue,
+prague, czech republic.
+
+2015.
+
+[williams et al.2016] jason d. williams, antoine
+raux, and matthew henderson. 2016. the dialog
+state tracking challenge series: a review. dialogue
+and discourse, 7(3).
+
+how can i help you?
+call frank on his home
+sorry, i don   t have a home number for
+frank seide.
+i only have a work phone.
+do you want to call that number?
+no
+oh, sorry about that. goodbye.
+
+how can i help you?
+call jason at his home
+sorry, i don   t have a home number for
+jason williams.
+i have mobile or work.
+which would you like?
+mobile
+calling jason williams, mobile
+placecall
+
+how can i help you?
+call michael
+theres more than one person named
+michael. can you say their full name?
+call michael seltzer
+savephonetypeavail
+calling michael seltzer, work
+placecall
+
+how can i help you?
+call michel
+sorry, i don   t know of any names called
+michel. can you try again?
+call michael seltzer
+savephonetypeavail
+calling michael seltzer, work
+placecall
+
+[williams1992] ronald j williams.
+
+simple
+statistical gradient-following algorithms for connec-
+tionist id23. machine learning,
+8(3-4):229   256.
+
+1992.
+
+[williams2007] jason d. williams. 2007. applying
+pomdps to id71 in the troubleshooting
+domain. in naacl-hlt workshop on bridging the
+gap: academic and industrial research in dialog
+technologies, rochester, new york, usa, pages 1   
+8.
+
+[williams2008] jason d. williams. 2008. the best of
+both worlds: unifying conventional id71
+in proc intl conf on spoken lan-
+and pomdps.
+guage processing (icslp), brisbane, australia.
+
+[young et al.2013] steve young, milica gasic, blaise
+thomson, and jason d. williams. 2013. pomdp-
+based statistical spoken dialogue systems: a re-
+view. proceedings of the ieee, pp(99):1   20.
+
+[zeiler2012] matthew d. zeiler. 2012. adadelta:
+corr,
+
+an adaptive learning rate method.
+abs/1212.5701.
+
+a example dialogs
+
+a subset of the 21 example dialogs created for
+this paper are given below. for space, the entity
+tags that appear in the user and system sides of
+the dialogs have been removed     for example, call
+<name>jason</name> is shown as call jason.
+
+how can i help you?
+call jason williams cellphone
+calling jason williams, mobile
+placecall
+
+how can i help you?
+call jason williams
+which type of phone: mobile or work?
+of   ce
+calling jason williams, work
+placecall
+
+how can i help you?
+call frank on his cellphone
+sorry, i don   t have a cellphone number for
+frank seide.
+i only have a work phone.
+do you want to call that number?
+yes
+savephonetypeavail
+calling frank seide, work
+placecall
+
+

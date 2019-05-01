@@ -1,0 +1,1397 @@
+a fast uni   ed model for parsing and sentence understanding
+abhinav rastogi3,5
+arastogi@stanford.edu
+
+jon gauthier2,3,4,   
+
+samuel r. bowman1,2,3,   
+
+jgauthie@stanford.edu
+
+sbowman@stanford.edu
+
+raghav gupta2,3,6
+rgupta93@stanford.edu
+
+christopher d. manning1,2,3,6
+
+manning@stanford.edu
+
+christopher potts1,6
+cgpotts@stanford.edu
+
+1stanford linguistics
+
+2stanford nlp group 3stanford ai lab
+
+4stanford symbolic systems
+
+5stanford electrical engineering 6stanford computer science
+
+6
+1
+0
+2
+
+ 
+l
+u
+j
+ 
+
+9
+2
+
+ 
+ 
+]
+l
+c
+.
+s
+c
+[
+ 
+ 
+
+3
+v
+1
+2
+0
+6
+0
+
+.
+
+3
+0
+6
+1
+:
+v
+i
+x
+r
+a
+
+abstract
+
+the meanings of
+
+tree-structured neural networks exploit
+valuable syntactic parse information as
+they interpret
+sen-
+tences. however, they su   er from two
+key technical problems that make them
+slow and unwieldy for large-scale nlp
+tasks:
+they usually operate on parsed
+sentences and they do not directly sup-
+port batched computation. we address
+these issues by introducing the stack-
+augmented parser-interpreter neural net-
+work (spinn), which combines parsing
+and interpretation within a single tree-
+sequence hybrid model by integrating tree-
+structured sentence interpretation into the
+linear sequential structure of a shift-reduce
+parser. our model supports batched com-
+putation for a speedup of up to 25   over
+other tree-structured models, and its in-
+tegrated parser can operate on unparsed
+data with little loss in accuracy. we evalu-
+ate it on the stanford nli entailment task
+and show that it signi   cantly outperforms
+other sentence-encoding models.
+
+1
+
+introduction
+
+a wide range of current models in nlp are built
+around a neural network component
+that pro-
+duces vector representations of sentence mean-
+ing (e.g., sutskever et al., 2014; tai et al., 2015).
+this component, the sentence encoder, is gen-
+erally formulated as a learned parametric func-
+tion from a sequence of word vectors to a sen-
+tence vector, and this function can take a range
+of di   erent forms. common sentence encoders
+include sequence-based recurrent neural network
+
+   the    rst two authors contributed equally.
+
+(a) a conventional sequence-based id56 for two sentences.
+
+(b) a conventional treeid56 for two sentences.
+
+figure 1: an illustration of two standard de-
+signs for sentence encoders. the treeid56, un-
+like the sequence-based id56, requires a substan-
+tially di   erent connection structure for each sen-
+tence, making batched computation impractical.
+
+models (id56s, see figure 1a) with long short-
+term memory (lstm, hochreiter and schmidhu-
+ber, 1997), which accumulate information over the
+sentence sequentially; convolutional neural net-
+works (kalchbrenner et al., 2014; zhang et al.,
+2015), which accumulate information using    l-
+ters over short local sequences of words or charac-
+ters; and tree-structured id56s
+(treeid56s, goller and k  uchler, 1996; socher
+et al., 2011a, see figure 1b), which propagate in-
+formation up a binary parse tree.
+
+of these, the treeid56 appears to be the prin-
+cipled choice, since meaning in natural language
+sentences is known to be constructed recursively
+according to a tree structure (dowty, 2007, i.a.).
+
+theoldcatate...thecatsatdown......theoldcatateatetheoldcatoldcatcatoldthe...thecatsatdownsatdowndownsatthecatcatthe(a) the spinn model unrolled for two transitions during the processing of the sentence the cat sat down.    tracking   ,    transi-
+tion   , and    composition    are neural network layers. gray arrows indicate connections which are blocked by a gating function.
+
+(b) the fully unrolled spinn for the cat sat down, with neural network layers omitted for clarity.
+
+figure 2: two views of the stack-augmented parser-interpreter neural network (spinn).
+
+treeid56s have shown promise (tai et al., 2015;
+li et al., 2015; bowman et al., 2015b), but have
+largely been overlooked in favor of sequence-
+based id56s because of their incompatibility with
+batched computation and their reliance on external
+parsers. batched computation   performing syn-
+chronized computation across many examples at
+once   yields order-of-magnitude improvements
+in model run time, and is crucial in enabling neural
+networks to be trained e   ciently on large datasets.
+because treeid56s use a di   erent model structure
+for each sentence, as in figure 1, e   cient batching
+is impossible in standard implementations. partly
+to address e   ciency problems, standard treeid56
+models commonly only operate on sentences that
+have already been processed by a syntactic parser,
+which slows and complicates the use of these mod-
+els at test time for most applications.
+
+this paper introduces a new model to address
+both these issues:
+the stack-augmented parser-
+interpreter neural network, or spinn, shown in
+figure 2. spinn executes the computations of a
+tree-structured model in a linearized sequence, and
+can incorporate a neural network parser that pro-
+duces the required parse structure on the    y. this
+design improves upon the treeid56 architecture
+in three ways: at test time, it can simultaneously
+parse and interpret unparsed sentences, removing
+the dependence on an external parser at nearly no
+
+additional computational cost. secondly, it sup-
+ports batched computation for both parsed and un-
+parsed sentences, yielding dramatic speedups over
+standard treeid56s. finally, it supports a novel
+tree-sequence hybrid architecture for handling lo-
+cal linear context in sentence interpretation. this
+model is a basically plausible model of human
+sentence processing and yields substantial accu-
+racy gains over pure sequence- or tree-based mod-
+els.
+
+we evaluate spinn on the stanford natural
+language id136 entailment task (snli, bow-
+man et al., 2015a), and    nd that it signi   cantly
+outperforms other sentence-encoding-based mod-
+els, even with a relatively simple and underpow-
+ered implementation of the built-in parser. we also
+   nd that spinn yields speed increases of up to
+25   over a standard treeid56 implementation.
+2 related work
+there is a fairly long history of work on building
+neural network-based parsers that use the core op-
+erations and data structures from transition-based
+parsing, of which id132 is a vari-
+ant (henderson, 2004; emami and jelinek, 2005;
+titov and henderson, 2010; chen and manning,
+2014; buys and blunsom, 2015; dyer et al., 2015;
+kiperwasser and goldberg, 2016).
+in addition,
+there has been recent work proposing models de-
+
+bu   erdownsatstackcatthecompositiontrackingtransitionreducedownsatthecatcompositiontrackingtransitionshiftdownsatthecattrackingbu   erstackt=0downsatcattheshiftt=1downsatcattheshiftt=2downsatcatthereducet=3downsatthecatshiftt=4downsatthecatshiftt=5downsatthecatreducet=6satdownthecatreducet=7=t(thecat)(satdown)outputtomodelforsemantictasksigned primarily for generative language model-
+ing tasks that use this architecture as well (zhang
+et al., 2016; dyer et al., 2016). to our knowledge,
+spinn is the    rst model to use this architecture
+for the purpose of sentence interpretation, rather
+than parsing or generation.
+
+socher et al. (2011a,b) present versions of the
+treeid56 model which are capable of operating
+over unparsed inputs. however, these methods re-
+quire an expensive search process at test time. our
+model presents a much faster alternative approach.
+
+3 our model: spinn
+3.1 background: id132
+spinn is inspired by id132 (aho
+and ullman, 1972), which builds a tree structure
+over a sequence (e.g., a natural language sentence)
+by a single left-to-right scan over its tokens. the
+formalism is widely used in natural language pars-
+ing (e.g., shieber, 1983; nivre, 2003).
+
+a shift-reduce parser accepts a sequence of
+input tokens x = (x0, . . . , xn   1) and consumes
+transitions a = (a0, . . . , at   1), where each at    
+{shift, reduce} speci   es one step of the parsing
+process.
+in general a parser may also gener-
+ate these transitions on the    y as it reads the to-
+kens.
+it proceeds left-to-right through a transi-
+tion sequence, combining the input tokens x in-
+crementally into a tree structure. for any binary-
+branching tree structure over n words, this re-
+quires t = 2n     1 transitions through a total of
+t + 1 states.
+
+the parser uses two auxiliary data structures:
+a stack s of partially completed subtrees and a
+bu   er b of tokens yet to be parsed. the parser is
+initialized with the stack empty and the bu   er con-
+taining the tokens x of the sentence in order. let
+(cid:104)s , b(cid:105) = (cid:104)   , x(cid:105) denote this starting state. it next
+proceeds through the transition sequence, where
+each transition at selects one of the two following
+operations. below, the | symbol denotes the cons
+(concatenation) operator. we arbitrarily choose to
+always cons on the left in the notation below.
+shift: (cid:104)s , x | b(cid:105)     (cid:104)x | s , b(cid:105). this operation pops
+an element from the bu   er and pushes it on
+to the top of the stack.
+
+reduce: (cid:104)x | y | s , b(cid:105)     (cid:104)(x, y) | s , b(cid:105). this
+operation pops the top two elements from
+the stack, merges them, and pushes the result
+back on to the stack.
+
+3.2 composition and representation
+spinn is based on a shift-reduce parser, but it is
+designed to produce a vector representation of a
+sentence as its output, rather than a tree as in stan-
+dard id132.
+it modi   es the shift-
+reduce formalism by using    xed length vectors to
+represent each entry in the stack and the bu   er.
+correspondingly, its reduce operation combines
+two vector representations from the stack into an-
+other vector using a neural network function.
+
+the composition function when a reduce op-
+eration is performed, the vector representations of
+two tree nodes are popped o    of the stack and fed
+into a composition function, which is a neural net-
+work function that produces a representation for a
+new tree node that is the parent of the two popped
+nodes. this new node is pushed on to the stack.
+
+the treelstm composition function (tai et al.,
+2015) generalizes the lstm neural network layer
+to tree- rather than sequence-based inputs, and it
+shares with the lstm the idea of representing in-
+termediate states as a pair of an active state rep-
+resentation (cid:126)h and a memory representation (cid:126)c. our
+version is formulated as:
+
+                                  + (cid:126)bcomp
+
+                                 
+
+                                 (cid:126)h1
+
+s
+(cid:126)h2
+s
+(cid:126)e
+
+(1)
+
+                                                                  
+
+                                                                  
+
+                                                                  
+
+                                                                   =
+
+                                 wcomp
+
+(cid:126)i
+  
+(cid:126)fl
+  
+(cid:126)fr
+  
+(cid:126)o
+  
+tanh
+(cid:126)g
+(cid:126)c = (cid:126)fl (cid:12) (cid:126)c 2
+s + (cid:126)fr (cid:12) (cid:126)c 1
+(cid:126)h = (cid:126)o (cid:12) tanh((cid:126)c)
+
+s +(cid:126)i (cid:12) (cid:126)g
+
+(2)
+(3)
+where    is the sigmoid activation function, (cid:12) is
+the elementwise product, the pairs (cid:104)(cid:126)h1
+s (cid:105) and
+(cid:104)(cid:126)h2
+s (cid:105) are the two input tree nodes popped o   
+s, (cid:126)c 2
+the stack, and (cid:126)e is an optional vector-valued input
+argument which is either empty or comes from an
+external source like the tracking lstm (see sec-
+tion 3.3). the result of this function, the pair (cid:104)(cid:126)h, (cid:126)c(cid:105),
+is placed back on the stack. each vector-valued
+variable listed is of dimension d except (cid:126)e, of the
+independent dimension dtracking.
+
+s, (cid:126)c 1
+
+the stack and bu   er the stack and the bu   er
+are arrays of n elements each (for sentences of up
+to n words), with the two d-dimensional vectors
+(cid:126)h and (cid:126)c in each element.
+
+word representations we use word represen-
+tations based on the 300d vectors provided with
+
+glove (pennington et al., 2014). we do not update
+these representations during training. instead, we
+use a learned linear transformation to map each in-
+put word vector (cid:126)xglove into a vector pair (cid:104)(cid:126)h, (cid:126)c(cid:105) that
+is stored in the bu   er:
+
+(4)
+
+= wwd(cid:126)xglove + (cid:126)bwd
+
+(cid:35)
+
+(cid:34)(cid:126)h
+
+(cid:126)c
+
+3.3 the tracking lstm
+in addition to the stack, bu   er, and composition
+function, our full model includes an additional
+component: the tracking lstm. this is a simple
+sequence-based lstm id56 that operates in tan-
+dem with the model, taking inputs from the bu   er
+and stack at each step. it is meant to maintain a
+low-resolution summary of the portion of the sen-
+tence that has been processed so far, which is used
+for two purposes:
+it supplies feature representa-
+tions to the transition classi   er, which allows the
+model to stand alone as a parser, and it additionally
+supplies a secondary input (cid:126)e to the composition
+function   see (1)   allowing context information
+to enter the construction of sentence meaning and
+forming what is e   ectively a tree-sequence hybrid
+model.
+
+the tracking lstm   s inputs (yellow in fig-
+ure 2) are the top element of the bu   er (cid:126)h1
+b (which
+would be moved in a shift operation) and the top
+two elements of the stack (cid:126)h1
+s and (cid:126)h2
+s (which would
+be composed in a reduce operation).
+why a tree-sequence hybrid? lexical ambigu-
+ity is ubiquitous in natural language. most words
+have multiple senses or meanings, and it is gener-
+ally necessary to use the context in which a word
+occurs to determine which of its senses or mean-
+ings is meant in a given sentence. even though
+treeid56s are more e   ective at composing mean-
+ings in principle, this ambiguity can give simpler
+sequence-based sentence-encoding models an ad-
+vantage: when a sequence-based model    rst pro-
+cesses a word, it has direct access to a state vec-
+tor that summarizes the left context of that word,
+which acts as a cue for disambiguation. in con-
+trast, when a standard tree-structured model    rst
+processes a word, it only has access to the con-
+stituent that the word is merging with, which is
+often just a single additional word. feeding a
+context representation from the tracking lstm
+into the composition function is a simple and ef-
+   cient way to mitigate this disadvantage of tree-
+structured models. using left linear context to dis-
+
+ambiguate is also a plausible model of human in-
+terpretation.
+
+it would be straightforward to augment spinn
+to support the use of some amount of right-side
+context as well, but this would add complexity to
+the model that we think is largely unnecessary: hu-
+mans are very e   ective at understanding the begin-
+nings of sentences before having seen or heard the
+ends, suggesting that it is possible to get by with-
+out the unavailable right-side context.
+
+3.4 parsing: predicting transitions
+for spinn to operate on unparsed inputs, it needs
+to produce its own transition sequence a rather
+than relying on an external parser to supply it as
+part of the input. to do this, the model predicts
+at at each step using a simple two-way softmax
+classi   er whose input is the state of the tracking
+lstm:
+
+(5) (cid:126)pa = softmax(wtrans(cid:126)htracking + (cid:126)btrans)
+
+the above model is nearly the simplest viable im-
+plementation of a transition decision function. in
+contrast, the decision functions in state-of-the-art
+transition-based parsers tend to use signi   cantly
+richer feature sets as inputs, including features
+containing information about several upcoming
+words on the bu   er. the value (cid:126)htracking is a func-
+tion of only the very top of the bu   er and the top
+two stack elements at each timestep.
+
+at test time, the model uses whichever tran-
+sition (i.e., shift or reduce) is assigned a higher
+(unnormalized) id203. the prediction func-
+tion is trained to mimic the decisions of an exter-
+nal parser. these decisions are used as inputs to
+the model during training. for snli, we use the
+binary stanford pid18 parser parses that are in-
+cluded with the corpus. we did not    nd scheduled
+sampling (bengio et al., 2015)   having the model
+use its own transition decisions sometimes at train-
+ing time   to help.
+
+implementation issues
+
+3.5
+representing the stack e   ciently a na    ve im-
+plementation of spinn needs to handle a size
+o(n) stack at each timestep, any element of which
+may be involved in later computations. a na    ve
+id26 implementation would then re-
+quire storing each of the o(n) stacks for a back-
+ward pass, leading to a per-example space require-
+ment of o(nt d)    oats. this requirement is pro-
+
+s [t] := bu   ertop
+
+if a = shift then
+
+algorithm 1 the thin stack algorithm
+1: function step(bu   ertop, a, t, s , q)
+2:
+3:
+4:
+5:
+6:
+7:
+8:
+
+else if a = reduce then
+right := s [q.pop()]
+left := s [q.pop()]
+s [t] := compose(left, right)
+
+q.push(t)
+
+hibitively large for signi   cant batch sizes or sen-
+tence lengths n. such a na    ve implementation
+would also require copying a largely unchanged
+stack at each timestep, since each shift or reduce
+operation writes only one new representation to
+the top of the stack.
+
+we propose a space-e   cient stack representa-
+tion inspired by the zipper technique (huet, 1997)
+that we call thin stack. for each input sentence, we
+represent the stack with a single t    d matrix s .
+each row s [t] (for 0 < t     t) represents the top of
+the actual stack at timestep t. at each timestep we
+can shift a new element onto the stack, or reduce
+the top two elements of the stack into a single el-
+ement. to shift an element from the bu   er to the
+top of the stack at timestep t, we simply write it
+into the location s [t]. in order to perform the re-
+duce operation, we need to retrieve the top two el-
+ements of the actual stack. we maintain a queue q
+of pointers into s which contains the row indices
+of s which are still present in the actual stack. the
+top two elements of the stack can be found by us-
+ing the    nal two pointers in the queue q. these
+retrieved elements are used to perform the reduce
+operation, which modi   es q to mark that some
+rows of s have now been replaced in the actual
+stack. algorithm 1 describes the full mechanics of
+a stack feedforward in this compressed representa-
+tion. it operates on the single t    d matrix s and
+a backpointer queue q. table 1 shows an example
+run.
+
+this stack representation requires substantially
+less space. it stores each element involved in the
+feedforward computation exactly once, meaning
+that this representation can still support e   cient
+id26. furthermore, all of the updates
+to s and q can be performed batched and in-place
+on a gpu, yielding substantial speed gains over
+both a more na    ve spinn implementation and a
+standard treeid56 implementation. we describe
+
+t
+0
+1
+2
+3
+4
+5
+
+s [t]
+
+spot
+sat
+down
+
+(sat down)
+
+(spot (sat down))
+
+qt
+
+at
+
+shift
+shift
+shift
+reduce
+reduce
+
+1
+1 2
+1 2 3
+1 4
+5
+
+table 1: the thin-stack algorithm operating on the
+input sequence x = (spot, sat, down) and the tran-
+sition sequence shown in the rightmost column.
+s [t] shows the top of the stack at each step t. the
+last two elements of q (underlined) specify which
+rows t would be involved in a reduce operation at
+the next step.
+
+speed results in section 3.7.
+
+preparing the data at training time, spinn re-
+quires both a transition sequence a and a token se-
+quence x as its inputs for each sentence. the token
+sequence is simply the words in the sentence in or-
+der. a can be obtained from any constituency parse
+for the sentence by    rst converting that parse into
+an unlabeled binary parse, then linearizing it (with
+the usual in-order traversal), then taking each word
+token as a shift transition and each    )    as a reduce
+transition, as here:
+
+unlabeled binary parse: ( ( the cat ) ( sat down ) )
+x: the, cat, sat, down
+a: shift, shift, reduce, shift, shift, reduce, reduce
+
+handling variable sentence lengths for any
+sentence model to be trained with batched com-
+putation, it is necessary to pad or crop sentences
+to a    xed length. we    x this length at n = 25
+words,
+longer than about 98% of sentences in
+snli. transition sequences a are cropped at the
+left or padded at the left with shifts. token se-
+quences x are then cropped or padded with empty
+tokens at the left to match the number of shifts
+added or removed from a, and can then be padded
+with empty tokens at the right to meet the desired
+length n.
+
+the addition of
+
+3.6 treeid56-equivalence
+without
+the tracking lstm,
+spinn (in particular the spinn-pi-nt variant,
+for parsed input, no tracking) is precisely equiv-
+alent to a conventional tree-structured neural net-
+work model in the function that it computes, and
+
+30 tokens or fewer. we    x the model dimension
+d and the id27 dimension at 300. we
+run the cpu performance test on a 2.20 ghz 16-
+core intel xeon e5-2660 processor with hyper-
+threading enabled. we test our thin-stack imple-
+mentation and the id56 model on an nvidia ti-
+tan x gpu.
+
+figure 3 compares the sentence encoding speed
+of the three models on random input data. we ob-
+serve a substantial di   erence in runtime between
+the cpu and thin-stack implementations that in-
+creases with batch size. with a large but practical
+batch size of 512, the largest on which we tested
+the treeid56, our model is about 25   faster than
+the standard cpu implementation, and about 4  
+slower than the id56 baseline.
+
+though this experiment only covers spinn-
+pi-nt, the results should be similar for the full
+spinn model: most of the computation involved
+in running spinn is involved in populating the
+bu   er, applying the composition function, and
+manipulating the bu   er and the stack, with the
+low-dimensional tracking and parsing components
+adding only a small additional load.
+
+4 nli experiments
+we evaluate spinn on the task of natural lan-
+guage id136 (nli, a.k.a. recognizing textual
+entailment, or rte; dagan et al., 2006). nli is a
+sentence pair classi   cation task, in which a model
+reads two sentences (a premise and a hypothesis),
+and outputs a judgment of entailment, contradic-
+tion, or neutral, re   ecting the relationship between
+the meanings of the two sentences. below is an ex-
+ample sentence pair and judgment from the snli
+corpus which we use in our experiments:
+premise: girl in a red coat, blue head wrap and jeans is
+making a snow angel.
+hypothesis: a girl outside plays in the snow.
+label: entailment
+snli is a corpus of 570k human-labeled pairs
+of scene descriptions like this one. we use the
+standard train   test split and ignore unlabeled ex-
+amples, which leaves about 549k examples for
+training, 9,842 for development, and 9,824 for
+testing. snli labels are roughly balanced, with
+the most frequent label, entailment, making up
+34.2% of the test set.
+
+although nli is framed as a simple three-way
+classi   cation task, it is nonetheless an e   ective
+way of evaluating the ability of a model to ex-
+tract broadly informative representations of sen-
+
+figure 3: feedforward speed comparison.
+
+therefore it also has the same learning dynam-
+ics. in both, the representation of each sentence
+consists of the representations of the words com-
+bined recursively using a treeid56 composition
+function (in our case, the treelstm function).
+spinn, however, is dramatically faster, and sup-
+ports both integrated parsing and a novel approach
+to context through the tracking lstm.
+
+id136 speed
+
+3.7
+in this section, we compare the test-time speed
+of our spinn-pi-nt with an equivalent treeid56
+implemented in the conventional fashion and with
+a standard id56 sequence model. while the
+full models evaluated below are implemented
+and trained using theano (theano development
+team, 2016), which is reasonably e   cient but
+not perfect for our model, we wish to compare
+well-optimized implementations of all three mod-
+els. to do this, we reimplement the feedforward1
+of spinn-pi-nt and an lstm id56 baseline
+in c++/cuda, and compare that implementation
+with a cpu-based c++/eigen treeid56 imple-
+mentation from irsoy and cardie (2014), which
+we modi   ed to perform exactly the same compu-
+tations as spinn-pi-nt.2 treeid56s like this can
+only operate on a single example at a time and are
+thus poorly suited for gpu computation.
+
+each model is restricted to run on sentences of
+
+1we chose to reimplement and evaluate only the feedfor-
+ward/id136 pass, as id136 speed is the relevant perfor-
+mance metric for most practical applications.
+
+2the original code for irsoy & cardie   s model is available
+at https://github.com/oir/deep-recursive. our op-
+timized c++/cuda models and the theano source code
+for the full spinn are available at https://github.com/
+stanfordnlp/spinn.
+
+3264128256512102420480510152025batchsizefeedforwardtime(sec)thin-stackgpucpu(?)id56param.
+initial lr
+l2 id173   
+transition cost   
+embedding transformation dropout
+classi   er mlp dropout
+tracking lstm size dtracking
+classi   er mlp layers
+
+strategy
+
+range
+2    10   4   2    10   2
+log
+8    10   7   3    10   5
+log
+0.5   4.0
+lin
+80   95% lin
+80   95% lin
+24   128
+log
+1   3
+lin
+
+id56 sp.-pi-nt
+3    10   4
+3    10   6
+   
+83%
+94%
+   
+2
+
+5    10   3
+4    10   6
+   
+   
+94%
+   
+2
+
+sp.-pi
+7    10   3
+2    10   5
+   
+92%
+93%
+61
+2
+
+sp.
+2    10   3
+3    10   5
+3.9
+86%
+94%
+79
+1
+
+table 2: hyperparameter ranges and values. range shows the hyperparameter ranges explored dur-
+ing random search. strategy indicates whether sampling from the range was uniform, or log-uniform.
+dropout parameters are expressed as keep rates rather than drop rates.
+
+tence meaning. in order for a model to perform re-
+liably well on nli, it must be able to represent and
+reason with the core phenomena of natural lan-
+guage semantics, including quanti   cation, coref-
+erence, scope, and several types of ambiguity.
+
+4.1 applying spinn to snli
+creating a sentence-pair classi   er to clas-
+sify an snli sentence pair, we run two copies
+of spinn with shared parameters: one on the
+premise sentence and another on the hypothesis
+sentence. we then use their outputs (the (cid:126)h states
+at the top of each stack at time t = t) to construct
+a feature vector (cid:126)xclassi   er for the pair. this feature
+vector consists of the concatenation of these two
+sentence vectors, their di   erence, and their ele-
+mentwise product (following mou et al., 2016):
+
+                                                   
+
+(cid:126)hpremise
+(cid:126)hhypothesis
+
+(cid:126)hpremise     (cid:126)hhypothesis
+(cid:126)hpremise (cid:12) (cid:126)hhypothesis
+
+                                                   
+
+(6) (cid:126)xclassi   er =
+
+this feature vector is then passed to a series of
+1024d relu neural network layers (i.e., an mlp;
+the number of layers is tuned as a hyperparame-
+ter), then passed into a linear transformation, and
+then    nally passed to a softmax layer, which yields
+a distribution over the three labels.
+the objective function our objective combines
+a cross-id178 objective ls for the snli classi-
+   cation task, cross-id178 objectives lt
+p and lt
+h
+for the parsing decision for each of the two sen-
+tences at each step t, and an l2 id173 term
+on the trained parameters. the terms are weighted
+using the tuned hyperparameters    and   :
+h) +   (cid:107)  (cid:107)2
+
+(7) lm =ls +   
+
+p + lt
+
+t   1(cid:88)
+
+(lt
+
+2
+
+t=0
+
+initialization, optimization, and tuning we
+initialize the model parameters using the nonpara-
+metric strategy of he et al. (2015), with the excep-
+tion of the softmax classi   er parameters, which
+we initialize using random uniform samples from
+[   0.005, 0.005].
+
+we use minibatch sgd with the rmsprop op-
+timizer (tieleman and hinton, 2012) and a tuned
+starting learning rate that decays by a factor of
+0.75 every 10k steps. we apply both dropout (sri-
+vastava et al., 2014) and batch id172 (io   e
+and szegedy, 2015) to the output of the word em-
+bedding projection layer and to the feature vectors
+that serve as the inputs and outputs to the mlp that
+precedes the    nal entailment classi   er.
+
+we train each model for 250k steps in each run,
+using a batch size of 32. we track each model   s
+performance on the development set during train-
+ing and save parameters when this performance
+reaches a new peak. we use early stopping, evalu-
+ating on the test set using the parameters that per-
+form best on the development set.
+
+we use random search to tune the hyperparame-
+ters of each model, setting the ranges for search for
+each hyperparameter heuristically (and validating
+the reasonableness of the ranges on the develop-
+ment set), and then launching eight copies of each
+experiment each with newly sampled hyperparam-
+eters from those ranges. table 2 shows the hyper-
+parameters used in the best run of each model.
+
+4.2 models evaluated
+we evaluate four models. the four all use the
+sentence-pair classi   er architecture described in
+section 4.1, and di   er only in the function com-
+puting the sentence encodings. first, a single-
+layer lstm id56 (similar to that of bowman
+et al., 2015a) serves as a baseline encoder. next,
+the minimal spinn-pi-nt model (equivalent to a
+
+model
+
+params.
+
+trans. acc. (%)
+
+train acc. (%)
+
+test acc. (%)
+
+lexicalized classi   er (bowman et al., 2015a)
+
+previous non-nn results
+
+   
+
+previous sentence encoder-based nn results
+
+100d lstm encoders (bowman et al., 2015a)
+1024d pretrained gru encoders (vendrov et al., 2016)
+300d tree-based id98 encoders (mou et al., 2016)
+
+300d lstm id56 encoders
+300d spinn-pi-nt (parsed input, no tracking) encoders
+300d spinn-pi (parsed input) encoders
+300d spinn (unparsed input) encoders
+
+our results
+
+221k
+15m
+3.5m
+
+3.0m
+3.4m
+3.7m
+2.7m
+
+   
+
+   
+   
+   
+
+   
+   
+   
+92.4
+
+99.7
+
+84.8
+98.8
+83.4
+
+83.9
+84.4
+89.2
+87.2
+
+78.2
+
+77.6
+81.4
+82.1
+
+80.6
+80.9
+83.2
+82.6
+
+table 3: results on snli 3-way id136 classi   cation. params. is the approximate number of trained
+parameters (excluding id27s for all models). trans. acc. is the model   s accuracy in predicting
+parsing transitions at test time. train and test are snli classi   cation accuracy.
+
+treelstm) introduces the spinn model design.
+spinn-pi adds the tracking lstm to that design.
+finally, the full spinn adds the integrated parser.
+we compare our models against several base-
+lines, including the strongest published non-neural
+network-based result from bowman et al. (2015a)
+and previous neural network models built around
+several types of sentence encoders.
+
+4.3 results
+table 3 shows our results on snli. for the full
+spinn, we also report a measure of agreement be-
+tween this model   s parses and the parses included
+with snli, calculated as classi   cation accuracy
+over transitions averaged across timesteps.
+
+we    nd that the bare spinn-pi-nt model per-
+forms little better than the id56 baseline, but that
+spinn-pi with the added tracking lstm per-
+forms well. the success of spinn-pi, which is the
+hybrid tree-sequence model, suggests that the tree-
+and sequence-based encoding methods are at least
+partially complementary, with the sequence model
+presumably providing useful local word disam-
+biguation. the full spinn model with its rela-
+tively weak internal parser performs slightly less
+well, but nonetheless robustly exceeds the perfor-
+mance of the id56 baseline.
+
+both spinn-pi and the full spinn signi   -
+cantly outperform all previous sentence-encoding
+models. most notably, these models outperform
+the tree-based id98 of mou et al. (2016), which
+also uses tree-structured composition for local fea-
+ture extraction, but uses simpler pooling tech-
+niques to build sentence features in the interest of
+e   ciency. our results show that a model that uses
+tree-structured composition fully (spinn) outper-
+
+forms one which uses it only partially (tree-based
+id98), which in turn outperforms one which does
+not use it at all (id56).
+
+the full spinn performed moderately well at
+reproducing the stanford parser   s parses of the
+snli data at a transition-by-transition level, with
+92.4% accuracy at test time.3 however, its transi-
+tion prediction errors are fairly evenly distributed
+across sentences, and most sentences were as-
+signed partially invalid transition sequences that
+either left a few words out of the    nal represen-
+tation or incorporated a few padding tokens into
+the    nal representation.
+
+4.4 discussion
+the use of tree structure improves the perfor-
+mance of sentence-encoding models for snli. we
+suspect that this improvement is largely due to the
+more e   cient learning of accurate generalizations
+overall, and not to any particular few phenomena.
+however, some patterns are identi   able in the re-
+sults.
+
+while all four models under study have trouble
+with negation, the tree-structured spinn models
+do quite substantially better on these pairs. this
+is likely due to the fact that parse trees make the
+scope of any instance of negation (the portion of
+the sentence   s content that is negated) relatively
+easy to identify and separate from the rest of the
+sentence. for test set sentence pairs like the one
+below where negation (not or n   t) does not appear
+in the premise but does appear in the hypothesis,
+the id56 shows 67% accuracy, while all three tree-
+structured models exceed 73%. only the id56 got
+
+3note that this is scoring the model against automatic
+
+parses, not a human-judged gold standard.
+
+the below example wrong:
+premise: the rhythmic gymnast completes her    oor exer-
+cise at the competition.
+hypothesis: the gymnast cannot    nish her exercise.
+label: contradiction
+note that the presence of negation in the hypoth-
+esis is correlated with a label of contradiction in
+snli, but not as strongly as one might intuit   
+only 45% of these examples in the test set are la-
+beled as contradictions.
+
+in addition, it seems that tree-structured mod-
+els, and especially the tree-sequence hybrid mod-
+els, are more e   ective than id56s at extracting in-
+formative representations of long sentences. the
+id56 model falls o    in test accuracy more quickly
+with increasing sentence length than spinn-pi-
+nt, which in turn falls of substantially faster than
+the two hybrid models, repeating a pattern seen
+more dramatically on arti   cial data in bowman
+et al. (2015b). on pairs with premises of 20 or
+more words, the id56   s 76.7% accuracy, while
+spinn-pi reaches 80.2%. all three spinn mod-
+els labeled the following example correctly, while
+the id56 did not:
+premise: a man wearing glasses and a ragged costume is
+playing a jaguar electric guitar and singing with the ac-
+companiment of a drummer.
+hypothesis: a man with glasses and a disheveled out   t is
+playing a guitar and singing along with a drummer.
+label: entailment
+we suspect that the hybrid nature of the full
+spinn model is also responsible for its surpris-
+ing ability to perform better than an id56 baseline
+even when its internal parser is relatively ine   ec-
+tive at producing correct full-sentence parses. it
+may act somewhat like the tree-based id98, only
+with access to larger trees: using tree structure to
+build up local phrase meanings, and then using the
+tracking lstm, at least in part, to combine those
+meanings.
+
+finally, as is likely inevitable for models evalu-
+ated on snli, all four models under study did sev-
+eral percent worse on test examples whose ground
+truth label is neutral than on examples of the
+other two classes. entailment   neutral and neu-
+tral   contradiction confusions appear to be much
+harder to avoid than entailment   contradiction
+confusions, where relatively super   cial cues might
+be more readily useful.
+
+5 conclusions and future work
+we introduce a model architecture (spinn-pi-
+nt) that is equivalent to a treelstm, but an or-
+
+der of magnitude faster at test time. we expand
+that architecture into a tree-sequence hybrid model
+(spinn-pi), and show that this yields signi   cant
+gains on the snli entailment task. finally, we
+show that it is possible to exploit the strengths of
+this model without the need for an external parser
+by integrating a fast parser into the model (as in
+the full spinn), and that the lack of external parse
+information yields little loss in accuracy.
+
+because this paper aims to introduce a general
+purpose model for sentence encoding, we do not
+pursue the use of soft attention (bahdanau et al.,
+2015; rockt  aschel et al., 2016), despite its demon-
+strated e   ectiveness on the snli task.4 however,
+we expect that it should be possible to produc-
+tively combine our model with soft attention to
+reach state-of-the-art performance.
+
+our tracking lstm uses only simple, quick-
+to-compute features drawn from the head of the
+bu   er and the head of the stack. it is plausible that
+giving the tracking lstm access to more informa-
+tion from the bu   er and stack at each step would
+allow it to better represent the context at each tree
+node, yielding both better parsing and better sen-
+tence encoding. one promising way to pursue this
+goal would be to encode the full contents of the
+stack and bu   er at each time step following the
+method used by dyer et al. (2015).
+
+for a more ambitious goal, we expect that
+it should be possible to implement a variant of
+spinn on top of a modi   ed stack data structure
+with di   erentiable push and pop operations (as
+in grefenstette et al., 2015; joulin and mikolov,
+2015). this would make it possible for the model
+to learn to parse using guidance from the se-
+mantic representation objective, which currently is
+blocked from in   uencing the key parsing param-
+eters by our use of hard shift/reduce decisions.
+this change would allow the model to learn to pro-
+duce parses that are, in aggregate, better suited to
+supporting semantic interpretation than those sup-
+plied in the training data.
+acknowledgments
+we acknowledge    nancial support from a google
+faculty research award, the stanford data sci-
+ence initiative, and the national science foun-
+dation under grant nos. bcs 1456077 and iis
+4attention-based models like rockt  aschel et al. (2016),
+wang and jiang (2016), and the unpublished cheng et al.
+(2016) have shown accuracies as high as 86.3% on snli,
+but are more narrowly engineered to suit the task and do not
+yield sentence encodings.
+
+1514268. some of the tesla k40s used for this
+research were donated by the nvidia corpora-
+tion. we also thank kelvin guu, noah goodman,
+and many others in the stanford nlp group for
+helpful comments.
+
+references
+alfred v. aho and je   rey d. ullman. 1972. the
+theory of parsing, translation, and compiling.
+prentice-hall, inc.
+
+dzmitry bahdanau, kyunghyun cho, and yoshua
+bengio. 2015. id4 by
+jointly learning to align and translate. in proc.
+iclr.
+
+samy bengio, oriol vinyals, navdeep jaitly, and
+noam shazeer. 2015. scheduled sampling for
+sequence prediction with recurrent neural net-
+works. in proc. nips.
+
+samuel r. bowman, gabor angeli, christopher
+potts, and christopher d. manning. 2015a. a
+large annotated corpus for learning natural lan-
+guage id136. in proc. emnlp.
+
+samuel r. bowman, christopher d. manning,
+and christopher potts. 2015b. tree-structured
+composition in neural networks without tree-
+structured architectures.
+in proc. 2015 nips
+workshop on cognitive computation: integrat-
+ing neural and symbolic approaches.
+
+jan buys and phil blunsom. 2015. generative in-
+cremental id33 with neural net-
+works. in proc. acl.
+
+danqi chen and christopher d. manning. 2014. a
+fast and accurate dependency parser using neu-
+ral networks. in proc. emnlp.
+
+jianpeng cheng, li dong, and mirella lapata.
+2016. long short-term memory-networks for
+machine reading. arxiv:1601.06733.
+
+ido dagan, oren glickman,
+
+and bernardo
+magnini. 2006. the pascal recognising tex-
+tual entailment challenge. in machine learning
+challenges. evaluating predictive uncertainty,
+visual object classi   cation, and recognising tec-
+tual entailment, springer.
+
+transition-based id33 with stack
+long short-term memory. in proc. acl.
+
+chris dyer, adhiguna kuncoro, miguel balles-
+teros, and noah a. smith. 2016. recurrent neu-
+ral network grammars. in proc. naacl.
+
+ahmad emami and frederick jelinek. 2005. a
+neural syntactic language model. machine
+learning 60(1   3).
+
+christoph goller and andreas k  uchler. 1996.
+learning task-dependent distributed representa-
+tions by id26 through structure. in
+proc. ieee international conference on neural
+networks.
+
+edward grefenstette, karl moritz hermann,
+mustafa suleyman, and phil blunsom. 2015.
+learning to transduce with unbounded memory.
+in proc. nips.
+
+kaiming he, xiangyu zhang, shaoqing ren, and
+jian sun. 2015. delving deep into recti   ers:
+surpassing human-level performance on image-
+net classi   cation. in proc. iccv.
+
+james henderson. 2004. discriminative training
+of a neural network statistical parser. in proc.
+acl.
+
+sepp hochreiter and j  urgen schmidhuber. 1997.
+long short-term memory. neural computation
+9(8).
+
+g  erard huet. 1997. the zipper. journal of func-
+
+tional programming 7(5).
+
+sergey io   e and christian szegedy. 2015. batch
+id172: accelerating deep network
+training by reducing internal covariate shift. in
+proc. icml.
+
+ozan irsoy and claire cardie. 2014. deep re-
+cursive neural networks for compositionality in
+language. in proc. nips.
+
+armand joulin and tomas mikolov. 2015. infer-
+ring algorithmic patterns with stack-augmented
+recurrent nets. in proc. nips.
+
+nal kalchbrenner, edward grefenstette, and phil
+blunsom. 2014. a convolutional neural net-
+work for modelling sentences. in proc. acl.
+
+david dowty. 2007. compositionality as an em-
+in direct compositionality,
+
+pirical problem.
+oxford univ. press.
+
+eliyahu kiperwasser and yoav goldberg. 2016.
+easy-   rst id33 with hierarchical
+tree lstms. arxiv:1603.00375.
+
+chris dyer, miguel ballesteros, wang ling,
+austin matthews, and noah a. smith. 2015.
+
+jiwei li, minh-thang luong, dan jurafsky, and
+eudard hovy. 2015. when are tree structures
+
+ivan titov and james henderson. 2010. a latent
+variable model for generative dependency pars-
+ing.
+in harry bunt, paola merlo, and joakim
+nivre, editors, trends in parsing technology,
+springer.
+
+ivan vendrov, ryan kiros, sanja fidler, and
+raquel urtasun. 2016. order-embeddings of
+images and language. in proc. iclr.
+
+shuohang wang and jing jiang. 2016. learning
+natural language id136 with lstm. in proc.
+naacl.
+
+xiang zhang, junbo zhao, and yann lecun.
+2015. character-level convolutional networks
+for text classi   cation. in proc. nips.
+
+xingxing zhang, liang lu, and mirella lapata.
+2016. top-down tree long short-term memory
+networks. in proc. naacl.
+
+necessary for deep learning of representations?
+in proc. emnlp.
+
+lili mou, men rui, ge li, yan xu, lu zhang,
+rui yan, and zhi jin. 2016. natural language
+id136 by tree-based convolution and heuris-
+tic matching. in proc. acl.
+
+joakim nivre. 2003. an e   cient algorithm for
+projective id33. in proc. iwpt.
+je   rey pennington, richard socher, and christo-
+pher d. manning. 2014. glove: global vectors
+for word representation. in proc. emnlp.
+
+tim rockt  aschel, edward grefenstette, karl
+moritz hermann, tom  a  s ko  cisk`y, and phil
+blunsom. 2016. reasoning about entailment
+with neural attention. in proc. iclr.
+
+stuart m. shieber. 1983. sentence disambiguation
+in proc.
+
+by a id132 technique.
+acl.
+
+richard socher, cli    c. lin, andrew y. ng, and
+christopher d. manning. 2011a. parsing natu-
+ral scenes and natural language with recursive
+neural networks. in proc. icml.
+
+richard socher,
+
+je   rey pennington, eric h
+huang, andrew y. ng, and christopher d.
+manning. 2011b.
+semi-supervised recursive
+autoencoders for predicting sentiment distribu-
+tions. in proc. emnlp.
+
+ilya sutskever,
+
+nitish srivastava, geo   rey hinton, alex
+krizhevsky,
+and ruslan
+salakhutdinov. 2014. dropout: a simple way
+to prevent neural networks from over   tting.
+jmlr 15.
+
+ilya sutskever, oriol vinyals, and quoc v. le.
+2014. sequence to sequence learning with neu-
+ral networks. in proc. nips.
+
+kai sheng tai, richard socher, and christo-
+pher d. manning. 2015.
+improved semantic
+representations from tree-structured long short-
+term memory networks. in proc. acl.
+
+theano development team. 2016.
+
+theano:
+a python framework for fast computation of
+mathematical expressions. arxiv:1605.02688.
+tijmen tieleman and geo   rey hinton. 2012. lec-
+ture 6.5     rmsprop: divide the gradient by
+a running average of its recent magnitude.
+in
+neural networks for machine learning, cours-
+era.
+
+

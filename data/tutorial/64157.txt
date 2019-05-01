@@ -1,0 +1,395 @@
+   #[1]machine learning explained    feed [2]machine learning explained   
+   comments feed [3]id38 tutorial in torchtext (practical
+   torchtext part 2) [4]kaggle mercari competition: analysis of winning
+   submissions [5]alternate [6]alternate
+
+   [7]skip to content
+
+   [8]machine learning explained
+
+   deep learning, python, data wrangling and other machine learning
+   related topics explained for practitioners
+   (button) menu
+
+     * [9]about this blog
+     * [10]github
+
+id173 techniques for natural language processing (with code
+examples)
+
+   if you   re a deep learning practitioner, overfitting is probably the
+   problem you struggle with the most. unfortunately, compared to computer
+   vision, methods for id173 (dealing with overfitting) in
+   natural language processing (nlp) tend to be scattered across various
+   papers and underdocumented. i felt that many nlp practitioners would
+   benefit from having a resource that they could reference to know what
+   methods were available. to meet this demand, this post will try to
+   cover some of the easiest, yet most effective id173 methods
+   along with code snippets in pytorch whenever possible.
+
+1. general techniques
+
+dropping out words at random
+
+   one of the ways in which overfitting can occur in nlp is by the model
+   relying too heavily on a select number of words. therefore, one natural
+   id173 method is to drop words out at random. most deep
+   learning models for nlp use an embedding matrix to convert words into
+   vectors, so this can be implemented relatively trivially by dropping
+   out entire rows of the embedding matrix.
+
+   here is a casual implementation (borrowed from [11]this repository and
+   refactored for simplicity)
+
+def embedded_dropout(embed, words, dropout=0.1):
+    mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_
+(1 - dropout).expand_as(embed.weight) / (1 - dropout)
+    mask = variable(mask)
+    masked_embed_weight = mask * embed.weight
+
+    padding_idx = embed.padding_idx if embed.padding_idx is not none else -1
+    x = embed._backend.embedding.apply(words, masked_embed_weight,
+                                       padding_idx, embed.max_norm, embed.norm_t
+ype,
+                                       embed.scale_grad_by_freq, embed.sparse
+                                      )
+    return x
+
+# usage
+word_dropped_embeddings = embedding_dropout(embedding_layer, words)
+
+   it   s only a few lines of code, but can be surprisingly effective.
+   whenever i see my model overfitting, i always start off by applying
+   dropout to the embedding matrix.
+
+
+2. dropout related techniques for recurrent neural networks
+
+   despite the various advances in novel architectures, recurrent neural
+   networks (id56s) are still the go-to neural network architecture for
+   nlp. id56s apply the same transformation multiple times, so
+   id173 methods that worked for feedforward networks often
+   cannot be used naively for id56s. this is particularly pertinent for one
+   of the most effective id173 methods in deep learning: dropout.
+   dropping out activations means partially erasing the memory.  if we
+   randomly dropout various sections of the memory, we prevent the model
+   from learning long-term dependencies, which defeats the purpose of
+   using id56s in the first place. most of the following methods attempt to
+   resolve this problem through various techniques.
+
+variational dropout/locked dropout
+
+   one of the first-developed methods of dealing with this problem is to
+   use a fixed mask to dropout the recurrent activations. this is akin to
+   selectively disabling certain parts of the memory, but allowing the
+   other parts to function fully. the reason this is called variational
+   dropout is that the mathematical justification behind this method uses
+   variational methods; the term    locked dropout    captures the essence
+   much more intuitively. (for more details, please refer to the
+   [12]original paper)
+
+   locked dropout can be implemented trivially if it is applied to the
+   input or output sequences. below is the code for lockeddropout (also
+   borrowed from [13]this repository and modified for clarity and
+   consistency) for the input and output sequences (note that this code
+   does not work for the hidden sequences).
+def locked_dropout(x, dropout=0.5, training=true):
+    if not self.training or not dropout:
+        return x
+    # same mask repeated across the sequence dimension
+    m = x.data.new(1, x.size(1), x.size(2)).bernoulli_(1 - dropout)
+    mask = variable(m, requires_grad=false) / (1 - dropout)
+    mask = mask.expand_as(x)
+    return mask * x
+
+# usage
+dropped_embeddings = locked_dropout(embeddings, dropout=0.5)
+
+
+   unfortunately, this code is incompatible with the cudnn backend for the
+   hidden sequences. this is because cudnn computes the hidden sequences
+   behind the scenes, so any code that requires intervention into the
+   computation of the hidden sequences (requires changing the relationship
+   between h_t and h_{t+1} ) cannot work with cudnn (as of now). this may
+   seem like a small problem, but being able to use the cudnn backend is
+   extremely important for training id56s efficiently.
+
+zoneout
+
+   one of the problems of locked dropout is that it can have negative
+   effects on the gradient flow during training. though this is not a
+   problem unique to recurrent dropout (it can occur for any dropout
+   method), recurrent neural networks have a special id173 method
+   called zoneout. proposed in [14]this paper, the idea behind zoneout is
+   simple: instead of setting the recurrent activations to zero, set them
+   to their values at the previous time step (i.e. prevent them from being
+   updated).
+
+   unfortunately, as with variational dropout, zoneout cannot be used with
+   the cudnn backend. it also isn   t clear whether it is really more
+   effective than variational/locked dropout either.
+
+recurrent dropout
+
+   somewhat related to the idea of zoneout, [15]this paper proposed a
+   method of recurrent dropout without losing memory by applying dropout
+   to the update vector for the hidden state. the authors claim that this
+   is better than applying dropout directly to the hidden state not only
+   because it retains memory but also because it avoids scaling the hidden
+   state directly, which can cause saturation of the hidden state.
+
+   [16]this paper tried using both variational dropout and recurrent
+   dropout, but saw no consistent advantage between either method.
+
+dropconnect on recurrent weights
+
+   though many papers have focused on dropping out the hidden activations,
+   [17]this paper proposed the use of dropconnect     a method that
+   basically drops out the weights of connections instead of the
+   activations     on the recurrent hidden to hidden weights. this is
+   similar to the dropout methods mentioned above, but its main advantage
+   is that it is compatible with cudnn optimized id56s. this is because the
+   dropout mask is applied to the weights once, and the cudnn backend does
+   all the remaining computation behind the scenes.
+
+   here   s the code the authors of the paper have provided for implementing
+   this functionality. don   t be intimidated by the housekeeping code: the
+   essence (the _setweights method) is very simple.
+
+class weightdrop(torch.nn.module):
+    def __init__(self, module, weights_to_drop, dropout=0):
+        super(weightdrop, self).__init__()
+        self.module = module
+        self.weights_to_drop = weights_to_drop
+        self.dropout = dropout
+        self._setup()
+
+    def null(*args, **kwargs):
+    # we need to replace flatten_parameters with a nothing function
+    # it must be a function rather than a lambda as otherwise pickling explodes
+        return
+
+    def _setup(self):
+    # terrible temporary solution to an issue regarding compacting weights re: c
+udnn id56
+        if issubclass(type(self.module), torch.nn.id56base):
+            self.module.flatten_parameters = self.null
+            for name_w in self.weights:
+                 w = getattr(self.module, name_w)
+                 del self.module._parameters[name_w]
+                 self.module.register_parameter(name_w + '_raw', parameter(w.dat
+a))
+
+    def _setweights(self):
+        for name_w in self.weights_to_drop:
+            raw_w = getattr(self.module, name_w + '_raw')
+            w = torch.nn.functional.dropout(raw_w, p=self.dropout, training=self
+.training)
+            setattr(self.module, name_w, w)
+
+    def forward(self, *args):
+         self._setweights()
+         return self.module.forward(*args)
+
+
+   the paper that proposed the use of dropconnect on the recurrent weights
+   used variational dropout for the inputs and outputs of the id56, and
+   found that both techniques provided consistent improvements in
+   performance.
+
+
+3. other techniques for recurrent neural networks
+
+   though dropout remains one of the most commonly used and studied
+   id173 techniques in deep learning, other methods can be
+   effective as well. i   ve covered id172 methods for id56s in
+   another post, so i   ll cover other id173 methods that can be
+   used for id56s in this section.
+
+weight id173
+
+   weight id173 (also known as weight decay) is as effective in
+   id56s as in other deep learning methods. although this might be obvious,
+   i think it   s important to emphasize that basic id173 methods
+   should not be neglected in favor of fancy and new id173
+   methods. since weight id173 can be implemented easily in most
+   deep learning frameworks, i use it immediately when i see my model
+   overfitting.
+
+activation id173
+
+   somewhat similar to weight id173, activation id173 is
+   a method of penalizing activations that are significantly larger than
+   0. [18]this paper proposed using it on the recurrent activations of
+   id56s. concretely, activation id173 for the recurrent
+   activations is implemented by adding a id173 term \alpha \|
+   h_t \| to the loss.
+
+temporal activation id173
+
+   temporal activation id173 is a method proposed in [19]this
+   paper that penalizes large changes in the hidden states between
+   timesteps. this id173 method is unique to id56s. concretely, it
+   adds a id173 term to the loss of the form \beta \| h_t -
+   h_{t+1} \|_2 . intuitively, this ensures that single inputs don   t
+   significantly change the decision of the model.
+
+
+4. conclusion
+
+   in this post, i covered various id173 methods that are used in
+   nlp along with code snippets that implement them. this list is by no
+   means exhaustive, but often these methods provide a fairly good degree
+   of id173 and prevent overfitting relatively effectively.
+
+   if you know any other effective methods that i haven   t covered here,
+   i   ll be very greatful if you could leave them in the comments.
+
+share this:
+
+     * [20]click to share on twitter (opens in new window)
+     * [21]click to share on facebook (opens in new window)
+     *
+
+like this:
+
+   like loading...
+
+related
+
+   author [22]keitakuritaposted on [23]march 2, 2018march 2,
+   2018categories [24]deep learning, [25]nlp
+
+post navigation
+
+   [26]previous previous post: id38 tutorial in torchtext
+   (practical torchtext part 2)
+   [27]next next post: kaggle mercari competition: analysis of winning
+   submissions
+
+top posts & pages
+
+     * [28]an in-depth tutorial to allennlp (from basics to elmo and bert)
+     * [29]weight id172 and layer id172 explained
+       (id172 in deep learning part 2)
+     * [30]lightgbm and xgboost explained
+     * [31]paper dissected: "attention is all you need" explained
+     * [32]a practical introduction to nmf (nonnegative matrix
+       factorization)
+
+subscribe to blog via email
+
+   find anything useful? ;)
+   enter your email address to subscribe to this blog and receive
+   notifications of new posts by email.
+
+   email address ____________________
+
+   (button) subscribe
+
+categories
+
+     * [33]id161 (2)
+     * [34]deep learning (22)
+     * [35]fromscratch (1)
+     * [36]jupyter (2)
+     * [37]kaggle (1)
+     * [38]machine learning (13)
+     * [39]nlp (11)
+     * [40]paper (10)
+     * [41]python (1)
+     * [42]skills (1)
+     * [43]software (1)
+     * [44]software engineering (2)
+     * [45]uncategorized (3)
+
+archives
+
+     * [46]april 2019
+     * [47]february 2019
+     * [48]january 2019
+     * [49]november 2018
+     * [50]september 2018
+     * [51]august 2018
+     * [52]june 2018
+     * [53]may 2018
+     * [54]april 2018
+     * [55]march 2018
+     * [56]february 2018
+     * [57]january 2018
+     * [58]december 2017
+
+     * [59]about this blog
+     * [60]github
+
+   [61]machine learning explained [62]proudly powered by wordpress
+
+   iframe: [63]likes-master
+
+   %d bloggers like this:
+
+references
+
+   1. http://id113xplained.com/feed/
+   2. http://id113xplained.com/comments/feed/
+   3. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+   4. http://id113xplained.com/2018/03/14/kaggle-mercari-competition-analysis-of-winning-submissions/
+   5. http://id113xplained.com/wp-json/oembed/1.0/embed?url=http://id113xplained.com/2018/03/02/id173-techniques-for-natural-language-processing-with-code-examples/
+   6. http://id113xplained.com/wp-json/oembed/1.0/embed?url=http://id113xplained.com/2018/03/02/id173-techniques-for-natural-language-processing-with-code-examples/&format=xml
+   7. http://id113xplained.com/2018/03/02/id173-techniques-for-natural-language-processing-with-code-examples/#content
+   8. http://id113xplained.com/
+   9. http://id113xplained.com/about-this-blog/
+  10. https://github.com/keitakurita
+  11. https://github.com/salesforce/awd-lstm-lm
+  12. https://arxiv.org/abs/1512.05287
+  13. https://github.com/salesforce/awd-lstm-lm
+  14. https://arxiv.org/abs/1606.01305.pdf
+  15. https://arxiv.org/pdf/1603.05118.pdf
+  16. https://arxiv.org/pdf/1707.05589.pdf
+  17. https://arxiv.org/pdf/1708.02182.pdf
+  18. https://arxiv.org/pdf/1708.01009.pdf
+  19. https://arxiv.org/pdf/1708.01009.pdf
+  20. http://id113xplained.com/2018/03/02/id173-techniques-for-natural-language-processing-with-code-examples/?share=twitter
+  21. http://id113xplained.com/2018/03/02/id173-techniques-for-natural-language-processing-with-code-examples/?share=facebook
+  22. http://id113xplained.com/author/admin/
+  23. http://id113xplained.com/2018/03/02/id173-techniques-for-natural-language-processing-with-code-examples/
+  24. http://id113xplained.com/category/machine-learning/deep-learning/
+  25. http://id113xplained.com/category/nlp/
+  26. http://id113xplained.com/2018/02/15/language-modeling-tutorial-in-torchtext-practical-torchtext-part-2/
+  27. http://id113xplained.com/2018/03/14/kaggle-mercari-competition-analysis-of-winning-submissions/
+  28. http://id113xplained.com/2019/01/30/an-in-depth-tutorial-to-allennlp-from-basics-to-elmo-and-bert/
+  29. http://id113xplained.com/2018/01/13/weight-id172-and-layer-id172-explained-id172-in-deep-learning-part-2/
+  30. http://id113xplained.com/2018/01/05/lightgbm-and-xgboost-explained/
+  31. http://id113xplained.com/2017/12/29/attention-is-all-you-need-explained/
+  32. http://id113xplained.com/2017/12/28/a-practical-introduction-to-nmf-nonnegative-matrix-factorization/
+  33. http://id113xplained.com/category/computer-vision/
+  34. http://id113xplained.com/category/machine-learning/deep-learning/
+  35. http://id113xplained.com/category/fromscratch/
+  36. http://id113xplained.com/category/jupyter/
+  37. http://id113xplained.com/category/kaggle/
+  38. http://id113xplained.com/category/machine-learning/
+  39. http://id113xplained.com/category/nlp/
+  40. http://id113xplained.com/category/paper/
+  41. http://id113xplained.com/category/python/
+  42. http://id113xplained.com/category/skills/
+  43. http://id113xplained.com/category/software/
+  44. http://id113xplained.com/category/software-engineering/
+  45. http://id113xplained.com/category/uncategorized/
+  46. http://id113xplained.com/2019/04/
+  47. http://id113xplained.com/2019/02/
+  48. http://id113xplained.com/2019/01/
+  49. http://id113xplained.com/2018/11/
+  50. http://id113xplained.com/2018/09/
+  51. http://id113xplained.com/2018/08/
+  52. http://id113xplained.com/2018/06/
+  53. http://id113xplained.com/2018/05/
+  54. http://id113xplained.com/2018/04/
+  55. http://id113xplained.com/2018/03/
+  56. http://id113xplained.com/2018/02/
+  57. http://id113xplained.com/2018/01/
+  58. http://id113xplained.com/2017/12/
+  59. http://id113xplained.com/about-this-blog/
+  60. https://github.com/keitakurita
+  61. http://id113xplained.com/
+  62. https://wordpress.org/
+  63. https://widgets.wp.com/likes/master.html?ver=201914#ver=201914

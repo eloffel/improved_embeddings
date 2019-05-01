@@ -1,0 +1,1030 @@
+    #[1]index [2]search [3]theano 1.0.0 documentation [4]tutorial
+   [5]configuration settings and compiling modes [6]using multiple gpus
+
+   [7]theano [theano_logo_allwhite_210x70.png]
+   1.0
+   ____________________
+     * [8]release notes
+     * [9]theano at a glance
+     * [10]requirements
+     * [11]installing theano
+     * [12]updating theano
+     * [13]tutorial
+          + [14]prerequisites
+          + [15]basics
+          + [16]advanced
+               o [17]sparse
+               o [18]using the gpu
+               o [19]using multiple gpus
+               o [20]convolution arithmetic tutorial
+                    # [21]about this tutorial
+                    # [22]refresher: discrete convolutions
+                    # [23]theano terminology
+                    # [24]convolution arithmetic
+                    # [25]transposed convolution arithmetic
+                    # [26]miscellaneous convolutions
+                    # [27]quick reference
+          + [28]advanced configuration and debugging
+          + [29]further readings
+     * [30]extending theano
+     * [31]developer start guide
+     * [32]optimizations
+     * [33]api documentation
+     * [34]troubleshooting
+     * [35]glossary
+     * [36]links
+     * [37]internal documentation
+     * [38]acknowledgements
+     * [39]license
+
+   [40]theano
+     * [41]docs   
+     * [42]tutorial   
+     * convolution arithmetic tutorial
+     * [43]view page source
+     __________________________________________________________________
+
+convolution arithmetic tutorial[44]  
+
+   note
+
+   this tutorial is adapted from an existing [45]convolution arithmetic
+   guide [46][1], with an added emphasis on theano   s interface.
+
+   also, note that the signal processing community has a different
+   nomenclature and a well established literature on the topic, but for
+   this tutorial we will stick to the terms used in the machine learning
+   community. for a signal processing point of view on the subject, see
+   for instance winograd, shmuel. arithmetic complexity of computations.
+   vol. 33. siam, 1980.
+
+about this tutorial[47]  
+
+   learning to use convolutional neural networks (id98s) for the first time
+   is generally an intimidating experience. a convolutional layer   s output
+   shape is affected by the shape of its input as well as the choice of
+   kernel shape, zero padding and strides, and the relationship between
+   these properties is not trivial to infer. this contrasts with
+   fully-connected layers, whose output size is independent of the input
+   size. additionally, so-called transposed convolutional layers (also
+   known as fractionally strided convolutional layers, or     wrongly     as
+   deconvolutions) have been employed in more and more work as of late,
+   and their relationship with convolutional layers has been explained
+   with various degrees of clarity.
+
+   the relationship between a convolution operation   s input shape, kernel
+   size, stride, padding and its output shape can be confusing at times.
+
+   the tutorial   s objective is threefold:
+     * explain the relationship between convolutional layers and
+       transposed convolutional layers.
+     * provide an intuitive understanding of the relationship between
+       input shape, kernel shape, zero padding, strides and output shape
+       in convolutional and transposed convolutional layers.
+     * clarify theano   s api on convolutions.
+
+refresher: discrete convolutions[48]  
+
+   the bread and butter of neural networks is affine transformations: a
+   vector is received as input and is multiplied with a matrix to produce
+   an output (to which a bias vector is usually added before passing the
+   result through a nonlinearity). this is applicable to any type of
+   input, be it an image, a sound clip or an unordered collection of
+   features: whatever their dimensionality, their representation can
+   always be flattened into a vector before the transformation.
+
+   images, sound clips and many other similar kinds of data have an
+   intrinsic structure. more formally, they share these important
+   properties:
+     * they are stored as multi-dimensional arrays.
+     * they feature one or more axes for which ordering matters (e.g.,
+       width and height axes for an image, time axis for a sound clip).
+     * one axis, called the channel axis, is used to access different
+       views of the data (e.g., the red, green and blue channels of a
+       color image, or the left and right channels of a stereo audio
+       track).
+
+   these properties are not exploited when an affine transformation is
+   applied; in fact, all the axes are treated in the same way and the
+   topological information is not taken into account. still, taking
+   advantage of the implicit structure of the data may prove very handy in
+   solving some tasks, like id161 and id103, and in
+   these cases it would be best to preserve it. this is where discrete
+   convolutions come into play.
+
+   a discrete convolution is a linear transformation that preserves this
+   notion of ordering. it is sparse (only a few input units contribute to
+   a given output unit) and reuses parameters (the same weights are
+   applied to multiple locations in the input).
+
+   here is an example of a discrete convolution:
+   ../_images/numerical_no_padding_no_strides.gif
+
+   the light blue grid is called the input feature map. a kernel (shaded
+   area) of value
+
+   \begin{pmatrix} 0 & 1 & 2 \\ 2 & 2 & 0 \\ 0 & 1 & 2 \end{pmatrix}
+
+   slides across the input feature map. at each location, the product
+   between each element of the kernel and the input element it overlaps is
+   computed and the results are summed up to obtain the output in the
+   current location. the final output of this procedure is a matrix called
+   output feature map (in green).
+
+   this procedure can be repeated using different kernels to form as many
+   output feature maps (a.k.a. output channels) as desired. note also that
+   to keep the drawing simple a single input feature map is being
+   represented, but it is not uncommon to have multiple feature maps
+   stacked one onto another (an example of this is what was referred to
+   earlier as channels for images and sound clips).
+
+   note
+
+   while there is a distinction between convolution and cross-correlation
+   from a signal processing perspective, the two become interchangeable
+   when the kernel is learned. for the sake of simplicity and to stay
+   consistent with most of the machine learning literature, the term
+   convolution will be used in this tutorial.
+
+   if there are multiple input and output feature maps, the collection of
+   kernels form a 4d array (output_channels, input_channels, filter_rows,
+   filter_columns). for each output channel, each input channel is
+   convolved with a distinct part of the kernel and the resulting set of
+   feature maps is summed elementwise to produce the corresponding output
+   feature map. the result of this procedure is a set of output feature
+   maps, one for each output channel, that is the output of the
+   convolution.
+
+   the convolution depicted above is an instance of a 2-d convolution, but
+   can be generalized to n-d convolutions. for instance, in a 3-d
+   convolution, the kernel would be a cuboid and would slide across the
+   height, width and depth of the input feature map.
+
+   the collection of kernels defining a discrete convolution has a shape
+   corresponding to some permutation of (n, m, k_1, \ldots, k_n) , where
+
+   \begin{split} n &\equiv \text{number of output feature maps},\\ m
+   &\equiv \text{number of input feature maps},\\ k_j &\equiv \text{kernel
+   size along axis $j$}. \end{split}
+
+   the following properties affect the output size o_j of a convolutional
+   layer along axis j :
+     * i_j : input size along axis j ,
+     * k_j : kernel size along axis j ,
+     * s_j : stride (distance between two consecutive positions of the
+       kernel) along axis j ,
+     * p_j : zero padding (number of zeros concatenated at the beginning
+       and at the end of an axis) along axis j.
+
+   for instance, here is a 3 \times 3 kernel applied to a 5 \times 5 input
+   padded with a 1 \times 1 border of zeros using 2 \times 2 strides:
+   ../_images/numerical_padding_strides.gif
+
+   the analysis of the relationship between convolutional layer properties
+   is eased by the fact that they don   t interact across axes, i.e., the
+   choice of kernel size, stride and zero padding along axis j only
+   affects the output size of axis j . because of that, this section will
+   focus on the following simplified setting:
+     * 2-d discrete convolutions ( n = 2 ),
+     * square inputs ( i_1 = i_2 = i ),
+     * square kernel size ( k_1 = k_2 = k ),
+     * same strides along both axes ( s_1 = s_2 = s ),
+     * same zero padding along both axes ( p_1 = p_2 = p ).
+
+   this facilitates the analysis and the visualization, but keep in mind
+   that the results outlined here also generalize to the n-d and
+   non-square cases.
+
+theano terminology[49]  
+
+   theano has its own terminology, which differs slightly from the
+   convolution arithmetic guide   s. here   s a simple conversion table for
+   the two:
+   theano convolution arithmetic
+   filters 4d collection of kernels
+   input_shape (batch size (b), input channels (c), input rows (i1), input
+   columns (i2))
+   filter_shape (output channels (c1), input channels (c2), filter rows
+   (k1), filter columns (k2))
+   border_mode 'valid', 'half', 'full' or ( p_1 , p_2 )
+   subsample (s1, s2)
+
+   for instance, the convolution shown above would correspond to the
+   following theano call:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(1, 1, 5, 5), filter_shape=(1, 1, 3, 3),
+    border_mode=(1, 1), subsample=(2, 2))
+
+convolution arithmetic[50]  
+
+no zero padding, unit strides[51]  
+
+   the simplest case to analyze is when the kernel just slides across
+   every position of the input (i.e., s = 1 and p = 0 ). here is an
+   example for i = 4 and k = 3 :
+   ../_images/no_padding_no_strides.gif
+
+   one way of defining the output size in this case is by the number of
+   possible placements of the kernel on the input. let   s consider the
+   width axis: the kernel starts on the leftmost part of the input feature
+   map and slides by steps of one until it touches the right side of the
+   input. the size of the output will be equal to the number of steps
+   made, plus one, accounting for the initial position of the kernel. the
+   same logic applies for the height axis.
+
+   more formally, the following relationship can be inferred:
+
+   relationship 1
+
+   for any i and k , and for s = 1 and p = 0 ,
+
+   o = (i - k) + 1.
+
+   this translates to the following theano code:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode=(0, 0), subsample=(1, 1))
+# output.shape[2] == (i1 - k1) + 1
+# output.shape[3] == (i2 - k2) + 1
+
+zero padding, unit strides[52]  
+
+   to factor in zero padding (i.e., only restricting to s = 1 ), let   s
+   consider its effect on the effective input size: padding with p zeros
+   changes the effective input size from i to i + 2p . in the general
+   case, relationship 1 can then be used to infer the following
+   relationship:
+
+   relationship 2
+
+   for any i , k and p , and for s = 1 ,
+
+   o = (i - k) + 2p + 1.
+
+   this translates to the following theano code:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode=(p1, p2), subsample=(1, 1))
+# output.shape[2] == (i1 - k1) + 2 * p1 + 1
+# output.shape[3] == (i2 - k2) + 2 * p2 + 1
+
+   here is an example for i = 5 , k = 4 and p = 2 :
+   ../_images/arbitrary_padding_no_strides.gif
+
+special cases[53]  
+
+   in practice, two specific instances of zero padding are used quite
+   extensively because of their respective properties. let   s discuss them
+   in more detail.
+
+half (same) padding[54]  
+
+   having the output size be the same as the input size (i.e., o = i ) can
+   be a desirable property:
+
+   relationship 3
+
+   for any i and for k odd ( k = 2n + 1, \quad n \in \mathbb{n} ), s = 1
+   and p = \lfloor k / 2 \rfloor = n ,
+
+   \begin{split} o &= i + 2 \lfloor k / 2 \rfloor - (k - 1) \\ &= i + 2n -
+   2n \\ &= i. \end{split}
+
+   this translates to the following theano code:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode='half', subsample=(1, 1))
+# output.shape[2] == i1
+# output.shape[3] == i2
+
+   this is sometimes referred to as half (or same) padding. here is an
+   example for i = 5 , k = 3 and (therefore) p = 1 :
+   ../_images/same_padding_no_strides.gif
+
+   note that half padding also works for even-valued k and for s > 1 , but
+   in that case the property that the output size is the same as the input
+   size is lost. some frameworks also implement the same convolution
+   slightly differently (e.g., in keras o = (i + s - 1) // s ).
+
+full padding[55]  
+
+   while convolving a kernel generally decreases the output size with
+   respect to the input size, sometimes the opposite is required. this can
+   be achieved with proper zero padding:
+
+   relationship 4
+
+   for any i and k , and for p = k - 1 and s = 1 ,
+
+   \begin{split} o &= i + 2(k - 1) - (k - 1) \\ &= i + (k - 1).
+   \end{split}
+
+   this translates to the following theano code:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode='full', subsample=(1, 1))
+# output.shape[2] == i1 + (k1 - 1)
+# output.shape[3] == i2 + (k2 - 1)
+
+   this is sometimes referred to as full padding, because in this setting
+   every possible partial or complete superimposition of the kernel on the
+   input feature map is taken into account. here is an example for i = 5 ,
+   k = 3 and (therefore) p = 2 :
+   ../_images/full_padding_no_strides.gif
+
+no zero padding, non-unit strides[56]  
+
+   all relationships derived so far only apply for unit-strided
+   convolutions. incorporating non unitary strides requires another
+   id136 leap. to facilitate the analysis, let   s momentarily ignore
+   zero padding (i.e., s > 1 and p = 0 ). here is an example for i = 5 , k
+   = 3 and s = 2 :
+   ../_images/no_padding_strides.gif
+
+   once again, the output size can be defined in terms of the number of
+   possible placements of the kernel on the input. let   s consider the
+   width axis: the kernel starts as usual on the leftmost part of the
+   input, but this time it slides by steps of size s until it touches the
+   right side of the input. the size of the output is again equal to the
+   number of steps made, plus one, accounting for the initial position of
+   the kernel. the same logic applies for the height axis.
+
+   from this, the following relationship can be inferred:
+
+   relationship 5
+
+   for any i , k and s , and for p = 0 ,
+
+   o = \left\lfloor \frac{i - k}{s} \right\rfloor + 1.
+
+   this translates to the following theano code:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode=(0, 0), subsample=(s1, s2))
+# output.shape[2] == (i1 - k1) // s1 + 1
+# output.shape[3] == (i2 - k2) // s2 + 1
+
+   the floor function accounts for the fact that sometimes the last
+   possible step does not coincide with the kernel reaching the end of the
+   input, i.e., some input units are left out.
+
+zero padding, non-unit strides[57]  
+
+   the most general case (convolving over a zero padded input using
+   non-unit strides) can be derived by applying relationship 5 on an
+   effective input of size i + 2p , in analogy to what was done for
+   relationship 2:
+
+   relationship 6
+
+   for any i , k , p and s ,
+
+   o = \left\lfloor \frac{i + 2p - k}{s} \right\rfloor + 1.
+
+   this translates to the following theano code:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode=(p1, p2), subsample=(s1, s2))
+# output.shape[2] == (i1 - k1 + 2 * p1) // s1 + 1
+# output.shape[3] == (i2 - k2 + 2 * p2) // s2 + 1
+
+   as before, the floor function means that in some cases a convolution
+   will produce the same output size for multiple input sizes. more
+   specifically, if i + 2p - k is a multiple of s , then any input size j
+   = i + a, \quad a \in \{0,\ldots,s - 1\} will produce the same output
+   size. note that this ambiguity applies only for s > 1 .
+
+   here is an example for i = 5 , k = 3 , s = 2 and p = 1 :
+   ../_images/padding_strides.gif
+
+   here is an example for i = 6 , k = 3 , s = 2 and p = 1 :
+   ../_images/padding_strides_odd.gif
+
+   interestingly, despite having different input sizes these convolutions
+   share the same output size. while this doesn   t affect the analysis for
+   convolutions, this will complicate the analysis in the case of
+   transposed convolutions.
+
+transposed convolution arithmetic[58]  
+
+   the need for transposed convolutions generally arises from the desire
+   to use a transformation going in the opposite direction of a normal
+   convolution, i.e., from something that has the shape of the output of
+   some convolution to something that has the shape of its input while
+   maintaining a connectivity pattern that is compatible with said
+   convolution. for instance, one might use such a transformation as the
+   decoding layer of a convolutional autoencoder or to project feature
+   maps to a higher-dimensional space.
+
+   once again, the convolutional case is considerably more complex than
+   the fully-connected case, which only requires to use a weight matrix
+   whose shape has been transposed. however, since every convolution boils
+   down to an efficient implementation of a matrix operation, the insights
+   gained from the fully-connected case are useful in solving the
+   convolutional case.
+
+   like for convolution arithmetic, the dissertation about transposed
+   convolution arithmetic is simplified by the fact that transposed
+   convolution properties don   t interact across axes.
+
+   this section will focus on the following setting:
+     * 2-d transposed convolutions ( n = 2 ),
+     * square inputs ( i_1 = i_2 = i ),
+     * square kernel size ( k_1 = k_2 = k ),
+     * same strides along both axes ( s_1 = s_2 = s ),
+     * same zero padding along both axes ( p_1 = p_2 = p ).
+
+   once again, the results outlined generalize to the n-d and non-square
+   cases.
+
+convolution as a matrix operation[59]  
+
+   take for example the convolution presented in the no zero padding, unit
+   strides subsection:
+   ../_images/no_padding_no_strides.gif
+
+   if the input and output were to be unrolled into vectors from left to
+   right, top to bottom, the convolution could be represented as a sparse
+   matrix \mathbf{c} where the non-zero elements are the elements w_{i,j}
+   of the kernel (with i and j being the row and column of the kernel
+   respectively):
+
+   \begin{pmatrix} w_{0,0} & 0 & 0 & 0 \\ w_{0,1} & w_{0,0} & 0 & 0 \\
+   w_{0,2} & w_{0,1} & 0 & 0 \\ 0 & w_{0,2} & 0 & 0 \\ w_{1,0} & 0 &
+   w_{0,0} & 0 \\ w_{1,1} & w_{1,0} & w_{0,1} & w_{0,0} \\ w_{1,2} &
+   w_{1,1} & w_{0,2} & w_{0,1} \\ 0 & w_{1,2} & 0 & w_{0,2} \\ w_{2,0} & 0
+   & w_{1,0} & 0 \\ w_{2,1} & w_{2,0} & w_{1,1} & w_{1,0} \\ w_{2,2} &
+   w_{2,1} & w_{1,2} & w_{1,1} \\ 0 & w_{2,2} & 0 & w_{1,2} \\ 0 & 0 &
+   w_{2,0} & 0 \\ 0 & 0 & w_{2,1} & w_{2,0} \\ 0 & 0 & w_{2,2} & w_{2,1}
+   \\ 0 & 0 & 0 & w_{2,2} \\ \end{pmatrix}^t
+
+   (note: the matrix has been transposed for formatting purposes.) this
+   linear operation takes the input matrix flattened as a 16-dimensional
+   vector and produces a 4-dimensional vector that is later reshaped as
+   the 2 \times 2 output matrix.
+
+   using this representation, the backward pass is easily obtained by
+   transposing \mathbf{c} ; in other words, the error is backpropagated by
+   multiplying the loss with \mathbf{c}^t . this operation takes a
+   4-dimensional vector as input and produces a 16-dimensional vector as
+   output, and its connectivity pattern is compatible with \mathbf{c} by
+   construction.
+
+   notably, the kernel \mathbf{w} defines both the matrices \mathbf{c} and
+   \mathbf{c}^t used for the forward and backward passes.
+
+transposed convolution[60]  
+
+   let   s now consider what would be required to go the other way around,
+   i.e., map from a 4-dimensional space to a 16-dimensional space, while
+   keeping the connectivity pattern of the convolution depicted above.
+   this operation is known as a transposed convolution.
+
+   transposed convolutions     also called fractionally strided convolutions
+       work by swapping the forward and backward passes of a convolution.
+   one way to put it is to note that the kernel defines a convolution, but
+   whether it   s a direct convolution or a transposed convolution is
+   determined by how the forward and backward passes are computed.
+
+   for instance, the kernel \mathbf{w} defines a convolution whose forward
+   and backward passes are computed by multiplying with \mathbf{c} and
+   \mathbf{c}^t respectively, but it also defines a transposed convolution
+   whose forward and backward passes are computed by multiplying with
+   \mathbf{c}^t and (\mathbf{c}^t)^t = \mathbf{c} respectively.
+
+   note
+
+   the transposed convolution operation can be thought of as the gradient
+   of some convolution with respect to its input, which is usually how
+   transposed convolutions are implemented in practice.
+
+   finally note that it is always possible to implement a transposed
+   convolution with a direct convolution. the disadvantage is that it
+   usually involves adding many columns and rows of zeros to the input,
+   resulting in a much less efficient implementation.
+
+   building on what has been introduced so far, this section will proceed
+   somewhat backwards with respect to the convolution arithmetic section,
+   deriving the properties of each transposed convolution by referring to
+   the direct convolution with which it shares the kernel, and defining
+   the equivalent direct convolution.
+
+no zero padding, unit strides, transposed[61]  
+
+   the simplest way to think about a transposed convolution is by
+   computing the output shape of the direct convolution for a given input
+   shape first, and then inverting the input and output shapes for the
+   transposed convolution.
+
+   let   s consider the convolution of a 3 \times 3 kernel on a 4 \times 4
+   input with unitary stride and no padding (i.e., i = 4 , k = 3 , s = 1
+   and p = 0 ). as depicted in the convolution below, this produces a 2
+   \times 2 output:
+   ../_images/no_padding_no_strides.gif
+
+   the transpose of this convolution will then have an output of shape 4
+   \times 4 when applied on a 2 \times 2 input.
+
+   another way to obtain the result of a transposed convolution is to
+   apply an equivalent     but much less efficient     direct convolution. the
+   example described so far could be tackled by convolving a 3 \times 3
+   kernel over a 2 \times 2 input padded with a 2 \times 2 border of zeros
+   using unit strides (i.e., i' = 2 , k' = k , s' = 1 and p' = 2 ), as
+   shown here:
+   ../_images/no_padding_no_strides_transposed.gif
+
+   notably, the kernel   s and stride   s sizes remain the same, but the input
+   of the equivalent (direct) convolution is now zero padded.
+
+   note
+
+   although equivalent to applying the transposed matrix, this
+   visualization adds a lot of zero multiplications in the form of zero
+   padding. this is done here for illustration purposes, but it is
+   inefficient, and software implementations will normally not perform the
+   useless zero multiplications.
+
+   one way to understand the logic behind zero padding is to consider the
+   connectivity pattern of the transposed convolution and use it to guide
+   the design of the equivalent convolution. for example, the top left
+   pixel of the input of the direct convolution only contribute to the top
+   left pixel of the output, the top right pixel is only connected to the
+   top right output pixel, and so on.
+
+   to maintain the same connectivity pattern in the equivalent convolution
+   it is necessary to zero pad the input in such a way that the first
+   (top-left) application of the kernel only touches the top-left pixel,
+   i.e., the padding has to be equal to the size of the kernel minus one.
+
+   proceeding in the same fashion it is possible to determine similar
+   observations for the other elements of the image, giving rise to the
+   following relationship:
+
+   relationship 7
+
+   a convolution described by s = 1 , p = 0 and k has an associated
+   transposed convolution described by k' = k , s' = s and p' = k - 1 and
+   its output size is
+
+   o' = i' + (k - 1).
+
+   in other words,
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, filter_shape=(c1, c2, k1, k2), border_mode=(0, 0),
+    subsample=(1, 1))
+# input.shape[2] == output.shape[2] + (k1 - 1)
+# input.shape[3] == output.shape[3] + (k2 - 1)
+
+   interestingly, this corresponds to a fully padded convolution with unit
+   strides.
+
+zero padding, unit strides, transposed[62]  
+
+   knowing that the transpose of a non-padded convolution is equivalent to
+   convolving a zero padded input, it would be reasonable to suppose that
+   the transpose of a zero padded convolution is equivalent to convolving
+   an input padded with less zeros.
+
+   it is indeed the case, as shown in here for i = 5 , k = 4 and p = 2 :
+   ../_images/arbitrary_padding_no_strides_transposed.gif
+
+   formally, the following relationship applies for zero padded
+   convolutions:
+
+   relationship 8
+
+   a convolution described by s = 1 , k and p has an associated transposed
+   convolution described by k' = k , s' = s and p' = k - p - 1 and its
+   output size is
+
+   o' = i' + (k - 1) - 2p.
+
+   in other words,
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, filter_shape=(c1, c2, k1, k2), border_mode=(p1, p2),
+    subsample=(1, 1))
+# input.shape[2] == output.shape[2] + (k1 - 1) - 2 * p1
+# input.shape[3] == output.shape[3] + (k2 - 1) - 2 * p2
+
+special cases[63]  
+
+half (same) padding, transposed[64]  
+
+   by applying the same inductive reasoning as before, it is reasonable to
+   expect that the equivalent convolution of the transpose of a half
+   padded convolution is itself a half padded convolution, given that the
+   output size of a half padded convolution is the same as its input size.
+   thus the following relation applies:
+
+   relationship 9
+
+   a convolution described by k = 2n + 1, \quad n \in \mathbb{n} , s = 1
+   and p = \lfloor k / 2 \rfloor = n has an associated transposed
+   convolution described by k' = k , s' = s and p' = p and its output size
+   is
+
+   \begin{split} o' &= i' + (k - 1) - 2p \\ &= i' + 2n - 2n \\ &= i'.
+   \end{split}
+
+   in other words,
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, filter_shape=(c1, c2, k1, k2), border_mode='half',
+    subsample=(1, 1))
+# input.shape[2] == output.shape[2]
+# input.shape[3] == output.shape[3]
+
+   here is an example for i = 5 , k = 3 and (therefore) p = 1 :
+   ../_images/same_padding_no_strides_transposed.gif
+
+full padding, transposed[65]  
+
+   knowing that the equivalent convolution of the transpose of a
+   non-padded convolution involves full padding, it is unsurprising that
+   the equivalent of the transpose of a fully padded convolution is a
+   non-padded convolution:
+
+   relationship 10
+
+   a convolution described by s = 1 , k and p = k - 1 has an associated
+   transposed convolution described by k' = k , s' = s and p' = 0 and its
+   output size is
+
+   \begin{split} o' &= i' + (k - 1) - 2p \\ &= i' - (k - 1) \end{split}
+
+   in other words,
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, filter_shape=(c1, c2, k1, k2), border_mode='full',
+    subsample=(1, 1))
+# input.shape[2] == output.shape[2] - (k1 - 1)
+# input.shape[3] == output.shape[3] - (k2 - 1)
+
+   here is an example for i = 5 , k = 3 and (therefore) p = 2 :
+   ../_images/full_padding_no_strides_transposed.gif
+
+no zero padding, non-unit strides, transposed[66]  
+
+   using the same kind of inductive logic as for zero padded convolutions,
+   one might expect that the transpose of a convolution with s > 1
+   involves an equivalent convolution with s < 1 . as will be explained,
+   this is a valid intuition, which is why transposed convolutions are
+   sometimes called fractionally strided convolutions.
+
+   here is an example for i = 5 , k = 3 and s = 2 :
+   ../_images/no_padding_strides_transposed.gif
+
+   this should help understand what fractional strides involve: zeros are
+   inserted between input units, which makes the kernel move around at a
+   slower pace than with unit strides.
+
+   note
+
+   doing so is inefficient and real-world implementations avoid useless
+   multiplications by zero, but conceptually it is how the transpose of a
+   strided convolution can be thought of.
+
+   for the moment, it will be assumed that the convolution is non-padded (
+   p = 0 ) and that its input size i is such that i - k is a multiple of s
+   . in that case, the following relationship holds:
+
+   relationship 11
+
+   a convolution described by p = 0 , k and s and whose input size is such
+   that i - k is a multiple of s , has an associated transposed
+   convolution described by \tilde{i}' , k' = k , s' = 1 and p' = k - 1 ,
+   where \tilde{i}' is the size of the stretched input obtained by adding
+   s - 1 zeros between each input unit, and its output size is
+
+   o' = s (i' - 1) + k.
+
+   in other words,
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, filter_shape=(c1, c2, k1, k2), border_mode=(0, 0),
+    subsample=(s1, s2))
+# input.shape[2] == s1 * (output.shape[2] - 1) + k1
+# input.shape[3] == s2 * (output.shape[3] - 1) + k2
+
+zero padding, non-unit strides, transposed[67]  
+
+   when the convolution   s input size i is such that i + 2p - k is a
+   multiple of s , the analysis can extended to the zero padded case by
+   combining [68]relationship 8 and [69]relationship 11:
+
+   relationship 12
+
+   a convolution described by k , s and p and whose input size i is such
+   that i + 2p - k is a multiple of s has an associated transposed
+   convolution described by \tilde{i}' , k' = k , s' = 1 and p' = k - p -
+   1 , where \tilde{i}' is the size of the stretched input obtained by
+   adding s - 1 zeros between each input unit, and its output size is
+
+   o' = s (i' - 1) + k - 2p.
+
+   in other words,
+o_prime1 = s1 * (output.shape[2] - 1) + k1 - 2 * p1
+o_prime2 = s2 * (output.shape[3] - 1) + k2 - 2 * p2
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, input_shape=(b, c1, o_prime1, o_prime2),
+    filter_shape=(c1, c2, k1, k2), border_mode=(p1, p2),
+    subsample=(s1, s2))
+
+   here is an example for i = 5 , k = 3 , s = 2 and p = 1 :
+   ../_images/padding_strides_transposed.gif
+
+   the constraint on the size of the input i can be relaxed by introducing
+   another parameter a \in \{0, \ldots, s - 1\} that allows to distinguish
+   between the s different cases that all lead to the same i' :
+
+   relationship 13
+
+   a convolution described by k , s and p has an associated transposed
+   convolution described by a , \tilde{i}' , k' = k , s' = 1 and p' = k -
+   p - 1 , where \tilde{i}' is the size of the stretched input obtained by
+   adding s - 1 zeros between each input unit, and a = (i + 2p - k) \mod s
+   represents the number of zeros added to the top and right edges of the
+   input, and its output size is
+
+   o' = s (i' - 1) + a + k - 2p.
+
+   in other words,
+o_prime1 = s1 * (output.shape[2] - 1) + a1 + k1 - 2 * p1
+o_prime2 = s2 * (output.shape[3] - 1) + a2 + k2 - 2 * p2
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, input_shape=(b, c1, o_prime1, o_prime2),
+    filter_shape=(c1, c2, k1, k2), border_mode=(p1, p2),
+    subsample=(s1, s2))
+
+   here is an example for i = 6 , k = 3 , s = 2 and p = 1 :
+   ../_images/padding_strides_odd_transposed.gif
+
+miscellaneous convolutions[70]  
+
+dilated convolutions[71]  
+
+   those familiar with the deep learning literature may have noticed the
+   term    dilated convolutions    (or    atrous convolutions   , from the french
+   expression convolutions    trous) appear in recent papers. here we
+   attempt to provide an intuitive understanding of dilated convolutions.
+   for a more in-depth description and to understand in what contexts they
+   are applied, see [72]chen et al. (2014) [73][2]; [74]yu and koltun
+   (2015) [75][3].
+
+   dilated convolutions    inflate    the kernel by inserting spaces between
+   the kernel elements. the dilation    rate    is controlled by an additional
+   hyperparameter d . implementations may vary, but there are usually d -
+   1 spaces inserted between kernel elements such that d = 1 corresponds
+   to a regular convolution.
+
+   to understand the relationship tying the dilation rate d and the output
+   size o , it is useful to think of the impact of d on the effective
+   kernel size. a kernel of size k dilated by a factor d has an effective
+   size
+
+   \hat{k} = k + (k - 1)(d - 1).
+
+   this can be combined with relationship 6 to form the following
+   relationship for dilated convolutions:
+
+   relationship 14
+
+   for any i , k , p and s , and for a dilation rate d ,
+
+   o = \left\lfloor \frac{i + 2p - k - (k - 1)(d - 1)}{s} \right\rfloor +
+   1.
+
+   this translates to the following theano code using the filter_dilation
+   parameter:
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode=(p1, p2), subsample=(s1, s2), filter_dilation=(d1, d2))
+# output.shape[2] == (i1 + 2 * p1 - k1 - (k1 - 1) * (d1 - 1)) // s1 + 1
+# output.shape[3] == (i2 + 2 * p2 - k2 - (k2 - 1) * (d2 - 1)) // s2 + 1
+
+   here is an example for i = 7 , k = 3 , d = 2 , s = 1 and p = 0 :
+   ../_images/dilation.gif
+   [76][1] dumoulin, vincent, and visin, francesco.    a guide to
+   convolution arithmetic for deep learning   . arxiv preprint
+   arxiv:1603.07285 (2016)
+   [77][2] chen, liang-chieh, papandreou, george, kokkinos, iasonas,
+   murphy, kevin and yuille, alan l.    semantic image segmentation with
+   deep convolutional nets and fully connected crfs   . arxiv preprint
+   arxiv:1412.7062 (2014).
+   [78][3] yu, fisher and koltun, vladlen.    multi-scale context
+   aggregation by dilated convolutions   . arxiv preprint arxiv:1511.07122
+   (2015)
+
+grouped convolutions[79]  
+
+   in grouped convolutions with n number of groups, the input and kernel
+   are split by their channels to form n distinct groups. each group
+   performs convolutions independent of the other groups to give n
+   different outputs. these individual outputs are then concatenated
+   together to give the final output. a few examples of works using
+   grouped convolutions are [80]krizhevsky et al (2012) [81][4]; [82]xie
+   et at (2016) [83][5].
+
+   a special case of grouped convolutions is when n equals the number of
+   input channels. this is called depth-wise convolutions or channel-wise
+   convolutions. depth-wise convolutions also forms a part of separable
+   convolutions.
+
+   an example to use grouped convolutions would be:
+
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2 / n, k1, k
+2),
+    border_mode=(p1, p2), subsample=(s1, s2), filter_dilation=(d1, d2), num_grou
+ps=n)
+# output.shape[0] == b
+# output.shape[1] == c1
+# output.shape[2] == (i1 + 2 * p1 - k1 - (k1 - 1) * (d1 - 1)) // s1 + 1
+# output.shape[3] == (i2 + 2 * p2 - k2 - (k2 - 1) * (d2 - 1)) // s2 + 1
+
+   [84][4] alex krizhevsky, ilya sutskever, geoffrey e. hinton.    id163
+   classification with deep convolutional neural networks   . advances in
+   neural information processing systems 25 (nips 2012)
+   [85][5] saining xie, ross girshick, piotr doll  r, zhuowen tu, kaiming
+   he.    aggregated residual transformations for deep neural networks   .
+   arxiv preprint arxiv:1611.05431 (2016).
+
+separable convolutions[86]  
+
+   separable convolutions consists of two consecutive convolution
+   operations. first is depth-wise convolutions which performs
+   convolutions separately for each channel of the input. the output of
+   this operation is the given as input to point-wise convolutions which
+   is a special case of general convolutions with 1x1 filters. this mixes
+   the channels to give the final output.
+
+   as we can see from this diagram, modified from [87]vanhoucke(2014)
+   [88][6], depth-wise convolutions is performed with c2 single channel
+   depth-wise filters to give a total of c2 output channels in the
+   intermediate output where each channel in the input separately performs
+   convolutions with separate kernels to give c2 / n channels to the
+   intermediate output, where n is the number of input channels. the
+   intermediate output then performs point-wise convolutions with c3 1x1
+   filters which mixes the channels of the intermediate output to give the
+   final output.
+   ../_images/sep2d.jpg
+
+   separable convolutions is used as follows:
+
+output = theano.tensor.nnet.separable_conv2d(
+    input, depthwise_filters, pointwise_filters, num_channels = c1,
+    input_shape=(b, c1, i1, i2), depthwise_filter_shape=(c2, 1, k1, k2),
+    pointwise_filter_shape=(c3, c2, 1, 1), border_mode=(p1, p2),
+    subsample=(s1, s2), filter_dilation=(d1, d2))
+# output.shape[0] == b
+# output.shape[1] == c3
+# output.shape[2] == (i1 + 2 * p1 - k1 - (k1 - 1) * (d1 - 1)) // s1 + 1
+# output.shape[3] == (i2 + 2 * p2 - k2 - (k2 - 1) * (d2 - 1)) // s2 + 1
+
+   [89][6] vincent vanhoucke.    learning visual representations at scale   ,
+   international conference on learning representations(2014).
+
+quick reference[90]  
+
+   convolution relationship
+
+   a convolution specified by
+     * input size i ,
+     * kernel size k ,
+     * stride s ,
+     * padding size p ,
+
+   has an output size given by
+
+   o = \left\lfloor \frac{i + 2p - k}{s} \right\rfloor + 1.
+
+   in theano, this translates to
+output = theano.tensor.nnet.conv2d(
+    input, filters, input_shape=(b, c2, i1, i2), filter_shape=(c1, c2, k1, k2),
+    border_mode=(p1, p2), subsample=(s1, s2))
+# output.shape[2] == (i1 + 2 * p1 - k1) // s1 + 1
+# output.shape[3] == (i2 + 2 * p2 - k2) // s2 + 1
+
+   transposed convolution relationship
+
+   a transposed convolution specified by
+     * input size i ,
+     * kernel size k ,
+     * stride s ,
+     * padding size p ,
+
+   has an output size given by
+
+   o = s (i - 1) + a + k - 2p, \quad a \in \{0, \ldots, s - 1\}
+
+   where a is a user-specified quantity used to distinguish between the s
+   different possible output sizes.
+
+   unless s = 1 , theano requires that a is implicitly passed via an
+   input_shape argument. for instance, if i = 3 , k = 4 , s = 2 , p = 0
+   and a = 1 , then o = 2 (3 - 1) + 1 + 4 = 9 and the theano code would
+   look like
+input = theano.tensor.nnet.abstract_conv.conv2d_grad_wrt_inputs(
+    output, filters, input_shape=(9, 9), filter_shape=(c1, c2, 4, 4),
+    border_mode='valid', subsample=(2, 2))
+
+   [91]next [92]previous
+     __________________________________________________________________
+
+      copyright 2008--2017, lisa lab. last updated on nov 21, 2017.
+   built with [93]sphinx using a [94]theme provided by [95]read the docs.
+
+references
+
+   1. http://deeplearning.net/software/theano/genindex.html
+   2. http://deeplearning.net/software/theano/search.html
+   3. http://deeplearning.net/software/theano/index.html
+   4. http://deeplearning.net/software/theano/tutorial/index.html
+   5. http://deeplearning.net/software/theano/tutorial/modes.html
+   6. http://deeplearning.net/software/theano/tutorial/using_multi_gpu.html
+   7. http://deeplearning.net/software/theano/index.html
+   8. http://deeplearning.net/software/theano/news.html
+   9. http://deeplearning.net/software/theano/introduction.html
+  10. http://deeplearning.net/software/theano/requirements.html
+  11. http://deeplearning.net/software/theano/install.html
+  12. http://deeplearning.net/software/theano/updating.html
+  13. http://deeplearning.net/software/theano/tutorial/index.html
+  14. http://deeplearning.net/software/theano/tutorial/index.html#prerequisites
+  15. http://deeplearning.net/software/theano/tutorial/index.html#basics
+  16. http://deeplearning.net/software/theano/tutorial/index.html#advanced
+  17. http://deeplearning.net/software/theano/tutorial/sparse.html
+  18. http://deeplearning.net/software/theano/tutorial/using_gpu.html
+  19. http://deeplearning.net/software/theano/tutorial/using_multi_gpu.html
+  20. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html
+  21. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#about-this-tutorial
+  22. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#refresher-discrete-convolutions
+  23. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#theano-terminology
+  24. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#convolution-arithmetic
+  25. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#transposed-convolution-arithmetic
+  26. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#miscellaneous-convolutions
+  27. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#quick-reference
+  28. http://deeplearning.net/software/theano/tutorial/index.html#advanced-configuration-and-debugging
+  29. http://deeplearning.net/software/theano/tutorial/index.html#further-readings
+  30. http://deeplearning.net/software/theano/extending/index.html
+  31. http://deeplearning.net/software/theano/dev_start_guide.html
+  32. http://deeplearning.net/software/theano/optimizations.html
+  33. http://deeplearning.net/software/theano/library/index.html
+  34. http://deeplearning.net/software/theano/troubleshooting.html
+  35. http://deeplearning.net/software/theano/glossary.html
+  36. http://deeplearning.net/software/theano/links.html
+  37. http://deeplearning.net/software/theano/internal/index.html
+  38. http://deeplearning.net/software/theano/acknowledgement.html
+  39. http://deeplearning.net/software/theano/license.html
+  40. http://deeplearning.net/software/theano/index.html
+  41. http://deeplearning.net/software/theano/index.html
+  42. http://deeplearning.net/software/theano/tutorial/index.html
+  43. http://deeplearning.net/software/theano/_sources/tutorial/conv_arithmetic.txt
+  44. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#convolution-arithmetic-tutorial
+  45. https://arxiv.org/abs/1603.07285
+  46. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  47. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#about-this-tutorial
+  48. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#refresher-discrete-convolutions
+  49. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#theano-terminology
+  50. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#convolution-arithmetic
+  51. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#no-zero-padding-unit-strides
+  52. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#zero-padding-unit-strides
+  53. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#special-cases
+  54. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#half-same-padding
+  55. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#full-padding
+  56. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#no-zero-padding-non-unit-strides
+  57. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#zero-padding-non-unit-strides
+  58. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#transposed-convolution-arithmetic
+  59. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#convolution-as-a-matrix-operation
+  60. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#transposed-convolution
+  61. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#no-zero-padding-unit-strides-transposed
+  62. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#zero-padding-unit-strides-transposed
+  63. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  64. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#half-same-padding-transposed
+  65. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#full-padding-transposed
+  66. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#no-zero-padding-non-unit-strides-transposed
+  67. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#zero-padding-non-unit-strides-transposed
+  68. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#relationship8
+  69. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#relationship11
+  70. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#miscellaneous-convolutions
+  71. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#dilated-convolutions
+  72. https://arxiv.org/abs/1412.7062
+  73. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  74. https://arxiv.org/abs/1511.07122
+  75. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  76. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#id1
+  77. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  78. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  79. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#grouped-convolutions
+  80. https://papers.nips.cc/paper/4824-id163-classification-with-deep-convolutional-neural-networks
+  81. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  82. https://arxiv.org/abs/1611.05431
+  83. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  84. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  85. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  86. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#separable-convolutions
+  87. http://scholar.google.co.in/scholar_url?url=http://vincent.vanhoucke.com/publications/vanhoucke-iclr14.pdf&hl=en&sa=x&scisig=aagbfm0x0bgnudaqsvgzalfu8upjyoiwwq&nossl=1&oi=scholarr&ved=0ahukewjlreljr_dvahulwi8khwmham8qgamijigamaa
+  88. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  89. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html# 
+  90. http://deeplearning.net/software/theano/tutorial/conv_arithmetic.html#quick-reference
+  91. http://deeplearning.net/software/theano/tutorial/modes.html
+  92. http://deeplearning.net/software/theano/tutorial/using_multi_gpu.html
+  93. http://sphinx-doc.org/
+  94. https://github.com/snide/sphinx_rtd_theme
+  95. https://readthedocs.org/

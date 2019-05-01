@@ -1,0 +1,341 @@
+   #[1]publisher [2]medium [3]alternate
+
+   [4]homepage
+   [5]homepage
+   [6]sign in[7]get started
+
+   [8]insight data
+     * [9]about insight
+     * [10]data science
+     * [11]data engineering
+     * [12]health data
+     * [13]ai
+     * [14]data pm
+     * [15]devops
+     __________________________________________________________________
+
+   [1*bgpehx4w49flohmvxd-j4a.png]
+
+graph-based machine learning: part 2
+
+community detection at scale
+
+   [16]go to the profile of sebastien dery
+   [17]sebastien dery (button) blockedunblock (button) followfollowing
+   nov 10, 2016
+
+   during the seven-week [18]insight data engineering fellows program
+   recent grads and experienced software engineers learn the [19]latest
+   open source technologies by building a data platform to handle large,
+   real-time datasets.
+
+   [20]sebastien dery (now a machine learning engineer at apple) discusses
+   his project on community detection on large datasets.
+     __________________________________________________________________
+
+     #tltr: graph-based machine learning is a powerful tool that can
+     easily be merged into ongoing efforts. this work reviews the
+     feasibility of performing community detection through a distributed
+     implementation using graphx. embedded within the hadoop ecosystem,
+     this modularity optimization approach allows the study of networks
+     of unprecedented size. this change of scales, previously limited by
+     ram, opens exciting perspectives as the self modular structure of
+     complex systems have been shown to hold crucial information to
+     understanding their nature.
+
+   in my [21]previous post, we discussed the foundation of community
+   detection using modularity optimization. one major constraint however,
+   is that your graph needs to fit in memory. this quickly turns
+   problematic as your number of nodes surpass billions, and the number of
+   edges becomes trillions.
+
+   thankfully we can leverage distributed computation systems in order to
+   solve this limitation. to do this we first need to define the state of
+   a node so that it contains all the information needed during
+   computation; this will serve as a basic structure to pass around
+   between the machines of our distributed cluster.
+
+   iframe: [22]/media/57905624fe8589c0d8545e700898e539?postid=f7096c801bec
+
+      node    and    vertex    are often used interchangeably in the literature.
+   this class serves as structure for the nodes within the graph.
+
+   let   s also briefly review the process behind modularity optimization.
+   this works by iteratively merging nodes that optimize for local
+   modularity to yield a new, and smaller, graph. repeat until satisfied.
+
+   two great properties emerge from this approach
+    1. locality: each node requires knowledge from only its first-degree
+       neighbors. this means a minimal amount of data needs to be passed
+       around between clusters. this way, you don   t need to extensively
+       jump from node to node across the clusters in order to get the
+       necessary information.
+    2. independence: each local computation occurs independently of the
+       graph layout. within an iteration, every node can asynchronously
+       send its information to its neighbors without waiting for a
+       blocking sequential set of operations to happen.
+
+   these are important points to highlight as they make distributed
+   computation a prime candidate for this memory problem. turns out we can
+   easily implement the logic behind those properties using nothing but a
+   simple iteration and a developer-defined halting criteria. as
+   [23]previously discussed this can take many forms; here are a few ideas
+   for brainstorming:
+     * scheduled based on a predefined number of iterations
+     * hits a specific total number of communities
+     * modularity gain between iteration is below a threshold
+
+   iframe: [24]/media/0f08453c24b034b5d449a7b669d884ab?postid=f7096c801bec
+
+   simple iteration over the two stage process of our optimization:
+   transfer and compress.
+
+   let   s dive into the initial step of transferring community between
+   nodes. remember that each node needs the information from its neighbors
+   in order to compute the gradient for local modularity.
+
+transfer
+
+   the best way to do this at scale (when you don   t know where the
+   information ultimately is on disk) is by using [25]distributed
+   transactions (aka passing messages). this type of architecture is
+   ubiquitous in modern computer software; it is used as a way for the
+   objects that make up a program to work with each other and as a way for
+   objects and systems running on different computers (e.g., the internet)
+   to interact. in algorithms, you   ll often find it referenced under the
+   name of [26]belief propagation or simply message passing. in the
+   context of community detection, each node sends a message to its
+   neighbors with content along the lines of:
+
+      hey i   m your friendly neighbor node 3 from community 12   
+   [1*f3nue27ouiyp-idky53umw.png]
+   by independently sending messages to their first degree neighbors, each
+   node can retrieve all the information necessary for them to optimize
+   for local modularity. the content of each message can easily be tweaked
+   thus adding considerable flexibility to your approach.
+
+   if you   ve ever worked with graphs you   re likely to be very familiar
+   with the concepts of [27]vertices and edges. should we perform the
+   message passing exhaustively you   d basically go through each vertex and
+   send a message for each of its edges. this is not an intrinsically bad
+   approach if that   s all you have to work with. turns out that in the
+   world of [28]graphx we have access to a third primitive for easy
+   manipulation of our data: the triplet.
+   [1*kftkzbhsgbus1hkhn61bqw.png]
+   the three different types of view allowed within graphx. taken
+   from [29]amplab.
+
+   the triplet logically joins the vertex and edge properties for a
+   simplified and useful view. literally, the [30]edgetriplet class
+   extends the [31]edge class by simply adding the srcattr and dstattr
+   members containing the source and destination properties respectively.
+
+   by [32]reducing the triplets view, each node receives n messages
+   corresponding to its n first degree neighbors. sendmsg and mergemsg are
+   both internal functions which perform the necessary aggregation for the
+   local modularity update. independently, and in parallel, each node
+   waits for its turn to reduce all its messages into a coherent local sum
+   of weighted edges, and make a decision based on the local modularity
+   deltaq of each neighboring community.
+
+   iframe: [33]/media/8776cde4c9fe43df4c9eda2b701a8dda?postid=f7096c801bec
+
+   a few iterations later, the graph has converged to a local equilibrium
+   (e.g. a minimal amount of nodes feel the need to change community). the
+   algorithm can now progress to the next step of compressing those
+   communities into a compact representation. this is done by creating a
+   new graph with a new set of nodes (corresponding to each community) and
+   edges being inferred from the edges during the previous computation
+   (e.g. average or sum of external edges).
+
+compression
+
+   what function to choose really depends on the use case (e.g. averaging,
+   total sum, maximum, [34]softmax, etc. are all valid functions, although
+   their respective advantages remains unclear in this particular
+   scenario). when in doubt, let   s use a simple average. note that
+   additional information, say the internal coherence within a community,
+   can be propagated in a similar fashion to the condensed node and
+   provide valuable information.
+   [1*mg0sabd2expk2oy9arn96g.png]
+   effect of compressing community into single nodes at each iteration.
+
+   iframe: [35]/media/17139ba6cb34d5ea2b3c10c83f8ef043?postid=f7096c801bec
+
+   finally, here we have a fully functional procedure to perform
+   modularity optimization on graphs of ridiculously large size, assuming
+   we have enough computers to store all the information on disk.
+
+caveats and tips
+
+computation time
+
+   note that the number of meta-communities naturally decreases at each
+   pass, and as a consequence most of the computing time is used in the
+   first pass. this suggests pre-ordering of the data would hold
+   considerable benefit in terms of computation time.
+   [1*ipfxcqmhtidqdpa4yckjmq.png]
+   optimizing for node locality at the cluster level means less transfer
+   between machines.
+
+convergence
+
+   this approach does not necessarily converge to the optimal solution. to
+   improve this, multiple iterations can increase confidence over the
+   structure of your data. conveniently, this also offers a proxy for the
+   id203 of two nodes belonging to the same community.
+
+layout
+
+   take into account graph connectivity when determining the usefulness of
+   this strategy. for example, for a completely connected and unweighted
+   graph, the output will be degenerate. consider thresholding the graph
+   beforehand to extract a more sparse representation of your data.
+   [1*tirod6om8k7mtuzsskjbug.png]
+   the adequateness of modularity optimization is dependent on the
+   connectivity pattern of your graph. for example, in a lattice layout
+   this algorithm will perform rather poorly. modularity optimization
+   doesn   t guarantee adequate id91; thus obtaining a community at
+   the end is not enough to conclusively say a node decidedly belongs to
+   that group (or even any group, for that matter).
+
+hierarchy
+
+   the iterative nature of this process offers a hierarchical view between
+   communities of subsequent iteration. the intermediary step should
+   therefore be saved for further investigation as they likely yield
+   valuable information on the structural complexity of the data. this
+   saving procedure is not covered in this post but should be trivial to
+   introduce (insert configuration state into your favorite database)
+   between iteration.
+
+summary
+
+   this work reviewed the feasibility of performing community detection
+   through a distributed implementation using [36]graphx. embedded within
+   the [37]hadoop ecosystem, this modularity optimization approach allows
+   the study of networks of unprecedented size. this change of scales,
+   previously limited by ram, opens exciting perspectives as the self
+   modular structure of complex systems have been shown to hold crucial
+   information to understanding their nature. this enables, among others,
+   [38]targeted marketing, [39]market segmentation, [40]gene id91,
+   [41]id96, etc.
+
+   being an unsupervised learning technique and an initial starting point
+   for a lot of analysis, the low barriers of entry make this approach
+   applicable to a wide range of datasets.
+
+   did i miss something crucial to get you up and running? have something
+   to add? would love to hear your experience with this type of approach!
+     __________________________________________________________________
+
+   want to learn spark, machine learning with graphs, and other big data
+   tools from top data engineers in silicon valley or new york? the
+   [42]insight data engineering fellows program is a free 7-week
+   professional training where you can build cutting edge big data
+   platforms and transition to a career in data engineering.
+
+   [43]learn more about the program and [44]apply today.
+
+     * [45]big data
+     * [46]data science
+     * [47]machine learning
+     * [48]insight data engineering
+     * [49]social network
+
+   (button)
+   (button)
+   (button) 26 claps
+   (button) (button) (button) (button)
+
+     (button) blockedunblock (button) followfollowing
+   [50]go to the profile of sebastien dery
+
+[51]sebastien dery
+
+   master of layers, protector of the graph, wielder of knowledge.
+   #openscience #nobullshit
+
+     (button) follow
+   [52]insight data
+
+[53]insight data
+
+   insight fellows program - your bridge to a thriving career
+
+     * (button)
+       (button) 26
+     * (button)
+     *
+     *
+
+   [54]insight data
+   never miss a story from insight data, when you sign up for medium.
+   [55]learn more
+   never miss a story from insight data
+   (button) get updatesget updates
+
+references
+
+   visible links
+   1. https://plus.google.com/103654360130207659246
+   2. https://blog.insightdatascience.com/osd.xml
+   3. android-app://com.medium.reader/https/medium.com/p/f7096c801bec
+   4. https://medium.com/
+   5. https://medium.com/
+   6. https://medium.com/m/signin?redirect=https://blog.insightdatascience.com/graph-based-machine-learning-part-2-f7096c801bec&source=--------------------------nav_reg&operation=login
+   7. https://medium.com/m/signin?redirect=https://blog.insightdatascience.com/graph-based-machine-learning-part-2-f7096c801bec&source=--------------------------nav_reg&operation=register
+   8. https://blog.insightdatascience.com/?source=logo-lo_my8fzvntfbr2---d02e65779d7b
+   9. https://blog.insightdatascience.com/tagged/about-insight
+  10. https://blog.insightdatascience.com/tagged/insight-data-science
+  11. https://blog.insightdatascience.com/tagged/insight-data-engineering
+  12. https://blog.insightdatascience.com/tagged/insight-health-data
+  13. https://blog.insightdatascience.com/tagged/insight-ai
+  14. https://blog.insightdatascience.com/tagged/insight-data-pm
+  15. https://blog.insightdatascience.com/tagged/insight-devops
+  16. https://blog.insightdatascience.com/@sderymail?source=post_header_lockup
+  17. https://blog.insightdatascience.com/@sderymail
+  18. http://insightdataengineering.com/
+  19. http://insightdataengineering.com/blog/pipeline_map.html
+  20. https://ca.linkedin.com/in/sebastiendery
+  21. https://blog.insightdatascience.com/graph-based-machine-learning-6e2bd8926a0#.ttmj9g3zx
+  22. https://blog.insightdatascience.com/media/57905624fe8589c0d8545e700898e539?postid=f7096c801bec
+  23. https://blog.insightdatascience.com/graph-based-machine-learning-6e2bd8926a0#.ttmj9g3zx
+  24. https://blog.insightdatascience.com/media/0f08453c24b034b5d449a7b669d884ab?postid=f7096c801bec
+  25. https://en.wikipedia.org/wiki/message_passing
+  26. https://en.wikipedia.org/wiki/belief_propagation
+  27. https://en.wikipedia.org/wiki/vertex_(graph_theory)
+  28. http://ampcamp.berkeley.edu/big-data-mini-course/graph-analytics-with-graphx.html
+  29. http://ampcamp.berkeley.edu/big-data-mini-course/graph-analytics-with-graphx.html
+  30. http://spark.incubator.apache.org/docs/latest/api/graphx/index.html#org.apache.spark.graphx.edgetriplet
+  31. http://spark.incubator.apache.org/docs/latest/api/graphx/index.html#org.apache.spark.graphx.edge
+  32. https://en.wikipedia.org/wiki/mapreduce#reduce_function
+  33. https://blog.insightdatascience.com/media/8776cde4c9fe43df4c9eda2b701a8dda?postid=f7096c801bec
+  34. https://en.wikipedia.org/wiki/softmax_function
+  35. https://blog.insightdatascience.com/media/17139ba6cb34d5ea2b3c10c83f8ef043?postid=f7096c801bec
+  36. http://ampcamp.berkeley.edu/big-data-mini-course/graph-analytics-with-graphx.html
+  37. https://en.wikipedia.org/wiki/apache_hadoop
+  38. https://en.wikipedia.org/wiki/market_segmentation
+  39. https://en.wikipedia.org/wiki/market_segmentation
+  40. http://www.nature.com/nbt/journal/v23/n12/full/nbt1205-1499.html
+  41. https://databricks.com/blog/2015/03/25/topic-modeling-with-lda-mllib-meets-graphx.html
+  42. http://insightdataengineering.com/?utm_source=id91part2&utm_campaign=17a&utm_medium=blog
+  43. http://insightdataengineering.com/?utm_source=id91part2&utm_campaign=17a&utm_medium=blog
+  44. http://insightdataengineering.com/apply?utm_source=id91part2&utm_campaign=17a&utm_medium=blog
+  45. https://blog.insightdatascience.com/tagged/big-data?source=post
+  46. https://blog.insightdatascience.com/tagged/data-science?source=post
+  47. https://blog.insightdatascience.com/tagged/machine-learning?source=post
+  48. https://blog.insightdatascience.com/tagged/insight-data-engineering?source=post
+  49. https://blog.insightdatascience.com/tagged/social-network?source=post
+  50. https://blog.insightdatascience.com/@sderymail?source=footer_card
+  51. https://blog.insightdatascience.com/@sderymail
+  52. https://blog.insightdatascience.com/?source=footer_card
+  53. https://blog.insightdatascience.com/?source=footer_card
+  54. https://blog.insightdatascience.com/
+  55. https://medium.com/@medium/personalize-your-medium-experience-with-users-publications-tags-26a41ab1ee0c#.hx4zuv3mg
+
+   hidden links:
+  57. https://medium.com/p/f7096c801bec/share/twitter
+  58. https://medium.com/p/f7096c801bec/share/facebook
+  59. https://medium.com/p/f7096c801bec/share/twitter
+  60. https://medium.com/p/f7096c801bec/share/facebook

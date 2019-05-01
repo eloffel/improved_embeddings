@@ -1,0 +1,510 @@
+   [1]lil'log [2]     contact [3]     faq [4]     tags
+
+id164 for dummies part 3: r-id98 family
+
+   dec 31, 2017 by lilian weng [5]object-detection  [6]object-recognition
+
+     in part 3, we would examine five id164 models: r-id98,
+     fast r-id98, faster r-id98, and mask r-id98. these models are highly
+     related and the new versions show great speed improvement compared
+     to the older ones.
+
+   [updated on 2018-12-20: remove yolo here. part 4 will cover multiple
+   fast id164 algorithms, including yolo.]
+   [updated on 2018-12-27: add [7]bbox regression and [8]tricks sections
+   for r-id98.]
+
+   in the series of    id164 for dummies   , we started with basic
+   concepts in image processing, such as gradient vectors and hog, in
+   [9]part 1. then we introduced classic convolutional neural network
+   architecture designs for classification and pioneer models for object
+   recognition, overfeat and dpm, in [10]part 2. in the third post of this
+   series, we are about to review a set of models in the r-id98
+   (   region-based id98   ) family.
+     * [11]r-id98
+          + [12]model workflow
+          + [13]bounding box regression
+          + [14]common tricks
+          + [15]speed bottleneck
+     * [16]fast r-id98
+          + [17]roi pooling
+          + [18]model workflow
+          + [19]id168
+          + [20]speed bottleneck
+     * [21]faster r-id98
+          + [22]model workflow
+          + [23]id168
+     * [24]mask r-id98
+          + [25]roialign
+          + [26]id168
+     * [27]summary of models in the r-id98 family
+     * [28]reference
+
+   here is a list of papers covered in this post ;)
+   model        goal               resources
+   r-id98        object recognition [[29]paper][[30]code]
+   fast r-id98   object recognition [[31]paper][[32]code]
+   faster r-id98 object recognition [[33]paper][[34]code]
+   mask r-id98   image segmentation [[35]paper][[36]code]
+
+r-id98
+
+   r-id98 ([37]girshick et al., 2014) is short for    region-based
+   convolutional neural networks   . the main idea is composed of two steps.
+   first, using [38]selective search, it identifies a manageable number of
+   bounding-box object region candidates (   region of interest    or    roi   ).
+   and then it extracts id98 features from each region independently for
+   classification.
+
+   architecture of r-id98
+
+   fig. 1. the architecture of r-id98. (image source: [39]girshick et al.,
+   2014)
+
+model workflow
+
+   how r-id98 works can be summarized as follows:
+    1. pre-train a id98 network on image classification tasks; for example,
+       vgg or resnet trained on [40]id163 dataset. the classification
+       task involves n classes.
+
+     note: you can find a pre-trained [41]alexnet in caffe model [42]zoo.
+     i don   t think you can [43]find it in tensorflow, but tensorflow-slim
+     model [44]library provides pre-trained resnet, vgg, and others.
+    2. propose category-independent regions of interest by selective
+       search (~2k candidates per image). those regions may contain target
+       objects and they are of different sizes.
+    3. region candidates are warped to have a fixed size as required by
+       id98.
+    4. continue fine-tuning the id98 on warped proposal regions for k + 1
+       classes; the additional one class refers to the background (no
+       object of interest). in the fine-tuning stage, we should use a much
+       smaller learning rate and the mini-batch oversamples the positive
+       cases because most proposed regions are just background.
+    5. given every image region, one forward propagation through the id98
+       generates a feature vector. this feature vector is then consumed by
+       a binary id166 trained for each class independently.
+       the positive samples are proposed regions with iou (intersection
+       over union) overlap threshold >= 0.3, and negative samples are
+       irrelevant others.
+    6. to reduce the localization errors, a regression model is trained to
+       correct the predicted detection window on bounding box correction
+       offset using id98 features.
+
+bounding box regression
+
+   given a predicted bounding box coordinate (center coordinate, width,
+   height) and its corresponding ground truth box coordinates , the
+   regressor is configured to learn scale-invariant transformation between
+   two centers and log-scale transformation between widths and heights.
+   all the transformation functions take as input.
+
+   bbox regression
+
+   fig. 2. illustration of transformation between predicted and ground
+   truth bounding boxes.
+
+   an obvious benefit of applying such transformation is that all the
+   bounding box correction functions, where , can take any value between
+   [-   , +   ]. the targets for them to learn are:
+
+   a standard regression model can solve the problem by minimizing the sse
+   loss with id173:
+
+   the id173 term is critical here and rid98 paper picked the best
+      by cross validation. it is also noteworthy that not all the predicted
+   bounding boxes have corresponding ground truth boxes. for example, if
+   there is no overlap, it does not make sense to run bbox regression.
+   here, only a predicted box with a nearby ground truth box with at least
+   0.6 iou is kept for training the bbox regression model.
+
+common tricks
+
+   several tricks are commonly used in rid98 and other detection models.
+
+   non-maximum suppression
+
+   likely the model is able to find multiple bounding boxes for the same
+   object. non-max suppression helps avoid repeated detection of the same
+   instance. after we get a set of matched bounding boxes for the same
+   object category: sort all the bounding boxes by confidence score.
+   discard boxes with low confidence scores. while there is any remaining
+   bounding box, repeat the following: greedily select the one with the
+   highest score. skip the remaining boxes with high iou (i.e. > 0.5) with
+   previously selected one.
+
+   non-max suppression
+
+   fig. 3. multiple bounding boxes detect the car in the image. after
+   non-maximum suppression, only the best remains and the rest are ignored
+   as they have large overlaps with the selected one. (image source:
+   [45]dpm paper)
+
+   hard negative mining
+
+   we consider bounding boxes without objects as negative examples. not
+   all the negative examples are equally hard to be identified. for
+   example, if it holds pure empty background, it is likely an    easy
+   negative   ; but if the box contains weird noisy texture or partial
+   object, it could be hard to be recognized and these are    hard
+   negative   .
+
+   the hard negative examples are easily misclassified. we can explicitly
+   find those false positive samples during the training loops and include
+   them in the training data so as to improve the classifier.
+
+speed bottleneck
+
+   looking through the r-id98 learning steps, you could easily find out
+   that training an r-id98 model is expensive and slow, as the following
+   steps involve a lot of work:
+     * running selective search to propose 2000 region candidates for
+       every image;
+     * generating the id98 feature vector for every image region (n images
+       * 2000).
+     * the whole process involves three models separately without much
+       shared computation: the convolutional neural network for image
+       classification and feature extraction; the top id166 classifier for
+       identifying target objects; and the regression model for tightening
+       region bounding boxes.
+
+fast r-id98
+
+   to make r-id98 faster, girshick ([46]2015) improved the training
+   procedure by unifying three independent models into one jointly trained
+   framework and increasing shared computation results, named fast r-id98.
+   instead of extracting id98 feature vectors independently for each region
+   proposal, this model aggregates them into one id98 forward pass over the
+   entire image and the region proposals share this feature matrix. then
+   the same feature matrix is branched out to be used for learning the
+   object classifier and the bounding-box regressor. in conclusion,
+   computation sharing speeds up r-id98.
+
+   fast r-id98
+
+   fig. 4. the architecture of fast r-id98. (image source: [47]girshick,
+   2015)
+
+roi pooling
+
+   it is a type of max pooling to convert features in the projected region
+   of the image of any size, h x w, into a small fixed window, h x w. the
+   input region is divided into h x w grids, approximately every subwindow
+   of size h/h x w/w. then apply max-pooling in each grid.
+
+   roi pooling
+
+   fig. 5. roi pooling (image source: [48]stanford cs231n slides.)
+
+model workflow
+
+   how fast r-id98 works is summarized as follows; many steps are same as
+   in r-id98:
+    1. first, pre-train a convolutional neural network on image
+       classification tasks.
+    2. propose regions by selective search (~2k candidates per image).
+    3. alter the pre-trained id98:
+          + replace the last max pooling layer of the pre-trained id98 with
+            a [49]roi pooling layer. the roi pooling layer outputs
+            fixed-length feature vectors of region proposals. sharing the
+            id98 computation makes a lot of sense, as many region proposals
+            of the same images are highly overlapped.
+          + replace the last fully connected layer and the last softmax
+            layer (k classes) with a fully connected layer and softmax
+            over k + 1 classes.
+    4. finally the model branches into two output layers:
+          + a softmax estimator of k + 1 classes (same as in r-id98, +1 is
+            the    background    class), outputting a discrete id203
+            distribution per roi.
+          + a bounding-box regression model which predicts offsets
+            relative to the original roi for each of k classes.
+
+id168
+
+   the model is optimized for a loss combining two tasks (classification +
+   localization):
+  symbol explanation
+         true class label, ; by convention, the catch-all background class has .
+   discrete id203 distribution (per roi) over k + 1 classes: ,
+   computed by a softmax over the k + 1 outputs of a fully connected
+   layer.
+         true bounding box .
+         predicted bounding box correction, . see [50]above.
+
+   the id168 sums up the cost of classification and bounding box
+   prediction: . for    background    roi, is ignored by the indicator
+   function , defined as:
+
+   the overall id168 is:
+
+   the bounding box loss should measure the difference between and using a
+   robust id168. the [51]smooth l1 loss is adopted here and it is
+   claimed to be less sensitive to outliers.
+
+   smooth l1 loss
+
+   fig. 6. the plot of smooth l1 loss, . (image source: [52]link)
+
+speed bottleneck
+
+   fast r-id98 is much faster in both training and testing time. however,
+   the improvement is not dramatic because the region proposals are
+   generated separately by another model and that is very expensive.
+
+faster r-id98
+
+   an intuitive speedup solution is to integrate the region proposal
+   algorithm into the id98 model. faster r-id98 ([53]ren et al., 2016) is
+   doing exactly this: construct a single, unified model composed of rpn
+   (region proposal network) and fast r-id98 with shared convolutional
+   feature layers.
+
+   faster r-id98
+
+   fig. 7. an illustration of faster r-id98 model. (image source: [54]ren
+   et al., 2016)
+
+model workflow
+
+    1. pre-train a id98 network on image classification tasks.
+    2. fine-tune the rpn (region proposal network) end-to-end for the
+       region proposal task, which is initialized by the pre-train image
+       classifier. positive samples have iou (intersection-over-union) >
+       0.7, while negative samples have iou < 0.3.
+          + slide a small n x n spatial window over the conv feature map
+            of the entire image.
+          + at the center of each sliding window, we predict multiple
+            regions of various scales and ratios simultaneously. an anchor
+            is a combination of (sliding window center, scale, ratio). for
+            example, 3 scales + 3 ratios => k=9 anchors at each sliding
+            position.
+    3. train a fast r-id98 id164 model using the proposals
+       generated by the current rpn
+    4. then use the fast r-id98 network to initialize rpn training. while
+       keeping the shared convolutional layers, only fine-tune the
+       rpn-specific layers. at this stage, rpn and the detection network
+       have shared convolutional layers!
+    5. finally fine-tune the unique layers of fast r-id98
+    6. step 4-5 can be repeated to train rpn and fast r-id98 alternatively
+       if needed.
+
+id168
+
+   faster r-id98 is optimized for a multi-task id168, similar to
+   fast r-id98.
+   symbol explanation
+          predicted id203 of anchor i being an object.
+          ground truth label (binary) of whether anchor i is an object.
+          predicted four parameterized coordinates.
+          ground truth coordinates.
+          id172 term, set to be mini-batch size (~256) in the paper.
+   id172 term, set to the number of anchor locations (~2400) in
+   the paper.
+   a balancing parameter, set to be ~10 in the paper (so that both and
+   terms are roughly equally weighted).
+
+   the multi-task id168 combines the losses of classification and
+   bounding box regression:
+
+   where is the log id168 over two classes, as we can easily
+   translate a multi-class classification into a binary classification by
+   predicting a sample being a target object versus not. is the smooth l1
+   loss.
+
+mask r-id98
+
+   mask r-id98 ([55]he et al., 2017) extends faster r-id98 to pixel-level
+   [56]image segmentation. the key point is to decouple the classification
+   and the pixel-level mask prediction tasks. based on the framework of
+   [57]faster r-id98, it added a third branch for predicting an object mask
+   in parallel with the existing branches for classification and
+   localization. the mask branch is a small fully-connected network
+   applied to each roi, predicting a segmentation mask in a pixel-to-pixel
+   manner.
+
+   mask r-id98
+
+   fig. 8. mask r-id98 is faster r-id98 model with image segmentation.
+   (image source: [58]he et al., 2017)
+
+   because pixel-level segmentation requires much more fine-grained
+   alignment than bounding boxes, mask r-id98 improves the roi pooling
+   layer (named    roialign layer   ) so that roi can be better and more
+   precisely mapped to the regions of the original image.
+
+   mask r-id98 examples
+
+   fig. 9. predictions by mask r-id98 on coco test set. (image source:
+   [59]he et al., 2017)
+
+roialign
+
+   the roialign layer is designed to fix the location misalignment caused
+   by quantization in the roi pooling. roialign removes the hash
+   quantization, for example, by using x/16 instead of [x/16], so that the
+   extracted features can be properly aligned with the input pixels.
+   [60]bilinear interpolation is used for computing the floating-point
+   location values in the input.
+
+   roi align
+
+   fig. 10. a region of interest is mapped accurately from the original
+   image onto the feature map without rounding up to integers. (image
+   source: [61]link)
+
+id168
+
+   the multi-task id168 of mask r-id98 combines the loss of
+   classification, localization and segmentation mask: , where and are
+   same as in faster r-id98.
+
+   the mask branch generates a mask of dimension m x m for each roi and
+   each class; k classes in total. thus, the total output is of size .
+   because the model is trying to learn a mask for each class, there is no
+   competition among classes for generating masks.
+
+   is defined as the average binary cross-id178 loss, only including
+   k-th mask if the region is associated with the ground truth class k.
+
+   where is the label of a cell (i, j) in the true mask for the region of
+   size m x m; is the predicted value of the same cell in the mask learned
+   for the ground-truth class k.
+
+summary of models in the r-id98 family
+
+   here i illustrate model designs of r-id98, fast r-id98, faster r-id98 and
+   mask r-id98. you can track how one model evolves to the next version by
+   comparing the small differences.
+
+   r-id98 family summary
+
+reference
+
+   [1] ross girshick, jeff donahue, trevor darrell, and jitendra malik.
+   [62]   rich feature hierarchies for accurate id164 and
+   semantic segmentation.    in proc. ieee conf. on id161 and
+   pattern recognition (cvpr), pp. 580-587. 2014.
+
+   [2] ross girshick. [63]   fast r-id98.    in proc. ieee intl. conf. on
+   id161, pp. 1440-1448. 2015.
+
+   [3] shaoqing ren, kaiming he, ross girshick, and jian sun. [64]   faster
+   r-id98: towards real-time id164 with region proposal
+   networks.    in advances in neural information processing systems (nips),
+   pp. 91-99. 2015.
+
+   [4] kaiming he, georgia gkioxari, piotr doll  r, and ross girshick.
+   [65]   mask r-id98.    arxiv preprint arxiv:1703.06870, 2017.
+
+   [5] joseph redmon, santosh divvala, ross girshick, and ali farhadi.
+   [66]   you only look once: unified, real-time id164.    in proc.
+   ieee conf. on id161 and pattern recognition (cvpr), pp.
+   779-788. 2016.
+
+   [6] [67]   a brief history of id98s in image segmentation: from r-id98 to
+   mask r-id98    by athelas.
+
+   [7] smooth l1 loss:
+   [68]https://github.com/rbgirshick/py-faster-rid98/files/764206/smoothl1l
+   oss.1.pdf
+     __________________________________________________________________
+
+   if you notice mistakes and errors in this post, please don   t hesitate
+   to contact me at [lilian dot wengweng at gmail dot com] and i would be
+   super happy to correct them right away!
+
+   see you in the next post :d
+   [69]    id164 for dummies part 2: id98, dpm and overfeat
+   [70]the multi-armed bandit problem and its solutions    
+   please enable javascript to view the [71]comments powered by disqus.
+
+   2019    built by [72]jekyll and [73]minima | view [74]this on github |
+   [75]tags | [76]contact | [77]faq
+
+   [78][logo_rss.png] [79][logo_scholar.png] [80][logo_github.png]
+   [81][logo_instagram.png] [82][logo_twitter.png]
+
+references
+
+   1. https://lilianweng.github.io/lil-log/
+   2. https://lilianweng.github.io/lil-log/contact.html
+   3. https://lilianweng.github.io/lil-log/faq.html
+   4. https://lilianweng.github.io/lil-log/tags.html
+   5. https://lilianweng.github.io/lil-log/tag/object-detection
+   6. https://lilianweng.github.io/lil-log/tag/object-recognition
+   7. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#bounding-box-regression
+   8. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#common-tricks
+   9. https://lilianweng.github.io/lil-log/2017/10/29/object-recognition-for-dummies-part-1.html
+  10. https://lilianweng.github.io/lil-log/2017/12/15/object-recognition-for-dummies-part-2.html
+  11. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#r-id98
+  12. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#model-workflow
+  13. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#bounding-box-regression
+  14. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#common-tricks
+  15. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#speed-bottleneck
+  16. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#fast-r-id98
+  17. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#roi-pooling
+  18. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#model-workflow-1
+  19. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#loss-function
+  20. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#speed-bottleneck-1
+  21. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#faster-r-id98
+  22. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#model-workflow-2
+  23. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#loss-function-1
+  24. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#mask-r-id98
+  25. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#roialign
+  26. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#loss-function-2
+  27. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#summary-of-models-in-the-r-id98-family
+  28. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#reference
+  29. https://arxiv.org/abs/1311.2524
+  30. https://github.com/rbgirshick/rid98
+  31. https://arxiv.org/abs/1504.08083
+  32. https://github.com/rbgirshick/fast-rid98
+  33. https://arxiv.org/abs/1506.01497
+  34. https://github.com/rbgirshick/py-faster-rid98
+  35. https://arxiv.org/abs/1703.06870
+  36. https://github.com/charlesshang/fastmaskrid98
+  37. https://arxiv.org/abs/1311.2524
+  38. https://lilianweng.github.io/lil-log/2017/10/29/object-recognition-for-dummies-part-1.html#selective-search
+  39. https://arxiv.org/abs/1311.2524
+  40. http://image-net.org/index
+  41. https://github.com/bvlc/caffe/tree/master/models/bvlc_alexnet
+  42. https://github.com/caffe2/caffe2/wiki/model-zoo
+  43. https://github.com/tensorflow/models/issues/1394
+  44. https://github.com/tensorflow/models/tree/master/research/slim
+  45. http://lear.inrialpes.fr/~oneata/reading_group/dpm.pdf
+  46. https://arxiv.org/pdf/1504.08083.pdf
+  47. https://arxiv.org/pdf/1504.08083.pdf
+  48. http://cs231n.stanford.edu/slides/2016/winter1516_lecture8.pdf
+  49. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#roi-pooling
+  50. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#bounding-box-regression
+  51. https://github.com/rbgirshick/py-faster-rid98/files/764206/smoothl1loss.1.pdf
+  52. https://github.com/rbgirshick/py-faster-rid98/files/764206/smoothl1loss.1.pdf
+  53. https://arxiv.org/pdf/1506.01497.pdf
+  54. https://arxiv.org/pdf/1506.01497.pdf
+  55. https://arxiv.org/pdf/1703.06870.pdf
+  56. https://lilianweng.github.io/lil-log/2017/10/29/object-recognition-for-dummies-part-1.html#image-segmentation-felzenszwalbs-algorithm
+  57. https://lilianweng.github.io/lil-log/2017/12/31/object-recognition-for-dummies-part-3.html#faster-r-id98
+  58. https://arxiv.org/pdf/1703.06870.pdf
+  59. https://arxiv.org/pdf/1703.06870.pdf
+  60. https://en.wikipedia.org/wiki/bilinear_interpolation
+  61. https://blog.athelas.com/a-brief-history-of-id98s-in-image-segmentation-from-r-id98-to-mask-r-id98-34ea83205de4
+  62. https://www.cv-foundation.org/openaccess/content_cvpr_2014/papers/girshick_rich_feature_hierarchies_2014_cvpr_paper.pdf
+  63. https://arxiv.org/pdf/1504.08083.pdf
+  64. http://papers.nips.cc/paper/5638-faster-r-id98-towards-real-time-object-detection-with-region-proposal-networks.pdf
+  65. https://arxiv.org/pdf/1703.06870.pdf
+  66. https://www.cv-foundation.org/openaccess/content_cvpr_2016/papers/redmon_you_only_look_cvpr_2016_paper.pdf
+  67. https://blog.athelas.com/a-brief-history-of-id98s-in-image-segmentation-from-r-id98-to-mask-r-id98-34ea83205de4
+  68. https://github.com/rbgirshick/py-faster-rid98/files/764206/smoothl1loss.1.pdf
+  69. https://lilianweng.github.io/lil-log/2017/12/15/object-recognition-for-dummies-part-2.html
+  70. https://lilianweng.github.io/lil-log/2018/01/23/the-multi-armed-bandit-problem-and-its-solutions.html
+  71. https://disqus.com/?ref_noscript
+  72. https://jekyllrb.com/
+  73. https://github.com/jekyll/minima/
+  74. https://github.com/lilianweng/lil-log/tree/gh-pages
+  75. https://lilianweng.github.io/lil-log/tags.html
+  76. https://lilianweng.github.io/lil-log/contact.html
+  77. https://lilianweng.github.io/lil-log/faq.html
+  78. https://lilianweng.github.io/lil-log/feed.xml
+  79. https://scholar.google.com/citations?user=dca-pw8aaaaj&hl=en&oi=ao
+  80. https://github.com/lilianweng
+  81. https://www.instagram.com/lilianweng/
+  82. https://twitter.com/lilianweng/

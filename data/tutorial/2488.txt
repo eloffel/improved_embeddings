@@ -1,0 +1,1295 @@
+   #[1]deniz yuret's homepage - atom [2]deniz yuret's homepage - rss
+   [3]deniz yuret's homepage - atom
+
+[4]deniz yuret's homepage
+
+   [5]ai.ku   [6]bibtex   [7]courses   [8]cv   [9]downloads   [10]github
+   [11]publications   [12]projects   [13]scholar   [14]students
+
+september 20, 2016
+
+[15]introducing knet8: beginning deep learning with 100 lines of julia
+
+   it has been a year and a half since i wrote the [16]first version of
+   this tutorial and it is time for an update.
+
+   [17]knet (pronounced    kay-net   ) is the [18]ko   university deep learning
+   framework implemented in [19]julia by [20]deniz yuret and
+   collaborators. it supports construction of high-performance deep
+   learning models in plain julia by combining automatic differentiation
+   with efficient gpu kernels and memory management. models can be defined
+   and trained using arbitrary julia code with helper functions, loops,
+   conditionals, recursion, closures, array indexing and concatenation.
+   the training can be performed on the gpu by simply using knetarray
+   instead of array for parameters and data. check out the [21]full
+   documentation and the [22]examples directory for more information.
+
+contents
+
+     * [23]installation
+     * [24]examples
+          + [25]id75
+          + [26]softmax classification
+          + [27]multi-layer id88
+          + [28]convolutional neural network
+          + [29]recurrent neural network
+     * [30]under the hood
+     * [31]benchmarks
+     * [32]contributing
+
+installation
+
+   you can install knet using pkg.add("knet"). some of the examples use
+   additional packages such as argparse, gzip, and jld. these are not
+   required by knet and can be installed when needed using additional
+   pkg.add() commands. see the detailed [33]installation instructions as
+   well as the section on [34]using amazon aws to experiment with gpu
+   machines on the cloud with pre-installed knet images.
+
+examples
+
+   in knet, a machine learning model is defined using plain julia code. a
+   typical model consists of a prediction and a id168. the
+   prediction function takes model parameters and some input, returns the
+   prediction of the model for that input. the id168 measures how
+   bad the prediction is with respect to some desired output. we train a
+   model by adjusting its parameters to reduce the loss. in this section
+   we will see the prediction, loss, and training functions for five
+   models: id75, softmax classification, fully-connected,
+   convolutional and recurrent neural networks.
+
+id75
+
+   here is the prediction function and the corresponding quadratic loss
+   function for a simple id75 model:
+predict(w,x) = w[1]*x .+ w[2]
+
+loss(w,x,y) = sumabs2(y - predict(w,x)) / size(y,2)
+
+   the variable w is a list of parameters (it could be a tuple, array, or
+   dict), x is the input and y is the desired output. to train this model,
+   we want to adjust its parameters to reduce the loss on given training
+   examples. the direction in the parameter space in which the loss
+   reduction is maximum is given by the negative gradient of the loss.
+   knet uses the higher-order function grad from [35]autograd.jl to
+   compute the gradient direction:
+using knet
+
+lossgradient = grad(loss)
+
+   note that grad is a higher-order function that takes and returns other
+   functions. the lossgradient function takes the same arguments as loss,
+   e.g. dw = lossgradient(w,x,y). instead of returning a loss value,
+   lossgradient returns dw, the gradient of the loss with respect to its
+   first argument w. the type and size of dw is identical to w, each entry
+   in dw gives the derivative of the loss with respect to the
+   corresponding entry in w. see @doc grad for more information.
+
+   given some training data = [(x1,y1),(x2,y2),...], here is how we can
+   train this model:
+function train(w, data; lr=.1)
+    for (x,y) in data
+        dw = lossgradient(w, x, y)
+        for i in 1:length(w)
+            w[i] -= lr * dw[i]
+        end
+    end
+    return w
+end
+
+   we simply iterate over the input-output pairs in data, calculate the
+   lossgradient for each example, and move the parameters in the negative
+   gradient direction with a step size determined by the learning rate lr.
+   [36]https://github.com/denizyuret/knet.jl/blob/master/docs/images/housi
+   ng.jpeg?raw=true
+
+   let   s train this model on the [37]housing dataset from the uci machine
+   learning repository.
+julia> url = "https://archive.ics.uci.edu/ml/machine-learning-databases/housing/
+housing.data"
+julia> rawdata = readdlm(download(url))
+julia> x = rawdata[:,1:13]'
+julia> x = (x .- mean(x,2)) ./ std(x,2)
+julia> y = rawdata[:,14:14]'
+julia> w = any[ 0.1*randn(1,13), 0 ]
+julia> for i=1:10; train(w, [(x,y)]); println(loss(w,x,y)); end
+366.0463078055053
+...
+29.63709385230451
+
+   the dataset has housing related information for 506 neighborhoods in
+   boston from 1978. each neighborhood is represented using 13 attributes
+   such as crime rate or distance to employment centers. the goal is to
+   predict the median value of the houses given in $1000   s. after
+   downloading, splitting and normalizing the data, we initialize the
+   parameters randomly and take 10 steps in the negative gradient
+   direction. we can see the loss dropping from 366.0 to 29.6. see
+   [38]housing.jl for more information on this example.
+
+   note that grad was the only function used that is not in the julia
+   standard library. this is typical of models defined in knet.
+
+softmax classification
+
+   in this example we build a simple classification model for the
+   [39]mnist handwritten digit recognition dataset. mnist has 60000
+   training and 10000 test examples. each input x consists of 784 pixels
+   representing a 28x28 image. the corresponding output indicates the
+   identity of the digit 0..9.
+   [40]https://github.com/denizyuret/knet.jl/blob/master/docs/images/first
+   eightimages.jpg?raw=true
+
+   classification models handle discrete outputs, as opposed to regression
+   models which handle numeric outputs. we typically use the cross id178
+   id168 in classification models:
+function loss(w,x,ygold)
+    ypred = predict(w,x)
+    ynorm = ypred .- log(sum(exp(ypred),1))
+    -sum(ygold .* ynorm) / size(ygold,2)
+end
+
+   other than the change of id168, the softmax model is identical
+   to the id75 model. we use the same predict, same train and
+   set lossgradient=grad(loss) as before. to see how well our model
+   classifies let   s define an accuracy function which returns the
+   percentage of instances classified correctly:
+function accuracy(w, data)
+    ncorrect = ninstance = 0
+    for (x, ygold) in data
+        ypred = predict(w,x)
+        ncorrect += sum(ygold .* (ypred .== maximum(ypred,1)))
+        ninstance += size(ygold,2)
+    end
+    return ncorrect/ninstance
+end
+
+   now let   s train a model on the mnist data:
+julia> include(pkg.dir("knet/examples/mnist.jl"))
+julia> using mnist: xtrn, ytrn, xtst, ytst, minibatch
+julia> dtrn = minibatch(xtrn, ytrn, 100)
+julia> dtst = minibatch(xtst, ytst, 100)
+julia> w = any[ -0.1+0.2*rand(float32,10,784), zeros(float32,10,1) ]
+julia> println((:epoch, 0, :trn, accuracy(w,dtrn), :tst, accuracy(w,dtst)))
+julia> for epoch=1:10
+           train(w, dtrn; lr=0.5)
+           println((:epoch, epoch, :trn, accuracy(w,dtrn), :tst, accuracy(w,dtst
+)))
+       end
+(:epoch,0,:trn,0.11761667f0,:tst,0.121f0)
+(:epoch,1,:trn,0.9005f0,:tst,0.9048f0)
+...
+(:epoch,10,:trn,0.9196f0,:tst,0.9153f0)
+
+   including mnist.jl loads the mnist data, downloading it from the
+   internet if necessary, and provides a training set (xtrn,ytrn), test
+   set (xtst,ytst) and a minibatch utility which we use to rearrange the
+   data into chunks of 100 instances. after randomly initializing the
+   parameters we train for 10 epochs, printing out training and test set
+   accuracy at every epoch. the final accuracy of about 92% is close to
+   the limit of what we can achieve with this type of model. to improve
+   further we must look beyond linear models.
+
+multi-layer id88
+
+   a multi-layer id88, i.e. a fully connected feed-forward neural
+   network, is basically a bunch of id75 models stuck
+   together with non-linearities in between.
+   [41]https://github.com/denizyuret/knet.jl/blob/master/docs/images/neura
+   l_net2.jpeg?raw=true
+
+   we can define a mlp by slightly modifying the predict function:
+function predict(w,x)
+    for i=1:2:length(w)-2
+        x = max(0, w[i]*x .+ w[i+1])
+    end
+    return w[end-1]*x .+ w[end]
+end
+
+   here w[2k-1] is the weight matrix and w[2k] is the bias vector for the
+   k   th layer. max(0,a) implements the popular rectifier non-linearity.
+   note that if w only has two entries, this is equivalent to the linear
+   and softmax models. by adding more entries to w, we can define
+   multi-layer id88s of arbitrary depth. let   s define one with a
+   single hidden layer of 64 units:
+w = any[ -0.1+0.2*rand(float32,64,784), zeros(float32,64,1),
+         -0.1+0.2*rand(float32,10,64),  zeros(float32,10,1) ]
+
+   the rest of the code is the same as the softmax model. we use the same
+   cross-id178 id168 and the same training script. the code for
+   this example is available in [42]mnist.jl. the multi-layer id88
+   does significantly better than the softmax model:
+(:epoch,0,:trn,0.10166667f0,:tst,0.0977f0)
+(:epoch,1,:trn,0.9389167f0,:tst,0.9407f0)
+...
+(:epoch,10,:trn,0.9866f0,:tst,0.9735f0)
+
+convolutional neural network
+
+   to improve the performance further, we can use [43]convolutional neural
+   networks. we will implement the [44]lenet model which consists of two
+   convolutional layers followed by two fully connected layers.
+   [45]https://github.com/denizyuret/knet.jl/blob/master/docs/images/le_ne
+   t.png?raw=true
+
+   knet provides the conv4(w,x) and pool(x) functions for the
+   implementation of convolutional nets (see @doc conv4 and @doc pool for
+   more information):
+function predict(w,x0)
+    x1 = pool(max(0, conv4(w[1],x0) .+ w[2]))
+    x2 = pool(max(0, conv4(w[3],x1) .+ w[4]))
+    x3 = max(0, w[5]*mat(x2) .+ w[6])
+    return w[7]*x3 .+ w[8]
+end
+
+   the weights for the convolutional net can be initialized as follows:
+w = any[ -0.1+0.2*rand(float32,5,5,1,20),  zeros(float32,1,1,20,1),
+         -0.1+0.2*rand(float32,5,5,20,50), zeros(float32,1,1,50,1),
+         -0.1+0.2*rand(float32,500,800),   zeros(float32,500,1),
+         -0.1+0.2*rand(float32,10,500),    zeros(float32,10,1) ]
+
+   currently convolution and pooling are only supported on the gpu for 4-d
+   and 5-d arrays. so we reshape our data and transfer it to the gpu along
+   with the parameters by converting them into knetarrays (see @doc
+   knetarray for more information):
+dtrn = map(d->(knetarray(reshape(d[1],(28,28,1,100))), knetarray(d[2])), dtrn)
+dtst = map(d->(knetarray(reshape(d[1],(28,28,1,100))), knetarray(d[2])), dtst)
+w = map(knetarray, w)
+
+   the training proceeds as before giving us even better results. the code
+   for the lenet example can be found in [46]lenet.jl.
+(:epoch,0,:trn,0.12215f0,:tst,0.1263f0)
+(:epoch,1,:trn,0.96963334f0,:tst,0.971f0)
+...
+(:epoch,10,:trn,0.99553335f0,:tst,0.9879f0)
+
+recurrent neural network
+
+   in this section we will see how to implement a recurrent neural network
+   (id56) in knet. an id56 is a class of neural network where connections
+   between units form a directed cycle, which allows them to keep a
+   persistent state over time. this gives them the ability to process
+   sequences of arbitrary length one element at a time, while keeping
+   track of what happened at previous elements.
+   [47]https://github.com/denizyuret/knet.jl/blob/master/docs/images/id56-u
+   nrolled.png?raw=true
+
+   as an example, we will build a character-level language model inspired
+   by [48]   the unreasonable effectiveness of recurrent neural networks   
+   from the andrej karpathy blog. the model can be trained with different
+   genres of text, and can be used to generate original text in the same
+   style.
+
+   it turns out simple id56s are not very good at remembering things for a
+   very long time. currently the most popular solution is to use a more
+   complicated unit like the long short term memory (lstm). an lstm
+   controls the information flow into and out of the unit using gates
+   similar to digital circuits and can model long term dependencies. see
+   [49]understanding id137 by christopher olah for a good overview
+   of lstms.
+   [50]https://github.com/denizyuret/knet.jl/blob/master/docs/images/lstm3
+   -chain.png?raw=true
+
+   the code below shows one way to define an lstm in knet. the first two
+   arguments are the parameters, the weight matrix and the bias vector.
+   the next two arguments hold the internal state of the lstm: the hidden
+   and cell arrays. the last argument is the input. note that for
+   performance reasons we lump all the parameters of the lstm into one
+   matrix-vector pair instead of using separate parameters for each gate.
+   this way we can perform a single id127, and recover the
+   gates using array indexing. we represent input, hidden and cell as row
+   vectors rather than column vectors for more efficient concatenation and
+   indexing. sigm and tanh are the sigmoid and the hyperbolic tangent
+   id180. the lstm returns the updated state variables
+   hidden and cell.
+function lstm(weight,bias,hidden,cell,input)
+    gates   = hcat(input,hidden) * weight .+ bias
+    hsize   = size(hidden,2)
+    forget  = sigm(gates[:,1:hsize])
+    ingate  = sigm(gates[:,1+hsize:2hsize])
+    outgate = sigm(gates[:,1+2hsize:3hsize])
+    change  = tanh(gates[:,1+3hsize:end])
+    cell    = cell .* forget + ingate .* change
+    hidden  = outgate .* tanh(cell)
+    return (hidden,cell)
+end
+
+   the lstm has an input gate, forget gate and an output gate that control
+   information flow. each gate depends on the current input value, and the
+   last hidden state hidden. the memory value cell is computed by blending
+   a new value change with the old cell value under the control of input
+   and forget gates. the output gate decides how much of the cell is
+   shared with the outside world.
+
+   if an input gate element is close to 0, the corresponding element in
+   the new input will have little effect on the memory cell. if a forget
+   gate element is close to 1, the contents of the corresponding memory
+   cell can be preserved for a long time. thus the lstm has the ability to
+   pay attention to the current input, or reminisce in the past, and it
+   can learn when to do which based on the problem.
+
+   to build a language model, we need to predict the next character in a
+   piece of text given the current character and recent history as encoded
+   in the internal state. the predict function below implements a
+   multi-layer lstm model. s[2k-1:2k] hold the hidden and cell arrays and
+   w[2k-1:2k] hold the weight and bias parameters for the k   th lstm layer.
+   the last three elements of w are the embedding matrix and the
+   weight/bias for the final prediction. predict takes the current
+   character encoded in x as a one-hot row vector, multiplies it with the
+   embedding matrix, passes it through a number of lstm layers, and
+   converts the output of the final layer to the same number of dimensions
+   as the input using a linear transformation. the state variable s is
+   modified in-place.
+function predict(w, s, x)
+    x = x * w[end-2]
+    for i = 1:2:length(s)
+        (s[i],s[i+1]) = lstm(w[i],w[i+1],s[i],s[i+1],x)
+        x = s[i]
+    end
+    return x * w[end-1] .+ w[end]
+end
+
+   to train the language model we will use id26 through time
+   (bptt) which basically means running the network on a given sequence
+   and updating the parameters based on the total loss. here is a function
+   that calculates the total cross-id178 loss for a given (sub)sequence:
+function loss(param,state,sequence,range=1:length(sequence)-1)
+    total = 0.0; count = 0
+    atype = typeof(getval(param[1]))
+    input = convert(atype,sequence[first(range)])
+    for t in range
+        ypred = predict(param,state,input)
+        ynorm = logp(ypred,2) # ypred .- log(sum(exp(ypred),2))
+        ygold = convert(atype,sequence[t+1])
+        total += sum(ygold .* ynorm)
+        count += size(ygold,1)
+        input = ygold
+    end
+    return -total / count
+end
+
+   here param and state hold the parameters and the state of the model,
+   sequence and range give us the input sequence and a possible range over
+   it to process. we convert the entries in the sequence to inputs that
+   have the same type as the parameters one at a time (to conserve gpu
+   memory). we use each token in the given range as an input to predict
+   the next token. the average cross-id178 loss per token is returned.
+
+   to generate text we sample each character randomly using the
+   probabilities predicted by the model based on the previous character:
+function generate(param, state, vocab, nchar)
+    index_to_char = array(char, length(vocab))
+    for (k,v) in vocab; index_to_char[v] = k; end
+    input = oftype(param[1], zeros(1,length(vocab)))
+    index = 1
+    for t in 1:nchar
+        ypred = predict(param,state,input)
+        input[index] = 0
+        index = sample(exp(logp(ypred)))
+        print(index_to_char[index])
+        input[index] = 1
+    end
+    println()
+end
+
+   here param and state hold the parameters and state variables as usual.
+   vocab is a char->int dictionary of the characters that can be produced
+   by the model, and nchar gives the number of characters to generate. we
+   initialize the input as a zero vector and use predict to predict
+   subsequent characters. sample picks a random index based on the
+   normalized probabilities output by the model.
+
+   at this point we can train the network on any given piece of text (or
+   other discrete sequence). for efficiency it is best to minibatch the
+   training data and run bptt on small subsequences. see [51]charlm.jl for
+   details. here is a sample run on    the complete works of william
+   shakespeare   :
+$ cd .julia/knet/examples
+$ wget http://www.gutenberg.org/files/100/100.txt
+$ julia charlm.jl --data 100.txt --epochs 10 --winit 0.3 --save shakespeare.jld
+... takes about 10 minutes on a gpu machine
+$ julia charlm.jl --load shakespeare.jld --generate 1000
+
+    pand soping them, my lord, if such a foolish?
+  marter. my lord, and nothing in england's ground to new comp'd.
+    to bless your view of wot their dullst. if doth no ape;
+    which with the heart. rome father stuff
+    these shall sweet mary against a sudden him
+    upon up th' night is a wits not that honour,
+    shouts have sure?
+  macbeth. hark? and, halcance doth never memory i be thou what
+    my enties mights in tim thou?
+  piesto. which it time's purpose mine hortful and
+    is my lord.
+  bottom. my lord, good mine eyest, then: i will not set up.
+  lucilius. who shall
+
+under the hood
+
+   coming soon...
+
+benchmarks
+
+   coming soon...
+
+contributing
+
+   knet is an open-source project and we are always open to new
+   contributions: bug reports and fixes, feature requests and
+   contributions, new machine learning models and operators, inspiring
+   examples, benchmarking results are all welcome. if you need help or
+   would like to request a feature, please consider joining the
+   [52]knet-users mailing list. if you find a bug, please open a
+   [53]github issue. if you would like to contribute to knet development,
+   check out the [54]knet-dev mailing list and [55]tips for developers. if
+   you use knet in your own work, the suggested citation is:
+@misc{knet,
+  author={yuret, deniz},
+  title={knet: ko\c{c} university deep learning framework.},
+  year={2016},
+  howpublished={\url{https://github.com/denizyuret/knet.jl}}
+}
+
+   labels: [56]downloads, [57]machinelearning
+
+18 comments:
+
+   alok said...
+          thanks a lot for this.
+          any idea how much effort may be involved in making this work
+          under windows?
+          also, have you tested with more a challenging dataset like
+          id163?
+
+          [58]february 28, 2015 [59][icon_delete13.gif]
+
+   [60]bernie said...
+          one of few approachable short tutorials i have been able to
+          digest as a rank beginner, thanks!
+
+          [61]february 28, 2015 [62][icon_delete13.gif]
+
+   [63]george cousteau said...
+          thank you!
+
+          [64]march 01, 2015 [65][icon_delete13.gif]
+
+   anonymous said...
+          alok, not much work at all: https://www.virtualbox.org/
+
+          [66]march 01, 2015 [67][icon_delete13.gif]
+
+   [68]jon norberg said...
+          this is amazing, exactly what is needed and the idea of readable
+          and efficient code. it would deb amazing if we can try to
+          implement the new ideas as they come out for people to play
+          around with. did you see the infinite rbm paper, about growing
+          the layers adaptively?
+          many thanks
+
+          [69]march 01, 2015 [70][icon_delete13.gif]
+
+   [71]jon norberg said...
+          amazing, this is exactly what is needed, short readable
+          efficient code for learning and implementations. i hope this can
+          implement the new ideas for people to try out as they are
+          published. many thanks.
+
+          [72]march 01, 2015 [73][icon_delete13.gif]
+
+   [74]deniz yuret said...
+          alok: i haven't tested the code under windows, but i know julia
+          and cudart support windows so it should not be too difficult.
+          regarding id163: as the size of the input grows, the number
+          of weights for fully connected layers grow with it. so we would
+          have to implement convolutional nets first to make large image
+          processing feasible.
+
+          [75]march 01, 2015 [76][icon_delete13.gif]
+
+   [77]deniz yuret said...
+          jon: thanks for your kind comments. trying new ideas with
+          minimal coding was one of the main motivations for starting
+          kunet.jl, i hope it serves that purpose. i hadn't seen the
+          infinite rbm paper, i will check it out
+          (http://arxiv.org/abs/1502.02476).
+
+          [78]march 01, 2015 [79][icon_delete13.gif]
+
+   [80]deniz yuret said...
+          check out [81]the kunet discussion on ycombinator and the
+          references therein: [82]mocha.jl, [83]deeplearning4j,
+          [84]boltzmann.jl.
+
+          [85]march 01, 2015 [86][icon_delete13.gif]
+
+   [87]dar  o said...
+          hi deniz, thanks for this very useful piece of work!
+          i had some problems getting the library to work in julia version
+          0.3.6 (2015-02-17 22:12 utc), darwin build. in case anybody can
+          find it useful, i had to change
+          adagrad!(eps, dw2, dw)=(for i=1:length(dw) (dw2[i] += dw[i] *
+          dw[i]; dw[i] /= (eps + sqrt(dw2[i]))) end)
+          to
+          adagrad!(eps, dw2, dw) = for i=1:length(dw)
+          dw2[i] += dw[i] * dw[i]
+          dw[i] /= (eps + sqrt(dw2[i]))
+          end
+          in update.jl (line 17), and also rename the net function in
+          types.jl (line 16) so that it doesn't clash with the type name.
+
+          [88]march 01, 2015 [89][icon_delete13.gif]
+
+   [90]deniz yuret said...
+          thanks dario: i have now fixed the v0.3 compatibility issues,
+          the latest from the repo should work out of the box.
+
+          [91]march 01, 2015 [92][icon_delete13.gif]
+
+   [93]unknown said...
+          hi,
+          i think it is clearer to write
+          for l in n
+          rather than
+          for l=n
+
+          [94]march 01, 2015 [95][icon_delete13.gif]
+
+   anonymous said...
+          alok,
+          you can try out the code at https://try.jupyter.org/. create a
+          new julia notebook in the top right and go from there.
+
+          [96]march 01, 2015 [97][icon_delete13.gif]
+
+   [98]andy said...
+          i find this code extremely succinct and easy to follow. very
+          well done. its great to see an example like this in julia. real
+          boost for the language.
+          do you have any stats on the performance benefits you refer to
+          at the top of the post?
+
+          [99]march 02, 2015 [100][icon_delete13.gif]
+
+   [101]deniz yuret said...
+          andy: i just posted some benchmark results [102]here.
+
+          [103]march 02, 2015 [104][icon_delete13.gif]
+
+   [105]emrah acar said...
+          terrific post. very timely and elegant indeed.
+          thanks deniz for sharing this with the rest of us. what kind of
+          license do you have in mind for general use?
+
+          [106]march 02, 2015 [107][icon_delete13.gif]
+
+   [108]deniz yuret said...
+          emrah: the repo uses an mit license.
+
+          [109]march 03, 2015 [110][icon_delete13.gif]
+
+   anonymous said...
+          matthew's parsing tutorial taught me how to do parsing, yours
+          would hopefully will teach me about this misterious thing called
+          deep learning. however, would have loved it if it was in python.
+          thanks anyways!
+
+          [111]march 03, 2015 [112][icon_delete13.gif]
+
+   [113]post a comment
+   [114]newer post [115]older post [116]home
+   subscribe to: [117]post comments (atom)
+   [118]my photo
+
+   deniz yuret
+          ko   university
+            stanbul turkey
+          +90-212-338-1724
+          dyuret@ku.edu.tr
+
+labels
+
+     * [119]books (28)
+     * [120]language (48)
+     * [121]links (16)
+     * [122]machinelearning (52)
+     * [123]math (12)
+     * [124]notes (17)
+     * [125]t  rk  e (55)
+     * [126]videos (13)
+
+popular posts
+
+     * [127]alec radford's animations for optimization algorithms
+     * [128]courses
+     * [129]turkish language resources
+     * [130]machine learning in 10 pictures
+     * [131]introducing knet8: beginning deep learning with 100 lines of
+       julia
+     * [132]ergun's english-turkish machine translation notes
+     * [133]mehmet ali yatbaz, ph.d. 2014
+     * [134]naive bayes is a joint maximum id178 model
+     * [135]emacs turkish mode
+     * [136]some starting points for deep learning and id56s
+
+archive
+
+     * [137]     [138]2019 (1)
+          + [139]     [140]jan 2019 (1)
+
+     * [141]     [142]2018 (26)
+          + [143]     [144]dec 2018 (3)
+          + [145]     [146]nov 2018 (2)
+          + [147]     [148]oct 2018 (2)
+          + [149]     [150]sep 2018 (1)
+          + [151]     [152]aug 2018 (1)
+          + [153]     [154]jul 2018 (3)
+          + [155]     [156]jun 2018 (2)
+          + [157]     [158]may 2018 (10)
+          + [159]     [160]apr 2018 (2)
+
+     * [161]     [162]2017 (12)
+          + [163]     [164]dec 2017 (1)
+          + [165]     [166]sep 2017 (3)
+          + [167]     [168]aug 2017 (2)
+          + [169]     [170]jul 2017 (1)
+          + [171]     [172]may 2017 (2)
+          + [173]     [174]apr 2017 (2)
+          + [175]     [176]feb 2017 (1)
+
+     * [177]     [178]2016 (13)
+          + [179]     [180]dec 2016 (4)
+          + [181]     [182]nov 2016 (2)
+          + [183]     [184]sep 2016 (1)
+               o [185]introducing knet8: beginning deep learning with
+                 10...
+          + [186]     [187]aug 2016 (2)
+          + [188]     [189]jun 2016 (2)
+          + [190]     [191]mar 2016 (1)
+          + [192]     [193]feb 2016 (1)
+
+     * [194]     [195]2015 (14)
+          + [196]     [197]dec 2015 (1)
+          + [198]     [199]nov 2015 (1)
+          + [200]     [201]jul 2015 (1)
+          + [202]     [203]jun 2015 (1)
+          + [204]     [205]may 2015 (3)
+          + [206]     [207]apr 2015 (2)
+          + [208]     [209]mar 2015 (2)
+          + [210]     [211]feb 2015 (1)
+          + [212]     [213]jan 2015 (2)
+
+     * [214]     [215]2014 (21)
+          + [216]     [217]nov 2014 (1)
+          + [218]     [219]sep 2014 (1)
+          + [220]     [221]aug 2014 (2)
+          + [222]     [223]jun 2014 (3)
+          + [224]     [225]may 2014 (3)
+          + [226]     [227]apr 2014 (3)
+          + [228]     [229]mar 2014 (1)
+          + [230]     [231]feb 2014 (2)
+          + [232]     [233]jan 2014 (5)
+
+     * [234]     [235]2013 (11)
+          + [236]     [237]dec 2013 (1)
+          + [238]     [239]nov 2013 (2)
+          + [240]     [241]oct 2013 (1)
+          + [242]     [243]sep 2013 (1)
+          + [244]     [245]jun 2013 (1)
+          + [246]     [247]may 2013 (2)
+          + [248]     [249]feb 2013 (2)
+          + [250]     [251]jan 2013 (1)
+
+     * [252]     [253]2012 (12)
+          + [254]     [255]nov 2012 (1)
+          + [256]     [257]oct 2012 (2)
+          + [258]     [259]aug 2012 (1)
+          + [260]     [261]jul 2012 (3)
+          + [262]     [263]jun 2012 (2)
+          + [264]     [265]apr 2012 (2)
+          + [266]     [267]mar 2012 (1)
+
+     * [268]     [269]2011 (11)
+          + [270]     [271]oct 2011 (1)
+          + [272]     [273]aug 2011 (1)
+          + [274]     [275]jul 2011 (2)
+          + [276]     [277]jun 2011 (1)
+          + [278]     [279]may 2011 (2)
+          + [280]     [281]apr 2011 (1)
+          + [282]     [283]mar 2011 (2)
+          + [284]     [285]jan 2011 (1)
+
+     * [286]     [287]2010 (20)
+          + [288]     [289]dec 2010 (1)
+          + [290]     [291]nov 2010 (4)
+          + [292]     [293]oct 2010 (2)
+          + [294]     [295]sep 2010 (2)
+          + [296]     [297]aug 2010 (1)
+          + [298]     [299]jul 2010 (2)
+          + [300]     [301]apr 2010 (1)
+          + [302]     [303]feb 2010 (7)
+
+     * [304]     [305]2009 (15)
+          + [306]     [307]dec 2009 (1)
+          + [308]     [309]nov 2009 (1)
+          + [310]     [311]aug 2009 (3)
+          + [312]     [313]jul 2009 (1)
+          + [314]     [315]apr 2009 (2)
+          + [316]     [317]mar 2009 (3)
+          + [318]     [319]feb 2009 (3)
+          + [320]     [321]jan 2009 (1)
+
+     * [322]     [323]2008 (6)
+          + [324]     [325]dec 2008 (1)
+          + [326]     [327]oct 2008 (1)
+          + [328]     [329]sep 2008 (1)
+          + [330]     [331]aug 2008 (2)
+          + [332]     [333]apr 2008 (1)
+
+     * [334]     [335]2007 (34)
+          + [336]     [337]dec 2007 (2)
+          + [338]     [339]nov 2007 (1)
+          + [340]     [341]oct 2007 (5)
+          + [342]     [343]sep 2007 (2)
+          + [344]     [345]jul 2007 (1)
+          + [346]     [347]jun 2007 (7)
+          + [348]     [349]may 2007 (2)
+          + [350]     [351]apr 2007 (1)
+          + [352]     [353]mar 2007 (2)
+          + [354]     [355]feb 2007 (8)
+          + [356]     [357]jan 2007 (3)
+
+     * [358]     [359]2006 (58)
+          + [360]     [361]dec 2006 (9)
+          + [362]     [363]nov 2006 (6)
+          + [364]     [365]oct 2006 (16)
+          + [366]     [367]sep 2006 (10)
+          + [368]     [369]jul 2006 (2)
+          + [370]     [371]jun 2006 (7)
+          + [372]     [373]may 2006 (7)
+          + [374]     [375]apr 2006 (1)
+
+     * [376]     [377]2005 (19)
+          + [378]     [379]oct 2005 (4)
+          + [380]     [381]sep 2005 (2)
+          + [382]     [383]aug 2005 (2)
+          + [384]     [385]jun 2005 (7)
+          + [386]     [387]may 2005 (2)
+          + [388]     [389]apr 2005 (2)
+
+     * [390]     [391]2004 (3)
+          + [392]     [393]oct 2004 (1)
+          + [394]     [395]jul 2004 (1)
+          + [396]     [397]apr 2004 (1)
+
+     * [398]     [399]2002 (2)
+          + [400]     [401]jun 2002 (1)
+          + [402]     [403]mar 2002 (1)
+
+     * [404]     [405]1998 (1)
+          + [406]     [407]may 1998 (1)
+
+     * [408]     [409]1994 (1)
+          + [410]     [411]may 1994 (1)
+
+my blog list
+
+     * [icon18_wrench_allbkg.png]
+       [412]slashdot
+       [413]the nations of the amazon want the name back
+       42 minutes ago
+     * [icon18_wrench_allbkg.png]
+       [414]shtetl-optimized
+       [415]congratulations!
+       2 hours ago
+     * [icon18_wrench_allbkg.png]
+       [416]less wrong
+       [417]ssc sacramento meetup
+       4 hours ago
+     * [icon18_wrench_allbkg.png]
+       [418]slate star codex
+       [419]classified thread 7
+       1 day ago
+     * [icon18_wrench_allbkg.png]
+       [420]ask a mathematician
+       [421]q: will time travel ever be invented?
+       4 days ago
+     * [icon18_wrench_allbkg.png]
+       [422]sean carroll
+       [423]true facts about cosmology (or, misconceptions skewered)
+       2 months ago
+     * [icon18_wrench_allbkg.png]
+       [424]cognitive medium
+       [425]using spaced repetition systems to see through a piece of
+       mathematics
+       2 months ago
+     * [icon18_wrench_allbkg.png]
+       [426]andrej karpathy
+       [427]cool! :)
+       1 year ago
+
+references
+
+   visible links
+   1. http://www.denizyuret.com/feeds/posts/default
+   2. http://www.denizyuret.com/feeds/posts/default?alt=rss
+   3. http://www.denizyuret.com/feeds/328231440874481473/comments/default
+   4. http://www.denizyuret.com/
+   5. http://ai.ku.edu.tr/
+   6. http://goo.gl/hq0sz3
+   7. http://goo.gl/5yftro
+   8. http://goo.gl/wfy0ns
+   9. http://goo.gl/ydyll9
+  10. http://goo.gl/elujdc
+  11. http://goo.gl/us4sf6
+  12. http://goo.gl/vbk9jm
+  13. http://goo.gl/lmgqrc
+  14. http://goo.gl/vnpejp
+  15. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html
+  16. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines_28.html
+  17. http://knet.rtfd.org/
+  18. http://www.ku.edu.tr/en
+  19. http://julia.rtfd.org/
+  20. http://www.denizyuret.com/
+  21. http://knet.rtfd.org/
+  22. https://github.com/denizyuret/knet.jl/tree/master/examples
+  23. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#installation
+  24. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#examples
+  25. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#linear-regression
+  26. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#softmax-classification
+  27. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#multi-layer-id88
+  28. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#convolutional-neural-network
+  29. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#recurrent-neural-network
+  30. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#under-the-hood
+  31. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#benchmarks
+  32. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#contributing
+  33. http://knet.readthedocs.org/en/latest/install.html#installation
+  34. http://knet.readthedocs.org/en/latest/install.html#using-amazon-aws
+  35. https://github.com/denizyuret/autograd.jl
+  36. https://archive.ics.uci.edu/ml/datasets/housing
+  37. https://archive.ics.uci.edu/ml/datasets/housing
+  38. https://github.com/denizyuret/knet.jl/blob/master/examples/housing.jl
+  39. http://yann.lecun.com/exdb/mnist
+  40. https://jamesmccaffrey.wordpress.com/2014/06/10/working-with-the-mnist-image-recognition-data-set
+  41. http://cs231n.github.io/neural-networks-1
+  42. https://github.com/denizyuret/knet.jl/blob/master/examples/mnist.jl
+  43. http://cs231n.github.io/convolutional-networks/
+  44. http://yann.lecun.com/exdb/lenet
+  45. http://www.dataiku.com/blog/2015/08/18/deep_learning.html
+  46. https://github.com/denizyuret/knet.jl/blob/master/examples/lenet.jl
+  47. http://colah.github.io/posts/2015-08-understanding-lstms
+  48. http://karpathy.github.io/2015/05/21/id56-effectiveness
+  49. http://colah.github.io/posts/2015-08-understanding-lstms
+  50. http://colah.github.io/posts/2015-08-understanding-lstms
+  51. https://github.com/denizyuret/knet.jl/blob/master/examples/charlm.jl
+  52. https://groups.google.com/forum/#!forum/knet-users
+  53. https://github.com/denizyuret/knet.jl/issues
+  54. https://groups.google.com/forum/#!forum/knet-dev
+  55. http://knet.readthedocs.org/en/latest/install.html#tips-for-developers
+  56. http://www.denizyuret.com/search/label/downloads
+  57. http://www.denizyuret.com/search/label/machinelearning
+  58. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425143787733#c6851738467536757616
+  59. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=6851738467536757616
+  60. https://www.blogger.com/profile/12629770310623405192
+  61. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425144804923#c7649563962547269915
+  62. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=7649563962547269915
+  63. https://www.blogger.com/profile/04457951892816469813
+  64. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425165922549#c1468277201800240765
+  65. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=1468277201800240765
+  66. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425180304926#c8255731009737915988
+  67. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=8255731009737915988
+  68. https://www.blogger.com/profile/15967273973400871354
+  69. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425192794276#c8813059638544718066
+  70. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=8813059638544718066
+  71. https://www.blogger.com/profile/15967273973400871354
+  72. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425192914599#c6360778897186378247
+  73. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=6360778897186378247
+  74. https://www.blogger.com/profile/00578023665603100985
+  75. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425204961889#c6876844577697161369
+  76. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=6876844577697161369
+  77. https://www.blogger.com/profile/00578023665603100985
+  78. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425205161268#c6323921913264961219
+  79. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=6323921913264961219
+  80. https://www.blogger.com/profile/00578023665603100985
+  81. https://news.ycombinator.com/item?id=9124176
+  82. https://github.com/pluskid/mocha.jl
+  83. http://deeplearning4j.org/
+  84. https://github.com/dfdx/boltzmann.jl
+  85. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425205666508#c4307892889032624936
+  86. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=4307892889032624936
+  87. https://www.blogger.com/profile/11516710513710645191
+  88. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425210068056#c348074052320125997
+  89. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=348074052320125997
+  90. https://www.blogger.com/profile/00578023665603100985
+  91. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425216724861#c2673992984789365134
+  92. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=2673992984789365134
+  93. https://www.blogger.com/profile/06544698063916882417
+  94. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425224792069#c5038205649396038795
+  95. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=5038205649396038795
+  96. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425244118720#c8939931709464159138
+  97. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=8939931709464159138
+  98. https://www.blogger.com/profile/16882084691355634515
+  99. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425256218440#c4489052797389310834
+ 100. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=4489052797389310834
+ 101. https://www.blogger.com/profile/00578023665603100985
+ 102. https://github.com/denizyuret/kunet.jl/blob/master/docs/benchmark.md
+ 103. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425281070161#c1123262816265525524
+ 104. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=1123262816265525524
+ 105. http://researcher.watson.ibm.com/researcher/view.php?person=us-emrah
+ 106. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425326949985#c7921611850917908842
+ 107. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=7921611850917908842
+ 108. https://www.blogger.com/profile/00578023665603100985
+ 109. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425363243390#c1389924524474119012
+ 110. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=1389924524474119012
+ 111. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html?showcomment=1425364410392#c8299021337861044820
+ 112. https://www.blogger.com/delete-comment.g?blogid=8540876&postid=8299021337861044820
+ 113. https://www.blogger.com/comment.g?blogid=8540876&postid=328231440874481473
+ 114. http://www.denizyuret.com/2016/11/why-neural-translations-are-right-length.html
+ 115. http://www.denizyuret.com/2016/08/onur-kuru-ms-2016.html
+ 116. http://www.denizyuret.com/
+ 117. http://www.denizyuret.com/feeds/328231440874481473/comments/default
+ 118. http://www.blogger.com/profile/00578023665603100985
+ 119. http://www.denizyuret.com/search/label/books
+ 120. http://www.denizyuret.com/search/label/language
+ 121. http://www.denizyuret.com/search/label/links
+ 122. http://www.denizyuret.com/search/label/machinelearning
+ 123. http://www.denizyuret.com/search/label/math
+ 124. http://www.denizyuret.com/search/label/notes
+ 125. http://www.denizyuret.com/search/label/t  rk  e
+ 126. http://www.denizyuret.com/search/label/videos
+ 127. http://www.denizyuret.com/2015/03/alec-radfords-animations-for.html
+ 128. http://www.denizyuret.com/2009/01/classes.html
+ 129. http://www.denizyuret.com/2006/11/turkish-resources.html
+ 130. http://www.denizyuret.com/2014/02/machine-learning-in-5-pictures.html
+ 131. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html
+ 132. http://www.denizyuret.com/2009/02/erguns-english-turkish-machine.html
+ 133. http://www.denizyuret.com/2007/10/mehmet-ali-yatbaz-ms-2007.html
+ 134. http://www.denizyuret.com/2010/11/naive-bayes-is-joint-maximum-id178.html
+ 135. http://www.denizyuret.com/2006/11/emacs-turkish-mode.html
+ 136. http://www.denizyuret.com/2014/11/some-starting-points-for-deep-learning.html
+ 137. javascript:void(0)
+ 138. http://www.denizyuret.com/2019/
+ 139. javascript:void(0)
+ 140. http://www.denizyuret.com/2019/01/
+ 141. javascript:void(0)
+ 142. http://www.denizyuret.com/2018/
+ 143. javascript:void(0)
+ 144. http://www.denizyuret.com/2018/12/
+ 145. javascript:void(0)
+ 146. http://www.denizyuret.com/2018/11/
+ 147. javascript:void(0)
+ 148. http://www.denizyuret.com/2018/10/
+ 149. javascript:void(0)
+ 150. http://www.denizyuret.com/2018/09/
+ 151. javascript:void(0)
+ 152. http://www.denizyuret.com/2018/08/
+ 153. javascript:void(0)
+ 154. http://www.denizyuret.com/2018/07/
+ 155. javascript:void(0)
+ 156. http://www.denizyuret.com/2018/06/
+ 157. javascript:void(0)
+ 158. http://www.denizyuret.com/2018/05/
+ 159. javascript:void(0)
+ 160. http://www.denizyuret.com/2018/04/
+ 161. javascript:void(0)
+ 162. http://www.denizyuret.com/2017/
+ 163. javascript:void(0)
+ 164. http://www.denizyuret.com/2017/12/
+ 165. javascript:void(0)
+ 166. http://www.denizyuret.com/2017/09/
+ 167. javascript:void(0)
+ 168. http://www.denizyuret.com/2017/08/
+ 169. javascript:void(0)
+ 170. http://www.denizyuret.com/2017/07/
+ 171. javascript:void(0)
+ 172. http://www.denizyuret.com/2017/05/
+ 173. javascript:void(0)
+ 174. http://www.denizyuret.com/2017/04/
+ 175. javascript:void(0)
+ 176. http://www.denizyuret.com/2017/02/
+ 177. javascript:void(0)
+ 178. http://www.denizyuret.com/2016/
+ 179. javascript:void(0)
+ 180. http://www.denizyuret.com/2016/12/
+ 181. javascript:void(0)
+ 182. http://www.denizyuret.com/2016/11/
+ 183. javascript:void(0)
+ 184. http://www.denizyuret.com/2016/09/
+ 185. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html
+ 186. javascript:void(0)
+ 187. http://www.denizyuret.com/2016/08/
+ 188. javascript:void(0)
+ 189. http://www.denizyuret.com/2016/06/
+ 190. javascript:void(0)
+ 191. http://www.denizyuret.com/2016/03/
+ 192. javascript:void(0)
+ 193. http://www.denizyuret.com/2016/02/
+ 194. javascript:void(0)
+ 195. http://www.denizyuret.com/2015/
+ 196. javascript:void(0)
+ 197. http://www.denizyuret.com/2015/12/
+ 198. javascript:void(0)
+ 199. http://www.denizyuret.com/2015/11/
+ 200. javascript:void(0)
+ 201. http://www.denizyuret.com/2015/07/
+ 202. javascript:void(0)
+ 203. http://www.denizyuret.com/2015/06/
+ 204. javascript:void(0)
+ 205. http://www.denizyuret.com/2015/05/
+ 206. javascript:void(0)
+ 207. http://www.denizyuret.com/2015/04/
+ 208. javascript:void(0)
+ 209. http://www.denizyuret.com/2015/03/
+ 210. javascript:void(0)
+ 211. http://www.denizyuret.com/2015/02/
+ 212. javascript:void(0)
+ 213. http://www.denizyuret.com/2015/01/
+ 214. javascript:void(0)
+ 215. http://www.denizyuret.com/2014/
+ 216. javascript:void(0)
+ 217. http://www.denizyuret.com/2014/11/
+ 218. javascript:void(0)
+ 219. http://www.denizyuret.com/2014/09/
+ 220. javascript:void(0)
+ 221. http://www.denizyuret.com/2014/08/
+ 222. javascript:void(0)
+ 223. http://www.denizyuret.com/2014/06/
+ 224. javascript:void(0)
+ 225. http://www.denizyuret.com/2014/05/
+ 226. javascript:void(0)
+ 227. http://www.denizyuret.com/2014/04/
+ 228. javascript:void(0)
+ 229. http://www.denizyuret.com/2014/03/
+ 230. javascript:void(0)
+ 231. http://www.denizyuret.com/2014/02/
+ 232. javascript:void(0)
+ 233. http://www.denizyuret.com/2014/01/
+ 234. javascript:void(0)
+ 235. http://www.denizyuret.com/2013/
+ 236. javascript:void(0)
+ 237. http://www.denizyuret.com/2013/12/
+ 238. javascript:void(0)
+ 239. http://www.denizyuret.com/2013/11/
+ 240. javascript:void(0)
+ 241. http://www.denizyuret.com/2013/10/
+ 242. javascript:void(0)
+ 243. http://www.denizyuret.com/2013/09/
+ 244. javascript:void(0)
+ 245. http://www.denizyuret.com/2013/06/
+ 246. javascript:void(0)
+ 247. http://www.denizyuret.com/2013/05/
+ 248. javascript:void(0)
+ 249. http://www.denizyuret.com/2013/02/
+ 250. javascript:void(0)
+ 251. http://www.denizyuret.com/2013/01/
+ 252. javascript:void(0)
+ 253. http://www.denizyuret.com/2012/
+ 254. javascript:void(0)
+ 255. http://www.denizyuret.com/2012/11/
+ 256. javascript:void(0)
+ 257. http://www.denizyuret.com/2012/10/
+ 258. javascript:void(0)
+ 259. http://www.denizyuret.com/2012/08/
+ 260. javascript:void(0)
+ 261. http://www.denizyuret.com/2012/07/
+ 262. javascript:void(0)
+ 263. http://www.denizyuret.com/2012/06/
+ 264. javascript:void(0)
+ 265. http://www.denizyuret.com/2012/04/
+ 266. javascript:void(0)
+ 267. http://www.denizyuret.com/2012/03/
+ 268. javascript:void(0)
+ 269. http://www.denizyuret.com/2011/
+ 270. javascript:void(0)
+ 271. http://www.denizyuret.com/2011/10/
+ 272. javascript:void(0)
+ 273. http://www.denizyuret.com/2011/08/
+ 274. javascript:void(0)
+ 275. http://www.denizyuret.com/2011/07/
+ 276. javascript:void(0)
+ 277. http://www.denizyuret.com/2011/06/
+ 278. javascript:void(0)
+ 279. http://www.denizyuret.com/2011/05/
+ 280. javascript:void(0)
+ 281. http://www.denizyuret.com/2011/04/
+ 282. javascript:void(0)
+ 283. http://www.denizyuret.com/2011/03/
+ 284. javascript:void(0)
+ 285. http://www.denizyuret.com/2011/01/
+ 286. javascript:void(0)
+ 287. http://www.denizyuret.com/2010/
+ 288. javascript:void(0)
+ 289. http://www.denizyuret.com/2010/12/
+ 290. javascript:void(0)
+ 291. http://www.denizyuret.com/2010/11/
+ 292. javascript:void(0)
+ 293. http://www.denizyuret.com/2010/10/
+ 294. javascript:void(0)
+ 295. http://www.denizyuret.com/2010/09/
+ 296. javascript:void(0)
+ 297. http://www.denizyuret.com/2010/08/
+ 298. javascript:void(0)
+ 299. http://www.denizyuret.com/2010/07/
+ 300. javascript:void(0)
+ 301. http://www.denizyuret.com/2010/04/
+ 302. javascript:void(0)
+ 303. http://www.denizyuret.com/2010/02/
+ 304. javascript:void(0)
+ 305. http://www.denizyuret.com/2009/
+ 306. javascript:void(0)
+ 307. http://www.denizyuret.com/2009/12/
+ 308. javascript:void(0)
+ 309. http://www.denizyuret.com/2009/11/
+ 310. javascript:void(0)
+ 311. http://www.denizyuret.com/2009/08/
+ 312. javascript:void(0)
+ 313. http://www.denizyuret.com/2009/07/
+ 314. javascript:void(0)
+ 315. http://www.denizyuret.com/2009/04/
+ 316. javascript:void(0)
+ 317. http://www.denizyuret.com/2009/03/
+ 318. javascript:void(0)
+ 319. http://www.denizyuret.com/2009/02/
+ 320. javascript:void(0)
+ 321. http://www.denizyuret.com/2009/01/
+ 322. javascript:void(0)
+ 323. http://www.denizyuret.com/2008/
+ 324. javascript:void(0)
+ 325. http://www.denizyuret.com/2008/12/
+ 326. javascript:void(0)
+ 327. http://www.denizyuret.com/2008/10/
+ 328. javascript:void(0)
+ 329. http://www.denizyuret.com/2008/09/
+ 330. javascript:void(0)
+ 331. http://www.denizyuret.com/2008/08/
+ 332. javascript:void(0)
+ 333. http://www.denizyuret.com/2008/04/
+ 334. javascript:void(0)
+ 335. http://www.denizyuret.com/2007/
+ 336. javascript:void(0)
+ 337. http://www.denizyuret.com/2007/12/
+ 338. javascript:void(0)
+ 339. http://www.denizyuret.com/2007/11/
+ 340. javascript:void(0)
+ 341. http://www.denizyuret.com/2007/10/
+ 342. javascript:void(0)
+ 343. http://www.denizyuret.com/2007/09/
+ 344. javascript:void(0)
+ 345. http://www.denizyuret.com/2007/07/
+ 346. javascript:void(0)
+ 347. http://www.denizyuret.com/2007/06/
+ 348. javascript:void(0)
+ 349. http://www.denizyuret.com/2007/05/
+ 350. javascript:void(0)
+ 351. http://www.denizyuret.com/2007/04/
+ 352. javascript:void(0)
+ 353. http://www.denizyuret.com/2007/03/
+ 354. javascript:void(0)
+ 355. http://www.denizyuret.com/2007/02/
+ 356. javascript:void(0)
+ 357. http://www.denizyuret.com/2007/01/
+ 358. javascript:void(0)
+ 359. http://www.denizyuret.com/2006/
+ 360. javascript:void(0)
+ 361. http://www.denizyuret.com/2006/12/
+ 362. javascript:void(0)
+ 363. http://www.denizyuret.com/2006/11/
+ 364. javascript:void(0)
+ 365. http://www.denizyuret.com/2006/10/
+ 366. javascript:void(0)
+ 367. http://www.denizyuret.com/2006/09/
+ 368. javascript:void(0)
+ 369. http://www.denizyuret.com/2006/07/
+ 370. javascript:void(0)
+ 371. http://www.denizyuret.com/2006/06/
+ 372. javascript:void(0)
+ 373. http://www.denizyuret.com/2006/05/
+ 374. javascript:void(0)
+ 375. http://www.denizyuret.com/2006/04/
+ 376. javascript:void(0)
+ 377. http://www.denizyuret.com/2005/
+ 378. javascript:void(0)
+ 379. http://www.denizyuret.com/2005/10/
+ 380. javascript:void(0)
+ 381. http://www.denizyuret.com/2005/09/
+ 382. javascript:void(0)
+ 383. http://www.denizyuret.com/2005/08/
+ 384. javascript:void(0)
+ 385. http://www.denizyuret.com/2005/06/
+ 386. javascript:void(0)
+ 387. http://www.denizyuret.com/2005/05/
+ 388. javascript:void(0)
+ 389. http://www.denizyuret.com/2005/04/
+ 390. javascript:void(0)
+ 391. http://www.denizyuret.com/2004/
+ 392. javascript:void(0)
+ 393. http://www.denizyuret.com/2004/10/
+ 394. javascript:void(0)
+ 395. http://www.denizyuret.com/2004/07/
+ 396. javascript:void(0)
+ 397. http://www.denizyuret.com/2004/04/
+ 398. javascript:void(0)
+ 399. http://www.denizyuret.com/2002/
+ 400. javascript:void(0)
+ 401. http://www.denizyuret.com/2002/06/
+ 402. javascript:void(0)
+ 403. http://www.denizyuret.com/2002/03/
+ 404. javascript:void(0)
+ 405. http://www.denizyuret.com/1998/
+ 406. javascript:void(0)
+ 407. http://www.denizyuret.com/1998/05/
+ 408. javascript:void(0)
+ 409. http://www.denizyuret.com/1994/
+ 410. javascript:void(0)
+ 411. http://www.denizyuret.com/1994/05/
+ 412. https://slashdot.org/
+ 413. https://tech.slashdot.org/story/19/04/05/1716206/the-nations-of-the-amazon-want-the-name-back?utm_source=rss1.0mainlinkanon&utm_medium=feed
+ 414. https://www.scottaaronson.com/blog
+ 415. https://www.scottaaronson.com/blog/?p=4156
+ 416. https://www.lesswrong.com/
+ 417. https://www.lesswrong.com/events/qetyqhopbaucfz6ri/ssc-sacramento-meetup
+ 418. https://slatestarcodex.com/
+ 419. https://slatestarcodex.com/2019/04/03/classified-thread-7/
+ 420. https://www.askamathematician.com/
+ 421. https://www.askamathematician.com/2019/03/q-will-time-travel-ever-be-invented/
+ 422. http://www.preposterousuniverse.com/blog
+ 423. http://www.preposterousuniverse.com/blog/2019/01/12/true-facts-about-cosmology-or-misconceptions-skewered/
+ 424. http://cognitivemedium.com/
+ 425. http://cognitivemedium.com/srs-mathematics
+ 426. https://medium.com/@karpathy?source=rss-ac9d9a35533e------2
+ 427. https://medium.com/@karpathy/cool-135489a407cc?source=rss-ac9d9a35533e------2
+
+   hidden links:
+ 429. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#contents
+ 430. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#installation
+ 431. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#examples
+ 432. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#linear-regression
+ 433. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#softmax-classification
+ 434. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#multi-layer-id88
+ 435. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#convolutional-neural-network
+ 436. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#recurrent-neural-network
+ 437. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#under-the-hood
+ 438. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#benchmarks
+ 439. http://www.denizyuret.com/2015/02/beginning-deep-learning-with-500-lines.html#contributing
+ 440. https://www.blogger.com/email-post.g?blogid=8540876&postid=328231440874481473
+ 441. https://www.blogger.com/post-edit.g?blogid=8540876&postid=328231440874481473&from=pencil
+ 442. https://www.blogger.com/profile/12629770310623405192
+ 443. https://www.blogger.com/profile/04457951892816469813
+ 444. https://www.blogger.com/profile/15967273973400871354
+ 445. https://www.blogger.com/profile/15967273973400871354
+ 446. https://www.blogger.com/profile/00578023665603100985
+ 447. https://www.blogger.com/profile/00578023665603100985
+ 448. https://www.blogger.com/profile/00578023665603100985
+ 449. https://www.blogger.com/profile/11516710513710645191
+ 450. https://www.blogger.com/profile/00578023665603100985
+ 451. https://www.blogger.com/profile/06544698063916882417
+ 452. https://www.blogger.com/profile/16882084691355634515
+ 453. https://www.blogger.com/profile/00578023665603100985
+ 454. http://researcher.watson.ibm.com/researcher/view.php?person=us-emrah
+ 455. https://www.blogger.com/profile/00578023665603100985
+ 456. http://www.blogger.com/rearrange?blogid=8540876&widgettype=html&widgetid=html4&action=editwidget&sectionid=sidebartop
+ 457. http://www.blogger.com/rearrange?blogid=8540876&widgettype=label&widgetid=label2&action=editwidget&sectionid=sidebartop
+ 458. http://www.blogger.com/rearrange?blogid=8540876&widgettype=popularposts&widgetid=popularposts1&action=editwidget&sectionid=sidebar
+ 459. http://www.blogger.com/rearrange?blogid=8540876&widgettype=blogarchive&widgetid=blogarchive1&action=editwidget&sectionid=sidebar
+ 460. http://www.blogger.com/rearrange?blogid=8540876&widgettype=bloglist&widgetid=bloglist2&action=editwidget&sectionid=sidebar
+ 461. http://www.blogger.com/rearrange?blogid=8540876&widgettype=html&widgetid=html5&action=editwidget&sectionid=sidebar
+ 462. http://www.blogger.com/rearrange?blogid=8540876&widgettype=html&widgetid=html2&action=editwidget&sectionid=footer

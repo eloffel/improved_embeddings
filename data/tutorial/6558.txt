@@ -1,0 +1,922 @@
+   (button) toggle navigation
+   [1][nav_logo.svg?v=479cefe8d932fb14a67b93911b97d70f]
+     * [2]jupyter
+     * [3]faq
+     * [4]view as code
+     * [5]python 3 kernel
+     * [6]view on github
+     * [7]execute on binder
+     * [8]download notebook
+
+    1. [9]gensim
+    2. [10]docs
+    3. [11]notebooks
+
+the author-topic model: lda with metadata[12]  
+
+   in this tutorial, you will learn how to use the author-topic model in
+   gensim. we will apply it to a corpus consisting of scientific papers,
+   to get insight about the authors of the papers.
+
+   the author-topic model is an extension of id44
+   (lda), that allows us to learn topic representations of authors in a
+   corpus. the model can be applied to any kinds of labels on documents,
+   such as tags on posts on the web. the model can be used as a novel way
+   of data exploration, as features in machine learning pipelines, for
+   author (or tag) prediction, or to simply leverage your topic model with
+   existing metadata.
+
+   to learn about the theoretical side of the author-topic model, see
+   [13]rosen-zvi and co-authors 2004, for example. a report on the
+   algorithm used in the gensim implementation will be available soon.
+
+   naturally, familiarity with topic modelling, lda and gensim is assumed
+   in this tutorial. if you are not familiar with either lda, or its
+   gensim implementation, i would recommend starting there. consider some
+   of these resources:
+     * gentle introduction to the lda model:
+       [14]http://blog.echen.me/2011/08/22/introduction-to-latent-dirichle
+       t-allocation/
+     * gensim's lda api documentation:
+       [15]https://radimrehurek.com/gensim/models/ldamodel.html
+     * topic modelling in gensim:
+       [16]http://radimrehurek.com/topic_modeling_tutorial/2%20-%20topic%2
+       0modeling.html
+     * [17]pre-processing and training lda
+
+     note:
+
+     to run this tutorial on your own, install jupyter, gensim, spacy,
+     scikit-learn, bokeh and pandas, e.g. using pip:
+
+     pip install jupyter gensim spacy sklearn bokeh pandas
+
+     note that you need to download some data for spacy using python -m
+     spacy.en.download.
+
+     download the notebook at
+     [18]https://github.com/rare-technologies/gensim/tree/develop/docs/no
+     tebooks/atmodel_tutorial.ipynb.
+
+   in this tutorial, we will learn how to prepare data for the model, how
+   to train it, and how to explore the resulting representation in
+   different ways. we will inspect the topic representation of some well
+   known authors like geoffrey hinton and yann lecun, and compare authors
+   by plotting them in reduced dimensionality and performing similarity
+   queries.
+
+analyzing scientific papers[19]  
+
+   the data we will be using consists of scientific papers about machine
+   learning, from the neural information processing systems conference
+   (nips). it is the same dataset used in the [20]pre-processing and
+   training lda tutorial, mentioned earlier.
+
+   we will be performing qualitative analysis of the model, and at times
+   this will require an understanding of the subject matter of the data.
+   if you try running this tutorial on your own, consider applying it on a
+   dataset with subject matter that you are familiar with. for example,
+   try one of the [21]stackexchange datadump datasets.
+
+   you can download the data from sam roweis' website
+   ([22]http://www.cs.nyu.edu/~roweis/data.html). or just run the cell
+   below, and it will be downloaded and extracted into your `tmp.
+   in [1]:
+!wget -o - 'http://www.cs.nyu.edu/~roweis/data/nips12raw_str602.tgz' > /tmp/nips
+12raw_str602.tgz
+
+--2017-01-16 12:29:12--  http://www.cs.nyu.edu/~roweis/data/nips12raw_str602.tgz
+resolving www.cs.nyu.edu (www.cs.nyu.edu)... 128.122.49.30
+connecting to www.cs.nyu.edu (www.cs.nyu.edu)|128.122.49.30|:80... connected.
+http request sent, awaiting response... 200 ok
+length: 12851423 (12m) [application/x-gzip]
+saving to:    stdout   
+
+-                   100%[===================>]  12.26m  3.33mb/s    in 4.9s
+
+2017-01-16 12:29:18 (2.49 mb/s) - written to stdout [12851423/12851423]
+
+
+   in [4]:
+import tarfile
+
+filename = '/tmp/nips12raw_str602.tgz'
+tar = tarfile.open(filename, 'r:gz')
+for item in tar:
+    tar.extract(item, path='/tmp')
+
+   in the following sections we will load the data, pre-process it, train
+   the model, and explore the results using some of the implementation's
+   functionality. feel free to skip the loading and pre-processing for
+   now, if you are familiar with the process.
+
+loading the data[23]  
+
+   in the cell below, we crawl the folders and files in the dataset, and
+   read the files into memory.
+   in [5]:
+import os, re
+from smart_open import smart_open
+
+# folder containing all nips papers.
+data_dir = '/tmp/nipstxt/'  # set this path to the data on your machine.
+
+# folders containin individual nips papers.
+yrs = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '
+12']
+dirs = ['nips' + yr for yr in yrs]
+
+# get all document texts and their corresponding ids.
+docs = []
+doc_ids = []
+for yr_dir in dirs:
+    files = os.listdir(data_dir + yr_dir)  # list of filenames.
+    for filen in files:
+        # get document id.
+        (idx1, idx2) = re.search('[0-9]+', filen).span()  # matches the indexes
+of the start end end of the id.
+        doc_ids.append(yr_dir[4:] + '_' + str(int(filen[idx1:idx2])))
+
+        # read document text.
+        # note: ignoring characters that cause encoding errors.
+        with smart_open(data_dir + yr_dir + '/' + filen, encoding='utf-8', 'rb')
+ as fid:
+            txt = fid.read()
+
+        # replace any whitespace (newline, tabs, etc.) by a single space.
+        txt = re.sub('\s', ' ', txt)
+
+        docs.append(txt)
+
+   construct a mapping from author names to document ids.
+   in [2]:
+from smart_open import smart_open
+filenames = [data_dir + 'idx/a' + yr + '.txt' for yr in yrs]  # using the years
+defined in previous cell.
+
+# get all author names and their corresponding document ids.
+author2doc = dict()
+i = 0
+for yr in yrs:
+    # the files "a00.txt" and so on contain the author-document mappings.
+    filename = data_dir + 'idx/a' + yr + '.txt'
+    for line in smart_open(filename, errors='ignore', encoding='utf-8', 'rb'):
+        # each line corresponds to one author.
+        contents = re.split(',', line)
+        author_name = (contents[1] + contents[0]).strip()
+        # remove any whitespace to reduce redundant author names.
+        author_name = re.sub('\s', '', author_name)
+        # get document ids for author.
+        ids = [c.strip() for c in contents[2:]]
+        if not author2doc.get(author_name):
+            # this is a new author.
+            author2doc[author_name] = []
+            i += 1
+
+        # add document ids to author.
+        author2doc[author_name].extend([yr + '_' + id for id in ids])
+
+# use an integer id in author2doc, instead of the ids provided in the nips datas
+et.
+# mapping from id of document in nips datast, to an integer id.
+doc_id_dict = dict(zip(doc_ids, range(len(doc_ids))))
+# replace nips ids by integer ids.
+for a, a_doc_ids in author2doc.items():
+    for i, doc_id in enumerate(a_doc_ids):
+        author2doc[a][i] = doc_id_dict[doc_id]
+
+pre-processing text[24]  
+
+   the text will be pre-processed using the following steps:
+     * tokenize text.
+     * replace all whitespace by single spaces.
+     * remove all punctuation and numbers.
+     * remove stopwords.
+     * lemmatize words.
+     * add multi-word named entities.
+     * add frequent bigrams.
+     * remove frequent and rare words.
+
+   a lot of the heavy lifting will be done by the great package, spacy.
+   spacy markets itself as "industrial-strength natural language
+   processing", is fast, enables multiprocessing, and is easy to use.
+   first, let's import it and load the nlp pipline in english.
+   in [3]:
+import spacy
+nlp = spacy.load('en')
+
+   in the code below, spacy takes care of id121, removing
+   non-alphabetic characters, removal of stopwords, lemmatization and
+   id39.
+
+   note that we only keep named entities that consist of more than one
+   word, as single word named entities are already there.
+   in [4]:
+%%time
+processed_docs = []
+for doc in nlp.pipe(docs, n_threads=4, batch_size=100):
+    # process document using spacy nlp pipeline.
+
+    ents = doc.ents  # named entities.
+
+    # keep only words (no numbers, no punctuation).
+    # lemmatize tokens, remove punctuation and remove stopwords.
+    doc = [token.lemma_ for token in doc if token.is_alpha and not token.is_stop
+]
+
+    # remove common words from a stopword list.
+    #doc = [token for token in doc if token not in stopwords]
+
+    # add named entities, but only if they are a compound of more than word.
+    doc.extend([str(entity) for entity in ents if len(entity) > 1])
+
+    processed_docs.append(doc)
+
+cpu times: user 9min 6s, sys: 276 ms, total: 9min 7s
+wall time: 2min 52s
+
+   in [5]:
+docs = processed_docs
+del processed_docs
+
+   below, we use a gensim model to add bigrams. note that this achieves
+   the same goal as id39, that is, finding adjacent
+   words that have some particular significance.
+   in [6]:
+# compute bigrams.
+from gensim.models import phrases
+# add bigrams and trigrams to docs (only ones that appear 20 times or more).
+bigram = phrases(docs, min_count=20)
+for idx in range(len(docs)):
+    for token in bigram[docs[idx]]:
+        if '_' in token:
+            # token is a bigram, add to document.
+            docs[idx].append(token)
+
+/home/olavur/dropbox/my_folder/workstuff/dtu/thesis/code/gensim/gensim/models/ph
+rases.py:248: userwarning: for a faster implementation, use the gensim.models.ph
+rases.phraser class
+  warnings.warn("for a faster implementation, use the gensim.models.phrases.phra
+ser class")
+
+   now we are ready to construct a dictionary, as our vocabulary is
+   finalized. we then remove common words (occurring $> 50\%$ of the
+   time), and rare words (occur $< 20$ times in total).
+   in [7]:
+# create a dictionary representation of the documents, and filter out frequent a
+nd rare words.
+
+from gensim.corpora import dictionary
+dictionary = dictionary(docs)
+
+# remove rare and common tokens.
+# filter out words that occur too frequently or too rarely.
+max_freq = 0.5
+min_wordcount = 20
+dictionary.filter_extremes(no_below=min_wordcount, no_above=max_freq)
+
+_ = dictionary[0]  # this sort of "initializes" dictionary. token.
+
+   we produce the vectorized representation of the documents, to supply
+   the author-topic model with, by computing the bag-of-words.
+   in [8]:
+# vectorize data.
+
+# bag-of-words representation of the documents.
+corpus = [dictionary.doc2bow(doc) for doc in docs]
+
+   let's inspect the dimensionality of our data.
+   in [9]:
+print('number of authors: %d' % len(author2doc))
+print('number of unique tokens: %d' % len(dictionary))
+print('number of documents: %d' % len(corpus))
+
+number of authors: 2479
+number of unique tokens: 6996
+number of documents: 1740
+
+train and use model[25]  
+
+   we train the author-topic model on the data prepared in the previous
+   sections.
+
+   the interface to the author-topic model is very similar to that of lda
+   in gensim. in addition to a corpus, id to word mapping ( word) and
+   number of topics (num_topics), the author-topic model requires either
+   an author to document id mapping (author2doc), or the reverse
+   (doc2author).
+
+   below, we have also (this can be skipped for now):
+     * increased the number of passes over the dataset (to improve the
+       convergence of the optimization problem).
+     * decreased the number of iterations over each document (related to
+       the above).
+     * specified the mini-batch size (chunksize) (primarily to speed up
+       training).
+     * turned off bound evaluation (eval_every) (as it takes a long time
+       to compute).
+     * turned on automatic learning of the alpha and eta priors (to
+       improve the convergence of the optimization problem).
+     * set the random state (random_state) of the random number generator
+       (to make these experiments reproducible).
+
+   we load the model, and train it.
+   in [10]:
+from gensim.models import authortopicmodel
+%time model = authortopicmodel(corpus=corpus, num_topics=10,  word=dictionary.
+ token, \
+                author2doc=author2doc, chunksize=2000, passes=1, eval_every=0, \
+                iterations=1, random_state=1)
+
+cpu times: user 3.56 s, sys: 316 ms, total: 3.87 s
+wall time: 3.65 s
+
+   if you believe your model hasn't converged, you can continue training
+   using model.update(). if you have additional documents and/or authors
+   call model.update(corpus, author2doc).
+
+   before we explore the model, let's try to improve upon it. to do this,
+   we will train several models with different random initializations, by
+   giving different seeds for the random number generator (random_state).
+   we evaluate the topic coherence of the model using the [26]top_topics
+   method, and pick the model with the highest topic coherence.
+   in [11]:
+%%time
+model_list = []
+for i in range(5):
+    model = authortopicmodel(corpus=corpus, num_topics=10,  word=dictionary.id
+2token, \
+                    author2doc=author2doc, chunksize=2000, passes=100, gamma_thr
+eshold=1e-10, \
+                    eval_every=0, iterations=1, random_state=i)
+    top_topics = model.top_topics(corpus)
+    tc = sum([t[1] for t in top_topics])
+    model_list.append((model, tc))
+
+cpu times: user 11min 59s, sys: 2min 14s, total: 14min 13s
+wall time: 11min 41s
+
+   choose the model with the highest topic coherence.
+   in [12]:
+model, tc = max(model_list, key=lambda x: x[1])
+print('topic coherence: %.3e' %tc)
+
+topic coherence: -1.847e+03
+
+   we save the model, to avoid having to train it again, and also show how
+   to load it again.
+   in [13]:
+# save model.
+model.save('/tmp/model.atmodel')
+
+   in [14]:
+# load model.
+model = authortopicmodel.load('/tmp/model.atmodel')
+
+explore author-topic representation[27]  
+
+   now that we have trained a model, we can start exploring the authors
+   and the topics.
+
+   first, let's simply print the most important words in the topics. below
+   we have printed topic 0. as we can see, each topic is associated with a
+   set of words, and each word has a id203 of being expressed under
+   that topic.
+   in [15]:
+model.show_topic(0)
+
+   out[15]:
+[('chip', 0.014645100754555081),
+ ('circuit', 0.011967493386263996),
+ ('analog', 0.011466032752399413),
+ ('control', 0.010067258628938444),
+ ('implementation', 0.0078096719430403956),
+ ('design', 0.0072620826472022419),
+ ('implement', 0.0063648695668359189),
+ ('signal', 0.0063389759280913392),
+ ('vlsi', 0.0059415519461153785),
+ ('processor', 0.0056545823226162124)]
+
+   below, we have given each topic a label based on what each topic seems
+   to be about intuitively.
+   in [42]:
+topic_labels = ['circuits', 'neuroscience', 'numerical optimization', 'object re
+cognition', \
+               'math/general', 'robotics', 'character recognition', \
+                'id23', 'id103', 'bayesian modell
+ing']
+
+   rather than just calling model.show_topics(num_topics=10), we format
+   the output a bit so it is easier to get an overview.
+   in [43]:
+for topic in model.show_topics(num_topics=10):
+    print('label: ' + topic_labels[topic[0]])
+    words = ''
+    for word, prob in model.show_topic(topic[0]):
+        words += word + ' '
+    print('words: ' + words)
+    print()
+
+label: circuits
+words: chip circuit analog control implementation design implement signal vlsi p
+rocessor
+
+label: neuroscience
+words: neuron cell spike response synaptic activity frequency stimulus synapse s
+ignal
+
+label: numerical optimization
+words: gradient noise prediction w optimal nonlinear matrix approximation series
+ variance
+
+label: object recognition
+words: image visual object motion field direction representation map position or
+ientation
+
+label: math/general
+words: bound f generalization class let w p theorem y threshold
+
+label: robotics
+words: dynamic control field trajectory neuron motor net forward l movement
+
+label: character recognition
+words: node distance character layer recognition matrix image sequence p code
+
+label: id23
+words: action policy q reinforcement rule control optimal representation environ
+ment sequence
+
+label: id103
+words: recognition speech word layer classifier net classification hidden class
+context
+
+label: bayesian modelling
+words: mixture gaussian likelihood prior data bayesian density sample cluster po
+sterior
+
+
+   these topics are by no means perfect. they have problems such as
+   chained topics, intruded words, random topics, and unbalanced topics
+   (see [28]mimno and co-authors 2011). they will do for the purposes of
+   this tutorial, however.
+
+   below, we use the model[name] syntax to retrieve the topic distribution
+   for an author. each topic has a id203 of being expressed given
+   the particular author, but only the ones above a certain threshold are
+   shown.
+   in [18]:
+model['yannlecun']
+
+   out[18]:
+[(6, 0.99976720177983869)]
+
+   let's print the top topics of some authors. first, we make a function
+   to help us do this more easily.
+   in [44]:
+from pprint import pprint
+
+def show_author(name):
+    print('\n%s' % name)
+    print('docs:', model.author2doc[name])
+    print('topics:')
+    pprint([(topic_labels[topic[0]], topic[1]) for topic in model[name]])
+
+   below, we print some high profile researchers and inspect them. three
+   of these, yann lecun, geoffrey e. hinton and christof koch, are spot
+   on.
+
+   terrence j. sejnowski's results are surprising, however. he is a
+   neuroscientist, so we would expect him to get the "neuroscience" label.
+   this may indicate that sejnowski works with the neuroscience aspects of
+   visual perception, or perhaps that we have labeled the topic
+   incorrectly, or perhaps that this topic simply is not very informative.
+   in [55]:
+show_author('yannlecun')
+
+yannlecun
+docs: [143, 406, 370, 495, 456, 449, 595, 616, 760, 752, 1532]
+topics:
+[('character recognition', 0.99976720177983869)]
+
+   in [46]:
+show_author('geoffreye.hinton')
+
+geoffreye.hinton
+docs: [56, 143, 284, 230, 197, 462, 463, 430, 688, 784, 826, 848, 869, 1387, 168
+4, 1728]
+topics:
+[('object recognition', 0.42128917017624745),
+ ('math/general', 0.043249835412857811),
+ ('robotics', 0.11149925993091593),
+ ('bayesian modelling', 0.42388500261455564)]
+
+   in [47]:
+show_author('terrencej.sejnowski')
+
+terrencej.sejnowski
+docs: [513, 530, 539, 468, 611, 581, 600, 594, 703, 711, 849, 981, 944, 865, 850
+, 883, 881, 1221, 1137, 1224, 1146, 1282, 1248, 1179, 1424, 1359, 1528, 1484, 15
+71, 1727, 1732]
+topics:
+[('object recognition', 0.99992379088787087)]
+
+   in [53]:
+show_author('christofkoch')
+
+christofkoch
+docs: [9, 221, 266, 272, 349, 411, 337, 371, 450, 483, 653, 663, 754, 712, 778,
+921, 1212, 1285, 1254, 1533, 1489, 1580, 1441, 1657]
+topics:
+[('neuroscience', 0.99989393011046035)]
+
+simple model evaluation methods[29]  
+
+   we can compute the per-word bound, which is a measure of the model's
+   predictive performance (you could also say that it is the
+   reconstruction error).
+
+   to do that, we need the doc2author dictionary, which we can build
+   automatically.
+   in [24]:
+from gensim.models import atmodel
+doc2author = atmodel.construct_doc2author(model.corpus, model.author2doc)
+
+   now let's evaluate the per-word bound.
+   in [25]:
+# compute the per-word bound.
+# number of words in corpus.
+corpus_words = sum(cnt for document in model.corpus for _, cnt in document)
+
+# compute bound and divide by number of words.
+perwordbound = model.bound(model.corpus, author2doc=model.author2doc, \
+                           doc2author=model.doc2author) / corpus_words
+print(perwordbound)
+
+-6.9955968712
+
+   we can evaluate the quality of the topics by computing the topic
+   coherence, as in the lda class. use this to e.g. find out which of the
+   topics are poor quality, or as a metric for model selection.
+   in [26]:
+%time top_topics = model.top_topics(model.corpus)
+
+cpu times: user 15.6 s, sys: 4 ms, total: 15.6 s
+wall time: 15.6 s
+
+plotting the authors[30]  
+
+   now we're going to produce the kind of pacific archipelago looking plot
+   below. the goal of this plot is to give you a way to explore the
+   author-topic representation in an intuitive manner.
+
+   we take all the author-topic distributions (stored in
+   model.state.gamma) and embed them in a 2d space. to do this, we reduce
+   the dimensionality of this data using id167.
+
+   id167 is a method that attempts to reduce the dimensionality of a
+   dataset, while maintaining the distances between the points. that means
+   that if two authors are close together in the plot below, then their
+   topic distributions are similar.
+
+   in the cell below, we transform the author-topic representation into
+   the id167 space. you can increase the smallest_author value if you do
+   not want to view all the authors with few documents.
+   in [27]:
+%%time
+from sklearn.manifold import tsne
+tsne = tsne(n_components=2, random_state=0)
+smallest_author = 0  # ignore authors with documents less than this.
+authors = [model.author2id[a] for a in model.author2id.keys() if len(model.autho
+r2doc[a]) >= smallest_author]
+_ = tsne.fit_transform(model.state.gamma[authors, :])  # result stored in tsne.e
+mbedding_
+
+cpu times: user 35.4 s, sys: 1.16 s, total: 36.5 s
+wall time: 36.4 s
+
+   we are now ready to make the plot.
+
+   note that if you run this notebook yourself, you will see a different
+   graph. the random initialization of the model will be different, and
+   the result will thus be different to some degree. you may find an
+   entirely different representation of the data, or it may show the same
+   interpretation slightly differently.
+
+   if you can't see the plot, you are probably viewing this tutorial in a
+   jupyter notebook. view it in an nbviewer instead at
+   [31]http://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/de
+   velop/docs/notebooks/atmodel_tutorial.ipynb.
+   in [28]:
+# tell bokeh to display plots inside the notebook.
+from bokeh.io import output_notebook
+output_notebook()
+
+   loading bokehjs ...
+   in [29]:
+from bokeh.models import hovertool
+from bokeh.plotting import figure, show, columndatasource
+
+x = tsne.embedding_[:, 0]
+y = tsne.embedding_[:, 1]
+author_names = [model. author[a] for a in authors]
+
+# radius of each point corresponds to the number of documents attributed to that
+ author.
+scale = 0.1
+author_sizes = [len(model.author2doc[a]) for a in author_names]
+radii = [size * scale for size in author_sizes]
+
+source = columndatasource(
+        data=dict(
+            x=x,
+            y=y,
+            author_names=author_names,
+            author_sizes=author_sizes,
+            radii=radii,
+        )
+    )
+
+# add author names and sizes to mouse-over info.
+hover = hovertool(
+        tooltips=[
+        ("author", "@author_names"),
+        ("size", "@author_sizes"),
+        ]
+    )
+
+p = figure(tools=[hover, 'crosshair,pan,wheel_zoom,box_zoom,reset,save,lasso_sel
+ect'])
+p.scatter('x', 'y', radius='radii', source=source, fill_alpha=0.6, line_color=no
+ne)
+show(p)
+
+   the circles in the plot above are individual authors, and their sizes
+   represent the number of documents attributed to the corresponding
+   author. hovering your mouse over the circles will tell you the name of
+   the authors and their sizes. large clusters of authors tend to reflect
+   some overlap in interest.
+
+   we see that the model tends to put duplicate authors close together.
+   for example, terrence j. sejnowki and t. j. sejnowski are the same
+   person, and their vectors end up in the same place (see about $(-10,
+   -10)$ in the plot).
+
+   at about $(-15, -10)$ we have a cluster of neuroscientists like
+   christof koch and james m. bower.
+
+   as discussed earlier, the "object recognition" topic was assigned to
+   sejnowski. if we get the topics of the other authors in sejnoski's
+   neighborhood, like peter dayan, we also get this same topic.
+   furthermore, we see that this cluster is close to the "neuroscience"
+   cluster discussed above, which is further indication that this topic is
+   about visual perception in the brain.
+
+   other clusters include a id23 cluster at about $(-5,
+   8)$, and a bayesian modelling cluster at about $(8, -12)$.
+
+similarity queries[32]  
+
+   in this section, we are going to set up a system that takes the name of
+   an author and yields the authors that are most similar. this
+   functionality can be used as a component in an information retrieval
+   (i.e. a search engine of some kind), or in an author prediction system,
+   i.e. a system that takes an unlabelled document and predicts the
+   author(s) that wrote it.
+
+   we simply need to search for the closest vector in the author-topic
+   space. in this sense, the approach is similar to the id167 plot above.
+
+   below we illustrate a similarity query using a built-in similarity
+   framework in gensim.
+   in [30]:
+from gensim.similarities import matrixsimilarity
+
+# generate a similarity object for the transformed corpus.
+index = matrixsimilarity(model[list(model. author.values())])
+
+# get similarities to some author.
+author_name = 'yannlecun'
+sims = index[model[author_name]]
+
+   however, this framework uses the cosine distance, but we want to use
+   the hellinger distance. the hellinger distance is a natural way of
+   measuring the distance (i.e. dis-similarity) between two id203
+   distributions. its discrete version is defined as $$ h(p, q) =
+   \frac{1}{\sqrt{2}} \sqrt{\sum_{i=1}^k (\sqrt{p_i} - \sqrt{q_i})^2}, $$
+
+   where $p$ and $q$ are both topic distributions for two different
+   authors. we define the similarity as $$ s(p, q) = \frac{1}{1 + h(p,
+   q)}. $$
+
+   in the cell below, we prepare everything we need to perform similarity
+   queries based on the hellinger distance.
+   in [63]:
+# make a function that returns similarities based on the hellinger distance.
+
+from gensim import matutils
+import pandas as pd
+
+# make a list of all the author-topic distributions.
+author_vecs = [model.get_author_topics(author) for author in model. author.val
+ues()]
+
+def similarity(vec1, vec2):
+    '''get similarity between two vectors'''
+    dist = matutils.hellinger(matutils.sparse2full(vec1, model.num_topics), \
+                              matutils.sparse2full(vec2, model.num_topics))
+    sim = 1.0 / (1.0 + dist)
+    return sim
+
+def get_sims(vec):
+    '''get similarity of vector to all authors.'''
+    sims = [similarity(vec, vec2) for vec2 in author_vecs]
+    return sims
+
+def get_table(name, top_n=10, smallest_author=1):
+    '''
+    get table with similarities, author names, and author sizes.
+    return `top_n` authors as a dataframe.
+
+    '''
+
+    # get similarities.
+    sims = get_sims(model.get_author_topics(name))
+
+    # arrange author names, similarities, and author sizes in a list of tuples.
+    table = []
+    for elem in enumerate(sims):
+        author_name = model. author[elem[0]]
+        sim = elem[1]
+        author_size = len(model.author2doc[author_name])
+        if author_size >= smallest_author:
+            table.append((author_name, sim, author_size))
+
+    # make dataframe and retrieve top authors.
+    df = pd.dataframe(table, columns=['author', 'score', 'size'])
+    df = df.sort_values('score', ascending=false)[:top_n]
+
+    return df
+
+   now we can find the most similar authors to some particular author. we
+   use the pandas library to print the results in a nice looking tables.
+   in [64]:
+get_table('yannlecun')
+
+   out[64]:
+             author       score   size
+   2422 yannlecun        1.000000 11
+   1717 patricesimard    0.999977 8
+   986  j.s.denker       0.999581 3
+   2425 yaserabu-mostafa 0.998040 5
+   1160 johns.denker     0.903560 6
+   187  antoninastarita  0.901699 1
+   1718 patricey.simard  0.899005 4
+   560  diegosona        0.876237 1
+   612  eduardsackinger  0.870400 3
+   2413 y.lecun          0.868843 2
+
+   as before, we can specify the minimum author size.
+   in [72]:
+get_table('jamesm.bower', smallest_author=3)
+
+   out[72]:
+            author        score   size
+   118 jamesm.bower      1.000000 10
+   44  christofkoch      0.999967 24
+   182 matthewa.wilson   0.999879 3
+   157 l.f.abbott        0.999872 4
+   256 stephenp.deweerth 0.999869 5
+   82  evemarder         0.999828 3
+   96  girishn.patel     0.856874 3
+   43  chdstofkoch       0.788195 3
+   291 williambialek     0.786987 4
+   247 shih-chiiliu      0.781643 3
+
+serialized corpora[33]  
+
+   the authortopicmodel class accepts serialized corpora, that is, corpora
+   that are stored on the hard-drive rather than in memory. this is
+   usually done when the corpus is too big to fit in memory. there are,
+   however, some caveats to this functionality, which we will discuss
+   here. as these caveats make this functionality less than ideal, it may
+   be improved in the future.
+
+   it is not necessary to read this section if you don't intend to use
+   serialized corpora.
+
+   in the following, an explanation, followed by an example and a
+   summarization will be given.
+
+   if the corpus is serialized, the user must specify serialized=true. any
+   input corpus can then be any type of iterable or generator.
+
+   the model will then take the input corpus and serialize it in the
+   mmcorpus format, which is [34]supported in gensim.
+
+   the user must specify the path where the model should serialize all
+   input documents, for example
+   serialization_path='/tmp/model_serializer.mm'. to avoid accidentally
+   overwriting some important data, the model will raise an error if there
+   already exists a file at serialization_path; in this case, either
+   choose another path, or delete the old file.
+
+   when you want to train on new data, and call model.update(corpus,
+   author2doc), all the old data and the new data have to be
+   re-serialized. this can of course be quite computationally demanding,
+   so it is recommended that you do this only when necessary; that is,
+   wait until you have as much new data as possible to update, rather than
+   updating the model for every new document.
+   in [34]:
+%time model_ser = authortopicmodel(corpus=corpus, num_topics=10,  word=diction
+ary. token, \
+                               author2doc=author2doc, random_state=1, serialized
+=true, \
+                               serialization_path='/tmp/model_serialization.mm')
+
+cpu times: user 17.6 s, sys: 540 ms, total: 18.1 s
+wall time: 17.7 s
+
+   in [35]:
+# delete the file, once you're done using it.
+import os
+os.remove('/tmp/model_serialization.mm')
+
+   in summary, when using serialized corpora:
+     * set serialized=true.
+     * set serialization_path to a path that doesn't already contain a
+       file.
+     * wait until you have lots of data before you call
+       model.update(corpus, author2doc).
+     * when done, delete the file at serialization_path if it's not needed
+       anymore.
+
+what to try next[35]  
+
+   try the model on one of the datasets in the [36]stackexchange data
+   dump. you can treat the tags on the posts as authors and train a
+   "tag-topic" model. there are many different categories, from statistics
+   to cooking to philosophy, so you can pick on that you like. you can
+   even try your hand at a [37]kaggle competition that uses tags in this
+   dataset.
+
+   this website does not host notebooks, it only renders notebooks
+   available on other websites.
+
+   delivered by [38]fastly, rendered by [39]rackspace
+
+   nbviewer github [40]repository.
+
+   nbviewer version: [41]33c4683
+
+   nbconvert version: [42]5.4.0
+
+   rendered (fri, 05 apr 2019 19:16:19 utc)
+
+references
+
+   visible links
+   1. https://nbviewer.jupyter.org/
+   2. http://jupyter.org/
+   3. https://nbviewer.jupyter.org/faq
+   4. https://nbviewer.jupyter.org/format/script/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb
+   5. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb
+   6. https://github.com/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb
+   7. https://mybinder.org/v2/gh/rare-technologies/gensim/develop?filepath=docs/notebooks/atmodel_tutorial.ipynb
+   8. https://raw.githubusercontent.com/rare-technologies/gensim/develop/docs/notebooks/atmodel_tutorial.ipynb
+   9. https://nbviewer.jupyter.org/github/rare-technologies/gensim/tree/develop
+  10. https://nbviewer.jupyter.org/github/rare-technologies/gensim/tree/develop/docs
+  11. https://nbviewer.jupyter.org/github/rare-technologies/gensim/tree/develop/docs/notebooks
+  12. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#the-author-topic-model:-lda-with-metadata
+  13. https://mimno.infosci.cornell.edu/info6150/readings/398.pdf
+  14. http://blog.echen.me/2011/08/22/introduction-to-latent-dirichlet-allocation/
+  15. https://radimrehurek.com/gensim/models/ldamodel.html
+  16. http://radimrehurek.com/topic_modeling_tutorial/2 - id96.html
+  17. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/lda_training_tips.ipynb
+  18. https://github.com/rare-technologies/gensim/tree/develop/docs/notebooks/atmodel_tutorial.ipynb
+  19. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#analyzing-scientific-papers
+  20. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/lda_training_tips.ipynb
+  21. https://archive.org/details/stackexchange
+  22. http://www.cs.nyu.edu/~roweis/data.html
+  23. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#loading-the-data
+  24. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#pre-processing-text
+  25. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#train-and-use-model
+  26. https://radimrehurek.com/gensim/models/ldamodel.html#gensim.models.ldamodel.ldamodel.top_topics
+  27. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#explore-author-topic-representation
+  28. https://people.cs.umass.edu/~wallach/publications/mimno11optimizing.pdf
+  29. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#simple-model-evaluation-methods
+  30. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#plotting-the-authors
+  31. http://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb
+  32. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#similarity-queries
+  33. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#serialized-corpora
+  34. https://radimrehurek.com/gensim/corpora/mmcorpus.html
+  35. https://nbviewer.jupyter.org/github/rare-technologies/gensim/blob/develop/docs/notebooks/atmodel_tutorial.ipynb#what-to-try-next
+  36. https://archive.org/details/stackexchange
+  37. https://www.kaggle.com/c/transfer-learning-on-stack-exchange-tags
+  38. http://www.fastly.com/
+  39. https://developer.rackspace.com/?nbviewer=awesome
+  40. https://github.com/jupyter/nbviewer
+  41. https://github.com/jupyter/nbviewer/commit/33c4683164d5ee4c92dbcd53afac7f13ef033c54
+  42. https://github.com/jupyter/nbconvert/releases/tag/5.4.0
+
+   hidden links:
+  44. http://bokeh.pydata.org/
